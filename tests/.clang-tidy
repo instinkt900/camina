@@ -1,0 +1,8 @@
+# Test code states expected values as literals on purpose. A named constant for
+# every expected result makes a test harder to read, not easier.
+
+InheritParentConfig: true
+
+Checks: >
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-do-while

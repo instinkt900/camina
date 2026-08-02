@@ -1,0 +1,64 @@
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+Entries are generated automatically from git history using [git-cliff](https://github.com/orhun/git-cliff).
+
+"""
+
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}\
+### {{ group | split(pat=". ") | last }}
+{% for commit in commits %}\
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}
+{% endfor %}
+{% endfor %}\
+"""
+
+trim = true
+footer = ""
+
+[git]
+# Parse conventional commits (feat:, fix:, etc.) but don't discard the rest
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+
+commit_preprocessors = [
+    # Strip GitHub PR references like "(#23)" wherever they appear
+    { pattern = '\s*\(#\d+\)', replace = "" },
+    # Strip trailing periods/whitespace from subject
+    { pattern = '\.\s*$', replace = "" },
+]
+
+commit_parsers = [
+    # Skip merge commits
+    { message = "^[Mm]erge", skip = true },
+    # Skip the automated changelog update commits
+    { message = "^chore\\(release\\)", skip = true },
+    # Skip CI commits
+    { message = "^ci", skip = true },
+    { message = "^feat", group = "1. Features" },
+    { message = "^fix", group = "2. Bug Fixes" },
+    { message = "^refactor", group = "3. Refactoring" },
+    { message = "^perf", group = "4. Performance" },
+    { message = "^docs", group = "5. Documentation" },
+    { message = "^test", group = "6. Testing" },
+    { message = "^chore", group = "7. Miscellaneous" },
+    { message = "^revert", group = "8. Reverts" },
+    # Catch-all: plain-english commits without a conventional prefix
+    { message = ".*", group = "9. Changes" },
+]
+
+filter_commits = false
+
+# Tags are version numbers like "1.0.0" or "1.0.0-rc.1" (no "v" prefix)
+tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?$"
+
+ignore_tags = ""

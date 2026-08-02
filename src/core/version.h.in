@@ -1,0 +1,22 @@
+#pragma once
+
+/**
+ * @file
+ * @brief Generated version constants.
+ *
+ * CMake generates this file from src/core/version.h.in. Do not edit it, and do not
+ * commit it. Change version.txt at the repository root instead. Pushing that change
+ * to main tags the release and generates the changelog. See
+ * .github/workflows/release.yml.
+ */
+
+namespace engine {
+    /// @brief Major version, from version.txt.
+    inline constexpr int VersionMajor = @PROJECT_VERSION_MAJOR@;
+    /// @brief Minor version, from version.txt.
+    inline constexpr int VersionMinor = @PROJECT_VERSION_MINOR@;
+    /// @brief Patch version, from version.txt.
+    inline constexpr int VersionPatch = @PROJECT_VERSION_PATCH@;
+    /// @brief Full version string, including any pre-release suffix such as "1.0.0-rc.1".
+    inline constexpr char const* Version = "@PROJECT_VERSION_FULL@";
+}
