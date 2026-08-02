@@ -33,12 +33,13 @@ swapchain that survives resize, two frames in flight, dynamic rendering, reverse
 and clean validation. It arrived in three parts: the device and the swapchain, the shader
 build and the triangle, then buffers, textures, descriptors, and the cube.
 
-M3 is in progress: EnTT and the scene. `scene::World` holds the registry and a transform
+M3 is complete: EnTT and the scene. `scene::World` holds the registry and a transform
 hierarchy that rebuilds a world matrix only when something moved (M3.1). A `.scene` file
 reads and writes that world through the reflection descriptors (M3.2). A prefab is a scene
 fragment, and an instance stores only the fields it overrides (M3.3). `sandbox/` is a
 library that the runtime links, and it loads a scene of prefab instances and turns two of
-them. A fly camera and live entity editing close M3. See `DESIGN.md` §10.
+them. The runtime flies through that scene and edits any component on any entity, which
+closes M3. See `DESIGN.md` §10.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings

@@ -45,6 +45,13 @@ namespace engine::gfx {
 
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        // Keyboard navigation otherwise raises WantCaptureKeyboard for every
+        // frame a window holds focus, and imgui.h says so at the flag itself.
+        // An application reading that flag to decide whether a key belongs to
+        // it therefore never sees a key at all. With this false the flag means
+        // what a caller expects: a widget is really taking the keyboard, such
+        // as an open text field. Navigation still works.
+        io.ConfigNavCaptureKeyboard = false;
         // The overlay has no home directory to write to, and a stray imgui.ini
         // next to the executable surprises people. M8 gives the editor a real
         // settings path.

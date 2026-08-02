@@ -6,14 +6,15 @@
  *
  * A scene file names its components. A reader holds only that name, and C++
  * cannot build a type from a string. This registry closes the gap: registering
- * a type stores three function pointers that already know the type, and the
- * reader calls them through the name.
+ * a type stores function pointers that already know the type, and the caller
+ * reaches them through the name.
  *
- * The functions are thin. Each one calls reflect/json.h, so this adds no second
- * descriptor system and rule 4.5 holds.
+ * The functions are thin. Each one calls reflect/json.h or reflect/inspector.h,
+ * so this adds no second descriptor system and rule 4.5 holds.
  */
 
 #include "core/entt.h"
+#include "reflect/inspector.h"
 #include "reflect/json.h"
 #include "reflect/reflect.h"
 
@@ -27,10 +28,10 @@
 namespace engine::scene {
 
     /**
-     * @brief What a scene file needs to do with one component type.
+     * @brief What a scene file and an editor need to do with one component type.
      *
-     * The three functions carry the type inside them, so the caller works with
-     * a name and an entity and never names a component type.
+     * The functions carry the type inside them, so the caller works with a name
+     * and an entity and never names a component type.
      */
     struct ComponentOps {
         /// @brief The name the scene file stores. It comes from Describe<T>::name.
@@ -45,6 +46,16 @@ namespace engine::scene {
         /// @brief Builds the component on an entity from JSON. Replaces any earlier one.
         bool (*load)(entt::registry& registry, entt::entity entity,
                      const nlohmann::json& document) = nullptr;
+
+        /**
+         * @brief Draws the component in the inspector and reports a change.
+         *
+         * Call this between ImGui::Begin() and ImGui::End(). It returns true
+         * when the user changed a field, and the caller decides what that
+         * means. A Transform changed this way needs World::mark_dirty(),
+         * because the change went around set_local().
+         */
+        bool (*inspect)(entt::registry& registry, entt::entity entity) = nullptr;
     };
 
     /**
@@ -91,6 +102,9 @@ namespace engine::scene {
                 }
                 registry.emplace_or_replace<T>(entity, std::move(value));
                 return true;
+            };
+            ops.inspect = [](entt::registry& registry, entt::entity entity) {
+                return reflect::inspect(registry.get<T>(entity));
             };
             entries_.push_back(ops);
         }
