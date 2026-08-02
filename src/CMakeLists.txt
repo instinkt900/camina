@@ -14,6 +14,7 @@ add_library(engine_core STATIC
     gfx/vulkan/vk_imgui.cpp
     gfx/vulkan/vk_vma.cpp
     render/cube_pass.cpp
+    scene/world.cpp
 )
 
 # GLSL to SPIR-V at build time. render/cube_pass.cpp embeds the output, so the
@@ -47,6 +48,7 @@ target_link_libraries(engine_core
         spdlog::spdlog
         Tracy::TracyClient
         enkiTS::enkiTS
+        EnTT::EnTT
         # reflect/json.h is a public header and includes the JSON parser.
         nlohmann_json::nlohmann_json
     PRIVATE

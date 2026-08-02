@@ -22,6 +22,13 @@ engine_enable_clang_tidy(test_json)
 
 add_test(NAME json COMMAND test_json)
 
+add_executable(test_scene test_scene.cpp)
+target_link_libraries(test_scene PRIVATE engine::core)
+engine_set_warnings(test_scene)
+engine_enable_clang_tidy(test_scene)
+
+add_test(NAME scene COMMAND test_scene)
+
 # Rule 4.1. No file outside src/gfx/vulkan/ can include a Vulkan header.
 #
 # The check is a shell script, so it needs bash. A Windows machine without Git

@@ -58,6 +58,9 @@ class CaminaConan(ConanFile):
         self.requires("imgui/1.92.8-docking")
         self.requires("nlohmann_json/3.12.0")
 
+        # M3. The scene lives in an EnTT registry. See DESIGN.md section 10.
+        self.requires("entt/3.16.0")
+
         if self.options.with_editor:
             self.requires("imguizmo/1.83")
 
