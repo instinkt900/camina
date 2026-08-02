@@ -3,8 +3,16 @@
 #
 # CI has no excuse for a missing clang-tidy, so a missing binary fails the build
 # there instead of skipping the check without saying so.
+#
+# MSVC is the exception. clang-tidy reads a clang command line, and the MSVC
+# driver passes flags it does not understand. The Linux clang job enforces the
+# check for every file, so nothing escapes review.
 
 function(engine_enable_clang_tidy target)
+    if(MSVC)
+        return()
+    endif()
+
     if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR DEFINED ENV{CI}))
         return()
     endif()

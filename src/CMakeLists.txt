@@ -35,5 +35,15 @@ target_compile_definitions(engine_core PUBLIC
     $<$<NOT:$<CONFIG:Release>>:ENGINE_ENABLE_ASSERTS>
 )
 
+# windows.h defines min and max as macros, which breaks std::min and std::max. It
+# also pulls in a large amount that no part of the engine uses. Set these before
+# anything reaches windows.h through a dependency header.
+if(WIN32)
+    target_compile_definitions(engine_core PUBLIC
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
+
 engine_set_warnings(engine_core)
 engine_enable_clang_tidy(engine_core)

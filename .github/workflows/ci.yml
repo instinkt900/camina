@@ -41,12 +41,33 @@ jobs:
       - name: Check Vulkan containment
         run: bash scripts/check-vulkan-containment.sh .
 
+  # The engine targets Clang on Linux and MSVC on Windows. See DESIGN.md
+  # section 2. Every step below runs under bash, including on Windows, so that
+  # one script serves both legs.
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        profile: [linux-gcc, linux-clang]
+        include:
+          - os: ubuntu-24.04
+            profile: linux-clang
+            # The xorg/system recipe needs about 35 X11 and XCB development
+            # packages. Conan defaults tools.system.package_manager:mode to
+            # "check", so it stops and asks the user to install them. On a
+            # runner there is no user, so let Conan install them with sudo. Do
+            # not put this in the profiles. A local build must not install
+            # system packages on its own.
+            conan_conf: >-
+              -c tools.system.package_manager:mode=install
+              -c tools.system.package_manager:sudo=True
+          - os: windows-2022
+            profile: windows-msvc
+            conan_conf: ""
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +75,7 @@ jobs:
           submodules: recursive
 
       - name: Install system packages
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config \
@@ -64,9 +86,9 @@ jobs:
 
       # The clang profile pins compiler.version=19, and the runner ships an older
       # clang. Install the matching toolchain and clang-tidy from apt.llvm.org.
-      # cmake/ClangTidy.cmake fails the build in CI when clang-tidy is missing,
-      # so this step is required for both matrix legs.
+      # cmake/ClangTidy.cmake fails the build in CI when clang-tidy is missing.
       - name: Install LLVM 19
+        if: runner.os == 'Linux'
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
           sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main"
@@ -75,6 +97,13 @@ jobs:
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
           sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-19 100
+
+      # The windows profile asks for the Ninja generator, so cl.exe and the
+      # Windows SDK must be on PATH before CMake runs. This action calls
+      # vcvars64.bat and exports the result to the later steps.
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - uses: actions/setup-python@v5
         with:
@@ -92,17 +121,10 @@ jobs:
           key: conan-${{ matrix.profile }}-${{ hashFiles('conanfile.py') }}
           restore-keys: conan-${{ matrix.profile }}-
 
-      # The xorg/system recipe needs about 35 X11 and XCB development packages.
-      # Conan defaults tools.system.package_manager:mode to "check", so it stops
-      # and asks the user to install them. On a runner there is no user, so let
-      # Conan install them with sudo. Do not put this in the profiles. A local
-      # build must not install system packages on its own.
       - name: Conan install
         run: |
           conan install . -pr:h profiles/${{ matrix.profile }} \
-            -pr:b profiles/${{ matrix.profile }} -b missing \
-            -c tools.system.package_manager:mode=install \
-            -c tools.system.package_manager:sudo=True
+            -pr:b profiles/${{ matrix.profile }} -b missing ${{ matrix.conan_conf }}
 
       - name: Configure
         run: cmake --preset conan-relwithdebinfo

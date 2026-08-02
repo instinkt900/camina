@@ -15,7 +15,17 @@ profiler. There is no renderer yet. See DESIGN.md section 10 for the milestone l
 
 ## Requirements
 
-- A C++20 compiler. GCC 13 or Clang 19 and later.
+The engine targets two platforms. Each one has one compiler.
+
+| Platform | Compiler | Conan profile |
+|---|---|---|
+| Linux | Clang 19 or later | `linux-clang` |
+| Windows | MSVC, Visual Studio 2022 | `windows-msvc` |
+
+CI builds and tests both on every pull request. GCC is not a target.
+
+You also need:
+
 - CMake 3.28 or later.
 - Ninja.
 - Conan 2.
@@ -32,21 +42,36 @@ sudo apt-get install -y ninja-build pkg-config \
 
 ## Build
 
+On Linux:
+
 ```bash
 conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang -b missing
 cmake --preset conan-relwithdebinfo
 cmake --build --preset conan-relwithdebinfo
 ```
 
-Swap `linux-clang` for `linux-gcc` to use GCC. Use `linux-clang-asan` for a build with
-the address sanitizer and the undefined behavior sanitizer. That profile turns Tracy off,
-because Tracy and the sanitizers both want the signal handlers.
+On Windows, start a "x64 Native Tools Command Prompt for VS 2022" so that `cl.exe` and
+Ninja are on PATH. Then run the same commands with the Windows profile:
+
+```bat
+conan install . -pr:h profiles/windows-msvc -pr:b profiles/windows-msvc -b missing
+cmake --preset conan-relwithdebinfo
+cmake --build --preset conan-relwithdebinfo
+```
+
+Both profiles ask for the Ninja generator, so the preset names match on each platform.
+
+Use `linux-clang-asan` for a build with the address sanitizer and the undefined behavior
+sanitizer. That profile turns Tracy off, because Tracy and the sanitizers both want the
+signal handlers.
 
 ## Run
 
 ```bash
 ./build/RelWithDebInfo/apps/runtime/runtime
 ```
+
+On Windows the binary is `build\RelWithDebInfo\apps\runtime\runtime.exe`.
 
 Press Escape or close the window to quit. Pass `--frames N` to exit after N frames, which
 is what CI uses.
@@ -58,7 +83,9 @@ ctest --preset conan-relwithdebinfo --output-on-failure
 ```
 
 This runs the unit tests and the rule 4.1 check, which proves that no file outside
-`src/render/vulkan/` includes a Vulkan header.
+`src/render/vulkan/` includes a Vulkan header. The rule 4.1 check is a shell script, so a
+Windows machine without Git Bash does not get it. The `vulkan-containment` job in CI runs
+on Linux and covers every push.
 
 ## Profile
 
@@ -74,6 +101,10 @@ clang-tidy -p build/RelWithDebInfo $(find src apps tests -name '*.cpp')
 
 CI fails on any formatting difference. clang-tidy also runs inside the compile step
 for a Debug build, or whenever the `CI` environment variable is set.
+
+An MSVC build skips clang-tidy, because clang-tidy reads a clang command line and the
+MSVC driver passes flags it does not understand. The Linux job checks every file, so
+nothing escapes review.
 
 ## Documentation
 
@@ -99,7 +130,7 @@ fine when the change is small.
 1. Branch from `main`. Name the branch `feat/...`, `fix/...`, or `docs/...`.
 2. Commit in the conventional style.
 3. Open a pull request. CI runs the format check, the docs build, the Vulkan containment
-   check, and a build across GCC and Clang.
+   check, and a build on Linux with Clang and on Windows with MSVC.
 4. Squash merge, with a conventional-commit title. Each pull request then becomes one
    changelog entry.
 
@@ -107,7 +138,10 @@ fine when the change is small.
 
 `version.txt` holds the version. Change it and push to `main`. CI then tags the commit,
 generates `CHANGELOG.md` with [git-cliff](https://github.com/orhun/git-cliff), and
-publishes a GitHub release with the runtime archive attached.
+publishes a GitHub release. Each release carries one archive for each platform:
+
+- `camina-<version>-linux-Release.tar.gz`
+- `camina-<version>-windows-Release.zip`
 
 Write commit messages in the conventional style, for example `feat:`, `fix:`, and
 `refactor:`. `cliff.toml` groups them in the changelog. Commits without a prefix still
