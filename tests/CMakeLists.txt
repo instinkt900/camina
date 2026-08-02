@@ -9,9 +9,18 @@ engine_enable_clang_tidy(test_core)
 add_test(NAME core COMMAND test_core)
 
 # Rule 4.1. No file outside src/render/vulkan/ can include a Vulkan header.
-add_test(
-    NAME vulkan_containment
-    COMMAND ${CMAKE_COMMAND} -E env bash
-            ${CMAKE_SOURCE_DIR}/scripts/check-vulkan-containment.sh
-            ${CMAKE_SOURCE_DIR}
-)
+#
+# The check is a shell script, so it needs bash. A Windows machine without Git
+# Bash does not get the test. The vulkan-containment job in CI runs on Linux and
+# covers every push, so the rule still holds.
+find_program(BASH_EXE bash)
+if(BASH_EXE)
+    add_test(
+        NAME vulkan_containment
+        COMMAND ${CMAKE_COMMAND} -E env ${BASH_EXE}
+                ${CMAKE_SOURCE_DIR}/scripts/check-vulkan-containment.sh
+                ${CMAKE_SOURCE_DIR}
+    )
+else()
+    message(STATUS "bash not found, skipping the vulkan_containment test")
+endif()

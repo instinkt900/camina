@@ -33,6 +33,7 @@ The engine is not complete, and that is on purpose.
 | Area | Decision |
 |---|---|
 | Language | C++20 |
+| Platforms | Linux with Clang 19+, Windows with MSVC (VS 2022). One compiler for each. No GCC |
 | Build | CMake 3.28+, Conan 2, Ninja |
 | Graphics | Vulkan 1.3 direct. Dynamic rendering, synchronization2, no render pass objects |
 | Backend abstraction | Deferred. The `gfx::` interface exists from day one. The plugin ABI comes later |
@@ -220,7 +221,7 @@ scheduler still owns the cores.
 ```
 engine/
   cmake/               Conan integration, compiler flags, shader compile rules
-  profiles/            Conan profiles (linux-gcc, linux-clang, windows-msvc, asan)
+  profiles/            Conan profiles (linux-clang, windows-msvc, linux-clang-asan)
   conanfile.py         Options: with_editor, with_ui, with_lua, with_audio
   third_party/         box3d, bc7enc_rdo (submodules and thin CMakeLists)
   src/

@@ -70,16 +70,38 @@ jobs:
         shell: bash
         run: echo "version=$(cat version.txt | tr -d '[:space:]')" >> $GITHUB_OUTPUT
 
+  # One leg for each supported target. The steps mirror the build job in ci.yml.
+  # Keep the two in step when you change either one.
   build-release:
     needs: check-version
     if: needs.check-version.outputs.changed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            profile: linux-clang
+            platform: linux
+            conan_conf: >-
+              -c tools.system.package_manager:mode=install
+              -c tools.system.package_manager:sudo=True
+          - os: windows-2022
+            profile: windows-msvc
+            platform: windows
+            conan_conf: ""
+
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Install system packages
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config \
@@ -87,13 +109,13 @@ jobs:
             libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols \
             libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
 
-      # This job builds with profiles/linux-clang, which pins compiler.version=19
-      # and calls plain "clang" and "clang++". The runner ships an older clang, so
-      # without this step Conan labels every package clang 19 and then compiles
-      # with clang 18. GitHub also sets CI, and cmake/ClangTidy.cmake fails the
-      # build when clang-tidy is missing under CI. Keep this step in step with the
-      # same step in ci.yml.
+      # profiles/linux-clang pins compiler.version=19 and calls plain "clang" and
+      # "clang++". The runner ships an older clang, so without this step Conan
+      # labels every package clang 19 and then compiles with clang 18. GitHub
+      # also sets CI, and cmake/ClangTidy.cmake fails the build when clang-tidy
+      # is missing under CI.
       - name: Install LLVM 19
+        if: runner.os == 'Linux'
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
           sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main"
@@ -102,6 +124,10 @@ jobs:
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
           sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-19 100
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - uses: actions/setup-python@v5
         with:
@@ -116,17 +142,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.conan2/p
-          key: conan-release-${{ hashFiles('conanfile.py') }}
-          restore-keys: conan-release-
+          key: conan-release-${{ matrix.profile }}-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-release-${{ matrix.profile }}-
 
-      # Let Conan install the X11 and XCB packages that xorg/system needs. See
-      # the same step in ci.yml for the reason.
       - name: Build
         run: |
-          conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
-            -s build_type=Release -b missing \
-            -c tools.system.package_manager:mode=install \
-            -c tools.system.package_manager:sudo=True
+          conan install . -pr:h profiles/${{ matrix.profile }} \
+            -pr:b profiles/${{ matrix.profile }} \
+            -s build_type=Release -b missing ${{ matrix.conan_conf }}
           cmake --preset conan-release
           cmake --build --preset conan-release
 
@@ -134,15 +157,23 @@ jobs:
         run: |
           name=camina-${{ needs.check-version.outputs.version }}
           mkdir -p "$name"
-          cp build/Release/apps/runtime/runtime "$name/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp build/Release/apps/runtime/runtime.exe "$name/"
+          else
+            cp build/Release/apps/runtime/runtime "$name/"
+          fi
           cp README.md DESIGN.md "$name/"
-          tar czf "$name-linux-Release.tar.gz" "$name"
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            7z a "$name-windows-Release.zip" "$name"
+          else
+            tar czf "$name-linux-Release.tar.gz" "$name"
+          fi
 
       - name: Upload archive as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: camina-linux-Release
-          path: camina-${{ needs.check-version.outputs.version }}-*
+          name: camina-${{ matrix.platform }}-Release
+          path: camina-${{ needs.check-version.outputs.version }}-${{ matrix.platform }}-*
           retention-days: 1
 
   tag-and-release:

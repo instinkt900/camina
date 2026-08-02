@@ -17,6 +17,10 @@ docs. It does not appear in any C++ identifier. Targets stay `engine_core` and
 question about structure, dependencies, or sequencing. Do not repeat its content here.
 Update it when a decision changes.
 
+**Two platforms, one compiler each.** Linux uses Clang 19 or later, Windows uses MSVC
+from Visual Studio 2022. GCC is not a target and there is no GCC profile. CI builds and
+tests both platforms on every pull request, and a release carries an archive for each.
+
 ## Current status
 
 M0 is complete. The runtime opens a window, runs the job system across 8 workers,
@@ -182,6 +186,12 @@ ctest --preset conan-relwithdebinfo --output-on-failure
 ./build/RelWithDebInfo/apps/runtime/runtime --frames 300
 ```
 
+Windows uses the same commands with `profiles/windows-msvc`, from a "x64 Native Tools
+Command Prompt for VS 2022". Both profiles ask for the Ninja generator, so the preset
+names match on each platform. Two things differ on Windows. An MSVC build skips
+clang-tidy, because clang-tidy reads a clang command line. The rule 4.1 test needs bash,
+so it does not run without Git Bash. The Linux CI jobs cover both.
+
 Conan lives in a virtual environment at `~/.venv/conan`. Add `~/.venv/conan/bin` to
 PATH, or call the binary by its full path.
 
@@ -205,6 +215,7 @@ These decisions are made. Do not raise them again unless the user asks.
 
 | Topic | Decision |
 |---|---|
+| Platforms and compilers | Linux with Clang, Windows with MSVC. GCC was dropped and is not a target |
 | Render backend abstraction | Vulkan direct now. The plugin ABI comes later. Rules 1 and 2 keep it cheap |
 | 2D support | Out of scope. Do not suggest Box2D |
 | Package manager | Conan 2. Not CPM, and not vcpkg |
