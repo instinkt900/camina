@@ -127,8 +127,11 @@ samples before you commit to +Y up. It almost certainly agrees. Confirm it anywa
 These rules hold for the life of the project. Each one keeps a later change cheap.
 
 **4.1 — Contain Vulkan.**
-Only files under `src/render/vulkan/` can include `vulkan.h`, volk, or VMA. Every layer
+Only files under `src/gfx/vulkan/` can include `vulkan.h`, volk, or VMA. Every layer
 above uses `gfx::` types. CI runs a grep for violations and fails the build.
+
+The backend sits under the interface it implements. `src/render/` is the layer above, and
+it holds the render graph and the passes. `src/render/` never sees a Vulkan type.
 
 **4.2 — Keep `gfx::` types C-compatible.**
 The public `gfx::` interface uses no `std::string`, no `std::vector`, no virtuals, and no

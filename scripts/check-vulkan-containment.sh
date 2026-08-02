@@ -2,14 +2,14 @@
 #
 # Enforces rule 4.1 in DESIGN.md.
 #
-# Only files under src/render/vulkan/ can include a Vulkan header. Every layer
+# Only files under src/gfx/vulkan/ can include a Vulkan header. Every layer
 # above talks in gfx:: types. This keeps the later plugin ABI extraction
 # mechanical instead of a rewrite.
 
 set -euo pipefail
 
 root="${1:-.}"
-allowed="src/render/vulkan/"
+allowed="src/gfx/vulkan/"
 
 search_dirs=()
 for dir in src apps tools tests sandbox; do
