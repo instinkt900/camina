@@ -11,6 +11,10 @@
 #include "reflect/json.h"
 #include "reflect/registry.h"
 #include "render/cube_pass.h"
+#include "sandbox/game.h"
+#include "scene/component_registry.h"
+#include "scene/components.h"
+#include "scene/world.h"
 
 #include <imgui.h>
 
@@ -33,32 +37,34 @@ namespace {
     constexpr float kNearPlane = 0.1F;
     constexpr float kTwoPi = 6.2831853F;
 
-    /// Where the scene file goes. The working directory, so a run is easy to redo.
-    constexpr const char* kScenePath = "scene.json";
+    /// Where the view settings go. The working directory, so a run is easy to redo.
+    /// The scene itself lives in the sandbox content directory, not here.
+    constexpr const char* kViewPath = "view.json";
 
     struct Options {
         std::uint64_t max_frames = 0; ///< 0 means run until the user quits.
         bool validation = true;
+        /// Where the game reads its content. Empty means the compiled-in default.
+        std::string content;
     };
 
     /**
-     * Everything the M2 demo lets the user change.
+     * How the runtime looks at the world, and nothing about the world itself.
      *
-     * This is the struct both reflection consumers read. The inspector builds
-     * its widgets from the descriptors below, and the serializer writes the same
-     * fields to scene.json. Neither one names a field by hand.
+     * The entities live in a scene::World that the sandbox loads. This struct
+     * holds only the camera and the clear color, and it stays because it is the
+     * M2 demonstration: the inspector builds its widgets from the descriptors
+     * below, and the serializer writes the same fields to view.json. Neither one
+     * names a field by hand.
      */
-    struct Scene {
-        std::string name = "M2 demo scene";
+    struct ViewSettings {
+        std::string name = "M3 sandbox view";
         engine::Vec3 clear_color{ 0.25F, 0.25F, 0.3F };
 
-        bool spin = true;
-        float spin_seconds = 5.0F;
-
-        float camera_distance = 3.0F;
-        float camera_height = 1.2F;
+        float camera_distance = 7.0F;
+        float camera_height = 2.5F;
         float fov_degrees = 60.0F;
-        float orbit_seconds = 8.0F;
+        float orbit_seconds = 16.0F;
 
         std::uint64_t frames_drawn = 0;
     };
@@ -72,25 +78,22 @@ namespace {
 // from the field it belongs to.
 // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 template <>
-struct engine::reflect::Describe<Scene> {
-    static constexpr const char* name = "Scene";
+struct engine::reflect::Describe<ViewSettings> {
+    static constexpr const char* name = "ViewSettings";
     static constexpr auto fields() {
         return std::make_tuple(
-            ENGINE_FIELD(Scene, name, Tooltip{ "Saved with the scene" }),
-            ENGINE_FIELD(Scene, clear_color, Range{ 0.0, 1.0, 0.01 },
+            ENGINE_FIELD(ViewSettings, name, Tooltip{ "Saved with the view settings" }),
+            ENGINE_FIELD(ViewSettings, clear_color, Range{ 0.0, 1.0, 0.01 },
                          Tooltip{ "Linear, not sRGB" }),
-            ENGINE_FIELD(Scene, spin, Category{ "Cube" }),
-            ENGINE_FIELD(Scene, spin_seconds, Range{ 0.5, 30.0, 0.1 }, Category{ "Cube" },
-                         Tooltip{ "Seconds for one full turn" }),
-            ENGINE_FIELD(Scene, camera_distance, Range{ 1.0, 12.0, 0.05 }, Category{ "Camera" }),
-            ENGINE_FIELD(Scene, camera_height, Range{ -4.0, 4.0, 0.05 }, Category{ "Camera" }),
-            ENGINE_FIELD(Scene, fov_degrees, Range{ 20.0, 120.0, 0.5 }, Category{ "Camera" }),
-            ENGINE_FIELD(Scene, orbit_seconds, Range{ 1.0, 60.0, 0.1 }, Category{ "Camera" },
-                         Tooltip{ "Seconds for one lap around the cube" }),
+            ENGINE_FIELD(ViewSettings, camera_distance, Range{ 1.0, 30.0, 0.05 }, Category{ "Camera" }),
+            ENGINE_FIELD(ViewSettings, camera_height, Range{ -4.0, 4.0, 0.05 }, Category{ "Camera" }),
+            ENGINE_FIELD(ViewSettings, fov_degrees, Range{ 20.0, 120.0, 0.5 }, Category{ "Camera" }),
+            ENGINE_FIELD(ViewSettings, orbit_seconds, Range{ 1.0, 60.0, 0.1 }, Category{ "Camera" },
+                         Tooltip{ "Seconds for one lap around the world" }),
             // ReadOnly keeps the editor from changing it. Transient keeps it out
             // of the file. The two attributes are read by different consumers,
             // and neither consumer knows about the other.
-            ENGINE_FIELD(Scene, frames_drawn, ReadOnly{}, Transient{}, Category{ "Debug" }));
+            ENGINE_FIELD(ViewSettings, frames_drawn, ReadOnly{}, Transient{}, Category{ "Debug" }));
     }
 };
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -104,6 +107,9 @@ namespace {
             if (arg == "--frames" && i + 1 < argc) {
                 options.max_frames = std::strtoull(argv[i + 1], nullptr, kDecimalBase);
                 ++i;
+            } else if (arg == "--content" && i + 1 < argc) {
+                options.content = argv[i + 1];
+                ++i;
             } else if (arg == "--no-validation") {
                 options.validation = false;
             }
@@ -112,65 +118,96 @@ namespace {
     }
 
     /**
-     * Builds the matrix the cube shader reads.
+     * Builds the matrix that turns a world position into clip space.
      *
-     * The camera orbits the origin and the cube turns on its own axis, so every
-     * face passes the camera. Reverse-Z means the near plane maps to depth 1, and
-     * perspective_reverse_z already negates the Y row for Vulkan clip space.
+     * The camera orbits the origin, so every side of the scene passes it. A
+     * model matrix is not part of this: each entity supplies its own, and
+     * scene::World has already composed it. Reverse-Z means the near plane maps
+     * to depth 1, and perspective_reverse_z already negates the Y row for
+     * Vulkan clip space.
      */
-    engine::Mat4 cube_mvp(const Scene& scene, float seconds, engine::gfx::Extent2D extent) {
+    engine::Mat4 view_projection(const ViewSettings& settings, float seconds,
+                                 engine::gfx::Extent2D extent) {
         const float aspect = extent.height == 0
                                  ? 1.0F
                                  : static_cast<float>(extent.width) /
                                        static_cast<float>(extent.height);
         const engine::Mat4 projection = engine::perspective_reverse_z(
-            glm::radians(scene.fov_degrees), aspect, kNearPlane);
+            glm::radians(settings.fov_degrees), aspect, kNearPlane);
 
-        const float orbit = kTwoPi * seconds / scene.orbit_seconds;
-        const engine::Vec3 eye{ scene.camera_distance * std::sin(orbit), scene.camera_height,
-                                scene.camera_distance * std::cos(orbit) };
+        const float orbit = kTwoPi * seconds / settings.orbit_seconds;
+        const engine::Vec3 eye{ settings.camera_distance * std::sin(orbit),
+                                settings.camera_height,
+                                settings.camera_distance * std::cos(orbit) };
         const engine::Mat4 view =
             glm::lookAt(eye, engine::Vec3{ 0.0F, 0.0F, 0.0F }, engine::world_up);
 
-        const float turn = scene.spin ? kTwoPi * seconds / scene.spin_seconds : 0.0F;
-        const engine::Mat4 model =
-            glm::rotate(engine::Mat4{ 1.0F }, turn, engine::Vec3{ 0.0F, 1.0F, 0.0F });
-
-        return projection * view * model;
+        return projection * view;
     }
 
     /**
-     * Draws the M2 window: the generated inspector, the save and load buttons,
-     * and the registry contents.
+     * Draws the view window: the generated inspector and the save and load
+     * buttons.
      *
-     * Nothing here names a field of Scene. Add a field to the struct and to its
-     * description, and it appears in this window and in the file.
+     * Nothing here names a field of ViewSettings. Add a field to the struct and
+     * to its description, and it appears in this window and in the file.
      */
-    void draw_ui(Scene& scene) {
-        ENGINE_PROFILE_ZONE_N("draw_ui");
+    void draw_view_window(ViewSettings& settings) {
+        ENGINE_PROFILE_ZONE_N("draw_view_window");
 
-        if (ImGui::Begin("Scene")) {
-            if (engine::reflect::inspect(scene)) {
+        if (ImGui::Begin("View")) {
+            if (engine::reflect::inspect(settings)) {
                 // A real editor marks the document dirty here. The demo only
                 // needs to show that the inspector reports a change.
-                ENGINE_LOG_TRACE("The user changed the scene.");
+                ENGINE_LOG_TRACE("The user changed the view.");
             }
 
             ImGui::Separator();
 
             if (ImGui::Button("Save")) {
-                if (engine::reflect::save_json(kScenePath, scene)) {
-                    ENGINE_LOG_INFO("Wrote {}.", kScenePath);
+                if (engine::reflect::save_json(kViewPath, settings)) {
+                    ENGINE_LOG_INFO("Wrote {}.", kViewPath);
                 }
             }
             ImGui::SameLine();
             if (ImGui::Button("Load")) {
-                if (engine::reflect::load_json(kScenePath, scene)) {
-                    ENGINE_LOG_INFO("Read {}.", kScenePath);
+                if (engine::reflect::load_json(kViewPath, settings)) {
+                    ENGINE_LOG_INFO("Read {}.", kViewPath);
                 }
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("%s", kScenePath);
+            ImGui::TextDisabled("%s", kViewPath);
+        }
+        ImGui::End();
+    }
+
+    /**
+     * Draws what the world holds.
+     *
+     * This window reads the world the sandbox loaded. It names no game type, so
+     * a different game in the same runtime shows the same list. Selecting an
+     * entity and editing its components arrives with the rest of M3.3.
+     */
+    void draw_world_window(const engine::scene::World& world) {
+        ENGINE_PROFILE_ZONE_N("draw_world_window");
+
+        if (ImGui::Begin("World")) {
+            ImGui::Text("Entities: %zu", world.size());
+            ImGui::Text("Matrices rebuilt last frame: %zu", world.rebuilt_last_update());
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Hierarchy");
+
+            const entt::registry& entities = world.registry();
+            for (const auto [entity, node] : entities.view<const engine::scene::Hierarchy>().each()) {
+                if (node.parent != entt::null) {
+                    continue;
+                }
+                const auto* named = entities.try_get<engine::scene::Name>(entity);
+                ImGui::BulletText("%s (%zu children)",
+                                  named != nullptr ? named->value.c_str() : "unnamed",
+                                  node.child_count);
+            }
 
             ImGui::Separator();
             ImGui::Text("Registered types: %zu", engine::reflect::registry().size());
@@ -209,13 +246,15 @@ namespace {
     struct FrameContext {
         engine::gfx::Device* device = nullptr;
         const engine::render::CubePass* pass = nullptr;
-        Scene* scene = nullptr;
+        ViewSettings* settings = nullptr;
+        const engine::scene::World* world = nullptr;
     };
 
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
                             float seconds, engine::gfx::Extent2D& out_extent) {
         engine::gfx::Device* device = context.device;
-        Scene& scene = *context.scene;
+        ViewSettings& settings = *context.settings;
+        const engine::scene::World& world = *context.world;
 
         engine::gfx::FrameInfo info;
         engine::gfx::Result result = engine::gfx::begin_frame(device, &info);
@@ -232,12 +271,22 @@ namespace {
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
         engine::gfx::imgui_new_frame();
-        draw_ui(scene);
+        draw_view_window(settings);
+        draw_world_window(world);
 
-        const engine::gfx::ColorRGBA clear{ scene.clear_color.r, scene.clear_color.g,
-                                            scene.clear_color.b, 1.0F };
+        const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
+                                            settings.clear_color.b, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, clear);
-        context.pass->draw(info.commands, cube_mvp(scene, seconds, info.extent));
+
+        // One cube for each entity, at the matrix World composed for it. Until
+        // M4 brings meshes, every entity is a cube, and that is the whole
+        // renderer. Nothing here asks what a component means.
+        const engine::Mat4 clip_from_world = view_projection(settings, seconds, info.extent);
+        for (const auto [entity, placed] :
+             world.registry().view<const engine::scene::WorldTransform>().each()) {
+            context.pass->draw(info.commands, clip_from_world * placed.matrix);
+        }
+
         engine::gfx::imgui_render(info.commands);
         engine::gfx::cmd_end_rendering(info.commands);
 
@@ -269,7 +318,7 @@ int main(int argc, char** argv) {
     engine::Arena frame_arena(kFrameArenaBytes);
 
     engine::platform::Window window;
-    if (!window.create({ .title = "Camina Engine (M2)" })) {
+    if (!window.create({ .title = "Camina Engine (M3 sandbox)" })) {
         engine::jobs::shutdown();
         engine::log::shutdown();
         return 1;
@@ -317,15 +366,39 @@ int main(int argc, char** argv) {
         [](const void* event, void* /*user*/) { engine::gfx::imgui_process_event(event); },
         nullptr);
 
-    Scene scene;
-    engine::reflect::registry().add<Scene>();
-    // A scene file next to the executable wins over the defaults, so a run
+    ViewSettings settings;
+    engine::reflect::registry().add<ViewSettings>();
+    // A view file next to the executable wins over the defaults, so a run
     // continues where the last one stopped.
-    if (std::filesystem::exists(kScenePath) && engine::reflect::load_json(kScenePath, scene)) {
-        ENGINE_LOG_INFO("Read {}.", kScenePath);
+    if (std::filesystem::exists(kViewPath) && engine::reflect::load_json(kViewPath, settings)) {
+        ENGINE_LOG_INFO("Read {}.", kViewPath);
     }
 
-    const FrameContext context{ .device = device, .pass = &cube, .scene = &scene };
+    // The engine registers what it defines, then the game registers what it
+    // defines. A scene loaded before this loses every component nobody claimed.
+    engine::scene::register_builtin_components();
+    sandbox::register_components();
+
+    const std::filesystem::path content =
+        options.content.empty() ? sandbox::default_content_directory()
+                                : std::filesystem::path{ options.content };
+
+    engine::scene::World world;
+    if (!sandbox::load(content, world)) {
+        ENGINE_LOG_CRITICAL("The game did not load. There is nothing to draw.");
+        window.set_event_hook(nullptr, nullptr);
+        engine::gfx::imgui_shutdown(device);
+        cube.destroy();
+        engine::gfx::destroy_device(device);
+        window.destroy();
+        engine::jobs::shutdown();
+        engine::log::shutdown();
+        return 1;
+    }
+
+    const FrameContext context{
+        .device = device, .pass = &cube, .settings = &settings, .world = &world
+    };
 
     std::uint64_t frame = 0;
     bool failed = false;
@@ -357,6 +430,11 @@ int main(int argc, char** argv) {
         const auto now = std::chrono::steady_clock::now();
         const float seconds = std::chrono::duration<float>(now - started).count();
 
+        // The game moves things, then the world composes the matrices, then the
+        // frame draws them. Reversing the first two would draw a frame behind.
+        sandbox::update(world, seconds);
+        world.update();
+
         engine::gfx::Extent2D drawn_extent{};
         const FrameOutcome outcome = draw_frame(context, extent, seconds, drawn_extent);
         if (outcome == FrameOutcome::Failed) {
@@ -368,7 +446,7 @@ int main(int argc, char** argv) {
         }
 
         ++frame;
-        scene.frames_drawn = frame;
+        settings.frames_drawn = frame;
 
         if (now - last_report >= std::chrono::seconds(1)) {
             ENGINE_LOG_INFO("frame {} | {}x{} | arena high water {} bytes | workers {}", frame,
