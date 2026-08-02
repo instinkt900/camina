@@ -4,27 +4,11 @@
 #include "core/log.h"
 
 #include <array>
+#include <vector>
 
 namespace engine::gfx {
 
     namespace {
-
-        /// Returns the live entry a handle names, or nullptr when the handle is
-        /// null, out of range, or stale.
-        PipelineEntry* resolve(Device& device, PipelineHandle handle) {
-            if (!handle.valid()) {
-                return nullptr;
-            }
-            const std::uint32_t index = handle.index();
-            if (index >= device.pipelines.size()) {
-                return nullptr;
-            }
-            PipelineEntry& entry = device.pipelines[index];
-            if (!entry.alive || entry.generation != handle.generation()) {
-                return nullptr;
-            }
-            return &entry;
-        }
 
         Result create_module(Device& device, const ShaderCode& code, VkShaderModule* out) {
             VkShaderModuleCreateInfo info{};
@@ -47,7 +31,7 @@ namespace engine::gfx {
             VkPipelineColorBlendStateCreateInfo blend{};
         };
 
-        void fill_fixed_state(FixedState& state) {
+        void fill_fixed_state(FixedState& state, const GraphicsPipelineDesc& desc) {
             state.vertex_input.sType =
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -63,10 +47,11 @@ namespace engine::gfx {
             state.raster.sType =
                 VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             state.raster.polygonMode = VK_POLYGON_MODE_FILL;
-            // Culling stays off until M1.3 brings real geometry. Vulkan clip space
-            // puts +Y down, which flips the apparent winding, and a silently
-            // culled first triangle is a hard failure to read.
-            state.raster.cullMode = VK_CULL_MODE_NONE;
+            state.raster.cullMode = desc.cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+            // Vulkan clip space already puts +Y down. The projection in
+            // math/conventions.h negates the Y row, which cancels that, so the
+            // winding the rasterizer sees matches the winding in world space.
+            // Counter-clockwise stays front facing, as glTF supplies it.
             state.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             state.raster.lineWidth = 1.0F;
 
@@ -74,10 +59,13 @@ namespace engine::gfx {
                 VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
             state.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-            // No depth attachment yet, so the test and the write stay off. M1.3
-            // turns them on with VK_COMPARE_OP_GREATER for reverse-Z.
+            // Reverse-Z puts the near plane at 1 and the far plane at 0, so a
+            // nearer fragment has the greater value. See DESIGN.md section 3.
             state.depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            state.depth.depthTestEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
+            state.depth.depthWriteEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
             state.depth.depthCompareOp = VK_COMPARE_OP_GREATER;
+            state.depth.maxDepthBounds = 1.0F;
 
             state.blend_attachment.colorWriteMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -88,8 +76,74 @@ namespace engine::gfx {
             state.blend.pAttachments = &state.blend_attachment;
         }
 
+        /// Owns the storage that the vertex input state points at.
+        struct VertexInput {
+            VkVertexInputBindingDescription binding{};
+            std::vector<VkVertexInputAttributeDescription> attributes;
+        };
+
+        VkFormat to_vk_format(VertexFormat format) {
+            return format == VertexFormat::Float2 ? VK_FORMAT_R32G32_SFLOAT
+                                                  : VK_FORMAT_R32G32B32_SFLOAT;
+        }
+
+        /// Leaves the state empty when the pipeline builds positions from the
+        /// vertex index, which is what the triangle pass does.
+        void fill_vertex_input(VertexInput& input, FixedState& state,
+                               const GraphicsPipelineDesc& desc) {
+            if (desc.attributes == nullptr || desc.attribute_count == 0) {
+                return;
+            }
+
+            input.binding.binding = 0;
+            input.binding.stride = desc.vertex_stride;
+            input.binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            input.attributes.reserve(desc.attribute_count);
+            for (std::size_t i = 0; i < desc.attribute_count; ++i) {
+                // Rule 4.2 passes a pointer and a count, so index it directly.
+                const VertexAttribute& source = desc.attributes[i];
+                VkVertexInputAttributeDescription attribute{};
+                attribute.location = source.location;
+                attribute.binding = 0;
+                attribute.offset = source.offset;
+                attribute.format = to_vk_format(source.format);
+                input.attributes.push_back(attribute);
+            }
+
+            state.vertex_input.vertexBindingDescriptionCount = 1;
+            state.vertex_input.pVertexBindingDescriptions = &input.binding;
+            state.vertex_input.vertexAttributeDescriptionCount =
+                static_cast<std::uint32_t>(input.attributes.size());
+            state.vertex_input.pVertexAttributeDescriptions = input.attributes.data();
+        }
+
+        /// The camera matrix travels as a push constant, and the texture is the one
+        /// descriptor set. Both stay optional.
+        Result create_layout(Device& device, const GraphicsPipelineDesc& desc,
+                             VkPipelineLayout* out) {
+            VkPushConstantRange push{};
+            push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            push.size = desc.push_constant_size;
+
+            VkPipelineLayoutCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            if (desc.sample_texture) {
+                info.setLayoutCount = 1;
+                info.pSetLayouts = &device.texture_layout;
+            }
+            if (desc.push_constant_size > 0) {
+                info.pushConstantRangeCount = 1;
+                info.pPushConstantRanges = &push;
+            }
+
+            ENGINE_VK_TRY(vkCreatePipelineLayout(device.device, &info, nullptr, out));
+            return Result::Success;
+        }
+
         /// Claims a free slot, or grows the pool. Returns the handle for the slot.
-        PipelineHandle claim_slot(Device& device, VkPipeline pipeline, VkPipelineLayout layout) {
+        PipelineHandle claim_slot(Device& device, VkPipeline pipeline, VkPipelineLayout layout,
+                                  std::uint32_t push_constant_size) {
             std::uint32_t index = 0;
             if (!device.free_pipelines.empty()) {
                 index = device.free_pipelines.back();
@@ -102,6 +156,7 @@ namespace engine::gfx {
             PipelineEntry& entry = device.pipelines[index];
             entry.pipeline = pipeline;
             entry.layout = layout;
+            entry.push_constant_size = push_constant_size;
             entry.alive = true;
             return PipelineHandle::make(index, entry.generation);
         }
@@ -109,6 +164,17 @@ namespace engine::gfx {
     } // namespace
 
     namespace vk {
+
+        PipelineEntry* resolve_pipeline(Device& device, PipelineHandle handle) {
+            if (!handle.valid() || handle.index() >= device.pipelines.size()) {
+                return nullptr;
+            }
+            PipelineEntry& entry = device.pipelines[handle.index()];
+            if (!entry.alive || entry.generation != handle.generation()) {
+                return nullptr;
+            }
+            return &entry;
+        }
 
         void destroy_pipelines(Device& device) {
             for (PipelineEntry& entry : device.pipelines) {
@@ -147,17 +213,7 @@ namespace engine::gfx {
 
         VkPipelineLayout layout = VK_NULL_HANDLE;
         if (succeeded(result)) {
-            // Empty for now. M1.3 adds the descriptor set for the camera and the
-            // texture.
-            VkPipelineLayoutCreateInfo layout_info{};
-            layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            const VkResult created =
-                vkCreatePipelineLayout(device->device, &layout_info, nullptr, &layout);
-            if (created != VK_SUCCESS) {
-                ENGINE_LOG_ERROR("vkCreatePipelineLayout failed with {} ({})",
-                                 vk::vk_result_name(created), static_cast<std::int32_t>(created));
-                result = vk::to_result(created);
-            }
+            result = create_layout(*device, desc, &layout);
         }
 
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -184,7 +240,10 @@ namespace engine::gfx {
             };
 
             FixedState state;
-            fill_fixed_state(state);
+            fill_fixed_state(state, desc);
+
+            VertexInput vertex_input;
+            fill_vertex_input(vertex_input, state, desc);
 
             const std::array<VkDynamicState, 2> dynamic_states{ VK_DYNAMIC_STATE_VIEWPORT,
                                                                 VK_DYNAMIC_STATE_SCISSOR };
@@ -199,6 +258,10 @@ namespace engine::gfx {
             rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
             rendering.colorAttachmentCount = 1;
             rendering.pColorAttachmentFormats = &device->swapchain_format;
+            // Every frame attaches the depth image, so every pipeline must name
+            // its format or the draw is invalid. depth_test decides only whether
+            // the pipeline reads and writes depth, not whether it is attached.
+            rendering.depthAttachmentFormat = device->depth_format;
 
             VkGraphicsPipelineCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -239,7 +302,7 @@ namespace engine::gfx {
             return result;
         }
 
-        *out_pipeline = claim_slot(*device, pipeline, layout);
+        *out_pipeline = claim_slot(*device, pipeline, layout, desc.push_constant_size);
         return Result::Success;
     }
 
@@ -247,7 +310,7 @@ namespace engine::gfx {
         if (device == nullptr) {
             return;
         }
-        PipelineEntry* entry = resolve(*device, pipeline);
+        PipelineEntry* entry = vk::resolve_pipeline(*device, pipeline);
         if (entry == nullptr) {
             return;
         }
@@ -267,13 +330,48 @@ namespace engine::gfx {
         ENGINE_CHECK(commands != nullptr, "cmd_bind_pipeline needs a command list.");
         ENGINE_CHECK(commands->owner != nullptr, "The command list has no device.");
 
-        const PipelineEntry* entry = resolve(*commands->owner, pipeline);
+        const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
         if (entry == nullptr) {
             ENGINE_LOG_ERROR("cmd_bind_pipeline received a stale or null pipeline handle.");
             return;
         }
 
         vkCmdBindPipeline(commands->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, entry->pipeline);
+    }
+
+    void cmd_bind_texture(CommandList* commands, PipelineHandle pipeline,
+                          TextureHandle texture) {
+        ENGINE_CHECK(commands != nullptr, "cmd_bind_texture needs a command list.");
+
+        const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
+        const TextureEntry* bound = vk::resolve_texture(*commands->owner, texture);
+        if (entry == nullptr || bound == nullptr) {
+            ENGINE_LOG_ERROR("cmd_bind_texture received a stale or null handle.");
+            return;
+        }
+
+        vkCmdBindDescriptorSets(commands->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, entry->layout,
+                                0, 1, &bound->set, 0, nullptr);
+    }
+
+    void cmd_push_constants(CommandList* commands, PipelineHandle pipeline, const void* data,
+                            std::uint32_t size) {
+        ENGINE_CHECK(commands != nullptr, "cmd_push_constants needs a command list.");
+        ENGINE_CHECK(data != nullptr, "cmd_push_constants needs data.");
+
+        const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("cmd_push_constants received a stale or null pipeline handle.");
+            return;
+        }
+        if (size != entry->push_constant_size) {
+            ENGINE_LOG_ERROR("cmd_push_constants got {} bytes but the pipeline declared {}.", size,
+                             entry->push_constant_size);
+            return;
+        }
+
+        vkCmdPushConstants(commands->buffer, entry->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, size,
+                           data);
     }
 
     void cmd_draw(CommandList* commands, std::uint32_t vertex_count,

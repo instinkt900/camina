@@ -23,13 +23,18 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
-M0 is complete. The runtime opens a window, runs the job system across 8 workers,
-resets a frame arena each tick, and reports to Tracy. There is no renderer yet.
+M1 is complete. The runtime opens a window, runs the job system, and draws a spinning
+textured cube through Vulkan. It has a swapchain that survives resize, two frames in
+flight, dynamic rendering, reverse-Z depth, and clean validation.
 
-M1 is next: Vulkan bring-up. See `DESIGN.md` §10.
+M1 arrived in three parts: the device and the swapchain, the shader build and the
+triangle, then buffers, textures, descriptors, and the cube.
 
-Verified on 2026-08-02 with Clang 19, CMake 3.28.3, Conan 2.31.1, and Mesa 25.2.8 on
-an Intel GPU. The build produces no warnings under the full warning set.
+M2 is next: reflection. See `DESIGN.md` §10.
+
+Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+GeForce MX250 with the Khronos validation layer active. The build produces no warnings
+under the full warning set.
 
 ## Development flow
 
@@ -63,6 +68,22 @@ owns the repository.
 
 Change `version.txt` in its own small commit on `main`, or in a release pull request of
 its own. A push to `main` that changes `version.txt` starts a release.
+
+## Issue tracker
+
+`DESIGN.md` §10 defines the milestones. The GitHub tracker holds the state.
+
+- **One GitHub Milestone for each `DESIGN.md` milestone**, M0 through M10, plus M5.5.
+- **Issues are work increments, not milestones.** M1 was one line in `DESIGN.md` and became
+  three pull requests. Split a milestone the same way, and name the issues `M<n>.<k> — ...`.
+- **An issue links to its `DESIGN.md` section. It never copies the definition.** Two copies
+  drift. The issue body holds the task list and the state.
+- **Create issues for the milestone in progress and the next one.** A detailed ticket for
+  M8 written today will be wrong by the time it starts.
+- Labels are `area: build`, `area: gfx`, `area: render`, `area: core`, `area: assets`, and
+  `area: editor`. Put `milestone-goal` on the issue that carries the milestone's own
+  done-when test.
+- Reference the issue from the pull request, so GitHub links them.
 
 ## Writing style
 

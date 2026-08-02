@@ -40,10 +40,92 @@ namespace engine::gfx {
         std::size_t word_count = 0;           ///< How many 32-bit words follow.
     };
 
+    /// @brief Distinguishes a buffer handle from every other kind of handle.
+    struct BufferTag {};
+
+    /// @brief Refers to a GPU buffer the device owns.
+    using BufferHandle = Handle<BufferTag>;
+
+    /// @brief Distinguishes a texture handle from every other kind of handle.
+    struct TextureTag {};
+
+    /// @brief Refers to a sampled texture the device owns.
+    using TextureHandle = Handle<TextureTag>;
+
+    /// @brief What a buffer is bound as.
+    enum class BufferUsage : std::uint32_t {
+        Vertex = 0, ///< Bound with cmd_bind_vertex_buffer().
+        Index,      ///< Bound with cmd_bind_index_buffer(). Holds 32-bit indices.
+    };
+
+    /**
+     * @brief Settings for create_buffer().
+     *
+     * The device copies the data through a staging buffer, so the memory ends up
+     * in device-local storage. The source only has to live for the create call.
+     */
+    struct BufferDesc {
+        const void* data = nullptr;              ///< The bytes to upload. Required.
+        std::size_t size = 0;                    ///< How many bytes to upload.
+        BufferUsage usage = BufferUsage::Vertex; ///< How the buffer will be bound.
+    };
+
+    /**
+     * @brief Settings for create_texture().
+     *
+     * The pixels are 8 bits for each channel in RGBA order, and the device reads
+     * them as sRGB. DESIGN.md section 3 converts to linear at the texture read.
+     */
+    struct TextureDesc {
+        const void* pixels = nullptr; ///< Width times height times 4 bytes. Required.
+        std::uint32_t width = 0;      ///< Width in texels.
+        std::uint32_t height = 0;     ///< Height in texels.
+    };
+
+    /// @brief The element type of one vertex attribute.
+    enum class VertexFormat : std::uint32_t {
+        Float2 = 0, ///< Two 32-bit floats.
+        Float3,     ///< Three 32-bit floats.
+    };
+
+    /// @brief One input to the vertex shader.
+    struct VertexAttribute {
+        std::uint32_t location = 0;                 ///< The `layout(location = N)` in the shader.
+        std::uint32_t offset = 0;                   ///< Byte offset inside one vertex.
+        VertexFormat format = VertexFormat::Float3; ///< The element type.
+    };
+
     /// @brief Settings for create_graphics_pipeline().
     struct GraphicsPipelineDesc {
         ShaderCode vertex;   ///< The vertex stage. Required.
         ShaderCode fragment; ///< The fragment stage. Required.
+
+        /// @brief The vertex attributes, or null to build positions from the vertex index.
+        const VertexAttribute* attributes = nullptr;
+        std::size_t attribute_count = 0; ///< How many entries @c attributes holds.
+        std::uint32_t vertex_stride = 0; ///< Bytes from one vertex to the next.
+
+        /// @brief How many bytes of push constants the vertex stage reads. 0 for none.
+        std::uint32_t push_constant_size = 0;
+        /// @brief Whether the fragment stage samples the texture at set 0, binding 0.
+        bool sample_texture = false;
+        /**
+         * @brief Whether to test and write depth. Reverse-Z keeps nearer fragments.
+         *
+         * This does not decide whether a depth attachment is present. Every frame
+         * attaches one, and every pipeline declares its format. A pipeline that
+         * leaves this false still renders into the same attachment, and simply
+         * does not read or write it.
+         */
+        bool depth_test = false;
+        /**
+         * @brief Whether to cull back faces.
+         *
+         * A front face is counter-clockwise, as glTF supplies it. Vulkan clip
+         * space puts +Y down, and the projection in `math/conventions.h` negates
+         * the Y row, so the two cancel and no winding change is needed.
+         */
+        bool cull_back = false;
     };
 
     /// @brief The outcome of a gfx call.

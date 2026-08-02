@@ -6,9 +6,10 @@
 #include "core/jobs.h"
 #include "math/conventions.h"
 
+#include <array>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace {
@@ -118,6 +119,46 @@ namespace {
         check(engine::jobs::worker_count() == 0, "shutdown stops the workers");
     }
 
+    /**
+     * Pins the orientation that the rasterizer sees.
+     *
+     * A face wound counter-clockwise seen from outside, and facing the camera,
+     * must reach the framebuffer with a negative signed area. That is the value
+     * VK_FRONT_FACE_COUNTER_CLOCKWISE accepts as front facing.
+     *
+     * Vulkan clip space puts +Y down, and perspective_reverse_z negates the Y
+     * row. The two cancel, so no winding change is needed anywhere. Remove the
+     * negation and this test fails, which is the signal to revisit frontFace in
+     * gfx/vulkan/vk_pipeline.cpp. An inside-out cube is otherwise easy to miss.
+     */
+    void test_winding() {
+        const engine::Mat4 projection =
+            engine::perspective_reverse_z(glm::radians(60.0F), 16.0F / 9.0F, 0.1F);
+
+        // The +Z face of a unit cube, wound counter-clockwise from outside, seen
+        // by a camera three meters along +Z.
+        const std::array<engine::Vec3, 3> face{ engine::Vec3{ -0.5F, -0.5F, 0.5F },
+                                                engine::Vec3{ 0.5F, -0.5F, 0.5F },
+                                                engine::Vec3{ 0.5F, 0.5F, 0.5F } };
+
+        std::array<engine::Vec2, 3> ndc{};
+        for (std::size_t i = 0; i < face.size(); ++i) {
+            const engine::Vec3 eye{ face[i].x, face[i].y, face[i].z - 3.0F };
+            const engine::Vec4 clip = projection * engine::Vec4{ eye, 1.0F };
+            ndc[i] = engine::Vec2{ clip.x / clip.w, clip.y / clip.w };
+        }
+
+        float area = 0.0F;
+        for (std::size_t i = 0; i < ndc.size(); ++i) {
+            const engine::Vec2& a = ndc[i];
+            const engine::Vec2& b = ndc[(i + 1) % ndc.size()];
+            area += (a.x * b.y) - (b.x * a.y);
+        }
+        area *= 0.5F;
+
+        check(area < 0.0F, "a camera-facing outward face is front facing under CCW");
+    }
+
 } // namespace
 
 int main() {
@@ -127,6 +168,8 @@ int main() {
     test_handle();
     std::printf("conventions\n");
     test_conventions();
+    std::printf("winding\n");
+    test_winding();
     std::printf("jobs\n");
     test_jobs();
 

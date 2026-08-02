@@ -171,10 +171,16 @@ namespace engine::gfx {
             if (!succeeded(result)) {
                 return result;
             }
-            return create_render_semaphores(device);
+            result = create_render_semaphores(device);
+            if (!succeeded(result)) {
+                return result;
+            }
+            return create_depth_image(device);
         }
 
         void destroy_swapchain(Device& device) {
+            destroy_depth_image(device);
+
             for (VkSemaphore& semaphore : device.render_finished) {
                 if (semaphore != VK_NULL_HANDLE) {
                     vkDestroySemaphore(device.device, semaphore, nullptr);
@@ -197,7 +203,7 @@ namespace engine::gfx {
         }
 
         void transition_image(VkCommandBuffer buffer, VkImage image, VkImageLayout from,
-                              VkImageLayout to) {
+                              VkImageLayout to, VkImageAspectFlags aspect) {
             VkImageMemoryBarrier2 barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             // ALL_COMMANDS is heavier than this milestone needs. M5 replaces it
@@ -211,7 +217,7 @@ namespace engine::gfx {
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.image = image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.aspectMask = aspect;
             barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
             barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 

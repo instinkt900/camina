@@ -5,6 +5,41 @@
 
 namespace engine::gfx {
 
+    namespace {
+
+        /// Opens the command buffer and moves both attachments into their
+        /// rendering layouts.
+        Result open_recording(Device& device, Frame& frame) {
+            ENGINE_VK_TRY(vkResetCommandPool(device.device, frame.pool, 0));
+
+            VkCommandBufferBeginInfo begin{};
+            begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            ENGINE_VK_TRY(vkBeginCommandBuffer(frame.commands.buffer, &begin));
+
+            frame.commands.target_image = device.images[device.image_index];
+            frame.commands.target_view = device.views[device.image_index];
+            frame.commands.extent =
+                Extent2D{ device.swapchain_extent.width, device.swapchain_extent.height };
+
+            // The previous contents are never read, so UNDEFINED is the correct
+            // source layout and lets the driver skip a decompress.
+            vk::transition_image(frame.commands.buffer, frame.commands.target_image,
+                                 VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_ASPECT_COLOR_BIT);
+
+            if (device.depth_image != VK_NULL_HANDLE) {
+                vk::transition_image(frame.commands.buffer, device.depth_image,
+                                     VK_IMAGE_LAYOUT_UNDEFINED,
+                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_ASPECT_DEPTH_BIT);
+            }
+            return Result::Success;
+        }
+
+    } // namespace
+
     Result begin_frame(Device* device, FrameInfo* out_frame) {
         ENGINE_CHECK(device != nullptr, "begin_frame needs a device.");
         ENGINE_CHECK(out_frame != nullptr, "begin_frame needs somewhere to put the frame.");
@@ -32,24 +67,14 @@ namespace engine::gfx {
             return vk::to_result(acquired);
         }
 
+        const Result opened = open_recording(*device, frame);
+        if (!succeeded(opened)) {
+            // Leave the fence signaled. Nothing was submitted, so this slot must
+            // stay free, or the next begin_frame waits on it forever.
+            return opened;
+        }
+
         ENGINE_VK_TRY(vkResetFences(device->device, 1, &frame.in_flight));
-        ENGINE_VK_TRY(vkResetCommandPool(device->device, frame.pool, 0));
-
-        VkCommandBufferBeginInfo begin{};
-        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        ENGINE_VK_TRY(vkBeginCommandBuffer(frame.commands.buffer, &begin));
-
-        frame.commands.target_image = device->images[device->image_index];
-        frame.commands.target_view = device->views[device->image_index];
-        frame.commands.extent = Extent2D{ device->swapchain_extent.width,
-                                          device->swapchain_extent.height };
-
-        // The previous contents are never read, so UNDEFINED is the correct source
-        // layout and lets the driver skip a decompress.
-        vk::transition_image(frame.commands.buffer, frame.commands.target_image,
-                             VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         device->frame_open = true;
 
@@ -68,7 +93,7 @@ namespace engine::gfx {
 
         vk::transition_image(frame.commands.buffer, frame.commands.target_image,
                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
 
         ENGINE_VK_TRY(vkEndCommandBuffer(frame.commands.buffer));
 
@@ -133,12 +158,29 @@ namespace engine::gfx {
         color.clearValue.color.float32[2] = clear_color.b;
         color.clearValue.color.float32[3] = clear_color.a;
 
+        // Reverse-Z clears depth to 0, which is the far plane. See DESIGN.md
+        // section 3.
+        VkRenderingAttachmentInfo depth{};
+        depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth.imageView = commands->owner->depth_view;
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.clearValue.depthStencil.depth = 0.0F;
+
+        // create_swapchain() builds the depth image, and begin_frame() opens a
+        // frame only when the swapchain is live. So a frame always has depth, and
+        // every pipeline declares the depth format for attachment compatibility.
+        ENGINE_ASSERT(commands->owner->depth_view != VK_NULL_HANDLE,
+                      "A frame is open but the depth attachment is missing.");
+
         VkRenderingInfo info{};
         info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         info.renderArea.extent = VkExtent2D{ commands->extent.width, commands->extent.height };
         info.layerCount = 1;
         info.colorAttachmentCount = 1;
         info.pColorAttachments = &color;
+        info.pDepthAttachment = &depth;
 
         vkCmdBeginRendering(commands->buffer, &info);
 

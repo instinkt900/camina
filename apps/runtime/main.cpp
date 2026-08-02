@@ -6,7 +6,7 @@
 #include "gfx/device.h"
 #include "math/conventions.h"
 #include "platform/window.h"
-#include "render/triangle_pass.h"
+#include "render/cube_pass.h"
 
 #include <chrono>
 #include <cmath>
@@ -21,6 +21,14 @@ namespace {
     constexpr int kDecimalBase = 10;
     /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
     constexpr int kMinimizedSleepMs = 16;
+
+    /// The orbit camera. Meters and radians, per DESIGN.md section 3.
+    constexpr float kCameraDistance = 3.0F;
+    constexpr float kCameraHeight = 1.2F;
+    constexpr float kCameraFovDegrees = 60.0F;
+    constexpr float kNearPlane = 0.1F;
+    constexpr float kOrbitPeriodSeconds = 8.0F;
+    constexpr float kSpinPeriodSeconds = 5.0F;
 
     /// The clear color cycles so that a still frame still shows the loop is live.
     constexpr float kColorPeriodSeconds = 4.0F;
@@ -59,6 +67,34 @@ namespace {
         };
     }
 
+    /**
+     * Builds the matrix the cube shader reads.
+     *
+     * The camera orbits the origin and the cube turns on its own axis, so every
+     * face passes the camera. Reverse-Z means the near plane maps to depth 1, and
+     * perspective_reverse_z already negates the Y row for Vulkan clip space.
+     */
+    engine::Mat4 cube_mvp(float seconds, engine::gfx::Extent2D extent) {
+        const float aspect = extent.height == 0
+                                 ? 1.0F
+                                 : static_cast<float>(extent.width) /
+                                       static_cast<float>(extent.height);
+        const engine::Mat4 projection = engine::perspective_reverse_z(
+            glm::radians(kCameraFovDegrees), aspect, kNearPlane);
+
+        const float orbit = kTwoPi * seconds / kOrbitPeriodSeconds;
+        const engine::Vec3 eye{ kCameraDistance * std::sin(orbit), kCameraHeight,
+                                kCameraDistance * std::cos(orbit) };
+        const engine::Mat4 view =
+            glm::lookAt(eye, engine::Vec3{ 0.0F, 0.0F, 0.0F }, engine::world_up);
+
+        const float spin = kTwoPi * seconds / kSpinPeriodSeconds;
+        const engine::Mat4 model =
+            glm::rotate(engine::Mat4{ 1.0F }, spin, engine::Vec3{ 0.0F, 1.0F, 0.0F });
+
+        return projection * view * model;
+    }
+
     engine::gfx::Extent2D window_extent(const engine::platform::Window& window) {
         return engine::gfx::Extent2D{ static_cast<std::uint32_t>(window.size().x),
                                       static_cast<std::uint32_t>(window.size().y) };
@@ -82,7 +118,7 @@ namespace {
         Failed,  ///< The device reported an error the loop cannot handle.
     };
 
-    FrameOutcome draw_frame(engine::gfx::Device* device, const engine::render::TrianglePass& pass,
+    FrameOutcome draw_frame(engine::gfx::Device* device, const engine::render::CubePass& pass,
                             engine::gfx::Extent2D extent, float seconds,
                             engine::gfx::Extent2D& out_extent) {
         engine::gfx::FrameInfo info;
@@ -98,7 +134,7 @@ namespace {
         }
 
         engine::gfx::cmd_begin_rendering(info.commands, clear_color_at(seconds));
-        pass.draw(info.commands);
+        pass.draw(info.commands, cube_mvp(seconds, info.extent));
         engine::gfx::cmd_end_rendering(info.commands);
 
         result = engine::gfx::end_frame(device);
@@ -152,8 +188,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    engine::render::TrianglePass triangle;
-    if (!triangle.create(device)) {
+    engine::render::CubePass cube;
+    if (!cube.create(device)) {
         engine::gfx::destroy_device(device);
         window.destroy();
         engine::jobs::shutdown();
@@ -192,7 +228,7 @@ int main(int argc, char** argv) {
         const float seconds = std::chrono::duration<float>(now - started).count();
 
         engine::gfx::Extent2D drawn_extent{};
-        const FrameOutcome outcome = draw_frame(device, triangle, extent, seconds, drawn_extent);
+        const FrameOutcome outcome = draw_frame(device, cube, extent, seconds, drawn_extent);
         if (outcome == FrameOutcome::Failed) {
             failed = true;
             break;
@@ -218,9 +254,9 @@ int main(int argc, char** argv) {
         ENGINE_PROFILE_FRAME();
     }
 
-    // The pipeline must go before the device that owns it.
+    // The resources must go before the device that owns them.
     engine::gfx::device_wait_idle(device);
-    triangle.destroy();
+    cube.destroy();
     engine::gfx::destroy_device(device);
     window.destroy();
     engine::jobs::shutdown();
