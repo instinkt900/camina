@@ -48,11 +48,20 @@ namespace engine::platform {
         }
     }
 
+    void Window::set_event_hook(EventHook hook, void* user) {
+        event_hook_ = hook;
+        event_hook_user_ = user;
+    }
+
     bool Window::poll() {
         ENGINE_PROFILE_ZONE_N("Window::poll");
 
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            if (event_hook_ != nullptr) {
+                event_hook_(&event, event_hook_user_);
+            }
+
             switch (event.type) {
             case SDL_EVENT_QUIT:
                 running_ = false;

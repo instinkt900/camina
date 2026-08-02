@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M1 complete
+Status: M2 complete
 Last updated: 2026-08-02
 
 ---
@@ -231,7 +231,8 @@ engine/
     core/              logging, assert, arena and pool allocators, handles,
                        time, jobs (enkiTS wrapper), Tracy macros
     math/              glm wrapper, transform, AABB, frustum, conventions.h
-    reflect/           field descriptors, attributes, type registry
+    reflect/           field descriptors, attributes, type registry, and the
+                       two consumers: the ImGui inspector and JSON
     platform/          SDL3 window, input, filesystem, dynamic library loading
     gfx/               PUBLIC render interface: handles, descs, command list
       vulkan/          the ONLY place vulkan.h is legal (rule 4.1)
@@ -279,6 +280,21 @@ costly. The minimum set is:
 **Validation rule.** Never ship a reflection design with one consumer. Build the ImGui
 inspector and the JSON serializer together in M2. A single consumer never proves the
 abstraction.
+
+**What M2 built.** `reflect/reflect.h` holds the descriptors, `reflect/inspector.h` holds
+the ImGui consumer, and `reflect/json.h` holds the serialization consumer. Both consumers
+call only `for_each_field()`, `field_count()`, and `type_name()`, so the later libclang
+step can replace the descriptors without touching either one.
+
+The two consumers split the attribute list cleanly, which is the result the validation rule
+was looking for. `Range`, `Tooltip`, `Category`, `Hidden`, and `ReadOnly` reach only the
+inspector. `Transient` and `Version` reach only the serializer. No attribute needed a change
+to serve the second consumer, and no consumer needed a field the other one added.
+
+`Version` drives the schema migration. The version of a type is the largest `Version` on any
+of its fields, and the writer stores it under `__version`. A field that the document
+predates keeps its default and the reader stays quiet. A field missing from a document that
+should carry it is a warning, because that points at a truncated file.
 
 ---
 

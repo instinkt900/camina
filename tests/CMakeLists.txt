@@ -15,7 +15,14 @@ engine_enable_clang_tidy(test_reflect)
 
 add_test(NAME reflect COMMAND test_reflect)
 
-# Rule 4.1. No file outside src/render/vulkan/ can include a Vulkan header.
+add_executable(test_json test_json.cpp)
+target_link_libraries(test_json PRIVATE engine::core)
+engine_set_warnings(test_json)
+engine_enable_clang_tidy(test_json)
+
+add_test(NAME json COMMAND test_json)
+
+# Rule 4.1. No file outside src/gfx/vulkan/ can include a Vulkan header.
 #
 # The check is a shell script, so it needs bash. A Windows machine without Git
 # Bash does not get the test. The vulkan-containment job in CI runs on Linux and

@@ -47,8 +47,18 @@ class CaminaConan(ConanFile):
         self.requires("volk/1.4.350.0")
         self.requires("vulkan-memory-allocator/3.3.0")
 
+        # M2. Both consumers of the reflection descriptors. See DESIGN.md
+        # section 7.
+        #
+        # ImGui is not gated behind with_editor. Hard rule 4.3 says the editor is
+        # an application, not a build mode, and the inspector runs as a debug
+        # overlay in the runtime long before apps/editor exists. The docking
+        # branch is the one the M8 editor wants, so take it now and do not
+        # change the version later.
+        self.requires("imgui/1.92.8-docking")
+        self.requires("nlohmann_json/3.12.0")
+
         if self.options.with_editor:
-            self.requires("imgui/1.92.8-docking")
             self.requires("imguizmo/1.83")
 
         if self.options.with_lua:

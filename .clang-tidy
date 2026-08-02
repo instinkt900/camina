@@ -50,3 +50,11 @@ Checks: >
 
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*'
+
+# Rule 4.4 says we vendor only what we patch, so a Conan header is code we will
+# never change. Linting it stops the build over a style choice upstream made.
+# The .cpp files carry SKIP_LINTING, but a header reaches us through our own
+# translation unit and the header filter above would still take it.
+#
+# This is engine-specific and moth_ui does not need it today.
+ExcludeHeaderFilterRegex: '.*/\.conan2/.*'
