@@ -4,6 +4,7 @@ add_library(engine_core STATIC
     core/arena.cpp
     platform/window.cpp
     gfx/types.cpp
+    reflect/registry.cpp
     gfx/vulkan/vk_device.cpp
     gfx/vulkan/vk_swapchain.cpp
     gfx/vulkan/vk_frame.cpp
@@ -71,6 +72,13 @@ if(WIN32)
         NOMINMAX
         WIN32_LEAN_AND_MEAN
     )
+endif()
+
+# MSVC keeps its old preprocessor unless you ask for the conforming one, and the
+# old one has no __VA_OPT__. reflect/reflect.h needs it for ENGINE_FIELD, and
+# that header is public, so this is PUBLIC too.
+if(MSVC)
+    target_compile_options(engine_core PUBLIC /Zc:preprocessor)
 endif()
 
 engine_set_warnings(engine_core)

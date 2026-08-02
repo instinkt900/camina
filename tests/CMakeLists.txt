@@ -8,6 +8,13 @@ engine_enable_clang_tidy(test_core)
 
 add_test(NAME core COMMAND test_core)
 
+add_executable(test_reflect test_reflect.cpp)
+target_link_libraries(test_reflect PRIVATE engine::core)
+engine_set_warnings(test_reflect)
+engine_enable_clang_tidy(test_reflect)
+
+add_test(NAME reflect COMMAND test_reflect)
+
 # Rule 4.1. No file outside src/render/vulkan/ can include a Vulkan header.
 #
 # The check is a shell script, so it needs bash. A Windows machine without Git
