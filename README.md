@@ -88,6 +88,21 @@ Every public entity in a header carries a Doxygen comment. The docs build treats
 undocumented entity or a mismatched `@param` as an error, and CI runs it on every
 push.
 
+## Development flow
+
+Development work happens on a branch and lands through a pull request. A small
+documentation fix, a typo, or a one-line tweak can go straight to `main`.
+
+`main` carries no branch protection rules. This flow is a convention, and an exception is
+fine when the change is small.
+
+1. Branch from `main`. Name the branch `feat/...`, `fix/...`, or `docs/...`.
+2. Commit in the conventional style.
+3. Open a pull request. CI runs the format check, the docs build, the Vulkan containment
+   check, and a build across GCC and Clang.
+4. Squash merge, with a conventional-commit title. Each pull request then becomes one
+   changelog entry.
+
 ## Releases
 
 `version.txt` holds the version. Change it and push to `main`. CI then tags the commit,
