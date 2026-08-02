@@ -92,10 +92,17 @@ jobs:
           key: conan-${{ matrix.profile }}-${{ hashFiles('conanfile.py') }}
           restore-keys: conan-${{ matrix.profile }}-
 
+      # The xorg/system recipe needs about 35 X11 and XCB development packages.
+      # Conan defaults tools.system.package_manager:mode to "check", so it stops
+      # and asks the user to install them. On a runner there is no user, so let
+      # Conan install them with sudo. Do not put this in the profiles. A local
+      # build must not install system packages on its own.
       - name: Conan install
         run: |
           conan install . -pr:h profiles/${{ matrix.profile }} \
-            -pr:b profiles/${{ matrix.profile }} -b missing
+            -pr:b profiles/${{ matrix.profile }} -b missing \
+            -c tools.system.package_manager:mode=install \
+            -c tools.system.package_manager:sudo=True
 
       - name: Configure
         run: cmake --preset conan-relwithdebinfo
