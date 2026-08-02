@@ -346,9 +346,9 @@ next to `save` and `load`, and it calls the same `reflect::inspect()` the M2 win
 So the first consumer of the descriptors is also the last one to arrive, this time reached
 through a name in a registry rather than through a type in the source.
 
-That is the third operation on the pile in `scene::ComponentRegistry`, and it sharpens issue
-#25 rather than settling it. The set is now save, load, and inspect, which is enough of a
-shape to fold into `reflect::Registry` when a fourth caller asks.
+That is the third operation on the pile in `scene::ComponentRegistry`, and it sharpens
+issue #25 rather than settling it. The set is now save, load, and inspect, which is enough
+of a shape to fold into `reflect::Registry` when a fourth caller asks.
 
 ---
 

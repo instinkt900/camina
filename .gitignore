@@ -14,7 +14,6 @@ content-cooked/
 src/core/version.h
 build-docs/
 
-# The runtime writes these into the working directory, and the build
+# The runtime writes this into the working directory, and the build
 # instructions run it from the repository root.
-imgui.ini
 view.json

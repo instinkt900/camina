@@ -47,10 +47,13 @@ namespace {
     constexpr float kShortestMove = 1.0e-4F;
     /// How much faster shift makes the camera.
     constexpr float kSprintFactor = 4.0F;
+    /// The largest step one frame may apply. A stall must not teleport the camera.
+    constexpr float kLongestFrame = 0.1F;
 
-    /// Where each window opens the first time. ImGui keeps any later move in
-    /// imgui.ini, so these decide the first run only. Without them all three
-    /// open at the same place and the last one drawn buries the rest.
+    /// Where each window opens. The overlay writes no imgui.ini, so a run
+    /// always starts from this layout and a move lasts until the program ends.
+    /// Without these all three open at the same place, and the last one drawn
+    /// buries the rest. M8 gives the editor a real settings path.
     constexpr float kPanelMargin = 16.0F;
     constexpr float kPanelWidth = 340.0F;
     constexpr float kViewHeight = 320.0F;
@@ -262,7 +265,7 @@ namespace {
         return projection * view;
     }
 
-    /// Opens a window where it belongs the first time, and lets the user move it after.
+    /// Opens a window where it belongs, and lets the user move it for this run.
     bool begin_panel(const char* name, ImVec2 position, ImVec2 size) {
         ImGui::SetNextWindowPos(position, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
@@ -373,6 +376,8 @@ namespace {
                 // changed comes back as an override rather than as entities.
                 if (engine::scene::save_scene_file(scene_path, world)) {
                     ENGINE_LOG_INFO("Wrote {}.", scene_path.string());
+                } else {
+                    ENGINE_LOG_ERROR("The scene did not write to {}.", scene_path.string());
                 }
             }
             ImGui::SameLine();
@@ -618,6 +623,8 @@ namespace {
                 // poll() does not block, so without this the loop pins one core
                 // while the window is minimized and there is nothing to draw.
                 std::this_thread::sleep_for(std::chrono::milliseconds(kMinimizedSleepMs));
+                // No frame ran, so the next delta must not count the idle time.
+                last_frame = std::chrono::steady_clock::now();
                 continue;
             }
 
@@ -632,7 +639,11 @@ namespace {
 
             const auto now = std::chrono::steady_clock::now();
             const float seconds = std::chrono::duration<float>(now - started).count();
-            const float delta = std::chrono::duration<float>(now - last_frame).count();
+            // A long stall, a debugger break, or a driver hitch would otherwise
+            // multiply move_speed by the whole gap and throw the camera across
+            // the scene in one step.
+            const float delta = std::min(
+                std::chrono::duration<float>(now - last_frame).count(), kLongestFrame);
             last_frame = now;
 
             update_camera(settings, delta);

@@ -33,7 +33,7 @@ swapchain that survives resize, two frames in flight, dynamic rendering, reverse
 and clean validation. It arrived in three parts: the device and the swapchain, the shader
 build and the triangle, then buffers, textures, descriptors, and the cube.
 
-M3 is in progress: EnTT and the scene. `scene::World` holds the registry and a transform
+M3 is complete: EnTT and the scene. `scene::World` holds the registry and a transform
 hierarchy that rebuilds a world matrix only when something moved (M3.1). A `.scene` file
 reads and writes that world through the reflection descriptors (M3.2). A prefab is a scene
 fragment, and an instance stores only the fields it overrides (M3.3). `sandbox/` is a
