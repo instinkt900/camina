@@ -7,7 +7,16 @@ add_library(engine_core STATIC
     gfx/vulkan/vk_device.cpp
     gfx/vulkan/vk_swapchain.cpp
     gfx/vulkan/vk_frame.cpp
+    gfx/vulkan/vk_pipeline.cpp
     gfx/vulkan/vk_vma.cpp
+    render/triangle_pass.cpp
+)
+
+# GLSL to SPIR-V at build time. render/triangle_pass.cpp embeds the output, so
+# the runtime carries no shader compiler. See cmake/Shaders.cmake.
+engine_add_shaders(engine_core
+    render/shaders/triangle.vert
+    render/shaders/triangle.frag
 )
 
 # VMA is one large third-party header, and rule 4.4 says we do not patch it.

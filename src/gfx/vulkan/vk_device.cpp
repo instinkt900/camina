@@ -320,6 +320,10 @@ namespace engine::gfx {
 
         Result create_frames(Device& device) {
             for (Frame& frame : device.frames) {
+                // The command list carries the device so that cmd_bind_pipeline()
+                // can resolve a handle without a second argument.
+                frame.commands.owner = &device;
+
                 VkCommandPoolCreateInfo pool{};
                 pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
                 pool.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -514,6 +518,7 @@ namespace engine::gfx {
 
         if (device->device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(device->device);
+            vk::destroy_pipelines(*device);
             vk::destroy_swapchain(*device);
             destroy_frames(*device);
         }
