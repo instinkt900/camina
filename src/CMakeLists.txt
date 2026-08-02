@@ -4,6 +4,7 @@ add_library(engine_core STATIC
     core/arena.cpp
     platform/window.cpp
     gfx/types.cpp
+    reflect/registry.cpp
     gfx/vulkan/vk_device.cpp
     gfx/vulkan/vk_swapchain.cpp
     gfx/vulkan/vk_frame.cpp

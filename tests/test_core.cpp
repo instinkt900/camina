@@ -1,6 +1,8 @@
 // M0 tests. These use plain checks and no framework. A framework arrives when
 // there is something that needs one. See rule 4.6 in DESIGN.md.
 
+#include "check.h"
+
 #include "core/arena.h"
 #include "core/handle.h"
 #include "core/jobs.h"
@@ -13,16 +15,7 @@
 
 namespace {
 
-    int g_failures = 0;
-
-    void check(bool condition, const char* name) {
-        if (condition) {
-            std::printf("  pass  %s\n", name);
-        } else {
-            std::printf("  FAIL  %s\n", name);
-            ++g_failures;
-        }
-    }
+    using test::check;
 
     void test_arena() {
         engine::Arena arena(1024);
@@ -130,10 +123,5 @@ int main() {
     std::printf("jobs\n");
     test_jobs();
 
-    if (g_failures == 0) {
-        std::printf("\nAll tests passed.\n");
-        return 0;
-    }
-    std::printf("\n%d test(s) failed.\n", g_failures);
-    return 1;
+    return test::report();
 }
