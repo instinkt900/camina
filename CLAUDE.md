@@ -168,6 +168,17 @@ here, consider whether moth_ui wants the same change.
   our profile, so the first install builds shaderc, glslang, and SPIRV-Tools from
   source. That takes several minutes once, then the cache serves it. M4 moves shader
   cooking into `tools/cooker/`.
+- **EnTT assertions.** `src/core/entt.h` points `ENTT_ASSERT` at `ENGINE_ASSERT`.
+  Include it before any EnTT header. Every engine header that includes one does that
+  already, and the file fails the build with a message when the order is wrong.
+  Without it EnTT falls back to `assert()`, which `NDEBUG` removes from a
+  RelWithDebInfo build, so a `get<T>()` for a component that is not there kills the
+  process with no message.
+- **A test that must die.** ctest cannot express "this program must abort, and it must
+  say why". `PASS_REGULAR_EXPRESSION` does not override a process that a signal
+  stopped, and `WILL_FAIL` passes whether the message appeared or not.
+  `tests/expect_assert.cmake` runs the program and checks both. It runs through
+  `cmake -P`, so it needs no shell and works on both platforms.
 
 ## Documentation comments
 
