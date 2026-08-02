@@ -26,6 +26,17 @@ namespace {
         return engine::Vec3{ matrix[3] };
     }
 
+    /// Walks a child list from the front, in order.
+    std::vector<entt::entity> children_of(const sc::World& world, entt::entity parent) {
+        std::vector<entt::entity> found;
+        const auto& node = world.registry().get<sc::Hierarchy>(parent);
+        for (entt::entity walk = node.first_child; walk != entt::null;
+             walk = world.registry().get<sc::Hierarchy>(walk).next_sibling) {
+            found.push_back(walk);
+        }
+        return found;
+    }
+
     void test_create_and_defaults() {
         sc::World world;
         const entt::entity entity = world.create();
@@ -171,20 +182,27 @@ namespace {
         check(world.registry().get<sc::Hierarchy>(parent).child_count == 3,
               "the parent counts three children");
 
+        // The list must read in attach order. A scene file depends on this, and
+        // without it a save and a load reverse every sibling list.
+        check(children_of(world, parent) == std::vector<entt::entity>({ kids[0], kids[1],
+                                                                        kids[2] }),
+              "the child list keeps the order they attached in");
+
         check(world.set_parent(kids[1], entt::null), "the middle sibling detaches");
         check(world.registry().get<sc::Hierarchy>(parent).child_count == 2,
               "the count drops with it");
-
-        // Walk what is left. Both ends must still be reachable.
-        std::vector<entt::entity> remaining;
-        const auto& node = world.registry().get<sc::Hierarchy>(parent);
-        for (entt::entity walk = node.first_child; walk != entt::null;
-             walk = world.registry().get<sc::Hierarchy>(walk).next_sibling) {
-            remaining.push_back(walk);
-        }
-        check(remaining.size() == 2, "two children remain on the list");
-        check(remaining[0] == kids[2] && remaining[1] == kids[0],
+        check(children_of(world, parent) == std::vector<entt::entity>({ kids[0], kids[2] }),
               "removing the middle joins the two ends");
+
+        // Both ends matter too. first_child and last_child must follow.
+        check(world.set_parent(kids[0], entt::null), "the first sibling detaches");
+        check(children_of(world, parent) == std::vector<entt::entity>({ kids[2] }),
+              "removing the head leaves the tail");
+        check(world.set_parent(kids[2], entt::null), "the last sibling detaches");
+        check(children_of(world, parent).empty(), "removing the tail empties the list");
+        check(world.registry().get<sc::Hierarchy>(parent).first_child == entt::null &&
+                  world.registry().get<sc::Hierarchy>(parent).last_child == entt::null,
+              "an empty list holds neither end");
     }
 
     void test_cycles_are_refused() {

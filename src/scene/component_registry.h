@@ -1,0 +1,136 @@
+#pragma once
+
+/**
+ * @file
+ * @brief Turns a component type name in a file back into a live component.
+ *
+ * A scene file names its components. A reader holds only that name, and C++
+ * cannot build a type from a string. This registry closes the gap: registering
+ * a type stores three function pointers that already know the type, and the
+ * reader calls them through the name.
+ *
+ * The functions are thin. Each one calls reflect/json.h, so this adds no second
+ * descriptor system and rule 4.5 holds.
+ */
+
+#include "reflect/json.h"
+#include "reflect/reflect.h"
+
+#include <entt/entity/registry.hpp>
+#include <nlohmann/json.hpp>
+
+#include <cstddef>
+#include <string_view>
+#include <vector>
+
+namespace engine::scene {
+
+    /**
+     * @brief What a scene file needs to do with one component type.
+     *
+     * The three functions carry the type inside them, so the caller works with
+     * a name and an entity and never names a component type.
+     */
+    struct ComponentOps {
+        /// @brief The name the scene file stores. It comes from Describe<T>::name.
+        const char* name = "";
+
+        /// @brief Whether an entity carries this component.
+        bool (*has)(const entt::registry& registry, entt::entity entity) = nullptr;
+
+        /// @brief Reads the component off an entity and writes it to JSON.
+        nlohmann::json (*save)(const entt::registry& registry, entt::entity entity) = nullptr;
+
+        /// @brief Builds the component on an entity from JSON. Replaces any earlier one.
+        bool (*load)(entt::registry& registry, entt::entity entity,
+                     const nlohmann::json& document) = nullptr;
+    };
+
+    /**
+     * @brief The component types a scene file can carry.
+     *
+     * A type that is not registered is not saved and not loaded. That is the
+     * switch for a component the program derives at load time, in the same way
+     * the Transient attribute works for one field.
+     *
+     * @code
+     * engine::scene::components().add<engine::Transform>();
+     * engine::scene::components().add<engine::scene::Name>();
+     * @endcode
+     */
+    class ComponentRegistry {
+    public:
+        /**
+         * @brief Registers a described component type.
+         *
+         * Registering the same type twice does nothing, so a caller does not
+         * have to guard the call.
+         *
+         * @tparam T A described component type.
+         */
+        template <reflect::Described T>
+        void add() {
+            if (find(reflect::type_name<T>()) != nullptr) {
+                return;
+            }
+
+            ComponentOps ops;
+            ops.name = reflect::type_name<T>();
+            ops.has = [](const entt::registry& registry, entt::entity entity) {
+                return registry.all_of<T>(entity);
+            };
+            ops.save = [](const entt::registry& registry, entt::entity entity) {
+                return reflect::to_json(registry.get<T>(entity));
+            };
+            ops.load = [](entt::registry& registry, entt::entity entity,
+                          const nlohmann::json& document) {
+                T value;
+                if (!reflect::from_json(document, value)) {
+                    return false;
+                }
+                registry.emplace_or_replace<T>(entity, std::move(value));
+                return true;
+            };
+            entries_.push_back(ops);
+        }
+
+        /**
+         * @brief Looks up a component type by the name a file stores.
+         * @param name The name to find.
+         * @return The entry, or nullptr when nothing registered that name.
+         */
+        [[nodiscard]] const ComponentOps* find(std::string_view name) const;
+
+        /// @brief Every registered type, in registration order.
+        /// @return The entries. The order decides the order a file stores them in.
+        [[nodiscard]] const std::vector<ComponentOps>& all() const { return entries_; }
+
+        /// @brief How many types are registered.
+        /// @return The count.
+        [[nodiscard]] std::size_t size() const { return entries_.size(); }
+
+        /// @brief Forgets every registration. Written for tests.
+        void clear() { entries_.clear(); }
+
+    private:
+        std::vector<ComponentOps> entries_;
+    };
+
+    /**
+     * @brief The registry a scene file uses when the caller names no other.
+     *
+     * @return The process-wide registry. It lives until the program ends.
+     */
+    [[nodiscard]] ComponentRegistry& components();
+
+    /**
+     * @brief Registers the component types the engine itself defines.
+     *
+     * Call this once at startup, before you read a scene. A game adds its own
+     * types after.
+     *
+     * @param registry The registry to fill. Defaults to the process-wide one.
+     */
+    void register_builtin_components(ComponentRegistry& registry = components());
+
+} // namespace engine::scene

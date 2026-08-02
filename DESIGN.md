@@ -306,6 +306,19 @@ of its fields, and the writer stores it under `__version`. A field that the docu
 predates keeps its default and the reader stays quiet. A field missing from a document that
 should carry it is a warning, because that points at a truncated file.
 
+**What the third consumer needed.** Scene files arrived in M3.2, and they were the first
+consumer nobody designed the descriptors alongside. The descriptor format needed no change.
+`for_each_field()` served the component writer and the component reader as they were.
+
+One gap did appear, and it is not in the descriptors. A scene file names its components,
+and C++ cannot build a type from a string. `reflect::Registry` stores a name, a size, and a
+field count, and none of that lets a reader act on a type. `scene::ComponentRegistry` closes
+the gap by storing function pointers that already know the type.
+
+That leaves two registries where the design wants one. Folding the operations into
+`reflect::Registry` is the answer, and it waits for a third caller to say what the set of
+operations should be.
+
 ---
 
 ## 8. Game UI — moth_ui

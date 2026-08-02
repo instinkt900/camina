@@ -1,0 +1,91 @@
+#pragma once
+
+/**
+ * @file
+ * @brief Reads and writes a whole world as a `.scene` document.
+ *
+ * This is the third consumer of the reflection descriptors, after the inspector
+ * and the field serializer. It adds no descriptor system of its own. It walks
+ * the hierarchy, and hands each component to reflect/json.h through the
+ * component registry.
+ *
+ * The document is deterministic. Saving a world, loading it, and saving it
+ * again produces the same bytes, which is the check that catches a field the
+ * writer drops or a link the reader rebuilds in the wrong order.
+ */
+
+#include "scene/component_registry.h"
+#include "scene/world.h"
+
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
+#include <filesystem>
+
+namespace engine::scene {
+
+    /**
+     * @brief The schema version this writer produces.
+     *
+     * A reader accepts this version and every earlier one. Raise it when the
+     * shape of the document changes, and not when a component gains a field.
+     * A component carries its own version, per reflect/json.h.
+     */
+    inline constexpr std::uint32_t kSceneVersion = 1;
+
+    /**
+     * @brief Writes a world to a JSON document.
+     *
+     * Entities appear in hierarchy order, parents before children. Each one
+     * stores an index rather than an `entt::entity`, because an entity value is
+     * an internal detail that a reader must not depend on.
+     *
+     * A component type that is not registered is not written.
+     *
+     * @param world The world to write.
+     * @param registry The component types to consider. Defaults to the
+     * process-wide registry.
+     * @return The document.
+     */
+    [[nodiscard]] nlohmann::json save_scene(const World& world,
+                                            const ComponentRegistry& registry = components());
+
+    /**
+     * @brief Reads a world back from a JSON document.
+     *
+     * The world must be empty. Loading into a world that already holds entities
+     * would mix two scenes, and no caller has asked for that.
+     *
+     * A component the file names but the registry does not know is a warning,
+     * not a failure. The rest of the entity still loads. That keeps an older
+     * build able to open a newer file.
+     *
+     * @param document The document to read.
+     * @param world The world to fill.
+     * @param registry The component types to consider.
+     * @return True when the document parsed and every known component loaded.
+     */
+    [[nodiscard]] bool load_scene(const nlohmann::json& document, World& world,
+                                  const ComponentRegistry& registry = components());
+
+    /**
+     * @brief Writes a world to a `.scene` file.
+     * @param path Where to write. The parent directory must exist.
+     * @param world The world to write.
+     * @param registry The component types to consider.
+     * @return True when the file was written.
+     */
+    [[nodiscard]] bool save_scene_file(const std::filesystem::path& path, const World& world,
+                                       const ComponentRegistry& registry = components());
+
+    /**
+     * @brief Reads a `.scene` file into an empty world.
+     * @param path The file to read.
+     * @param world The world to fill.
+     * @param registry The component types to consider.
+     * @return True when the file parsed and every known component loaded.
+     */
+    [[nodiscard]] bool load_scene_file(const std::filesystem::path& path, World& world,
+                                       const ComponentRegistry& registry = components());
+
+} // namespace engine::scene

@@ -13,6 +13,10 @@
  */
 
 #include "math/conventions.h"
+#include "reflect/attributes.h"
+#include "reflect/reflect.h"
+
+#include <tuple>
 
 namespace engine {
 
@@ -48,3 +52,22 @@ namespace engine {
     }
 
 } // namespace engine
+
+/**
+ * @brief Describes Transform for the inspector and for scene files.
+ *
+ * The description sits next to the type, so there is one place to change when a
+ * field arrives. See DESIGN.md section 7.
+ */
+template <>
+struct engine::reflect::Describe<engine::Transform> {
+    static constexpr const char* name = "Transform"; ///< The name a scene file stores.
+    /// @brief The fields, in the order an editor shows them.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::Transform, position, Tooltip{ "Meters, in parent space" }),
+            ENGINE_FIELD(engine::Transform, rotation, Tooltip{ "Quaternion, wxyz order" }),
+            ENGINE_FIELD(engine::Transform, scale));
+    }
+};
