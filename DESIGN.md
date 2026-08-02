@@ -335,7 +335,20 @@ A merge patch reads a null as "remove this key", so an instance can drop a whole
 No described field writes a null, so nothing collides with that meaning.
 
 The gap here is structural, not per-field. An instance cannot record a child you added, a
-member you destroyed, or a member you reparented. Issue #27 tracks that.
+member you destroyed, or a member you reparented. Issue #27 tracks that. No content file can
+reach it, because a scene file gives an index only to the records it writes and a prefab
+instance is one record. Only code can build that shape, so the trigger is a tool that edits
+a live world structurally.
+
+**What the editor needed.** M3.3 closed with a window that edits any component on any
+entity, and it named no component type. `scene::ComponentOps` gained an `inspect` pointer
+next to `save` and `load`, and it calls the same `reflect::inspect()` the M2 window calls.
+So the first consumer of the descriptors is also the last one to arrive, this time reached
+through a name in a registry rather than through a type in the source.
+
+That is the third operation on the pile in `scene::ComponentRegistry`, and it sharpens issue
+#25 rather than settling it. The set is now save, load, and inspect, which is enough of a
+shape to fold into `reflect::Registry` when a fourth caller asks.
 
 ---
 

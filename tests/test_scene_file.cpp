@@ -101,6 +101,15 @@ namespace {
         registry.add<Health>();
         check(registry.size() == 3, "a game component joins the same registry");
         check(registry.find("Nothing") == nullptr, "an unknown name finds nothing");
+
+        // Registering a type has to wire every operation, not only the two the
+        // scene file uses. The inspector reaches a component through the same
+        // entry, and a null there would take the editor down on the first click.
+        for (const sc::ComponentOps& ops : registry.all()) {
+            check(ops.has != nullptr && ops.save != nullptr && ops.load != nullptr &&
+                      ops.inspect != nullptr,
+                  "every registered type carries every operation");
+        }
     }
 
     void test_round_trip() {
