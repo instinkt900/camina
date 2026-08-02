@@ -1,0 +1,14 @@
+include(linux-clang)
+
+[settings]
+build_type=Debug
+
+[conf]
+tools.build:cflags=["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+tools.build:cxxflags=["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+tools.build:sharedlinkflags=["-fsanitize=address,undefined"]
+tools.build:exelinkflags=["-fsanitize=address,undefined"]
+
+[options]
+# Tracy and a sanitizer fight over signal handlers. Turn Tracy off here.
+tracy/*:enable=False

@@ -1,0 +1,192 @@
+name: Release
+
+# Change version.txt and push to main. This workflow then tags the commit,
+# generates CHANGELOG.md with git-cliff, and publishes a GitHub release with the
+# runtime archive attached.
+#
+# Adapted from the moth_ui release workflow. The Conan upload job is not here
+# yet, because the engine is not consumed as a package. Add it back when
+# DESIGN.md section 8.5 comes true and the engine ships as a Conan recipe.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Run even if version has not changed.'
+        type: boolean
+        default: false
+      test:
+        description: 'Test run. Will not create release or tags.'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'apps/**'
+      - 'tools/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'conanfile.py'
+      - 'version.txt'
+      - 'profiles/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if version.txt changed
+        id: check
+        run: |
+          if [[ "${{ github.event.inputs.force }}" == "true" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          elif [[ -z "${{ github.event.before }}" ]]; then
+            if git diff HEAD^ HEAD --name-only 2>/dev/null | grep -q "^version.txt$"; then
+              echo "changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "changed=false" >> $GITHUB_OUTPUT
+            fi
+          elif [[ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          elif git diff "${{ github.event.before }}..${{ github.sha }}" --name-only 2>/dev/null | grep -q "^version.txt$"; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(cat version.txt | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
+  build-release:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan profile detect --force
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-release-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-release-
+
+      - name: Build
+        run: |
+          conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
+            -s build_type=Release -b missing
+          cmake --preset conan-release
+          cmake --build --preset conan-release
+
+      - name: Archive
+        run: |
+          name=camina-${{ needs.check-version.outputs.version }}
+          mkdir -p "$name"
+          cp build/Release/apps/runtime/runtime "$name/"
+          cp README.md DESIGN.md "$name/"
+          tar czf "$name-linux-Release.tar.gz" "$name"
+
+      - name: Upload archive as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camina-linux-Release
+          path: camina-${{ needs.check-version.outputs.version }}-*
+          retention-days: 1
+
+  tag-and-release:
+    needs: [check-version, build-release]
+    if: needs.check-version.outputs.changed == 'true' && github.event.inputs.test != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create version tag
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: ${{ needs.check-version.outputs.version }}
+          tag_exists_error: false
+          force_push_tag: true
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Generate CHANGELOG.md
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --verbose
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Generate release notes (current version only)
+        id: release-notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --verbose --current --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Commit CHANGELOG.md to main
+        run: |
+          git add CHANGELOG.md
+          git diff --cached --quiet || git commit -m "chore(release): update CHANGELOG.md for ${{ needs.check-version.outputs.version }} [skip ci]"
+          git fetch origin main
+          git rebase origin/main || { echo "Rebase failed; aborting to avoid overwriting remote history"; git rebase --abort; exit 1; }
+          git push origin main
+
+      - name: Download all archives
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: "Camina Engine ${{ needs.check-version.outputs.version }}"
+          body_path: RELEASE_NOTES.md
+          files: release-assets/*

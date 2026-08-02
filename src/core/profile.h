@@ -1,0 +1,35 @@
+#pragma once
+
+/**
+ * @file
+ * @brief Profiler markers, wrapping Tracy.
+ *
+ * When the tracy package has enable=False, every Tracy macro compiles to nothing,
+ * so these markers cost nothing. The asan profile turns Tracy off, because Tracy
+ * and the sanitizers both want the signal handlers.
+ */
+
+#include <tracy/Tracy.hpp>
+
+/**
+ * @brief Marks the end of a frame.
+ *
+ * Call this once per frame, at the same point each time. The profiler measures
+ * frame time between consecutive calls.
+ */
+#define ENGINE_PROFILE_FRAME() FrameMark
+
+/// @brief Times the enclosing scope. The zone takes the name of the function.
+#define ENGINE_PROFILE_ZONE() ZoneScoped
+
+/**
+ * @brief Times the enclosing scope under an explicit name.
+ * @param name A string literal naming the zone.
+ */
+#define ENGINE_PROFILE_ZONE_N(name) ZoneScopedN(name)
+
+/**
+ * @brief Names the calling thread in the profiler view.
+ * @param name A null-terminated string. Tracy copies it.
+ */
+#define ENGINE_PROFILE_THREAD(name) tracy::SetThreadName(name)

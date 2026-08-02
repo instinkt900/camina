@@ -1,0 +1,107 @@
+name: Build and Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Check formatting
+        run: |
+          files=$(find src apps tests -name '*.cpp' -o -name '*.h' | grep -v '/version\.h$')
+          clang-format --dry-run --Werror $files
+
+  # Doxygen runs with WARN_IF_UNDOCUMENTED and WARN_AS_ERROR, so an undocumented
+  # public entity or a mismatched @param fails this job. It needs no compiler and
+  # no dependencies, so it runs on its own and reports quickly.
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+      - name: Build docs
+        run: |
+          cmake -S . -B build-docs -DCAMINA_DOCS_ONLY=ON
+          cmake --build build-docs --target docs
+
+  # Rule 4.1 in DESIGN.md. This runs on its own so that a violation is obvious in
+  # the checks list, and so that it reports even when the build fails.
+  vulkan-containment:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Vulkan containment
+        run: bash scripts/check-vulkan-containment.sh .
+
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [linux-gcc, linux-clang]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev \
+            libudev-dev
+
+      # The clang profile pins compiler.version=19, and the runner ships an older
+      # clang. Install the matching toolchain and clang-tidy from apt.llvm.org.
+      # cmake/ClangTidy.cmake fails the build in CI when clang-tidy is missing,
+      # so this step is required for both matrix legs.
+      - name: Install LLVM 19
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-19 clang-tidy-19
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-19 100
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan profile detect --force
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-${{ matrix.profile }}-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-${{ matrix.profile }}-
+
+      - name: Conan install
+        run: |
+          conan install . -pr:h profiles/${{ matrix.profile }} \
+            -pr:b profiles/${{ matrix.profile }} -b missing
+
+      - name: Configure
+        run: cmake --preset conan-relwithdebinfo
+
+      - name: Build
+        run: cmake --build --preset conan-relwithdebinfo
+
+      - name: Test
+        run: ctest --preset conan-relwithdebinfo --output-on-failure

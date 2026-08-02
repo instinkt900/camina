@@ -1,0 +1,52 @@
+# Started from the moth_ui configuration so that the two projects agree where they
+# can. The engine-specific entries are grouped at the end of the list.
+#
+# WARNING: keep comments OUT of the Checks block. Checks uses a YAML folded
+# scalar, so every line joins into one string and clang-tidy splits it on commas.
+# A comment line without a trailing comma therefore merges with the entry that
+# follows it, and that entry silently stops working. Put rationale here instead.
+#
+# Why each engine-specific entry is off:
+#
+#   pro-bounds-pointer-arithmetic
+#       The arena is a linear allocator. Pointer arithmetic over a raw block is
+#       the whole point of the type. See src/core/arena.cpp.
+#   owning-memory, no-malloc
+#       The arena owns one raw block through operator new and operator delete.
+#       A smart pointer cannot express an aligned block of untyped bytes.
+#   macro-usage
+#       Logging, assert, and profiling need macros. They capture the source
+#       location and compile out in a shipping build. See src/core/assert.h.
+#   avoid-do-while
+#       ENGINE_CHECK wraps its body in do/while so that the macro takes a
+#       trailing semicolon. This is the standard idiom and has no alternative.
+#   pro-type-reinterpret-cast
+#       Handles and GPU data cross type boundaries by design. See rule 4.2 in
+#       DESIGN.md, which keeps the gfx:: types C-compatible.
+#   pro-bounds-array-to-pointer-decay, pro-type-vararg
+#       argv and the C APIs in SDL, Vulkan, and Box3D decay arrays to pointers
+#       and take varargs. The engine itself does neither.
+
+Checks: >
+  cppcoreguidelines-*,
+  readability-*,
+  -readability-uppercase-literal-suffix,
+  -readability-identifier-length,
+  -readability-use-anyofallof,
+  -readability-magic-numbers,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-no-malloc,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-type-vararg
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*'
