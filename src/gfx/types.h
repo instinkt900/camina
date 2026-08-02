@@ -70,6 +70,31 @@ namespace engine::gfx {
         BufferUsage usage = BufferUsage::Vertex; ///< How the buffer will be bound.
     };
 
+    /// @brief How a sampler picks a color between texel centers.
+    enum class Filter : std::uint32_t {
+        Linear = 0, ///< Blend the nearest texels. The right default for a photograph.
+        Nearest,    ///< Take the nearest texel. Keeps a texel grid crisp.
+    };
+
+    /// @brief What a sampler reads outside the 0 to 1 range.
+    enum class AddressMode : std::uint32_t {
+        Repeat = 0,     ///< Tile the texture.
+        ClampToEdge,    ///< Hold the edge texel.
+        MirroredRepeat, ///< Tile, and flip every other copy.
+    };
+
+    /**
+     * @brief The sampler state a texture reads through.
+     *
+     * A driver keeps a small number of distinct sampler states, so the device
+     * shares one VkSampler between every texture that asks for the same state.
+     * A scene with 500 textures holds about 5 samplers, not 500.
+     */
+    struct SamplerDesc {
+        Filter filter = Filter::Linear;            ///< Applies to both magnify and minify.
+        AddressMode address = AddressMode::Repeat; ///< Applies to all three axes.
+    };
+
     /**
      * @brief Settings for create_texture().
      *
@@ -80,6 +105,7 @@ namespace engine::gfx {
         const void* pixels = nullptr; ///< Width times height times 4 bytes. Required.
         std::uint32_t width = 0;      ///< Width in texels.
         std::uint32_t height = 0;     ///< Height in texels.
+        SamplerDesc sampler;          ///< How the shader reads it. Shared, not owned.
     };
 
     /// @brief The element type of one vertex attribute.

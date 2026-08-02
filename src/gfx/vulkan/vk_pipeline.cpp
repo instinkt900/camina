@@ -87,8 +87,8 @@ namespace engine::gfx {
                                                   : VK_FORMAT_R32G32B32_SFLOAT;
         }
 
-        /// Leaves the state empty when the pipeline builds positions from the
-        /// vertex index, which is what the triangle pass does.
+        /// Leaves the state empty when the pipeline builds its positions from
+        /// the vertex index instead of reading a vertex buffer.
         void fill_vertex_input(VertexInput& input, FixedState& state,
                                const GraphicsPipelineDesc& desc) {
             if (desc.attributes == nullptr || desc.attribute_count == 0) {

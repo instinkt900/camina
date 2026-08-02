@@ -14,6 +14,18 @@ namespace engine::gfx {
         /// Four bytes for each texel, in RGBA order.
         constexpr std::size_t kBytesPerTexel = 4;
 
+        VkSamplerAddressMode to_address_mode(AddressMode mode) {
+            switch (mode) {
+            case AddressMode::Repeat:
+                return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            case AddressMode::ClampToEdge:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case AddressMode::MirroredRepeat:
+                return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            }
+            return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        }
+
         /// Creates a host-visible buffer holding a copy of the source bytes.
         Result create_staging(Device& device, const void* data, std::size_t size,
                               VkBuffer* out_buffer, VmaAllocation* out_allocation) {
@@ -161,6 +173,8 @@ namespace engine::gfx {
             upload.queueFamilyIndex = device.graphics_family;
             ENGINE_VK_TRY(vkCreateCommandPool(device.device, &upload, nullptr, &device.upload_pool));
 
+            // The sampler cache fills on demand, so create_shared_resources()
+            // builds nothing here. destroy_shared_resources() still clears it.
             device.depth_format = choose_depth_format(device.physical);
             if (device.depth_format == VK_FORMAT_UNDEFINED) {
                 ENGINE_LOG_CRITICAL("No depth attachment format is available.");
@@ -170,6 +184,7 @@ namespace engine::gfx {
         }
 
         void destroy_shared_resources(Device& device) {
+            destroy_samplers(device);
             if (device.upload_pool != VK_NULL_HANDLE) {
                 vkDestroyCommandPool(device.device, device.upload_pool, nullptr);
                 device.upload_pool = VK_NULL_HANDLE;
@@ -245,9 +260,8 @@ namespace engine::gfx {
 
         void destroy_textures(Device& device) {
             for (TextureEntry& entry : device.textures) {
-                if (entry.sampler != VK_NULL_HANDLE) {
-                    vkDestroySampler(device.device, entry.sampler, nullptr);
-                }
+                // The sampler belongs to the cache, not to the texture.
+                // destroy_samplers() releases it.
                 if (entry.view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device.device, entry.view, nullptr);
                 }
@@ -257,6 +271,52 @@ namespace engine::gfx {
             }
             device.textures.clear();
             device.free_textures.clear();
+        }
+
+        Result resolve_sampler(Device& device, const SamplerDesc& desc, VkSampler* out_sampler) {
+            *out_sampler = VK_NULL_HANDLE;
+
+            for (const SamplerEntry& entry : device.samplers) {
+                if (entry.desc.filter == desc.filter && entry.desc.address == desc.address) {
+                    *out_sampler = entry.sampler;
+                    return Result::Success;
+                }
+            }
+
+            const VkFilter filter =
+                desc.filter == Filter::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+            const VkSamplerAddressMode address = to_address_mode(desc.address);
+
+            VkSamplerCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            info.magFilter = filter;
+            info.minFilter = filter;
+            info.mipmapMode = desc.filter == Filter::Nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                                             : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            info.addressModeU = address;
+            info.addressModeV = address;
+            info.addressModeW = address;
+            info.maxLod = VK_LOD_CLAMP_NONE;
+
+            SamplerEntry built;
+            built.desc = desc;
+            ENGINE_VK_TRY(vkCreateSampler(device.device, &info, nullptr, &built.sampler));
+
+            device.samplers.push_back(built);
+            ENGINE_LOG_DEBUG("Sampler cache: built entry {} for filter {} and address mode {}.",
+                             device.samplers.size(), static_cast<std::uint32_t>(desc.filter),
+                             static_cast<std::uint32_t>(desc.address));
+            *out_sampler = built.sampler;
+            return Result::Success;
+        }
+
+        void destroy_samplers(Device& device) {
+            for (const SamplerEntry& entry : device.samplers) {
+                if (entry.sampler != VK_NULL_HANDLE) {
+                    vkDestroySampler(device.device, entry.sampler, nullptr);
+                }
+            }
+            device.samplers.clear();
         }
 
     } // namespace vk
@@ -413,16 +473,9 @@ namespace engine::gfx {
         }
 
         if (succeeded(result)) {
-            VkSamplerCreateInfo sampler{};
-            sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            sampler.magFilter = VK_FILTER_NEAREST;
-            sampler.minFilter = VK_FILTER_NEAREST;
-            sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sampler.maxLod = VK_LOD_CLAMP_NONE;
-            result =
-                vk::to_result(vkCreateSampler(device->device, &sampler, nullptr, &built.sampler));
+            // The cache owns this. The texture only points at it, so the failure
+            // path below must not destroy it.
+            result = vk::resolve_sampler(*device, desc.sampler, &built.sampler);
         }
 
         if (succeeded(result)) {
@@ -436,9 +489,8 @@ namespace engine::gfx {
         }
 
         if (!succeeded(result)) {
-            if (built.sampler != VK_NULL_HANDLE) {
-                vkDestroySampler(device->device, built.sampler, nullptr);
-            }
+            // built.sampler belongs to the cache. Leave it alone. The next
+            // texture with the same state reuses it.
             if (built.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device->device, built.view, nullptr);
             }
@@ -491,7 +543,8 @@ namespace engine::gfx {
         }
 
         vkFreeDescriptorSets(device->device, device->descriptor_pool, 1, &entry->set);
-        vkDestroySampler(device->device, entry->sampler, nullptr);
+        // The sampler is shared, so it stays. destroy_samplers() releases the
+        // whole cache when the device goes.
         vkDestroyImageView(device->device, entry->view, nullptr);
         vmaDestroyImage(device->allocator, entry->image, entry->allocation);
 

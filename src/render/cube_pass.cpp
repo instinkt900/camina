@@ -157,6 +157,9 @@ namespace engine::render {
             .pixels = pixels.data(),
             .width = kTextureSize,
             .height = kTextureSize,
+            // Nearest on purpose. The checkerboard is the reference the M1.3
+            // pixel check reads, and blending would soften the texel edges.
+            .sampler = { .filter = gfx::Filter::Nearest },
         };
         result = gfx::create_texture(device, texture_desc, &texture_);
         if (!gfx::succeeded(result)) {
