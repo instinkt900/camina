@@ -151,8 +151,9 @@ that `cliff.toml` groups them. Plain commits still appear, under "Changes".
 
 `DESIGN.md` §4 holds the full text and the reason for each rule. Do not break these.
 
-1. **Contain Vulkan.** Only files under `src/render/vulkan/` can include `vulkan.h`, volk,
+1. **Contain Vulkan.** Only files under `src/gfx/vulkan/` can include `vulkan.h`, volk,
    or VMA. Every layer above uses `gfx::` types. CI enforces this with a grep.
+   `src/render/` is the layer above and holds the render graph and the passes.
 2. **Keep `gfx::` C-compatible.** No `std::string`, no `std::vector`, no virtuals, and no
    exceptions in the public `gfx::` interface. Use opaque generational `uint64_t` handles
    and POD structs.

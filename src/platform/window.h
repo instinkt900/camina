@@ -77,8 +77,8 @@ namespace engine::platform {
         /**
          * @brief The raw SDL handle.
          *
-         * The Vulkan backend needs this to create a surface in M1. No code outside
-         * src/render/vulkan/ should call it.
+         * The Vulkan backend needs this to create a surface. No code outside
+         * src/gfx/vulkan/ should call it.
          *
          * @return The SDL window pointer, or nullptr before create() succeeds.
          */

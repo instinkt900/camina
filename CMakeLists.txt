@@ -42,6 +42,8 @@ find_package(spdlog REQUIRED)
 find_package(glm REQUIRED)
 find_package(enkiTS REQUIRED)
 find_package(Tracy REQUIRED)
+find_package(volk REQUIRED)
+find_package(VulkanMemoryAllocator REQUIRED)
 
 add_subdirectory(src)
 add_subdirectory(apps/runtime)

@@ -3,6 +3,19 @@ add_library(engine_core STATIC
     core/jobs.cpp
     core/arena.cpp
     platform/window.cpp
+    gfx/types.cpp
+    gfx/vulkan/vk_device.cpp
+    gfx/vulkan/vk_swapchain.cpp
+    gfx/vulkan/vk_frame.cpp
+    gfx/vulkan/vk_vma.cpp
+)
+
+# VMA is one large third-party header, and rule 4.4 says we do not patch it.
+# Compiling it under the engine warning set and clang-tidy reports problems in
+# code we will never change, so both are off for this file alone.
+set_source_files_properties(gfx/vulkan/vk_vma.cpp PROPERTIES
+    SKIP_LINTING ON
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
 )
 
 add_library(engine::core ALIAS engine_core)
@@ -19,6 +32,8 @@ target_link_libraries(engine_core
         enkiTS::enkiTS
     PRIVATE
         SDL3::SDL3
+        volk::volk
+        GPUOpen::VulkanMemoryAllocator
 )
 
 # The math conventions in DESIGN.md section 3. These must reach every translation
