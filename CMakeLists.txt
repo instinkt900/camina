@@ -57,6 +57,10 @@ include(Shaders)
 include(ImGuiBackends)
 
 add_subdirectory(src)
+
+# The game module comes before the applications, because both link it. Rule 4.3.
+add_subdirectory(sandbox)
+
 add_subdirectory(apps/runtime)
 
 if(ENGINE_WITH_EDITOR)

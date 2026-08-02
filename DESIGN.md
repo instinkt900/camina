@@ -492,6 +492,11 @@ EnTT. A transform hierarchy with dirty propagation and correct update order. Sce
 serialization through M2. Prefab instancing with per-instance overrides.
 **Done when:** you load a `.scene` file, fly through it, and edit entities live.
 
+`sandbox/` starts here, as a library rather than an application. Rule 4.3 says the editor
+and the runtime are two applications over one core, and the game links into both. Building
+the game as a library from the start is what keeps that true, five milestones before M8
+depends on it. The runtime links `camina::sandbox` today.
+
 ### M4 — Asset pipeline
 **This milestone decides whether the engine is usable.** Asset GUIDs. The `cooker`
 executable. glTF import with cgltf. Textures through stb and bc7enc_rdo with mip chains.

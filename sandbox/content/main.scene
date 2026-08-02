@@ -1,0 +1,72 @@
+{
+  "__version": 2,
+  "entities": [
+    {
+      "parent": -1,
+      "prefab": "crate",
+      "overrides": {
+        "0": {
+          "Transform": {
+            "position": [-2.5, 0.0, 0.0]
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate",
+      "overrides": {
+        "0": {
+          "Spin": {
+            "__version": 1,
+            "axis": [0.0, 1.0, 0.0],
+            "seconds_per_turn": 6.0
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate",
+      "overrides": {
+        "0": {
+          "Name": { "__version": 1, "value": "small crate" },
+          "Transform": {
+            "position": [2.5, 0.0, 0.0],
+            "scale": [0.7, 0.7, 0.7]
+          }
+        }
+      }
+    },
+    {
+      "parent": 0,
+      "prefab": "crate",
+      "overrides": {
+        "0": {
+          "Name": { "__version": 1, "value": "stacked crate" },
+          "Transform": {
+            "position": [0.0, 1.15, 0.0],
+            "scale": [0.8, 0.8, 0.8]
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": { "__version": 1, "value": "beacon" },
+        "Transform": {
+          "__version": 1,
+          "position": [0.0, 2.2, 0.0],
+          "rotation": [1.0, 0.0, 0.0, 0.0],
+          "scale": [0.35, 0.35, 0.35]
+        },
+        "Spin": {
+          "__version": 1,
+          "axis": [1.0, 1.0, 0.0],
+          "seconds_per_turn": 2.5
+        }
+      }
+    }
+  ]
+}

@@ -36,8 +36,9 @@ build and the triangle, then buffers, textures, descriptors, and the cube.
 M3 is in progress: EnTT and the scene. `scene::World` holds the registry and a transform
 hierarchy that rebuilds a world matrix only when something moved (M3.1). A `.scene` file
 reads and writes that world through the reflection descriptors (M3.2). A prefab is a scene
-fragment, and an instance stores only the fields it overrides (M3.3). The first `sandbox/`
-game closes M3. See `DESIGN.md` §10.
+fragment, and an instance stores only the fields it overrides (M3.3). `sandbox/` is a
+library that the runtime links, and it loads a scene of prefab instances and turns two of
+them. A fly camera and live entity editing close M3. See `DESIGN.md` §10.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings
@@ -161,6 +162,10 @@ here, consider whether moth_ui wants the same change.
   backend must see `IMGUI_IMPL_VULKAN_USE_VOLK`, because the engine never links the
   Vulkan loader library. Rule 4.4 keeps these files in the Conan cache, not in
   `third_party/`, since we do not patch them.
+- **Sandbox content.** `sandbox/` reads its prefabs and its scene from the source
+  directory, through a `SANDBOX_CONTENT_DIR` definition that CMake sets. That is a
+  stand-in, and M4 replaces it with a cooked content directory next to the executable.
+  `runtime --content <dir>` overrides it.
 - **Shaders.** `cmake/Shaders.cmake` compiles GLSL to SPIR-V with glslc at build time
   and writes a braced list of 32-bit words. The consumer embeds it with
   `std::to_array`, so the runtime carries no shader compiler. glslc arrives through
@@ -203,6 +208,9 @@ Style:
   it twice is a warning.
 - `.cpp` files are excluded from the docs. They hold implementation comments, not
   API documentation.
+- The docs read `src/` only. `sandbox/` is a game that consumes the engine, not part
+  of the engine interface, so its headers are not checked. They carry the comments
+  anyway, because the game is also the worked example.
 - Wrap a construct Doxygen cannot parse in `/// @cond` and `/// @endcond`, with a
   comment saying why. `std::hash<Handle<Tag>>` in `src/core/handle.h` is the one
   current case.

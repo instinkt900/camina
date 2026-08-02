@@ -43,6 +43,15 @@ engine_enable_clang_tidy(test_prefab)
 
 add_test(NAME prefab COMMAND test_prefab)
 
+# The game module. This test reads the content the sandbox actually ships, so a
+# broken prefab or scene fails here rather than in the running application.
+add_executable(test_sandbox test_sandbox.cpp)
+target_link_libraries(test_sandbox PRIVATE camina::sandbox)
+engine_set_warnings(test_sandbox)
+engine_enable_clang_tidy(test_sandbox)
+
+add_test(NAME sandbox COMMAND test_sandbox)
+
 # The EnTT preconditions reach ENGINE_ASSERT through src/core/entt.h. This
 # program reads a component the entity does not carry, so it is expected to die.
 # It passes only when the engine assertion reported the failure first. Without
