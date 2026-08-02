@@ -12,11 +12,14 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string_view>
+#include <thread>
 
 namespace {
 
     constexpr std::size_t kFrameArenaBytes = 4U * 1024U * 1024U;
     constexpr int kDecimalBase = 10;
+    /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
+    constexpr int kMinimizedSleepMs = 16;
 
     /// The clear color cycles so that a still frame still shows the loop is live.
     constexpr float kColorPeriodSeconds = 4.0F;
@@ -97,7 +100,13 @@ namespace {
         engine::gfx::cmd_end_rendering(info.commands);
 
         result = engine::gfx::end_frame(device);
-        if (result != engine::gfx::Result::OutOfDate && !engine::gfx::succeeded(result)) {
+        if (result == engine::gfx::Result::OutOfDate) {
+            // The frame did present. The swapchain is now stale or suboptimal, and
+            // the window size alone does not report that, so rebuild here.
+            if (!rebuild_swapchain(device, extent)) {
+                return FrameOutcome::Failed;
+            }
+        } else if (!engine::gfx::succeeded(result)) {
             ENGINE_LOG_CRITICAL("end_frame failed: {}", engine::gfx::result_name(result));
             return FrameOutcome::Failed;
         }
@@ -152,6 +161,9 @@ int main(int argc, char** argv) {
         frame_arena.reset();
 
         if (window.minimized()) {
+            // poll() does not block, so without this the loop pins one core while
+            // the window is minimized and there is nothing to draw.
+            std::this_thread::sleep_for(std::chrono::milliseconds(kMinimizedSleepMs));
             continue;
         }
 

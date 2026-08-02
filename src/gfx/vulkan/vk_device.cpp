@@ -67,7 +67,36 @@ namespace engine::gfx {
             return false;
         }
 
+        /// A Vulkan 1.0 loader returns VK_ERROR_INCOMPATIBLE_DRIVER when the
+        /// application asks for a higher version, and that error says nothing
+        /// useful. Ask first, so the failure names the version we found.
+        Result check_loader_version() {
+            std::uint32_t version = VK_API_VERSION_1_0;
+
+            // vkEnumerateInstanceVersion arrived in Vulkan 1.1. volk leaves the
+            // pointer null on an older loader.
+            if (vkEnumerateInstanceVersion != nullptr) {
+                ENGINE_VK_TRY(vkEnumerateInstanceVersion(&version));
+            }
+
+            if (version < VK_API_VERSION_1_3) {
+                ENGINE_LOG_CRITICAL("The Vulkan loader reports {}.{}.{}. This engine needs 1.3.",
+                                    VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version),
+                                    VK_API_VERSION_PATCH(version));
+                return Result::ErrorInit;
+            }
+
+            ENGINE_LOG_DEBUG("Vulkan loader {}.{}.{}.", VK_API_VERSION_MAJOR(version),
+                             VK_API_VERSION_MINOR(version), VK_API_VERSION_PATCH(version));
+            return Result::Success;
+        }
+
         Result create_instance(Device& device, const DeviceDesc& desc) {
+            const Result loader = check_loader_version();
+            if (!succeeded(loader)) {
+                return loader;
+            }
+
             std::uint32_t sdl_count = 0;
             char const* const* sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_count);
             if (sdl_extensions == nullptr) {
@@ -367,10 +396,16 @@ namespace engine::gfx {
                 return "VK_ERROR_OUT_OF_DATE_KHR";
             case VK_ERROR_SURFACE_LOST_KHR:
                 return "VK_ERROR_SURFACE_LOST_KHR";
+            case VK_ERROR_INCOMPATIBLE_DRIVER:
+                return "VK_ERROR_INCOMPATIBLE_DRIVER";
+            case VK_ERROR_LAYER_NOT_PRESENT:
+                return "VK_ERROR_LAYER_NOT_PRESENT";
             default:
                 break;
             }
-            return "VkResult";
+            // ENGINE_VK_TRY also logs the number, so an unmapped value stays
+            // traceable to the specification.
+            return "an unmapped VkResult";
         }
 
         Result to_result(VkResult result) {
@@ -390,6 +425,8 @@ namespace engine::gfx {
             case VK_ERROR_INITIALIZATION_FAILED:
             case VK_ERROR_EXTENSION_NOT_PRESENT:
             case VK_ERROR_FEATURE_NOT_PRESENT:
+            case VK_ERROR_INCOMPATIBLE_DRIVER:
+            case VK_ERROR_LAYER_NOT_PRESENT:
                 return Result::ErrorInit;
             default:
                 break;

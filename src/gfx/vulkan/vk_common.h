@@ -15,6 +15,8 @@
 #include "core/log.h"
 #include "gfx/types.h"
 
+#include <cstdint>
+
 #include <volk.h>
 
 /// @brief Stops VMA from linking Vulkan entry points directly. volk owns them.
@@ -55,12 +57,13 @@ namespace engine::gfx::vk {
  * ENGINE_VK_TRY(vkCreateInstance(&info, nullptr, &instance));
  * @endcode
  */
-#define ENGINE_VK_TRY(expr)                                                        \
-    do {                                                                           \
-        const VkResult engine_vk_result = (expr);                                  \
-        if (engine_vk_result != VK_SUCCESS) {                                      \
-            ENGINE_LOG_ERROR("{} failed with {}", #expr,                           \
-                             ::engine::gfx::vk::vk_result_name(engine_vk_result)); \
-            return ::engine::gfx::vk::to_result(engine_vk_result);                 \
-        }                                                                          \
+#define ENGINE_VK_TRY(expr)                                                       \
+    do {                                                                          \
+        const VkResult engine_vk_result = (expr);                                 \
+        if (engine_vk_result != VK_SUCCESS) {                                     \
+            ENGINE_LOG_ERROR("{} failed with {} ({})", #expr,                     \
+                             ::engine::gfx::vk::vk_result_name(engine_vk_result), \
+                             static_cast<std::int32_t>(engine_vk_result));        \
+            return ::engine::gfx::vk::to_result(engine_vk_result);                \
+        }                                                                         \
     } while (false)
