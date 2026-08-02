@@ -103,10 +103,14 @@ jobs:
           key: conan-release-${{ hashFiles('conanfile.py') }}
           restore-keys: conan-release-
 
+      # Let Conan install the X11 and XCB packages that xorg/system needs. See
+      # the same step in ci.yml for the reason.
       - name: Build
         run: |
           conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
-            -s build_type=Release -b missing
+            -s build_type=Release -b missing \
+            -c tools.system.package_manager:mode=install \
+            -c tools.system.package_manager:sudo=True
           cmake --preset conan-release
           cmake --build --preset conan-release
 
