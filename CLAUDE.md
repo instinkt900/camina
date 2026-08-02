@@ -27,6 +27,35 @@ M1 is next: Vulkan bring-up. See `DESIGN.md` §10.
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, Conan 2.31.1, and Mesa 25.2.8 on
 an Intel GPU. The build produces no warnings under the full warning set.
 
+## Development flow
+
+**Do all development work on a branch and merge it with a pull request.** Commit
+straight to `main` only for a small documentation fix, a typo, a comment change, or a
+one-line tweak. When you are not sure which one applies, use a branch.
+
+`main` carries no branch protection rules, and the user does not want any. This flow is
+a convention, not a lock. The user can set it aside at any time. Follow an explicit
+instruction to work on `main`.
+
+Steps:
+
+1. Branch from current `main`. Name the branch `<type>/<short-topic>`, for example
+   `feat/vulkan-swapchain` or `fix/arena-alignment`.
+2. Commit on the branch in the conventional style.
+3. Open a pull request with `gh pr create`. Write the title in the conventional style.
+   A squash merge uses that title as the commit subject.
+4. Wait for CI. The format, docs, vulkan-containment, and build jobs all run on a pull
+   request.
+5. Ask the user before you merge. Do not merge your own pull request on your own.
+
+Squash merge is the default here. `cliff.toml` skips merge commits and strips the
+`(#12)` suffix that GitHub adds to a squashed subject, so one pull request becomes one
+changelog entry. A merge commit works too, but then every work-in-progress commit on the
+branch reaches the changelog.
+
+Change `version.txt` in its own small commit on `main`, or in a release pull request of
+its own. A push to `main` that changes `version.txt` starts a release.
+
 ## Writing style
 
 Write all prose in relaxed "STE-flavored" ASD-STE100 Simplified Technical English. Use the
