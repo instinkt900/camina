@@ -23,13 +23,18 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
-M0 is complete. The runtime opens a window, runs the job system across 8 workers,
-resets a frame arena each tick, and reports to Tracy. There is no renderer yet.
+M1 is complete. The runtime opens a window, runs the job system, and draws a spinning
+textured cube through Vulkan. It has a swapchain that survives resize, two frames in
+flight, dynamic rendering, reverse-Z depth, and clean validation.
 
-M1 is next: Vulkan bring-up. See `DESIGN.md` §10.
+M1 arrived in three parts: the device and the swapchain, the shader build and the
+triangle, then buffers, textures, descriptors, and the cube.
 
-Verified on 2026-08-02 with Clang 19, CMake 3.28.3, Conan 2.31.1, and Mesa 25.2.8 on
-an Intel GPU. The build produces no warnings under the full warning set.
+M2 is next: reflection. See `DESIGN.md` §10.
+
+Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+GeForce MX250 with the Khronos validation layer active. The build produces no warnings
+under the full warning set.
 
 ## Development flow
 

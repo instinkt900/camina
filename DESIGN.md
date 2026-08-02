@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M0 complete
+Status: M1 complete
 Last updated: 2026-08-02
 
 ---

@@ -494,6 +494,12 @@ namespace engine::gfx {
             return result;
         }
 
+        result = vk::create_shared_resources(*device);
+        if (!succeeded(result)) {
+            destroy_device(device);
+            return result;
+        }
+
         int width = 0;
         int height = 0;
         SDL_GetWindowSizeInPixels(window, &width, &height);
@@ -519,7 +525,10 @@ namespace engine::gfx {
         if (device->device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(device->device);
             vk::destroy_pipelines(*device);
+            vk::destroy_textures(*device);
+            vk::destroy_buffers(*device);
             vk::destroy_swapchain(*device);
+            vk::destroy_shared_resources(*device);
             destroy_frames(*device);
         }
 

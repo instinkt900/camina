@@ -12,6 +12,7 @@
 #include "gfx/vulkan/vk_common.h"
 
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace engine::gfx {
@@ -28,10 +29,30 @@ namespace engine::gfx {
     /// @brief One slot in the pipeline pool that PipelineHandle indexes.
     struct PipelineEntry {
         VkPipeline pipeline = VK_NULL_HANDLE;     ///< Null while the slot is free.
-        VkPipelineLayout layout = VK_NULL_HANDLE; ///< Empty layout until M1.3 adds descriptors.
+        VkPipelineLayout layout = VK_NULL_HANDLE; ///< Carries the push range and the set layout.
         /// @brief Starts at 1, so slot 0 never produces the null handle value.
         std::uint32_t generation = 1;
-        bool alive = false; ///< Whether the slot holds a live pipeline.
+        std::uint32_t push_constant_size = 0; ///< Checked by cmd_push_constants().
+        bool alive = false;                   ///< Whether the slot holds a live pipeline.
+    };
+
+    /// @brief One slot in the buffer pool that BufferHandle indexes.
+    struct BufferEntry {
+        VkBuffer buffer = VK_NULL_HANDLE;          ///< Null while the slot is free.
+        VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the buffer.
+        std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
+        bool alive = false;                        ///< Whether the slot holds a live buffer.
+    };
+
+    /// @brief One slot in the texture pool that TextureHandle indexes.
+    struct TextureEntry {
+        VkImage image = VK_NULL_HANDLE;            ///< Null while the slot is free.
+        VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the image.
+        VkImageView view = VK_NULL_HANDLE;         ///< The view the sampler reads.
+        VkSampler sampler = VK_NULL_HANDLE;        ///< Owned by the texture for now.
+        VkDescriptorSet set = VK_NULL_HANDLE;      ///< Set 0, ready to bind.
+        std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
+        bool alive = false;                        ///< Whether the slot holds a live texture.
     };
 
     /// @brief One slot in the frames-in-flight ring.
@@ -67,8 +88,22 @@ namespace engine::gfx {
         /// @brief One semaphore for each image, signaled when its work finishes.
         std::vector<VkSemaphore> render_finished;
 
+        VkImage depth_image = VK_NULL_HANDLE;            ///< Rebuilt with the swapchain.
+        VmaAllocation depth_allocation = VK_NULL_HANDLE; ///< The VMA block behind the depth image.
+        VkImageView depth_view = VK_NULL_HANDLE;         ///< The depth attachment view.
+        VkFormat depth_format = VK_FORMAT_UNDEFINED;     ///< Chosen once at device creation.
+
+        /// @brief Set 0, binding 0, one combined image sampler for the fragment stage.
+        VkDescriptorSetLayout texture_layout = VK_NULL_HANDLE;
+        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE; ///< Serves one set for each texture.
+        VkCommandPool upload_pool = VK_NULL_HANDLE;        ///< Used by immediate_submit().
+
         std::vector<PipelineEntry> pipelines;      ///< Indexed by PipelineHandle::index().
         std::vector<std::uint32_t> free_pipelines; ///< Slots that destroy_pipeline() released.
+        std::vector<BufferEntry> buffers;          ///< Indexed by BufferHandle::index().
+        std::vector<std::uint32_t> free_buffers;   ///< Slots that destroy_buffer() released.
+        std::vector<TextureEntry> textures;        ///< Indexed by TextureHandle::index().
+        std::vector<std::uint32_t> free_textures;  ///< Slots that destroy_texture() released.
 
         std::array<Frame, kFramesInFlight> frames{}; ///< The frames-in-flight ring.
         std::uint32_t frame_index = 0;               ///< Which ring slot the next frame uses.
@@ -109,9 +144,34 @@ namespace engine::gfx {
          * @param image The image to move.
          * @param from The layout the image is in now.
          * @param to The layout the image must reach.
+         * @param aspect Which aspect to move, colour or depth.
          */
         void transition_image(VkCommandBuffer buffer, VkImage image, VkImageLayout from,
-                              VkImageLayout to);
+                              VkImageLayout to, VkImageAspectFlags aspect);
+
+        /**
+         * @brief Looks up a pipeline slot.
+         * @param device The device that owns the pool.
+         * @param handle The handle to resolve.
+         * @return The live entry, or nullptr when the handle is null or stale.
+         */
+        [[nodiscard]] PipelineEntry* resolve_pipeline(Device& device, PipelineHandle handle);
+
+        /**
+         * @brief Looks up a buffer slot.
+         * @param device The device that owns the pool.
+         * @param handle The handle to resolve.
+         * @return The live entry, or nullptr when the handle is null or stale.
+         */
+        [[nodiscard]] BufferEntry* resolve_buffer(Device& device, BufferHandle handle);
+
+        /**
+         * @brief Looks up a texture slot.
+         * @param device The device that owns the pool.
+         * @param handle The handle to resolve.
+         * @return The live entry, or nullptr when the handle is null or stale.
+         */
+        [[nodiscard]] TextureEntry* resolve_texture(Device& device, TextureHandle handle);
 
         /**
          * @brief Destroys every live pipeline and clears the pool.
@@ -121,6 +181,52 @@ namespace engine::gfx {
          * @param device The device whose pool to clear.
          */
         void destroy_pipelines(Device& device);
+
+        /// @brief Destroys every live buffer and clears the pool.
+        /// @param device The device whose pool to clear.
+        void destroy_buffers(Device& device);
+
+        /// @brief Destroys every live texture and clears the pool.
+        /// @param device The device whose pool to clear.
+        void destroy_textures(Device& device);
+
+        /**
+         * @brief Builds the depth image at the current swapchain size.
+         *
+         * Reverse-Z needs a float depth format, per DESIGN.md section 3.
+         *
+         * @param device The device to build into.
+         * @return Result::Success, or the reason the image did not build.
+         */
+        [[nodiscard]] Result create_depth_image(Device& device);
+
+        /// @brief Destroys the depth image and its view. Calling this twice is safe.
+        /// @param device The device to clear.
+        void destroy_depth_image(Device& device);
+
+        /**
+         * @brief Creates the texture set layout, the descriptor pool, and the upload pool.
+         * @param device The device to build into.
+         * @return Result::Success, or the reason a resource did not build.
+         */
+        [[nodiscard]] Result create_shared_resources(Device& device);
+
+        /// @brief Destroys what create_shared_resources() built.
+        /// @param device The device to clear.
+        void destroy_shared_resources(Device& device);
+
+        /**
+         * @brief Records and runs one command buffer, then waits for it.
+         *
+         * Used for staging copies and layout changes at upload time. It is
+         * deliberately simple and blocking. M4 replaces it with a transfer queue.
+         *
+         * @param device The device to submit on.
+         * @param record Fills the command buffer. It runs once.
+         * @return Result::Success, or the reason the submit failed.
+         */
+        [[nodiscard]] Result immediate_submit(Device& device,
+                                              const std::function<void(VkCommandBuffer)>& record);
 
     } // namespace vk
 

@@ -172,4 +172,85 @@ namespace engine::gfx {
                   std::uint32_t instance_count, std::uint32_t first_vertex,
                   std::uint32_t first_instance);
 
+    /**
+     * @brief Uploads data into a device-local buffer.
+     * @param device The device that owns the buffer.
+     * @param desc The bytes, the size, and how the buffer will be bound.
+     * @param out_buffer Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the upload failed.
+     */
+    [[nodiscard]] Result create_buffer(Device* device, const BufferDesc& desc,
+                                       BufferHandle* out_buffer);
+
+    /**
+     * @brief Releases a buffer and frees its slot for reuse.
+     * @param device The device that owns the buffer.
+     * @param buffer The handle to release. A null or stale handle does nothing.
+     */
+    void destroy_buffer(Device* device, BufferHandle buffer);
+
+    /**
+     * @brief Uploads pixels into a sampled texture with its own descriptor set.
+     * @param device The device that owns the texture.
+     * @param desc The pixels and the size.
+     * @param out_texture Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the upload failed.
+     */
+    [[nodiscard]] Result create_texture(Device* device, const TextureDesc& desc,
+                                        TextureHandle* out_texture);
+
+    /**
+     * @brief Releases a texture and frees its slot for reuse.
+     * @param device The device that owns the texture.
+     * @param texture The handle to release. A null or stale handle does nothing.
+     */
+    void destroy_texture(Device* device, TextureHandle texture);
+
+    /**
+     * @brief Binds the vertex buffer that the draws that follow read.
+     * @param commands The command list from begin_frame().
+     * @param buffer The buffer to bind. A stale handle logs and does nothing.
+     */
+    void cmd_bind_vertex_buffer(CommandList* commands, BufferHandle buffer);
+
+    /**
+     * @brief Binds the index buffer that the draws that follow read.
+     * @param commands The command list from begin_frame().
+     * @param buffer The buffer to bind. It holds 32-bit indices.
+     */
+    void cmd_bind_index_buffer(CommandList* commands, BufferHandle buffer);
+
+    /**
+     * @brief Binds a texture at set 0, binding 0.
+     *
+     * The pipeline must have asked for it with GraphicsPipelineDesc::sample_texture.
+     *
+     * @param commands The command list from begin_frame().
+     * @param pipeline The bound pipeline, which supplies the layout.
+     * @param texture The texture to bind.
+     */
+    void cmd_bind_texture(CommandList* commands, PipelineHandle pipeline, TextureHandle texture);
+
+    /**
+     * @brief Sends push constants to the vertex stage.
+     * @param commands The command list from begin_frame().
+     * @param pipeline The bound pipeline, which supplies the layout.
+     * @param data The bytes to send.
+     * @param size How many bytes to send. It must match the pipeline's declared size.
+     */
+    void cmd_push_constants(CommandList* commands, PipelineHandle pipeline, const void* data,
+                            std::uint32_t size);
+
+    /**
+     * @brief Draws with the bound index buffer.
+     * @param commands The command list from begin_frame().
+     * @param index_count How many indices to read.
+     * @param instance_count How many instances to draw. Pass 1 for a single copy.
+     * @param first_index The first index to read.
+     * @param first_instance The value gl_InstanceIndex starts at.
+     */
+    void cmd_draw_indexed(CommandList* commands, std::uint32_t index_count,
+                          std::uint32_t instance_count, std::uint32_t first_index,
+                          std::uint32_t first_instance);
+
 } // namespace engine::gfx
