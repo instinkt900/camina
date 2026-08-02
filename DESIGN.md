@@ -408,6 +408,11 @@ add GameNetworkingSockets or ENet later instead of rewriting.
 
 Each milestone ends with something you can run.
 
+**This section stays canonical.** It holds each definition and each "done when" test. The
+GitHub issue tracker holds the state. Every milestone here has a GitHub Milestone, and the
+work inside it becomes issues that link back to this section. Do not copy a definition into
+an issue, because two copies drift.
+
 ### M0 — Foundations
 CMake, Conan 2, and profiles. An SDL3 window. Logging, asserts, and a live Tracy
 connection. enkiTS running a `parallel_for`. Math and `conventions.h`. A frame arena
