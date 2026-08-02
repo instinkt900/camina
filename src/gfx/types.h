@@ -109,7 +109,14 @@ namespace engine::gfx {
         std::uint32_t push_constant_size = 0;
         /// @brief Whether the fragment stage samples the texture at set 0, binding 0.
         bool sample_texture = false;
-        /// @brief Whether to test and write depth. Reverse-Z keeps nearer fragments.
+        /**
+         * @brief Whether to test and write depth. Reverse-Z keeps nearer fragments.
+         *
+         * This does not decide whether a depth attachment is present. Every frame
+         * attaches one, and every pipeline declares its format. A pipeline that
+         * leaves this false still renders into the same attachment, and simply
+         * does not read or write it.
+         */
         bool depth_test = false;
         /**
          * @brief Whether to cull back faces.

@@ -67,12 +67,14 @@ namespace engine::gfx {
             return vk::to_result(acquired);
         }
 
-        ENGINE_VK_TRY(vkResetFences(device->device, 1, &frame.in_flight));
-
         const Result opened = open_recording(*device, frame);
         if (!succeeded(opened)) {
+            // Leave the fence signaled. Nothing was submitted, so this slot must
+            // stay free, or the next begin_frame waits on it forever.
             return opened;
         }
+
+        ENGINE_VK_TRY(vkResetFences(device->device, 1, &frame.in_flight));
 
         device->frame_open = true;
 
@@ -166,15 +168,19 @@ namespace engine::gfx {
         depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depth.clearValue.depthStencil.depth = 0.0F;
 
+        // create_swapchain() builds the depth image, and begin_frame() opens a
+        // frame only when the swapchain is live. So a frame always has depth, and
+        // every pipeline declares the depth format for attachment compatibility.
+        ENGINE_ASSERT(commands->owner->depth_view != VK_NULL_HANDLE,
+                      "A frame is open but the depth attachment is missing.");
+
         VkRenderingInfo info{};
         info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         info.renderArea.extent = VkExtent2D{ commands->extent.width, commands->extent.height };
         info.layerCount = 1;
         info.colorAttachmentCount = 1;
         info.pColorAttachments = &color;
-        if (commands->owner->depth_view != VK_NULL_HANDLE) {
-            info.pDepthAttachment = &depth;
-        }
+        info.pDepthAttachment = &depth;
 
         vkCmdBeginRendering(commands->buffer, &info);
 
