@@ -27,7 +27,12 @@ namespace engine::scene {
                 return false;
             }
 
-            out.parent = record.value(kParentKey, kNoParent);
+            const std::string where =
+                "Prefab " + std::string(name) + " entity " + std::to_string(index);
+            if (!read_parent(record, where, out.parent)) {
+                return false;
+            }
+
             if (index == 0) {
                 if (out.parent != kNoParent) {
                     ENGINE_LOG_ERROR("Prefab {}: the first entity must be the root.", name);
@@ -220,9 +225,13 @@ namespace engine::scene {
         world.registry().emplace<PrefabInstance>(root, PrefabInstance{ .prefab = prefab.name() });
 
         if (!ok) {
-            // Every created entity is the root or a descendant of it, so one
-            // destroy leaves no orphan behind.
-            world.destroy(root);
+            // Destroy the list rather than the tree. Destroying the root reaches
+            // every entity that attached, and walking the list then reaches any
+            // that did not. World::destroy() ignores an entity that has already
+            // gone, so the two do not fight.
+            for (const entt::entity dead : created) {
+                world.destroy(dead);
+            }
             return entt::null;
         }
         return root;

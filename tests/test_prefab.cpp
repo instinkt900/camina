@@ -15,6 +15,7 @@
 #include "scene/world.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -49,12 +50,36 @@ namespace {
         return document;
     }
 
+    /**
+     * The library key stays "crate" whatever the arguments say.
+     *
+     * test_prefab_edit_reaches_instances() saves a scene against one crate and
+     * loads it against an edited crate, and that only works while both live
+     * under the same key. `crate_name` sets the Name component value, which is
+     * one of the fields the edit changes.
+     */
     sc::PrefabLibrary crate_library(const std::string& crate_name = "crate",
                                     float crate_scale = 1.0F) {
         sc::PrefabLibrary library;
         check(library.add("crate", crate_document(crate_name, crate_scale)),
               "the crate prefab parses");
         return library;
+    }
+
+    /**
+     * The crate prefab, or a hard stop.
+     *
+     * check() records a failure and carries on, so a null dereference here would
+     * take the rest of the run with it and CI would lose every later result.
+     */
+    const sc::Prefab& crate_of(const sc::PrefabLibrary& library) {
+        const sc::Prefab* found = library.find("crate");
+        if (found == nullptr) {
+            check(false, "the library holds the crate prefab");
+            std::printf("Cannot go on without the prefab.\n");
+            std::exit(test::report());
+        }
+        return *found;
     }
 
     /// The one override this suite uses: move the instance root sideways.
@@ -75,6 +100,10 @@ namespace {
 
         check(!sc::Prefab::parse("bad", nlohmann::json::array(), prefab),
               "an array is not a prefab");
+        // The header promises the target is untouched when the read fails, and
+        // every negative case below reuses this one object.
+        check(prefab.name() == "crate" && prefab.size() == 2,
+              "a refused parse leaves the target prefab alone");
 
         nlohmann::json no_version = crate_document("crate", 1.0F);
         no_version.erase("__version");
@@ -114,6 +143,23 @@ namespace {
         nlohmann::json bad_parts = crate_document("crate", 1.0F);
         bad_parts["entities"][0]["components"] = 7;
         check(!sc::Prefab::parse("bad", bad_parts, prefab), "components must be an object");
+
+        // nlohmann::json::value() converts to the type of the default, and it
+        // throws when the stored type cannot convert. Nothing here catches a
+        // JSON exception, so a parent of the wrong type used to end the process.
+        nlohmann::json worded_parent = crate_document("crate", 1.0F);
+        worded_parent["entities"][1]["parent"] = "root";
+        check(!sc::Prefab::parse("bad", worded_parent, prefab),
+              "a parent that is not a number is refused rather than thrown");
+
+        nlohmann::json null_parent = crate_document("crate", 1.0F);
+        null_parent["entities"][1]["parent"] = nullptr;
+        check(!sc::Prefab::parse("bad", null_parent, prefab), "a null parent is refused");
+
+        nlohmann::json fractional_parent = crate_document("crate", 1.0F);
+        fractional_parent["entities"][1]["parent"] = 0.5;
+        check(!sc::Prefab::parse("bad", fractional_parent, prefab),
+              "a parent with a fraction is refused");
     }
 
     void test_library() {
@@ -129,7 +175,7 @@ namespace {
         // needs no remove call.
         check(library.add("crate", crate_document("heavy crate", 1.0F)), "a reload goes in");
         check(library.size() == 1, "a reload replaces rather than adds");
-        check(library.find("crate")->entities().at(0).components["Name"]["value"] ==
+        check(crate_of(library).entities().at(0).components.at("Name").at("value") ==
                   "heavy crate",
               "the reload won");
 
@@ -176,7 +222,7 @@ namespace {
     void test_instantiate() {
         const sc::ComponentRegistry registry = make_registry();
         const sc::PrefabLibrary library = crate_library();
-        const sc::Prefab& crate = *library.find("crate");
+        const sc::Prefab& crate = crate_of(library);
 
         sc::World world;
         const entt::entity root = sc::instantiate(world, crate, nlohmann::json::object(),
@@ -205,7 +251,7 @@ namespace {
     void test_overrides_are_per_field() {
         const sc::ComponentRegistry registry = make_registry();
         const sc::PrefabLibrary library = crate_library("crate", 3.0F);
-        const sc::Prefab& crate = *library.find("crate");
+        const sc::Prefab& crate = crate_of(library);
 
         sc::World world;
         const entt::entity root = sc::instantiate(world, crate, moved_to(7.0F), registry);
@@ -231,7 +277,7 @@ namespace {
     void test_instantiate_refuses_bad_input() {
         const sc::ComponentRegistry registry = make_registry();
         const sc::PrefabLibrary library = crate_library();
-        const sc::Prefab& crate = *library.find("crate");
+        const sc::Prefab& crate = crate_of(library);
 
         sc::World world;
         check(sc::instantiate(world, crate, nlohmann::json::array(), registry) == entt::null,
@@ -256,7 +302,7 @@ namespace {
         check(library.add("crate", document), "the prefab parses");
 
         sc::World world;
-        const entt::entity root = sc::instantiate(world, *library.find("crate"),
+        const entt::entity root = sc::instantiate(world, crate_of(library),
                                                   nlohmann::json::object(), make_registry());
         check(root != entt::null, "an unknown component does not fail the build");
         check(world.registry().get<sc::Name>(root).value == "crate",
@@ -267,7 +313,7 @@ namespace {
     nlohmann::json two_crates(const sc::ComponentRegistry& registry,
                               const sc::PrefabLibrary& library) {
         sc::World world;
-        const sc::Prefab& crate = *library.find("crate");
+        const sc::Prefab& crate = crate_of(library);
 
         check(sc::instantiate(world, crate, nlohmann::json::object(), registry) != entt::null,
               "the plain crate builds");
@@ -374,7 +420,7 @@ namespace {
         // Saving an instance without its prefab writes the entities one by one,
         // rather than throwing away every field the instance holds.
         sc::World world;
-        check(sc::instantiate(world, *library.find("crate"), moved_to(9.0F), registry) !=
+        check(sc::instantiate(world, crate_of(library), moved_to(9.0F), registry) !=
                   entt::null,
               "the instance builds");
         const nlohmann::json expanded = sc::save_scene(world, registry, empty);

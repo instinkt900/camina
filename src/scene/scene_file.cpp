@@ -94,7 +94,10 @@ namespace engine::scene {
         /// Attaches one entity to its parent, if the record names one.
         bool apply_parent(const nlohmann::json& record, std::size_t self,
                           const std::vector<entt::entity>& created, World& world) {
-            const int parent = record.value(kParentKey, kNoParent);
+            int parent = kNoParent;
+            if (!read_parent(record, "Entity " + std::to_string(self), parent)) {
+                return false;
+            }
             if (parent == kNoParent) {
                 return true;
             }

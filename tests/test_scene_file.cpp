@@ -243,6 +243,23 @@ namespace {
         check(!sc::load_scene(bad_parent, fresh, registry),
               "a parent index outside the file is refused");
 
+        // nlohmann::json::value() converts to the type of the default, and it
+        // throws when the stored type cannot convert. Nothing here catches a
+        // JSON exception, so a hand-edited file with a worded parent used to end
+        // the process rather than report.
+        nlohmann::json worded_parent = nlohmann::json::object();
+        worded_parent["__version"] = sc::kSceneVersion;
+        worded_parent["entities"] = nlohmann::json::array({ { { "parent", "root" } } });
+        sc::World unworded;
+        check(!sc::load_scene(worded_parent, unworded, registry),
+              "a parent that is not a number is refused rather than thrown");
+
+        nlohmann::json null_parent = nlohmann::json::object();
+        null_parent["__version"] = sc::kSceneVersion;
+        null_parent["entities"] = nlohmann::json::array({ { { "parent", nullptr } } });
+        sc::World unnulled;
+        check(!sc::load_scene(null_parent, unnulled, registry), "a null parent is refused");
+
         // A world that already holds entities must not take a second scene.
         sc::World busy;
         build_world(busy);
