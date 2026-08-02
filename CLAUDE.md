@@ -82,8 +82,21 @@ its own. A push to `main` that changes `version.txt` starts a release.
   M8 written today will be wrong by the time it starts.
 - Labels are `area: build`, `area: gfx`, `area: render`, `area: core`, `area: assets`, and
   `area: editor`. Put `milestone-goal` on the issue that carries the milestone's own
-  done-when test.
+  done-when test. Put `tech debt` on a known shortcut to pay back later.
 - Reference the issue from the pull request, so GitHub links them.
+
+**File an issue for every problem you find.** When you find a bug, a shortcut, dead code, or
+a question that the current work does not answer, open an issue for it. Do this even when
+you cannot fix it now, and even when the user has not answered yet. A finding that lives
+only in a chat reply or in a pull-request comment gets lost.
+
+Rules for such an issue:
+
+- Say where you found it, with a `file:line` reference.
+- Say why it matters. A finding with no cost attached is not worth tracking.
+- Give a `Done when` checklist, so a later session can tell when it is closed.
+- Add a milestone only when the work clearly belongs to one. Leave it empty otherwise.
+- Do not fix it in the current branch unless it blocks that branch. File it and move on.
 
 ## Writing style
 
