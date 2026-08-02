@@ -10,11 +10,15 @@
  */
 
 #include "math/conventions.h"
+#include "reflect/attributes.h"
+#include "reflect/reflect.h"
 
 #include <entt/entity/entity.hpp>
 #include <entt/entity/fwd.hpp>
 
 #include <cstddef>
+#include <string>
+#include <tuple>
 
 /// @brief The entity world, the transform hierarchy, and scene files.
 namespace engine::scene {
@@ -26,6 +30,10 @@ namespace engine::scene {
      * the same whether an entity has two children or two thousand. No entity
      * allocates a container for its children.
      *
+     * A new child joins at the end, so the list keeps the order the caller
+     * attached in. A scene file relies on that: without it, saving and loading
+     * would reverse every sibling list.
+     *
      * A root has no parent. A leaf has no first child.
      */
     struct Hierarchy {
@@ -33,6 +41,8 @@ namespace engine::scene {
         entt::entity parent = entt::null;
         /// @brief The first child, or `entt::null` for a leaf.
         entt::entity first_child = entt::null;
+        /// @brief The last child, so attaching at the end costs nothing.
+        entt::entity last_child = entt::null;
         /// @brief The next child of the same parent, or `entt::null` at the end.
         entt::entity next_sibling = entt::null;
         /// @brief The previous child of the same parent, or `entt::null` at the start.
@@ -56,4 +66,25 @@ namespace engine::scene {
         bool dirty = true;
     };
 
+    /**
+     * @brief A label for one entity.
+     *
+     * Nothing in the engine reads this. A person reads it, in the editor and in
+     * a scene file, and that is enough reason to keep it.
+     */
+    struct Name {
+        std::string value; ///< Free text. It does not have to be unique.
+    };
+
 } // namespace engine::scene
+
+/// @brief Describes Name for the inspector and for scene files.
+template <>
+struct engine::reflect::Describe<engine::scene::Name> {
+    static constexpr const char* name = "Name"; ///< The name a scene file stores.
+    /// @brief The one field.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(engine::scene::Name, value));
+    }
+};

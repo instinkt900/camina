@@ -37,6 +37,9 @@ namespace engine::scene {
         if (parent.first_child == child) {
             parent.first_child = node.next_sibling;
         }
+        if (parent.last_child == child) {
+            parent.last_child = node.prev_sibling;
+        }
         if (node.prev_sibling != entt::null) {
             registry_.get<Hierarchy>(node.prev_sibling).next_sibling = node.next_sibling;
         }
@@ -54,13 +57,16 @@ namespace engine::scene {
         Hierarchy& node = registry_.get<Hierarchy>(child);
         Hierarchy& head = registry_.get<Hierarchy>(parent);
 
+        // Join at the end, so the list keeps the order the caller attached in.
         node.parent = parent;
-        node.prev_sibling = entt::null;
-        node.next_sibling = head.first_child;
-        if (head.first_child != entt::null) {
-            registry_.get<Hierarchy>(head.first_child).prev_sibling = child;
+        node.next_sibling = entt::null;
+        node.prev_sibling = head.last_child;
+        if (head.last_child != entt::null) {
+            registry_.get<Hierarchy>(head.last_child).next_sibling = child;
+        } else {
+            head.first_child = child;
         }
-        head.first_child = child;
+        head.last_child = child;
         ++head.child_count;
     }
 

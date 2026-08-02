@@ -15,6 +15,8 @@ add_library(engine_core STATIC
     gfx/vulkan/vk_vma.cpp
     render/cube_pass.cpp
     scene/world.cpp
+    scene/component_registry.cpp
+    scene/scene_file.cpp
 )
 
 # GLSL to SPIR-V at build time. render/cube_pass.cpp embeds the output, so the
