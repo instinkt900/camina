@@ -319,6 +319,24 @@ That leaves two registries where the design wants one. Folding the operations in
 `reflect::Registry` is the answer, and it waits for a third caller to say what the set of
 operations should be.
 
+**What prefab overrides needed.** M3.3 added the fourth consumer, and it needed nothing from
+the descriptors either. A prefab override has to name one field, and it gets that granularity
+for free: `to_json()` writes one key for each described field, so a patch that names one key
+overrides one field.
+
+The override is an RFC 7386 merge patch over the component set of one entity. The prefab
+supplies the defaults, the patch supplies the changes, and a field the patch does not name
+still comes from the prefab. That one line of ordering is the whole of "editing a prefab
+reaches every instance that left the field alone". `scene::override_patch()` walks two
+documents and keeps only what differs, so an instance stores the field it moved and nothing
+else.
+
+A merge patch reads a null as "remove this key", so an instance can drop a whole component.
+No described field writes a null, so nothing collides with that meaning.
+
+The gap here is structural, not per-field. An instance cannot record a child you added, a
+member you destroyed, or a member you reparented. Issue #27 tracks that.
+
 ---
 
 ## 8. Game UI — moth_ui

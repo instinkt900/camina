@@ -36,6 +36,13 @@ engine_enable_clang_tidy(test_scene_file)
 
 add_test(NAME scene_file COMMAND test_scene_file)
 
+add_executable(test_prefab test_prefab.cpp)
+target_link_libraries(test_prefab PRIVATE engine::core)
+engine_set_warnings(test_prefab)
+engine_enable_clang_tidy(test_prefab)
+
+add_test(NAME prefab COMMAND test_prefab)
+
 # Rule 4.1. No file outside src/gfx/vulkan/ can include a Vulkan header.
 #
 # The check is a shell script, so it needs bash. A Windows machine without Git

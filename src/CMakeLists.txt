@@ -17,6 +17,7 @@ add_library(engine_core STATIC
     scene/world.cpp
     scene/component_registry.cpp
     scene/scene_file.cpp
+    scene/prefab.cpp
 )
 
 # GLSL to SPIR-V at build time. render/cube_pass.cpp embeds the output, so the
