@@ -49,10 +49,21 @@ namespace engine::gfx {
         VkImage image = VK_NULL_HANDLE;            ///< Null while the slot is free.
         VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the image.
         VkImageView view = VK_NULL_HANDLE;         ///< The view the sampler reads.
-        VkSampler sampler = VK_NULL_HANDLE;        ///< Owned by the texture for now.
+        VkSampler sampler = VK_NULL_HANDLE;        ///< Shared. The device sampler cache owns it.
         VkDescriptorSet set = VK_NULL_HANDLE;      ///< Set 0, ready to bind.
         std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
         bool alive = false;                        ///< Whether the slot holds a live texture.
+    };
+
+    /**
+     * @brief One shared sampler, and the state it was built from.
+     *
+     * Textures do not own a sampler. They point at an entry here, and the entry
+     * lives as long as the device. See gfx::SamplerDesc.
+     */
+    struct SamplerEntry {
+        VkSampler sampler = VK_NULL_HANDLE; ///< The shared object.
+        SamplerDesc desc;                   ///< The state that produced it. Also the cache key.
     };
 
     /// @brief One slot in the frames-in-flight ring.
@@ -97,6 +108,7 @@ namespace engine::gfx {
         VkDescriptorSetLayout texture_layout = VK_NULL_HANDLE;
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE; ///< Serves one set for each texture.
         VkCommandPool upload_pool = VK_NULL_HANDLE;        ///< Used by immediate_submit().
+        std::vector<SamplerEntry> samplers;                ///< The sampler cache. Textures share these.
 
         std::vector<PipelineEntry> pipelines;      ///< Indexed by PipelineHandle::index().
         std::vector<std::uint32_t> free_pipelines; ///< Slots that destroy_pipeline() released.
@@ -189,6 +201,24 @@ namespace engine::gfx {
         /// @brief Destroys every live texture and clears the pool.
         /// @param device The device whose pool to clear.
         void destroy_textures(Device& device);
+
+        /**
+         * @brief Finds the shared sampler for a state, and builds it once.
+         *
+         * The cache holds one entry for each distinct state, so two textures
+         * that ask for the same filtering share one VkSampler.
+         *
+         * @param device The device that owns the cache.
+         * @param desc The wanted sampler state.
+         * @param out_sampler Receives the shared sampler. The caller does not own it.
+         * @return Result::Success, or the reason the sampler did not build.
+         */
+        [[nodiscard]] Result resolve_sampler(Device& device, const SamplerDesc& desc,
+                                             VkSampler* out_sampler);
+
+        /// @brief Destroys every cached sampler. Call it after destroy_textures().
+        /// @param device The device whose cache to clear.
+        void destroy_samplers(Device& device);
 
         /**
          * @brief Builds the depth image at the current swapchain size.
