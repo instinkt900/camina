@@ -100,7 +100,14 @@ here, consider whether moth_ui wants the same change.
 - **clangd.** `.clangd` points at `build/RelWithDebInfo`. There is no
   `compile_commands.json` symlink and none is needed.
 - **clang-format** is not in apt on this machine. It lives in the Conan virtual
-  environment: `~/.venv/conan/bin/clang-format`.
+  environment: `~/.venv/conan/bin/clang-format`. It is version 19, and CI pins
+  clang-format 19 as well. Do not use the apt package, which is 18. The two
+  disagree on pointer-to-member spacing, so version 18 fails CI on code that
+  version 19 calls clean.
+- **MSVC and `__VA_OPT__`.** The old MSVC preprocessor has no `__VA_OPT__`, and it is
+  still the default. `src/CMakeLists.txt` sets `/Zc:preprocessor` as a PUBLIC option
+  for that reason. A C++20 macro that works with Clang can still fail on Windows
+  without it.
 - **Shaders.** `cmake/Shaders.cmake` compiles GLSL to SPIR-V with glslc at build time
   and writes a braced list of 32-bit words. The consumer embeds it with
   `std::to_array`, so the runtime carries no shader compiler. glslc arrives through

@@ -70,5 +70,12 @@ if(WIN32)
     )
 endif()
 
+# MSVC keeps its old preprocessor unless you ask for the conforming one, and the
+# old one has no __VA_OPT__. reflect/reflect.h needs it for ENGINE_FIELD, and
+# that header is public, so this is PUBLIC too.
+if(MSVC)
+    target_compile_options(engine_core PUBLIC /Zc:preprocessor)
+endif()
+
 engine_set_warnings(engine_core)
 engine_enable_clang_tidy(engine_core)
