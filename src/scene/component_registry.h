@@ -124,6 +124,39 @@ namespace engine::scene {
     [[nodiscard]] ComponentRegistry& components();
 
     /**
+     * @brief Writes every registered component an entity carries.
+     *
+     * A scene file and a prefab both store an entity this way, so they agree on
+     * the shape without either one repeating the loop.
+     *
+     * @param registry The entity registry to read.
+     * @param entity The entity to read.
+     * @param types The component types to consider.
+     * @return An object keyed by component name. It is empty when the entity
+     * carries no registered component.
+     */
+    [[nodiscard]] nlohmann::json save_components(const entt::registry& registry,
+                                                 entt::entity entity,
+                                                 const ComponentRegistry& types = components());
+
+    /**
+     * @brief Builds every component an object names and the registry knows.
+     *
+     * A component the registry does not know is a warning, not a failure. The
+     * rest of the entity still loads, so an older build can open a newer file.
+     *
+     * @param parts An object keyed by component name, as save_components writes.
+     * @param registry The entity registry to fill.
+     * @param entity The entity to build on.
+     * @param types The component types to consider.
+     * @param where What to name in a log line, for example "entity 3".
+     * @return True when @p parts is an object and every known component loaded.
+     */
+    [[nodiscard]] bool load_components(const nlohmann::json& parts, entt::registry& registry,
+                                       entt::entity entity, const ComponentRegistry& types,
+                                       std::string_view where);
+
+    /**
      * @brief Registers the component types the engine itself defines.
      *
      * Call this once at startup, before you read a scene. A game adds its own

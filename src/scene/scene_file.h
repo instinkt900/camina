@@ -15,6 +15,7 @@
  */
 
 #include "scene/component_registry.h"
+#include "scene/prefab.h"
 #include "scene/world.h"
 
 #include <nlohmann/json.hpp>
@@ -30,8 +31,11 @@ namespace engine::scene {
      * A reader accepts this version and every earlier one. Raise it when the
      * shape of the document changes, and not when a component gains a field.
      * A component carries its own version, per reflect/json.h.
+     *
+     * Version 2 added the prefab link and the override patch on an entity.
+     * A version 1 document names no prefab, so it still reads.
      */
-    inline constexpr std::uint32_t kSceneVersion = 1;
+    inline constexpr std::uint32_t kSceneVersion = 2;
 
     /**
      * @brief Writes a world to a JSON document.
@@ -42,13 +46,21 @@ namespace engine::scene {
      *
      * A component type that is not registered is not written.
      *
+     * A prefab instance collapses to its name and the fields it changed. The
+     * entities the prefab supplied are not written, because the prefab already
+     * holds them.
+     *
      * @param world The world to write.
      * @param registry The component types to consider. Defaults to the
      * process-wide registry.
+     * @param library The prefabs to collapse against. An instance of a prefab
+     * this library does not hold is written entity by entity, and the link is
+     * lost. The writer reports that.
      * @return The document.
      */
     [[nodiscard]] nlohmann::json save_scene(const World& world,
-                                            const ComponentRegistry& registry = components());
+                                            const ComponentRegistry& registry = components(),
+                                            const PrefabLibrary& library = prefabs());
 
     /**
      * @brief Reads a world back from a JSON document.
@@ -60,32 +72,42 @@ namespace engine::scene {
      * not a failure. The rest of the entity still loads. That keeps an older
      * build able to open a newer file.
      *
+     * A prefab the file names but the library does not hold is an error. The
+     * reader cannot invent the entities, so it leaves an empty one in its place
+     * and keeps reading the rest of the scene.
+     *
      * @param document The document to read.
      * @param world The world to fill.
      * @param registry The component types to consider.
+     * @param library The prefabs to build instances from.
      * @return True when the document parsed and every known component loaded.
      */
     [[nodiscard]] bool load_scene(const nlohmann::json& document, World& world,
-                                  const ComponentRegistry& registry = components());
+                                  const ComponentRegistry& registry = components(),
+                                  const PrefabLibrary& library = prefabs());
 
     /**
      * @brief Writes a world to a `.scene` file.
      * @param path Where to write. The parent directory must exist.
      * @param world The world to write.
      * @param registry The component types to consider.
+     * @param library The prefabs to collapse against.
      * @return True when the file was written.
      */
     [[nodiscard]] bool save_scene_file(const std::filesystem::path& path, const World& world,
-                                       const ComponentRegistry& registry = components());
+                                       const ComponentRegistry& registry = components(),
+                                       const PrefabLibrary& library = prefabs());
 
     /**
      * @brief Reads a `.scene` file into an empty world.
      * @param path The file to read.
      * @param world The world to fill.
      * @param registry The component types to consider.
+     * @param library The prefabs to build instances from.
      * @return True when the file parsed and every known component loaded.
      */
     [[nodiscard]] bool load_scene_file(const std::filesystem::path& path, World& world,
-                                       const ComponentRegistry& registry = components());
+                                       const ComponentRegistry& registry = components(),
+                                       const PrefabLibrary& library = prefabs());
 
 } // namespace engine::scene
