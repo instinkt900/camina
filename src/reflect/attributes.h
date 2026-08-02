@@ -70,7 +70,7 @@ namespace engine::reflect {
     /**
      * @brief The field exists only for the editor.
      *
-     * Rule 4.3 in DESIGN.md allows `#ifdef EDITOR` for exactly this, to keep
+     * Rule 4.3 in DESIGN.md allows `WITH_EDITOR` to remove exactly this, to keep
      * editor-only metadata out of a shipping build.
      */
     struct EditorOnly {};

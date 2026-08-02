@@ -220,8 +220,11 @@ that `cliff.toml` groups them. Plain commits still appear, under "Changes".
 2. **Keep `gfx::` C-compatible.** No `std::string`, no `std::vector`, no virtuals, and no
    exceptions in the public `gfx::` interface. Use opaque generational `uint64_t` handles
    and POD structs.
-3. **The editor is an application, not a build mode.** Use `#ifdef EDITOR` only to remove
-   editor-only reflection metadata. Never use it to change engine logic.
+3. **`WITH_EDITOR` removes code. It never changes code.** `editor` and `runtime` are two
+   executables over `engine_core`, and the game module links into both. The macro may
+   remove an editor-only method, member, subsystem, or attribute. It must never change
+   what the remaining code does, because then a shipping build behaves unlike the editor
+   build.
 4. **Vendor only what you patch.** Everything else comes from Conan.
 5. **Reflect once, consume many times.** Every field enumeration goes through `reflect/`.
    Do not add a second descriptor system.

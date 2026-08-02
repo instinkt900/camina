@@ -140,10 +140,20 @@ exceptions. Use `const char*` with a length, a pointer with a count, opaque gene
 `uint64_t` handles, and POD descriptor structs. This costs nothing now. It turns the later
 plugin ABI into a header rename.
 
-**4.3 — The editor is an application, not a build mode.**
-`engine_core` is a library. `editor` and `runtime` are two executables that link it. Use
-`#ifdef EDITOR` only to remove editor-only reflection metadata from shipping builds. Never
-use it to change engine logic.
+**4.3 — `WITH_EDITOR` removes code. It never changes code.**
+`engine_core` is a library. `editor` and `runtime` are two executables that link it, and
+the game module links into both. This is the Unreal and Hazel shape: the editor belongs to
+the project and holds the project types, and it is not a generic tool that opens project
+files.
+
+`WITH_EDITOR` may remove an editor-only method, member, subsystem, or reflection
+attribute. It must never change what the code that remains does. An `#ifdef` around a
+branch inside a function that both builds run is a violation, because it lets a shipping
+build behave unlike the editor build. That class of bug is miserable to trace, and this
+rule is the only thing that prevents it.
+
+The macro name matches the Conan option `with_editor` and matches Unreal, so one name
+means one thing across the build, the package, and the code.
 
 **4.4 — Vendor only what you patch.**
 A dependency goes in `third_party/` only if you may need to patch it. Everything else comes
@@ -485,9 +495,12 @@ enjoys. Add hot reload from the start.
 **Done when:** the sandbox game logic runs entirely in Lua.
 
 ### M8 — Editor split
-`editor` and `runtime` as separate executables over `engine_core`. Play-in-editor through
-world snapshot and restore, which M2 and M3 already provide. ImGuizmo. An asset browser, a
-hierarchy panel, and an inspector panel.
+`editor` and `runtime` as separate executables over `engine_core`. The game module links
+into both, so the editor holds the project types and can inspect them. A release build
+compiles with `WITH_EDITOR` off and drops the editor code. See rule 4.3.
+
+Play-in-editor through world snapshot and restore, which M2 and M3 already provide.
+ImGuizmo. An asset browser, a hierarchy panel, and an inspector panel.
 **Done when:** you build a level in the editor, press play, and ship it as a runtime build.
 
 ### M9 — Game UI
