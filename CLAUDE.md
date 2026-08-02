@@ -53,6 +53,10 @@ Squash merge is the default here. `cliff.toml` skips merge commits and strips th
 changelog entry. A merge commit works too, but then every work-in-progress commit on the
 branch reaches the changelog.
 
+**No co-author trailers.** Do not add a `Co-Authored-By:` line to any commit message.
+This overrides the default Claude Code behavior. The author of a commit is the person who
+owns the repository.
+
 Change `version.txt` in its own small commit on `main`, or in a release pull request of
 its own. A push to `main` that changes `version.txt` starts a release.
 
