@@ -4,14 +4,22 @@
 #include "core/profile.h"
 #include "core/version.h"
 #include "gfx/device.h"
+#include "gfx/imgui.h"
 #include "math/conventions.h"
 #include "platform/window.h"
+#include "reflect/inspector.h"
+#include "reflect/json.h"
+#include "reflect/registry.h"
 #include "render/cube_pass.h"
+
+#include <imgui.h>
 
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -22,26 +30,72 @@ namespace {
     /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
     constexpr int kMinimizedSleepMs = 16;
 
-    /// The orbit camera. Meters and radians, per DESIGN.md section 3.
-    constexpr float kCameraDistance = 3.0F;
-    constexpr float kCameraHeight = 1.2F;
-    constexpr float kCameraFovDegrees = 60.0F;
     constexpr float kNearPlane = 0.1F;
-    constexpr float kOrbitPeriodSeconds = 8.0F;
-    constexpr float kSpinPeriodSeconds = 5.0F;
-
-    /// The clear color cycles so that a still frame still shows the loop is live.
-    constexpr float kColorPeriodSeconds = 4.0F;
-    constexpr float kColorCenter = 0.25F;
-    constexpr float kColorSwing = 0.2F;
     constexpr float kTwoPi = 6.2831853F;
-    /// Green trails red by a third of a turn, and blue trails green by the same.
-    constexpr float kChannelPhaseStep = kTwoPi / 3.0F;
+
+    /// Where the scene file goes. The working directory, so a run is easy to redo.
+    constexpr const char* kScenePath = "scene.json";
 
     struct Options {
         std::uint64_t max_frames = 0; ///< 0 means run until the user quits.
         bool validation = true;
     };
+
+    /**
+     * Everything the M2 demo lets the user change.
+     *
+     * This is the struct both reflection consumers read. The inspector builds
+     * its widgets from the descriptors below, and the serializer writes the same
+     * fields to scene.json. Neither one names a field by hand.
+     */
+    struct Scene {
+        std::string name = "M2 demo scene";
+        engine::Vec3 clear_color{ 0.25F, 0.25F, 0.3F };
+
+        bool spin = true;
+        float spin_seconds = 5.0F;
+
+        float camera_distance = 3.0F;
+        float camera_height = 1.2F;
+        float fov_degrees = 60.0F;
+        float orbit_seconds = 8.0F;
+
+        std::uint64_t frames_drawn = 0;
+    };
+
+} // namespace
+
+// The description sits outside the anonymous namespace, because a template
+// specialization has to live in the namespace of the template it specializes.
+// The numbers in a Range are the description. Naming each slider bound would
+// give twelve constants that each appear once, and would push the number away
+// from the field it belongs to.
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+template <>
+struct engine::reflect::Describe<Scene> {
+    static constexpr const char* name = "Scene";
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(Scene, name, Tooltip{ "Saved with the scene" }),
+            ENGINE_FIELD(Scene, clear_color, Range{ 0.0, 1.0, 0.01 },
+                         Tooltip{ "Linear, not sRGB" }),
+            ENGINE_FIELD(Scene, spin, Category{ "Cube" }),
+            ENGINE_FIELD(Scene, spin_seconds, Range{ 0.5, 30.0, 0.1 }, Category{ "Cube" },
+                         Tooltip{ "Seconds for one full turn" }),
+            ENGINE_FIELD(Scene, camera_distance, Range{ 1.0, 12.0, 0.05 }, Category{ "Camera" }),
+            ENGINE_FIELD(Scene, camera_height, Range{ -4.0, 4.0, 0.05 }, Category{ "Camera" }),
+            ENGINE_FIELD(Scene, fov_degrees, Range{ 20.0, 120.0, 0.5 }, Category{ "Camera" }),
+            ENGINE_FIELD(Scene, orbit_seconds, Range{ 1.0, 60.0, 0.1 }, Category{ "Camera" },
+                         Tooltip{ "Seconds for one lap around the cube" }),
+            // ReadOnly keeps the editor from changing it. Transient keeps it out
+            // of the file. The two attributes are read by different consumers,
+            // and neither consumer knows about the other.
+            ENGINE_FIELD(Scene, frames_drawn, ReadOnly{}, Transient{}, Category{ "Debug" }));
+    }
+};
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
+namespace {
 
     Options parse_options(int argc, char** argv) {
         Options options;
@@ -57,16 +111,6 @@ namespace {
         return options;
     }
 
-    engine::gfx::ColorRGBA clear_color_at(float seconds) {
-        const float phase = kTwoPi * seconds / kColorPeriodSeconds;
-        return engine::gfx::ColorRGBA{
-            kColorCenter + (kColorSwing * std::sin(phase)),
-            kColorCenter + (kColorSwing * std::sin(phase + kChannelPhaseStep)),
-            kColorCenter + (kColorSwing * std::sin(phase + kChannelPhaseStep + kChannelPhaseStep)),
-            1.0F,
-        };
-    }
-
     /**
      * Builds the matrix the cube shader reads.
      *
@@ -74,25 +118,68 @@ namespace {
      * face passes the camera. Reverse-Z means the near plane maps to depth 1, and
      * perspective_reverse_z already negates the Y row for Vulkan clip space.
      */
-    engine::Mat4 cube_mvp(float seconds, engine::gfx::Extent2D extent) {
+    engine::Mat4 cube_mvp(const Scene& scene, float seconds, engine::gfx::Extent2D extent) {
         const float aspect = extent.height == 0
                                  ? 1.0F
                                  : static_cast<float>(extent.width) /
                                        static_cast<float>(extent.height);
         const engine::Mat4 projection = engine::perspective_reverse_z(
-            glm::radians(kCameraFovDegrees), aspect, kNearPlane);
+            glm::radians(scene.fov_degrees), aspect, kNearPlane);
 
-        const float orbit = kTwoPi * seconds / kOrbitPeriodSeconds;
-        const engine::Vec3 eye{ kCameraDistance * std::sin(orbit), kCameraHeight,
-                                kCameraDistance * std::cos(orbit) };
+        const float orbit = kTwoPi * seconds / scene.orbit_seconds;
+        const engine::Vec3 eye{ scene.camera_distance * std::sin(orbit), scene.camera_height,
+                                scene.camera_distance * std::cos(orbit) };
         const engine::Mat4 view =
             glm::lookAt(eye, engine::Vec3{ 0.0F, 0.0F, 0.0F }, engine::world_up);
 
-        const float spin = kTwoPi * seconds / kSpinPeriodSeconds;
+        const float turn = scene.spin ? kTwoPi * seconds / scene.spin_seconds : 0.0F;
         const engine::Mat4 model =
-            glm::rotate(engine::Mat4{ 1.0F }, spin, engine::Vec3{ 0.0F, 1.0F, 0.0F });
+            glm::rotate(engine::Mat4{ 1.0F }, turn, engine::Vec3{ 0.0F, 1.0F, 0.0F });
 
         return projection * view * model;
+    }
+
+    /**
+     * Draws the M2 window: the generated inspector, the save and load buttons,
+     * and the registry contents.
+     *
+     * Nothing here names a field of Scene. Add a field to the struct and to its
+     * description, and it appears in this window and in the file.
+     */
+    void draw_ui(Scene& scene) {
+        ENGINE_PROFILE_ZONE_N("draw_ui");
+
+        if (ImGui::Begin("Scene")) {
+            if (engine::reflect::inspect(scene)) {
+                // A real editor marks the document dirty here. The demo only
+                // needs to show that the inspector reports a change.
+                ENGINE_LOG_TRACE("The user changed the scene.");
+            }
+
+            ImGui::Separator();
+
+            if (ImGui::Button("Save")) {
+                if (engine::reflect::save_json(kScenePath, scene)) {
+                    ENGINE_LOG_INFO("Wrote {}.", kScenePath);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Load")) {
+                if (engine::reflect::load_json(kScenePath, scene)) {
+                    ENGINE_LOG_INFO("Read {}.", kScenePath);
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", kScenePath);
+
+            ImGui::Separator();
+            ImGui::Text("Registered types: %zu", engine::reflect::registry().size());
+            for (const engine::reflect::TypeInfo& type : engine::reflect::registry().types()) {
+                ImGui::BulletText("%s: %zu fields, %zu bytes", type.name, type.field_count,
+                                  type.size);
+            }
+        }
+        ImGui::End();
     }
 
     engine::gfx::Extent2D window_extent(const engine::platform::Window& window) {
@@ -118,9 +205,18 @@ namespace {
         Failed,  ///< The device reported an error the loop cannot handle.
     };
 
-    FrameOutcome draw_frame(engine::gfx::Device* device, const engine::render::CubePass& pass,
-                            engine::gfx::Extent2D extent, float seconds,
-                            engine::gfx::Extent2D& out_extent) {
+    /// What draw_frame() needs that does not change from one frame to the next.
+    struct FrameContext {
+        engine::gfx::Device* device = nullptr;
+        const engine::render::CubePass* pass = nullptr;
+        Scene* scene = nullptr;
+    };
+
+    FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
+                            float seconds, engine::gfx::Extent2D& out_extent) {
+        engine::gfx::Device* device = context.device;
+        Scene& scene = *context.scene;
+
         engine::gfx::FrameInfo info;
         engine::gfx::Result result = engine::gfx::begin_frame(device, &info);
 
@@ -133,8 +229,16 @@ namespace {
             return FrameOutcome::Failed;
         }
 
-        engine::gfx::cmd_begin_rendering(info.commands, clear_color_at(seconds));
-        pass.draw(info.commands, cube_mvp(seconds, info.extent));
+        // The overlay opens after the frame does, so a skipped frame never
+        // leaves an ImGui frame half open.
+        engine::gfx::imgui_new_frame();
+        draw_ui(scene);
+
+        const engine::gfx::ColorRGBA clear{ scene.clear_color.r, scene.clear_color.g,
+                                            scene.clear_color.b, 1.0F };
+        engine::gfx::cmd_begin_rendering(info.commands, clear);
+        context.pass->draw(info.commands, cube_mvp(scene, seconds, info.extent));
+        engine::gfx::imgui_render(info.commands);
         engine::gfx::cmd_end_rendering(info.commands);
 
         result = engine::gfx::end_frame(device);
@@ -165,7 +269,7 @@ int main(int argc, char** argv) {
     engine::Arena frame_arena(kFrameArenaBytes);
 
     engine::platform::Window window;
-    if (!window.create({ .title = "Camina Engine (M1)" })) {
+    if (!window.create({ .title = "Camina Engine (M2)" })) {
         engine::jobs::shutdown();
         engine::log::shutdown();
         return 1;
@@ -196,6 +300,32 @@ int main(int argc, char** argv) {
         engine::log::shutdown();
         return 1;
     }
+
+    result = engine::gfx::imgui_init(device, window.native());
+    if (!engine::gfx::succeeded(result)) {
+        ENGINE_LOG_CRITICAL("The overlay did not start: {}", engine::gfx::result_name(result));
+        cube.destroy();
+        engine::gfx::destroy_device(device);
+        window.destroy();
+        engine::jobs::shutdown();
+        engine::log::shutdown();
+        return 1;
+    }
+
+    // ImGui reads every event, and the window still acts on the ones it owns.
+    window.set_event_hook(
+        [](const void* event, void* /*user*/) { engine::gfx::imgui_process_event(event); },
+        nullptr);
+
+    Scene scene;
+    engine::reflect::registry().add<Scene>();
+    // A scene file next to the executable wins over the defaults, so a run
+    // continues where the last one stopped.
+    if (std::filesystem::exists(kScenePath) && engine::reflect::load_json(kScenePath, scene)) {
+        ENGINE_LOG_INFO("Read {}.", kScenePath);
+    }
+
+    const FrameContext context{ .device = device, .pass = &cube, .scene = &scene };
 
     std::uint64_t frame = 0;
     bool failed = false;
@@ -228,7 +358,7 @@ int main(int argc, char** argv) {
         const float seconds = std::chrono::duration<float>(now - started).count();
 
         engine::gfx::Extent2D drawn_extent{};
-        const FrameOutcome outcome = draw_frame(device, cube, extent, seconds, drawn_extent);
+        const FrameOutcome outcome = draw_frame(context, extent, seconds, drawn_extent);
         if (outcome == FrameOutcome::Failed) {
             failed = true;
             break;
@@ -238,6 +368,7 @@ int main(int argc, char** argv) {
         }
 
         ++frame;
+        scene.frames_drawn = frame;
 
         if (now - last_report >= std::chrono::seconds(1)) {
             ENGINE_LOG_INFO("frame {} | {}x{} | arena high water {} bytes | workers {}", frame,
@@ -256,6 +387,8 @@ int main(int argc, char** argv) {
 
     // The resources must go before the device that owns them.
     engine::gfx::device_wait_idle(device);
+    window.set_event_hook(nullptr, nullptr);
+    engine::gfx::imgui_shutdown(device);
     cube.destroy();
     engine::gfx::destroy_device(device);
     window.destroy();

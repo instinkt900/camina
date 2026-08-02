@@ -5,11 +5,13 @@ add_library(engine_core STATIC
     platform/window.cpp
     gfx/types.cpp
     reflect/registry.cpp
+    reflect/inspector.cpp
     gfx/vulkan/vk_device.cpp
     gfx/vulkan/vk_swapchain.cpp
     gfx/vulkan/vk_frame.cpp
     gfx/vulkan/vk_pipeline.cpp
     gfx/vulkan/vk_resources.cpp
+    gfx/vulkan/vk_imgui.cpp
     gfx/vulkan/vk_vma.cpp
     render/triangle_pass.cpp
     render/cube_pass.cpp
@@ -32,6 +34,10 @@ set_source_files_properties(gfx/vulkan/vk_vma.cpp PROPERTIES
     COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
 )
 
+# The ImGui SDL3 and Vulkan backends, and the std::string helper. They live in
+# the Conan package, not in this tree. See cmake/ImGuiBackends.cmake.
+engine_add_imgui_backends(engine_core)
+
 add_library(engine::core ALIAS engine_core)
 
 target_include_directories(engine_core PUBLIC
@@ -44,10 +50,15 @@ target_link_libraries(engine_core
         spdlog::spdlog
         Tracy::TracyClient
         enkiTS::enkiTS
+        # reflect/json.h is a public header and includes the JSON parser.
+        nlohmann_json::nlohmann_json
     PRIVATE
         SDL3::SDL3
         volk::volk
         GPUOpen::VulkanMemoryAllocator
+        # reflect/inspector.h names no ImGui type, so this stays private. An
+        # application that calls ImGui itself links imgui::imgui as well.
+        imgui::imgui
 )
 
 # The math conventions in DESIGN.md section 3. These must reach every translation

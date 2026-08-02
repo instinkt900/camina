@@ -44,10 +44,16 @@ find_package(enkiTS REQUIRED)
 find_package(Tracy REQUIRED)
 find_package(volk REQUIRED)
 find_package(VulkanMemoryAllocator REQUIRED)
+find_package(imgui REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Shaders.cmake looks for glslc and fails when it is missing, so it must come
 # after the docs-only return above. The docs job has no Conan and no glslc.
 include(Shaders)
+
+# The ImGui backends live in the Conan package, so this needs find_package(imgui)
+# above and no Conan install in the docs job.
+include(ImGuiBackends)
 
 add_subdirectory(src)
 add_subdirectory(apps/runtime)

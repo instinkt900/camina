@@ -23,14 +23,17 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
-M1 is complete. The runtime opens a window, runs the job system, and draws a spinning
-textured cube through Vulkan. It has a swapchain that survives resize, two frames in
-flight, dynamic rendering, reverse-Z depth, and clean validation.
+M2 is complete. A type describes itself once in a `Describe<T>` specialization, and two
+consumers read that one description. The ImGui inspector generates its widgets from the
+descriptors, and the JSON serializer writes and reads the same fields. The runtime shows
+both: it edits a `Scene` struct live and round-trips it to `scene.json`.
 
-M1 arrived in three parts: the device and the swapchain, the shader build and the
-triangle, then buffers, textures, descriptors, and the cube.
+M1 is complete as well. The runtime draws a spinning textured cube through Vulkan, with a
+swapchain that survives resize, two frames in flight, dynamic rendering, reverse-Z depth,
+and clean validation. It arrived in three parts: the device and the swapchain, the shader
+build and the triangle, then buffers, textures, descriptors, and the cube.
 
-M2 is next: reflection. See `DESIGN.md` §10.
+M3 is next: EnTT and the scene. See `DESIGN.md` §10.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings
@@ -131,6 +134,11 @@ here, consider whether moth_ui wants the same change.
 - **`.clang-tidy` trap.** Never put a comment inside the `Checks:` block. It is a YAML
   folded scalar, so a comment line without a trailing comma merges with the entry
   after it, and that entry stops working with no error. Put rationale above the key.
+- **Third-party headers and clang-tidy.** `HeaderFilterRegex` is `.*`, so clang-tidy
+  reads every header our code includes, including the ones in the Conan cache.
+  `ExcludeHeaderFilterRegex` drops `~/.conan2/`. `SKIP_LINTING` on a source file does
+  not help here, because a third-party header arrives through our own translation unit.
+  The ImGui Vulkan backend header is the case that needed this.
 - **clangd.** `.clangd` points at `build/RelWithDebInfo`. There is no
   `compile_commands.json` symlink and none is needed.
 - **clang-format** is not in apt on this machine. It lives in the Conan virtual
@@ -142,6 +150,13 @@ here, consider whether moth_ui wants the same change.
   still the default. `src/CMakeLists.txt` sets `/Zc:preprocessor` as a PUBLIC option
   for that reason. A C++20 macro that works with Clang can still fail on Windows
   without it.
+- **ImGui backends.** ImGui ships its platform and renderer backends as loose source
+  files, and the Conan package copies them to `res/bindings`. The recipe does not
+  declare a resource directory, so `imgui_RES_DIRS` is empty and
+  `cmake/ImGuiBackends.cmake` works from `imgui_PACKAGE_FOLDER_<CONFIG>` instead. The
+  backend must see `IMGUI_IMPL_VULKAN_USE_VOLK`, because the engine never links the
+  Vulkan loader library. Rule 4.4 keeps these files in the Conan cache, not in
+  `third_party/`, since we do not patch them.
 - **Shaders.** `cmake/Shaders.cmake` compiles GLSL to SPIR-V with glslc at build time
   and writes a braced list of 32-bit words. The consumer embeds it with
   `std::to_array`, so the runtime carries no shader compiler. glslc arrives through
@@ -247,6 +262,10 @@ PATH, or call the binary by its full path.
 Conan options: `with_editor`, `with_ui`, `with_lua`, `with_audio`. Every one defaults
 to False and turns on at its milestone. `with_ui` needs moth_ui in the local Conan
 cache, because it is not on Conan Center.
+
+ImGui itself is not behind `with_editor`. Hard rule 3 says the editor is an application
+and not a build mode, and the M2 inspector runs as a debug overlay in the runtime. The
+option still gates ImGuizmo and, from M8, the editor application.
 
 Note: the enkiTS package installs its headers under a subdirectory. Include
 `<enkiTS/TaskScheduler.h>`, not `<TaskScheduler.h>`.

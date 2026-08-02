@@ -38,6 +38,17 @@ namespace engine::platform {
      */
     class Window {
     public:
+        /**
+         * @brief Called for each event the window drains, before it acts on it.
+         *
+         * The event arrives as a pointer to an SDL_Event, so the header stays
+         * free of SDL types. An overlay that wants the raw input uses this.
+         *
+         * @param event A pointer to the SDL_Event.
+         * @param user Whatever the caller passed to set_event_hook().
+         */
+        using EventHook = void (*)(const void* event, void* user);
+
         Window() = default;
         ~Window();
 
@@ -66,6 +77,16 @@ namespace engine::platform {
          */
         [[nodiscard]] bool poll();
 
+        /**
+         * @brief Sends every event to a second reader before the window uses it.
+         *
+         * There is one hook. Setting a second one replaces the first.
+         *
+         * @param hook The function to call, or nullptr to stop calling one.
+         * @param user Passed back to @p hook unchanged. May be null.
+         */
+        void set_event_hook(EventHook hook, void* user);
+
         /// @brief The current client size in pixels.
         /// @return Width and height. Both are 0 before create() succeeds.
         [[nodiscard]] IVec2 size() const { return size_; }
@@ -86,6 +107,8 @@ namespace engine::platform {
 
     private:
         SDL_Window* window_ = nullptr;
+        EventHook event_hook_ = nullptr;
+        void* event_hook_user_ = nullptr;
         IVec2 size_{ 0, 0 };
         bool minimized_ = false;
         bool running_ = true;
