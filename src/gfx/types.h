@@ -114,9 +114,9 @@ namespace engine::gfx {
         /**
          * @brief Whether to cull back faces.
          *
-         * The projection in `math/conventions.h` flips Y, which reverses the
-         * winding the rasterizer sees. The backend therefore treats clockwise as
-         * front facing, so geometry stays counter-clockwise as glTF supplies it.
+         * A front face is counter-clockwise, as glTF supplies it. Vulkan clip
+         * space puts +Y down, and the projection in `math/conventions.h` negates
+         * the Y row, so the two cancel and no winding change is needed.
          */
         bool cull_back = false;
     };

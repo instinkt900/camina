@@ -26,9 +26,8 @@ namespace engine::render {
 
         // Each face carries its own four vertices, so the texture coordinates can
         // differ at a shared corner. Every face winds counter-clockwise seen from
-        // outside, which is what glTF supplies. The backend treats clockwise as
-        // front facing to absorb the Y flip in the projection. See DESIGN.md
-        // section 3.
+        // outside, which is what glTF supplies and what the backend treats as
+        // front facing. See DESIGN.md section 3.
         //
         // A literal table reads better here than a generator. The values are cube
         // corners and texture corners, and naming each one would only add noise.

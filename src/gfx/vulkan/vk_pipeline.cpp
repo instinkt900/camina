@@ -48,11 +48,11 @@ namespace engine::gfx {
                 VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             state.raster.polygonMode = VK_POLYGON_MODE_FILL;
             state.raster.cullMode = desc.cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
-            // The projection in math/conventions.h negates the Y row, which
-            // reverses the winding the rasterizer sees. Treating clockwise as
-            // front facing lets geometry stay counter-clockwise, as glTF supplies
-            // it. See DESIGN.md section 3.
-            state.raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            // Vulkan clip space already puts +Y down. The projection in
+            // math/conventions.h negates the Y row, which cancels that, so the
+            // winding the rasterizer sees matches the winding in world space.
+            // Counter-clockwise stays front facing, as glTF supplies it.
+            state.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             state.raster.lineWidth = 1.0F;
 
             state.multisample.sType =
