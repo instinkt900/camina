@@ -43,6 +43,30 @@ engine_enable_clang_tidy(test_prefab)
 
 add_test(NAME prefab COMMAND test_prefab)
 
+# The EnTT preconditions reach ENGINE_ASSERT through src/core/entt.h. This
+# program reads a component the entity does not carry, so it is expected to die.
+# It passes only when the engine assertion reported the failure first. Without
+# the wiring the process dies just the same, with no message, so the message is
+# the whole test.
+#
+# ENGINE_ASSERT compiles out in a Release build, so the test is not registered
+# there. CI and the presets build RelWithDebInfo.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_executable(test_entt_assert test_entt_assert.cpp)
+    target_link_libraries(test_entt_assert PRIVATE engine::core)
+    engine_set_warnings(test_entt_assert)
+    engine_enable_clang_tidy(test_entt_assert)
+
+    # expect_assert.cmake runs the program and checks the message. A ctest
+    # property cannot do this. See the comment at the top of that script.
+    add_test(
+        NAME entt_assert
+        COMMAND ${CMAKE_COMMAND}
+                -DEXE=$<TARGET_FILE:test_entt_assert>
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_assert.cmake
+    )
+endif()
+
 # Rule 4.1. No file outside src/gfx/vulkan/ can include a Vulkan header.
 #
 # The check is a shell script, so it needs bash. A Windows machine without Git

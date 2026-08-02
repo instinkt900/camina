@@ -9,6 +9,7 @@
  * flags stop agreeing with each other.
  */
 
+#include "core/entt.h"
 #include "math/conventions.h"
 #include "reflect/attributes.h"
 #include "reflect/reflect.h"

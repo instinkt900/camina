@@ -9,6 +9,7 @@
  * owns both of those rules, so no caller has to remember them.
  */
 
+#include "core/entt.h"
 #include "math/transform.h"
 #include "scene/components.h"
 

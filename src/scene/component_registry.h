@@ -13,6 +13,7 @@
  * descriptor system and rule 4.5 holds.
  */
 
+#include "core/entt.h"
 #include "reflect/json.h"
 #include "reflect/reflect.h"
 
