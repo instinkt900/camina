@@ -48,6 +48,15 @@ namespace {
     /// How much faster shift makes the camera.
     constexpr float kSprintFactor = 4.0F;
 
+    /// Where each window opens the first time. ImGui keeps any later move in
+    /// imgui.ini, so these decide the first run only. Without them all three
+    /// open at the same place and the last one drawn buries the rest.
+    constexpr float kPanelMargin = 16.0F;
+    constexpr float kPanelWidth = 340.0F;
+    constexpr float kViewHeight = 320.0F;
+    constexpr float kWorldHeight = 380.0F;
+    constexpr float kInspectorHeight = 460.0F;
+
     /// Where the view settings go. The working directory, so a run is easy to redo.
     /// The scene itself lives in the sandbox content directory, not here.
     constexpr const char* kViewPath = "view.json";
@@ -253,6 +262,13 @@ namespace {
         return projection * view;
     }
 
+    /// Opens a window where it belongs the first time, and lets the user move it after.
+    bool begin_panel(const char* name, ImVec2 position, ImVec2 size) {
+        ImGui::SetNextWindowPos(position, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+        return ImGui::Begin(name);
+    }
+
     /**
      * Draws the view window: the generated inspector and the save and load
      * buttons.
@@ -263,7 +279,8 @@ namespace {
     void draw_view_window(ViewSettings& settings) {
         ENGINE_PROFILE_ZONE_N("draw_view_window");
 
-        if (ImGui::Begin("View")) {
+        if (begin_panel("View", { kPanelMargin, kPanelMargin },
+                        { kPanelWidth, kViewHeight })) {
             if (engine::reflect::inspect(settings)) {
                 // A real editor marks the document dirty here. The demo only
                 // needs to show that the inspector reports a change.
@@ -320,8 +337,11 @@ namespace {
         ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
         const bool open = ImGui::TreeNodeEx("node", flags, "%s",
                                             entity_label(entities, entity).c_str());
-        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+        // A press and a release inside one frame make ImGui hold the click for
+        // two frames, so guard on a real change rather than logging twice.
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen() && selected != entity) {
             selected = entity;
+            ENGINE_LOG_TRACE("Selected entity {}.", entt::to_integral(entity));
         }
         if (open) {
             for (entt::entity child = node.first_child; child != entt::null;
@@ -343,7 +363,8 @@ namespace {
                            const std::filesystem::path& scene_path) {
         ENGINE_PROFILE_ZONE_N("draw_world_window");
 
-        if (ImGui::Begin("World")) {
+        if (begin_panel("World", { kPanelMargin, (2 * kPanelMargin) + kViewHeight },
+                        { kPanelWidth, kWorldHeight })) {
             ImGui::Text("Entities: %zu", world.size());
             ImGui::Text("Matrices rebuilt last frame: %zu", world.rebuilt_last_update());
 
@@ -381,7 +402,8 @@ namespace {
     void draw_inspector_window(engine::scene::World& world, entt::entity selected) {
         ENGINE_PROFILE_ZONE_N("draw_inspector_window");
 
-        if (ImGui::Begin("Inspector")) {
+        if (begin_panel("Inspector", { (2 * kPanelMargin) + kPanelWidth, kPanelMargin },
+                        { kPanelWidth, kInspectorHeight })) {
             if (selected == entt::null || !world.registry().valid(selected)) {
                 ImGui::TextDisabled("Pick an entity in the World window.");
                 ImGui::End();
