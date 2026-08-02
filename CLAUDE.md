@@ -101,6 +101,13 @@ here, consider whether moth_ui wants the same change.
   `compile_commands.json` symlink and none is needed.
 - **clang-format** is not in apt on this machine. It lives in the Conan virtual
   environment: `~/.venv/conan/bin/clang-format`.
+- **Shaders.** `cmake/Shaders.cmake` compiles GLSL to SPIR-V with glslc at build time
+  and writes a braced list of 32-bit words. The consumer embeds it with
+  `std::to_array`, so the runtime carries no shader compiler. glslc arrives through
+  the `shaderc` tool requirement in `conanfile.py`. Conan Center has no binary for
+  our profile, so the first install builds shaderc, glslang, and SPIRV-Tools from
+  source. That takes several minutes once, then the cache serves it. M4 moves shader
+  cooking into `tools/cooker/`.
 
 ## Documentation comments
 

@@ -45,6 +45,10 @@ find_package(Tracy REQUIRED)
 find_package(volk REQUIRED)
 find_package(VulkanMemoryAllocator REQUIRED)
 
+# Shaders.cmake looks for glslc and fails when it is missing, so it must come
+# after the docs-only return above. The docs job has no Conan and no glslc.
+include(Shaders)
+
 add_subdirectory(src)
 add_subdirectory(apps/runtime)
 

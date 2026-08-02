@@ -10,10 +10,41 @@
  * rename instead of a rewrite.
  */
 
+#include "core/handle.h"
+
+#include <cstddef>
 #include <cstdint>
 
 /// @brief The public render interface. The backend behind it stays hidden.
 namespace engine::gfx {
+
+    /// @brief Distinguishes a pipeline handle from every other kind of handle.
+    struct PipelineTag {};
+
+    /**
+     * @brief Refers to a graphics pipeline the device owns.
+     *
+     * The handle is 8 bytes and carries a generation, so a stale handle resolves
+     * to nothing instead of to the wrong pipeline. See rule 4.2 in DESIGN.md.
+     */
+    using PipelineHandle = Handle<PipelineTag>;
+
+    /**
+     * @brief A compiled SPIR-V module, as a pointer and a word count.
+     *
+     * Rule 4.2 forbids a container in this interface, so the caller keeps the
+     * storage. The words must stay alive only for the create call.
+     */
+    struct ShaderCode {
+        const std::uint32_t* spirv = nullptr; ///< The first word of the module.
+        std::size_t word_count = 0;           ///< How many 32-bit words follow.
+    };
+
+    /// @brief Settings for create_graphics_pipeline().
+    struct GraphicsPipelineDesc {
+        ShaderCode vertex;   ///< The vertex stage. Required.
+        ShaderCode fragment; ///< The fragment stage. Required.
+    };
 
     /// @brief The outcome of a gfx call.
     enum class Result : std::uint32_t {

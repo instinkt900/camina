@@ -22,6 +22,16 @@ namespace engine::gfx {
         VkImage target_image = VK_NULL_HANDLE;    ///< The swapchain image this frame draws into.
         VkImageView target_view = VK_NULL_HANDLE; ///< The view used as the color attachment.
         Extent2D extent;                          ///< The size of the target image.
+        Device* owner = nullptr;                  ///< Resolves a handle without a second argument.
+    };
+
+    /// @brief One slot in the pipeline pool that PipelineHandle indexes.
+    struct PipelineEntry {
+        VkPipeline pipeline = VK_NULL_HANDLE;     ///< Null while the slot is free.
+        VkPipelineLayout layout = VK_NULL_HANDLE; ///< Empty layout until M1.3 adds descriptors.
+        /// @brief Starts at 1, so slot 0 never produces the null handle value.
+        std::uint32_t generation = 1;
+        bool alive = false; ///< Whether the slot holds a live pipeline.
     };
 
     /// @brief One slot in the frames-in-flight ring.
@@ -56,6 +66,9 @@ namespace engine::gfx {
         std::vector<VkImageView> views;                  ///< One view for each image.
         /// @brief One semaphore for each image, signaled when its work finishes.
         std::vector<VkSemaphore> render_finished;
+
+        std::vector<PipelineEntry> pipelines;      ///< Indexed by PipelineHandle::index().
+        std::vector<std::uint32_t> free_pipelines; ///< Slots that destroy_pipeline() released.
 
         std::array<Frame, kFramesInFlight> frames{}; ///< The frames-in-flight ring.
         std::uint32_t frame_index = 0;               ///< Which ring slot the next frame uses.
@@ -99,6 +112,15 @@ namespace engine::gfx {
          */
         void transition_image(VkCommandBuffer buffer, VkImage image, VkImageLayout from,
                               VkImageLayout to);
+
+        /**
+         * @brief Destroys every live pipeline and clears the pool.
+         *
+         * The caller must make sure the GPU is idle first.
+         *
+         * @param device The device whose pool to clear.
+         */
+        void destroy_pipelines(Device& device);
 
     } // namespace vk
 

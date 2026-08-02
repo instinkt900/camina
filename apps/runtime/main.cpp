@@ -6,6 +6,7 @@
 #include "gfx/device.h"
 #include "math/conventions.h"
 #include "platform/window.h"
+#include "render/triangle_pass.h"
 
 #include <chrono>
 #include <cmath>
@@ -81,8 +82,9 @@ namespace {
         Failed,  ///< The device reported an error the loop cannot handle.
     };
 
-    FrameOutcome draw_frame(engine::gfx::Device* device, engine::gfx::Extent2D extent,
-                            float seconds, engine::gfx::Extent2D& out_extent) {
+    FrameOutcome draw_frame(engine::gfx::Device* device, const engine::render::TrianglePass& pass,
+                            engine::gfx::Extent2D extent, float seconds,
+                            engine::gfx::Extent2D& out_extent) {
         engine::gfx::FrameInfo info;
         engine::gfx::Result result = engine::gfx::begin_frame(device, &info);
 
@@ -96,7 +98,7 @@ namespace {
         }
 
         engine::gfx::cmd_begin_rendering(info.commands, clear_color_at(seconds));
-        // M1.2 records the triangle here.
+        pass.draw(info.commands);
         engine::gfx::cmd_end_rendering(info.commands);
 
         result = engine::gfx::end_frame(device);
@@ -150,6 +152,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    engine::render::TrianglePass triangle;
+    if (!triangle.create(device)) {
+        engine::gfx::destroy_device(device);
+        window.destroy();
+        engine::jobs::shutdown();
+        engine::log::shutdown();
+        return 1;
+    }
+
     std::uint64_t frame = 0;
     bool failed = false;
     const auto started = std::chrono::steady_clock::now();
@@ -181,7 +192,7 @@ int main(int argc, char** argv) {
         const float seconds = std::chrono::duration<float>(now - started).count();
 
         engine::gfx::Extent2D drawn_extent{};
-        const FrameOutcome outcome = draw_frame(device, extent, seconds, drawn_extent);
+        const FrameOutcome outcome = draw_frame(device, triangle, extent, seconds, drawn_extent);
         if (outcome == FrameOutcome::Failed) {
             failed = true;
             break;
@@ -207,6 +218,9 @@ int main(int argc, char** argv) {
         ENGINE_PROFILE_FRAME();
     }
 
+    // The pipeline must go before the device that owns it.
+    engine::gfx::device_wait_idle(device);
+    triangle.destroy();
     engine::gfx::destroy_device(device);
     window.destroy();
     engine::jobs::shutdown();

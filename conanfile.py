@@ -63,6 +63,12 @@ class CaminaConan(ConanFile):
             #   conan create . --version=<v>   (from the moth_ui checkout)
             self.requires("moth_ui/[>=0.1]")
 
+    def build_requirements(self):
+        # shaderc is a build tool here, not a library. The engine compiles GLSL to
+        # SPIR-V during the build and embeds the result, so the runtime carries no
+        # shader compiler. See cmake/Shaders.cmake and DESIGN.md section 2.
+        self.tool_requires("shaderc/2025.3")
+
     def layout(self):
         cmake_layout(self)
 

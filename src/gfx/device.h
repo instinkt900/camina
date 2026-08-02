@@ -125,4 +125,51 @@ namespace engine::gfx {
      */
     void cmd_end_rendering(CommandList* commands);
 
+    /**
+     * @brief Builds a graphics pipeline from two SPIR-V modules.
+     *
+     * The pipeline draws into the swapchain format with dynamic rendering, and it
+     * keeps the viewport and the scissor dynamic. A resize therefore needs no
+     * rebuild. There is no vertex input state, so the vertex shader must build its
+     * positions from the vertex index.
+     *
+     * @param device The device that owns the pipeline.
+     * @param desc The two shader stages.
+     * @param out_pipeline Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the pipeline did not build.
+     */
+    [[nodiscard]] Result create_graphics_pipeline(Device* device,
+                                                  const GraphicsPipelineDesc& desc,
+                                                  PipelineHandle* out_pipeline);
+
+    /**
+     * @brief Releases a pipeline and frees its slot for reuse.
+     *
+     * The caller must make sure the GPU has finished with the pipeline. A null or
+     * stale handle does nothing.
+     *
+     * @param device The device that owns the pipeline.
+     * @param pipeline The handle to release.
+     */
+    void destroy_pipeline(Device* device, PipelineHandle pipeline);
+
+    /**
+     * @brief Binds a pipeline for the draws that follow.
+     * @param commands The command list from begin_frame().
+     * @param pipeline The pipeline to bind. A stale handle logs and does nothing.
+     */
+    void cmd_bind_pipeline(CommandList* commands, PipelineHandle pipeline);
+
+    /**
+     * @brief Draws without an index buffer.
+     * @param commands The command list from begin_frame().
+     * @param vertex_count How many vertices the vertex shader runs for.
+     * @param instance_count How many instances to draw. Pass 1 for a single copy.
+     * @param first_vertex The value gl_VertexIndex starts at.
+     * @param first_instance The value gl_InstanceIndex starts at.
+     */
+    void cmd_draw(CommandList* commands, std::uint32_t vertex_count,
+                  std::uint32_t instance_count, std::uint32_t first_vertex,
+                  std::uint32_t first_instance);
+
 } // namespace engine::gfx
