@@ -59,6 +59,24 @@ namespace {
     }
 
     /**
+     * Loads the shipped content, with the cooked tree open beside it.
+     *
+     * The model prefab lives in the cooked tree rather than in the source
+     * tree, because the cooker writes it from the glTF node tree. So loading
+     * the game needs both: the source directory for the hand-authored prefab
+     * and the scene, and the manifest to turn a model path into its identity.
+     */
+    [[nodiscard]] bool load_shipped(sc::World& world, const sc::ComponentRegistry& registry,
+                                    sc::PrefabLibrary& library) {
+        engine::assets::Content cooked;
+        if (!cooked.open(sandbox::default_content_directory())) {
+            return false;
+        }
+        return sandbox::load(sandbox::default_content_directory(), &cooked, world, registry,
+                             library);
+    }
+
+    /**
      * Every mesh the scene names has to be a mesh the cooker wrote.
      *
      * The scene stores those GUIDs as text. They are derived rather than
@@ -74,7 +92,7 @@ namespace {
         const sc::ComponentRegistry registry = make_registry();
         sc::PrefabLibrary library;
         sc::World world;
-        check(sandbox::load(sandbox::default_content_directory(), world, registry, library),
+        check(load_shipped(world, registry, library),
               "the shipped content loads");
 
         engine::assets::Content content;
@@ -91,7 +109,10 @@ namespace {
             }
         }
 
-        check(named == 6, "the scene names the six meshes the flight helmet holds");
+        // Eight from the four crate instances, which carry a mesh on the box
+        // and on the lid, six from the flight helmet, and the beacon. The
+        // prefab root the cooker added draws nothing, so it names no mesh.
+        check(named == 15, "every entity that draws names a mesh");
         check(resolved == named, "and the cooker wrote every one of them");
     }
 
@@ -109,13 +130,16 @@ namespace {
         sc::PrefabLibrary library;
 
         sc::World world;
-        check(sandbox::load(sandbox::default_content_directory(), world, registry, library),
+        check(load_shipped(world, registry, library),
               "the shipped content loads");
-        check(library.size() == 1, "the crate prefab went into the library");
+        // The hand-authored crate, and the flight helmet the cooker wrote
+        // from the glTF node tree.
+        check(library.size() == 2, "both prefabs went into the library");
 
-        // Four crate instances of two entities each, one beacon, and one
-        // entity for each of the six meshes the flight helmet holds.
-        check(world.size() == 15, "the scene holds fifteen entities");
+        // Four crate instances of two entities each, one beacon, and seven for
+        // the flight helmet: the root the cooker added, and one for each of the
+        // six nodes the model holds.
+        check(world.size() == 16, "the scene holds sixteen entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
@@ -129,7 +153,10 @@ namespace {
             (void)entity;
             ++instances;
         }
-        check(instances == 4, "four entities are prefab instances");
+        // The four crates and the flight helmet. The helmet is one instance
+        // now rather than six hand-written entities, which is what the node
+        // tree becoming a prefab bought.
+        check(instances == 5, "five entities are prefab instances");
     }
 
     void test_scene_round_trips() {
@@ -137,7 +164,7 @@ namespace {
         sc::PrefabLibrary library;
 
         sc::World world;
-        check(sandbox::load(sandbox::default_content_directory(), world, registry, library),
+        check(load_shipped(world, registry, library),
               "the shipped content loads");
 
         // The shipped file has to survive a save and a load, or an editor would
@@ -154,7 +181,7 @@ namespace {
         sc::PrefabLibrary library;
 
         sc::World world;
-        check(sandbox::load(sandbox::default_content_directory(), world, registry, library),
+        check(load_shipped(world, registry, library),
               "the shipped content loads");
         world.update();
 
@@ -188,7 +215,7 @@ namespace {
         sc::PrefabLibrary library;
 
         sc::World world;
-        check(sandbox::load(sandbox::default_content_directory(), world, registry, library),
+        check(load_shipped(world, registry, library),
               "the shipped content loads");
 
         check(sandbox::update(world, 0.0F) == 2, "the update moves both spinning entities");

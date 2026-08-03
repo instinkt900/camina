@@ -139,7 +139,12 @@ namespace engine::assets {
     }
 
     bool save_manifest(const std::filesystem::path& cooked_root, const Manifest& manifest) {
-        return reflect::save_json(cooked_root / kManifestFile, manifest);
+        // The version is stamped here rather than by the caller, so a caller
+        // cannot forget it. A manifest claiming a version it was not written by
+        // is worse than one claiming none.
+        Manifest stamped = manifest;
+        stamped.cooker = kCookerVersion;
+        return reflect::save_json(cooked_root / kManifestFile, stamped);
     }
 
 } // namespace engine::assets

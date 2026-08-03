@@ -122,198 +122,34 @@
             0.0
           ],
           "seconds_per_turn": 2.5
+        },
+        "MeshRenderer": {
+          "__version": 1,
+          "mesh": "508dcd18-9d17-8eb2-b877-acfa91632504"
         }
       }
     },
     {
       "parent": -1,
-      "components": {
-        "Name": {
-          "__version": 1,
-          "value": "helmet Hose"
-        },
-        "Transform": {
-          "__version": 1,
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            1.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            3.0,
-            3.0,
-            3.0
-          ]
-        },
-        "MeshRenderer": {
-          "__version": 1,
-          "mesh": "e1ea47da-4903-8eaf-9248-4b646bea03a5"
-        }
-      }
-    },
-    {
-      "parent": -1,
-      "components": {
-        "Name": {
-          "__version": 1,
-          "value": "helmet RubberWood"
-        },
-        "Transform": {
-          "__version": 1,
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            1.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            3.0,
-            3.0,
-            3.0
-          ]
-        },
-        "MeshRenderer": {
-          "__version": 1,
-          "mesh": "41ef9bd1-f2cd-821e-b24d-9f5c15b44714"
-        }
-      }
-    },
-    {
-      "parent": -1,
-      "components": {
-        "Name": {
-          "__version": 1,
-          "value": "helmet GlassPlastic"
-        },
-        "Transform": {
-          "__version": 1,
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            1.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            3.0,
-            3.0,
-            3.0
-          ]
-        },
-        "MeshRenderer": {
-          "__version": 1,
-          "mesh": "a1f4efc9-9c98-858d-923d-a37518557cc7"
-        }
-      }
-    },
-    {
-      "parent": -1,
-      "components": {
-        "Name": {
-          "__version": 1,
-          "value": "helmet MetalParts"
-        },
-        "Transform": {
-          "__version": 1,
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            1.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            3.0,
-            3.0,
-            3.0
-          ]
-        },
-        "MeshRenderer": {
-          "__version": 1,
-          "mesh": "01fa43c1-4662-88fc-b242-f76cc21fc036"
-        }
-      }
-    },
-    {
-      "parent": -1,
-      "components": {
-        "Name": {
-          "__version": 1,
-          "value": "helmet LeatherParts"
-        },
-        "Transform": {
-          "__version": 1,
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            1.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            3.0,
-            3.0,
-            3.0
-          ]
-        },
-        "MeshRenderer": {
-          "__version": 1,
-          "mesh": "61ff97b8-f02c-8c6b-925d-9b4313131161"
-        }
-      }
-    },
-    {
-      "parent": -1,
-      "components": {
-        "Name": {
-          "__version": 1,
-          "value": "helmet Lenses"
-        },
-        "Transform": {
-          "__version": 1,
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            1.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "scale": [
-            3.0,
-            3.0,
-            3.0
-          ]
-        },
-        "MeshRenderer": {
-          "__version": 1,
-          "mesh": "c204ebb0-99f6-8fda-b262-ef3abcdd54d0"
+      "prefab": "flight helmet",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "flight helmet"
+          },
+          "Transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              3.0,
+              3.0,
+              3.0
+            ]
+          }
         }
       }
     }

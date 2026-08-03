@@ -7,6 +7,7 @@ add_library(cooker_lib STATIC
     cook.cpp
     material.cpp
     mesh.cpp
+    prefab.cpp
     texture.cpp
     stb_image_impl.cpp
 )

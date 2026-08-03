@@ -19,6 +19,8 @@
 #include "cook.h"
 #include "mesh.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -84,6 +86,38 @@ namespace {
         /// Where an embedded image sits, when the file carries one.
         std::size_t image_at = 0;
         std::uint32_t image_size = 0;
+    };
+
+    /**
+     * Whether the file carries a node tree, and what shape it has.
+     *
+     * Off by default. A glTF in the wild always names a scene, but turning it
+     * on here would add a prefab to the outputs of every case below, and those
+     * cases are about meshes and materials. The prefab tests ask for it.
+     */
+    enum class NodeTree : std::uint8_t {
+        None,   ///< No scene and no node. The file cooks meshes and nothing else.
+        Flat,   ///< One root node for each mesh, which is what the helmet has.
+        Single, ///< One root node, so the prefab needs no root of its own.
+        Nested, ///< A root that carries the mesh nodes as children.
+        /**
+         * A chain three deep, so a grandchild names a parent that is not the
+         * root. Two levels cannot tell a correct parent from the root, because
+         * for them the two are the same entity.
+         */
+        Deep,
+        /**
+         * One node whose matrix mirrors on X.
+         *
+         * The scale of an axis is the length of its basis column, which is
+         * never negative, so a mirror is invisible to length alone. It has to
+         * come out of the determinant.
+         */
+        Mirrored,
+        /// One node whose matrix holds shear, which a Transform cannot say.
+        Sheared,
+        /// A scene that lists no node, so there is nothing to instance.
+        EmptyScene,
     };
 
     /// Which material slot uses the image, which is what decides its color space.
@@ -153,9 +187,92 @@ namespace {
         return parts;
     }
 
+    /// A comma separated run of node indices, as a glTF array holds them.
+    std::string index_list(int count) {
+        std::string out;
+        for (int at = 0; at < count; ++at) {
+            out += (at > 0 ? "," : "") + std::to_string(at);
+        }
+        return out;
+    }
+
+    /// One node for each mesh, each carrying a translation a test can check.
+    std::string part_nodes(int count) {
+        std::string out;
+        for (int at = 0; at < count; ++at) {
+            if (at > 0) {
+                out += ",";
+            }
+            out += R"({"name":"part)" + std::to_string(at) + R"(","mesh":)" +
+                   std::to_string(at) + R"(,"translation":[)" + std::to_string(at) +
+                   R"(.0,2.0,0.0]})";
+        }
+        return out;
+    }
+
+    /**
+     * The nodes and the scene, for a case that asked for a node tree.
+     *
+     * Its own function because geometry_json is already at the complexity limit
+     * with the buffers, the accessors, and the materials.
+     */
+    std::string node_json(NodeTree tree, int mesh_count) {
+        if (tree == NodeTree::None) {
+            return {};
+        }
+
+        const int node_count = tree == NodeTree::Single ? 1 : mesh_count;
+        std::string list;
+        std::string roots;
+
+        switch (tree) {
+        case NodeTree::EmptyScene:
+            // The node is there and the scene names none of it, which is legal
+            // glTF and describes nothing an instance could place.
+            list = R"({"name":"unused","mesh":0})";
+            roots = "";
+            break;
+        case NodeTree::Mirrored:
+            // Column major, the order glTF stores. The X basis is negated, so
+            // the determinant is negative and the matrix mirrors.
+            list = R"({"name":"flipped","mesh":0,"matrix":)"
+                   R"([-2,0,0,0, 0,1,0,0, 0,0,1,0, 3,0,0,1]})";
+            roots = "0";
+            break;
+        case NodeTree::Sheared:
+            // The Y basis leans into X, so the basis is not orthogonal and no
+            // translate, rotate, scale triple describes it.
+            list = R"({"name":"skewed","mesh":0,"matrix":)"
+                   R"([1,0,0,0, 0.5,1,0,0, 0,0,1,0, 0,0,0,1]})";
+            roots = "0";
+            break;
+        case NodeTree::Deep:
+            // node0 holds node1 holds node2. Only the first two draw, so the
+            // third proves a node with no mesh still becomes an entity.
+            list = R"({"name":"top","mesh":0,"children":[1]},)"
+                   R"({"name":"middle","mesh":1,"children":[2]},)"
+                   R"({"name":"bottom"})";
+            roots = "0";
+            break;
+        case NodeTree::Nested:
+            list = part_nodes(node_count) + R"(,{"name":"group","children":[)" +
+                   index_list(node_count) + "]}";
+            roots = std::to_string(node_count);
+            break;
+        default:
+            list = part_nodes(node_count);
+            roots = index_list(node_count);
+            break;
+        }
+
+        return R"("nodes":[)" + list + R"(],"scenes":[{"name":"the scene","nodes":[)" + roots +
+               R"(]}],"scene":0,)";
+    }
+
     std::string geometry_json(const Geometry& parts, int mesh_count,
                               std::string_view buffer_uri, std::string_view image_uri = {},
-                              ImageSlot slot = ImageSlot::Both) {
+                              ImageSlot slot = ImageSlot::Both,
+                              NodeTree tree = NodeTree::None) {
         const auto number = [](std::size_t value) { return std::to_string(value); };
         const auto bytes = [&](std::uint32_t count, std::size_t stride) {
             return number(static_cast<std::size_t>(count) * stride);
@@ -239,14 +356,17 @@ namespace {
         }
         buffer += R"("byteLength":)" + number(parts.buffer.size()) + "}],";
 
-        return R"({"asset":{"version":"2.0"},)" + buffer + views + accessors + materials +
+        const std::string nodes = node_json(tree, mesh_count);
+
+        return R"({"asset":{"version":"2.0"},)" + buffer + views + accessors + materials + nodes +
                meshes + "}";
     }
 
     /// Writes a .glb, which carries its buffer inside rather than beside it.
     void write_glb(const std::filesystem::path& path, const Geometry& parts, int mesh_count,
-                   std::string_view image_uri = {}, ImageSlot slot = ImageSlot::Both) {
-        std::string json = geometry_json(parts, mesh_count, "", image_uri, slot);
+                   std::string_view image_uri = {}, ImageSlot slot = ImageSlot::Both,
+                   NodeTree tree = NodeTree::None) {
+        std::string json = geometry_json(parts, mesh_count, "", image_uri, slot, tree);
         while (json.size() % 4 != 0) {
             json.push_back(' ');
         }
@@ -1123,6 +1243,258 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    /// Reads a cooked prefab back as JSON.
+    nlohmann::json read_prefab(const std::filesystem::path& path) {
+        std::ifstream file(path);
+        return nlohmann::json::parse(file, nullptr, false);
+    }
+
+    void test_the_node_tree_becomes_a_prefab() {
+        const std::filesystem::path source = scratch("tree/src");
+        const std::filesystem::path out = scratch("tree/out");
+        write_glb(source / "model.glb", build_triangle(), 2, {}, ImageSlot::Both,
+                  NodeTree::Flat);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a glTF with a node tree cooks");
+
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads back");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "model.glb");
+        check(entry != nullptr, "and it holds the glTF");
+        if (entry == nullptr) {
+            return;
+        }
+
+        const engine::Guid wanted = engine::Guid::derive(entry->guid, "prefab", 0);
+        check(as::find_by_guid(manifest, wanted) != nullptr,
+              "the prefab has an identity derived from the source and the scene index");
+
+        const nlohmann::json document = read_prefab(out / "model.glb.0.prefab");
+        check(!document.is_discarded(), "the cooked prefab parses");
+        if (document.is_discarded()) {
+            return;
+        }
+
+        // Two mesh nodes, and a root the cooker added because a prefab holds
+        // exactly one and the scene listed two.
+        const nlohmann::json& entities = document.at("entities");
+        check(entities.size() == 3, "two mesh nodes give three entities with the added root");
+        // check() carries on after a failure, so a short array would reach at()
+        // below and throw. That ends the process and every later test reports
+        // nothing.
+        if (entities.size() != 3) {
+            return;
+        }
+        check(entities.at(0).at("parent") == -1, "the root has no parent");
+        check(entities.at(1).at("parent") == 0 && entities.at(2).at("parent") == 0,
+              "and both mesh nodes hang from it");
+        check(!entities.at(0).at("components").contains("MeshRenderer"),
+              "the added root draws nothing of its own");
+
+        // The identity has to be the mesh the same file cooked. Any other value
+        // draws nothing, and nothing at load says why.
+        const std::string named =
+            entities.at(1).at("components").at("MeshRenderer").at("mesh");
+        check(named == engine::Guid::derive(entry->guid, "mesh", 0).to_text(),
+              "a node that draws a mesh names the identity the cooker gave it");
+        const std::string second =
+            entities.at(2).at("components").at("MeshRenderer").at("mesh");
+        check(second == engine::Guid::derive(entry->guid, "mesh", 1).to_text(),
+              "and the second node names the second mesh");
+
+        // The node carried a translation. A prefab that dropped it would put
+        // every part at the origin, which looks like a broken model.
+        const nlohmann::json& position =
+            entities.at(2).at("components").at("Transform").at("position");
+        check(position.at(0) == 1.0F && position.at(1) == 2.0F,
+              "the node translation came across");
+
+        check(entities.at(1).at("components").at("Name").at("value") == "part0",
+              "and the node name came across");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_single_root_needs_no_added_root() {
+        const std::filesystem::path source = scratch("oneroot/src");
+        const std::filesystem::path out = scratch("oneroot/out");
+        write_glb(source / "solo.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::Single);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "it cooks");
+
+        const nlohmann::json document = read_prefab(out / "solo.glb.0.prefab");
+        check(!document.is_discarded(), "the cooked prefab parses");
+        if (document.is_discarded()) {
+            return;
+        }
+
+        // A scene with one root already has the shape a prefab wants, so adding
+        // another root would put an entity in every instance for no reason.
+        const nlohmann::json& entities = document.at("entities");
+        check(entities.size() == 1, "one root node gives one entity and no added root");
+        if (entities.size() != 1) {
+            return;
+        }
+        check(entities.at(0).at("components").contains("MeshRenderer"),
+              "and that entity is the one that draws");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_child_comes_after_its_parent() {
+        const std::filesystem::path source = scratch("nested/src");
+        const std::filesystem::path out = scratch("nested/out");
+        write_glb(source / "deep.glb", build_triangle(), 2, {}, ImageSlot::Both,
+                  NodeTree::Nested);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "it cooks");
+
+        const nlohmann::json document = read_prefab(out / "deep.glb.0.prefab");
+        check(!document.is_discarded(), "the cooked prefab parses");
+        if (document.is_discarded()) {
+            return;
+        }
+
+        // A prefab builds in one forward pass, so every parent has to come
+        // before its children. A child that came first would name a parent that
+        // does not exist yet, and the instance would not build.
+        const nlohmann::json& entities = document.at("entities");
+        check(entities.size() == 3, "the group and its two children give three entities");
+        if (entities.size() != 3) {
+            return;
+        }
+        bool parents_come_first = true;
+        for (std::size_t at = 0; at < entities.size(); ++at) {
+            const int parent = entities.at(at).at("parent");
+            parents_come_first =
+                parents_come_first && parent < static_cast<int>(at) && parent >= -1;
+        }
+        check(parents_come_first, "and every parent comes before its children");
+        check(entities.at(0).at("parent") == -1, "with the group as the only root");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_grandchild_names_its_own_parent() {
+        const std::filesystem::path source = scratch("deep/src");
+        const std::filesystem::path out = scratch("deep/out");
+        write_glb(source / "chain.glb", build_triangle(), 2, {}, ImageSlot::Both,
+                  NodeTree::Deep);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "it cooks");
+
+        const nlohmann::json document = read_prefab(out / "chain.glb.0.prefab");
+        check(!document.is_discarded(), "the cooked prefab parses");
+        if (document.is_discarded()) {
+            return;
+        }
+
+        // Three levels, because two cannot tell a correct parent from the root.
+        // A prefab that parented every node to the root would place a grandchild
+        // in the wrong space, and the part would sit somewhere the model never
+        // put it.
+        const nlohmann::json& entities = document.at("entities");
+        check(entities.size() == 3, "the chain gives three entities");
+        if (entities.size() != 3) {
+            return;
+        }
+        check(entities.at(0).at("parent") == -1, "the top is the root");
+        check(entities.at(1).at("parent") == 0, "the middle hangs from the top");
+        check(entities.at(2).at("parent") == 1,
+              "and the bottom hangs from the middle, not from the root");
+
+        // A node with no mesh is a group. It still becomes an entity, because
+        // its children need the space it defines.
+        check(!entities.at(2).at("components").contains("MeshRenderer"),
+              "a node with no mesh becomes an entity that draws nothing");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_mirrored_matrix_keeps_its_mirror() {
+        const std::filesystem::path source = scratch("mirror/src");
+        const std::filesystem::path out = scratch("mirror/out");
+        write_glb(source / "flip.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::Mirrored);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a node with a mirroring matrix cooks");
+
+        const nlohmann::json document = read_prefab(out / "flip.glb.0.prefab");
+        check(!document.is_discarded(), "the cooked prefab parses");
+        if (document.is_discarded()) {
+            return;
+        }
+
+        const nlohmann::json& transform =
+            document.at("entities").at(0).at("components").at("Transform");
+
+        // The scale of an axis is the length of its basis column, and a length
+        // is never negative. A decomposition that used length alone would turn
+        // this mirror into a plain scale of 2 with a rotation that puts the
+        // geometry inside out, and nothing downstream could see it. That is
+        // the failure DESIGN.md section 3 exists to stop.
+        const float x = transform.at("scale").at(0);
+        check(x < 0.0F, "a mirror comes back as a negative scale, not a positive one");
+        check(std::abs(std::abs(x) - 2.0F) < 1.0e-4F, "and it keeps the size the matrix had");
+
+        const float position = transform.at("position").at(0);
+        check(std::abs(position - 3.0F) < 1.0e-4F, "the translation came across as well");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_sheared_matrix_fails_the_cook() {
+        const std::filesystem::path source = scratch("shear/src");
+        const std::filesystem::path out = scratch("shear/out");
+        write_glb(source / "skew.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::Sheared);
+
+        // A Transform holds a position, a rotation, and a scale, and none of
+        // those says shear. Writing the nearest transform instead would place
+        // the part somewhere the model never put it, with nothing said.
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a node whose matrix holds shear fails");
+        check(result.failed == 1, "and the glTF is the source that failed");
+        check(!std::filesystem::exists(out / "skew.glb.0.prefab"),
+              "and no prefab was left behind");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_scene_with_no_nodes_writes_no_prefab() {
+        const std::filesystem::path source = scratch("emptyscene/src");
+        const std::filesystem::path out = scratch("emptyscene/out");
+        write_glb(source / "bare.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::EmptyScene);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a glTF whose scene lists no node still cooks");
+
+        // The mesh is still worth cooking. A scene can name it, and a person
+        // may have exported a file whose scene graph is empty by accident.
+        check(std::filesystem::exists(out / "bare.glb.0.mesh"), "and the mesh is there");
+
+        // A prefab holding only the root the cooker adds would give every
+        // instance one entity that does nothing.
+        check(!std::filesystem::exists(out / "bare.glb.0.prefab"),
+              "but there is no prefab, because there is nothing to instance");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
 } // namespace
 
 int main() {
@@ -1149,5 +1521,13 @@ int main() {
     test_an_image_in_a_glb_buffer_gets_an_identity();
     test_an_inline_normal_map_reads_as_linear();
     test_an_inline_image_in_both_kinds_of_slot_reads_as_color();
+    test::section("the node tree");
+    test_the_node_tree_becomes_a_prefab();
+    test_a_single_root_needs_no_added_root();
+    test_a_child_comes_after_its_parent();
+    test_a_grandchild_names_its_own_parent();
+    test_a_mirrored_matrix_keeps_its_mirror();
+    test_a_sheared_matrix_fails_the_cook();
+    test_a_scene_with_no_nodes_writes_no_prefab();
     return test::report();
 }

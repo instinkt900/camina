@@ -75,9 +75,32 @@ namespace engine::assets {
     };
 
     /**
-     * @brief Every cooked output from one run of the cooker.
+     * @brief What version of the cooking rules wrote a manifest.
+     *
+     * Raise this whenever a rule starts writing an output it did not write
+     * before, or writes an existing one differently. Nothing else can catch
+     * that. The freshness check compares identities, input names, and input
+     * bytes, and a new kind of output changes none of them, so an old manifest
+     * would look fresh forever and the new output would never appear.
+     *
+     * A person meets that as content missing after an engine update, with no
+     * message and no failing build. Cooking into a clean directory would fix it
+     * and nothing would say so.
      */
+    inline constexpr std::uint32_t kCookerVersion = 2;
+
+    /// @brief Every cooked output from one run of the cooker.
     struct Manifest {
+        /**
+         * @brief The cooker that wrote this. See ::kCookerVersion.
+         *
+         * Zero rather than the current version, because this is what a manifest
+         * written before the field existed reads back as. Defaulting it to the
+         * current version would make every old manifest claim to be current,
+         * which is the failure the field exists to catch. save_manifest() fills
+         * it in, so nothing has to remember to set it.
+         */
+        std::uint32_t cooker = 0;
         /// @brief The entries, in the order the cooker wrote them.
         std::vector<ManifestEntry> entries;
     };
@@ -220,6 +243,11 @@ struct engine::reflect::Describe<engine::assets::Manifest> {
     /// @brief The one field.
     /// @return The field descriptors.
     static constexpr auto fields() {
-        return std::make_tuple(ENGINE_FIELD(engine::assets::Manifest, entries));
+        return std::make_tuple(
+            // Version 2, so a manifest written before this field reads back
+            // without a warning. It then reads as cooker 0, which matches no
+            // build, so every entry cooks again. That is the wanted answer.
+            ENGINE_FIELD(engine::assets::Manifest, cooker, engine::reflect::Version{ 2 }),
+            ENGINE_FIELD(engine::assets::Manifest, entries));
     }
 };
