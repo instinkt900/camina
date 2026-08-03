@@ -360,9 +360,17 @@ namespace {
         check(color_view.mip_count == 2, "2 by 2 gives two levels");
 
         // Level 1 is the last four bytes: one texel, RGBA.
+        //
+        // check() records a failure and carries on, so a read that failed above
+        // leaves the payload empty and this would read past the end. A crash
+        // here would take every test after it, and the log would name none of
+        // them. The sentinel matches no expected value, so the checks below
+        // still fail and still say what they wanted.
         const std::size_t level_one = as::level_bytes(as::TextureFormat::RGBA8, 2, 2);
+        constexpr int kNoTexel = -1;
         const auto red = [&](const as::TextureView& view) {
-            return static_cast<int>(view.payload[level_one]);
+            return view.payload.size() > level_one ? static_cast<int>(view.payload[level_one])
+                                                   : kNoTexel;
         };
 
         // Half of full light is 0.5 linear, and 0.5 linear encodes as 188.
@@ -494,8 +502,11 @@ namespace {
                   static_cast<std::size_t>(kSize) * kSize * 4,
               "so the payload is the texels and nothing else");
 
-        // Uncompressed keeps every texel, so the first one is still black.
-        check(static_cast<int>(view.payload[0]) == 0, "and the texels came through unchanged");
+        // Uncompressed keeps every texel, so the first one is still black. The
+        // guard is for the same reason as the one above: a failed read leaves
+        // the payload empty, and indexing it would end the run.
+        check(!view.payload.empty() && static_cast<int>(view.payload[0]) == 0,
+              "and the texels came through unchanged");
 
         std::filesystem::remove_all(source.parent_path());
     }

@@ -104,6 +104,17 @@ namespace engine::gfx {
             return shifted < 1U ? 1U : shifted;
         }
 
+        /// How many levels an extent can hold. The chain runs down to 1 by 1.
+        std::uint32_t max_mip_levels(std::uint32_t width, std::uint32_t height) {
+            std::uint32_t levels = 1;
+            std::uint32_t size = width > height ? width : height;
+            while (size > 1) {
+                size /= 2;
+                ++levels;
+            }
+            return levels;
+        }
+
         /// How many bytes one mip level takes in the staging buffer.
         std::size_t level_bytes(TextureFormat format, std::uint32_t width,
                                 std::uint32_t height) {
@@ -495,6 +506,21 @@ namespace engine::gfx {
         if (desc.pixels == nullptr || desc.width == 0 || desc.height == 0 ||
             desc.mip_count == 0) {
             ENGINE_LOG_ERROR("create_texture needs pixels, a size, and at least one mip level.");
+            return Result::ErrorInit;
+        }
+
+        // Vulkan allows no more levels than the extent can halve down to. The
+        // size check below does not catch an oversized count, because
+        // mip_extent clamps at one texel, so every extra level asks for a few
+        // more bytes and a caller can hand over a buffer that matches.
+        // assets::read_texture holds this bound for a cooked file, and this
+        // call is public, so any other caller reaches here as well. Without
+        // this, vkCreateImage fails and the validation layer explains it rather
+        // than the engine.
+        const std::uint32_t allowed = max_mip_levels(desc.width, desc.height);
+        if (desc.mip_count > allowed) {
+            ENGINE_LOG_ERROR("create_texture got {} levels, and {} by {} texels hold {}.",
+                             desc.mip_count, desc.width, desc.height, allowed);
             return Result::ErrorInit;
         }
 

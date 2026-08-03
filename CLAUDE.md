@@ -53,10 +53,10 @@ the executable, and `platform::cooked_content_root()` finds it there.
 
 M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
 and both the cooker and the runtime read that one header. The cooker reads an image with
-stb_image, builds the mip chain in linear light, and compresses to BC7 with `bc7enc_rdo`,
-the first entry in `third_party/`. The `.meta` sidecar records the color space, and the
-cooker guesses it from the file name only on the cook that writes a new sidecar. The cube
-reads `cube.png` from the cooked tree, and `build_texture()` is gone.
+stb_image and builds the mip chain in linear light. It then compresses to BC7 with
+`bc7enc_rdo`, the first entry in `third_party/`. The `.meta` sidecar records the color
+space. The cooker guesses it from the file name, and only on the cook that writes a new
+sidecar. The cube reads `cube.png` from the cooked tree, and `build_texture()` is gone.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings
