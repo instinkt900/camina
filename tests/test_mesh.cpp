@@ -14,6 +14,7 @@
 #include "assets/material.h"
 #include "assets/mesh.h"
 #include "assets/meta.h"
+#include "assets/texture.h"
 #include "check.h"
 #include "cook.h"
 #include "mesh.h"
@@ -80,6 +81,16 @@ namespace {
         std::size_t indices_at = 0;
         std::uint32_t vertex_count = 0;
         std::uint32_t index_count = 0;
+        /// Where an embedded image sits, when the file carries one.
+        std::size_t image_at = 0;
+        std::uint32_t image_size = 0;
+    };
+
+    /// Which material slot uses the image, which is what decides its color space.
+    enum class ImageSlot : std::uint8_t {
+        Both,      ///< Base color and normal, so a test can tell the fields apart.
+        BaseColor, ///< Color, so the image has to read as sRGB.
+        Normal,    ///< Numbers, so the image has to read as linear.
     };
 
     /**
@@ -134,8 +145,17 @@ namespace {
      * of this many pieces is what a formatter cannot lay out readably, and a
      * test that nobody can read is a test nobody will fix.
      */
+    /// Appends an encoded image to the buffer, the way a .glb carries one.
+    Geometry with_image(Geometry parts, std::span<const std::byte> image) {
+        parts.image_at = parts.buffer.size();
+        parts.buffer.insert(parts.buffer.end(), image.begin(), image.end());
+        parts.image_size = static_cast<std::uint32_t>(image.size());
+        return parts;
+    }
+
     std::string geometry_json(const Geometry& parts, int mesh_count,
-                              std::string_view buffer_uri, std::string_view image_uri = {}) {
+                              std::string_view buffer_uri, std::string_view image_uri = {},
+                              ImageSlot slot = ImageSlot::Both) {
         const auto number = [](std::size_t value) { return std::to_string(value); };
         const auto bytes = [&](std::uint32_t count, std::size_t stride) {
             return number(static_cast<std::size_t>(count) * stride);
@@ -151,7 +171,14 @@ namespace {
         views += R"({"buffer":0,"byteOffset":)" + number(parts.uvs_at) +
                  R"(,"byteLength":)" + bytes(parts.vertex_count, 8) + "},";
         views += R"({"buffer":0,"byteOffset":)" + number(parts.indices_at) +
-                 R"(,"byteLength":)" + bytes(parts.index_count, 2) + "}],";
+                 R"(,"byteLength":)" + bytes(parts.index_count, 2) + "}";
+        // A fifth view for an image the buffer carries, which is the form a
+        // .glb uses and the one most exporters produce.
+        if (parts.image_size > 0) {
+            views += R"(,{"buffer":0,"byteOffset":)" + number(parts.image_at) +
+                     R"(,"byteLength":)" + number(parts.image_size) + "}";
+        }
+        views += "],";
 
         const std::string count = number(parts.vertex_count);
         std::string accessors = R"("accessors":[)";
@@ -164,18 +191,31 @@ namespace {
         accessors += R"({"bufferView":3,"componentType":5123,"count":)" +
                      number(parts.index_count) + R"(,"type":"SCALAR"}],)";
 
-        // One material over one image, when the caller asked for it. The
-        // material names the image as both a base color and a normal map, so a
-        // test can tell the two fields apart from one file.
+        // One material over one image, when the caller asked for one. The
+        // image arrives either as a URI or in the buffer view added above.
         std::string materials;
         std::string material_of;
-        if (!image_uri.empty()) {
-            materials = R"("images":[{"uri":")" + std::string{ image_uri } + R"("}],)";
+        if (!image_uri.empty() || parts.image_size > 0) {
+            if (parts.image_size > 0) {
+                // The declared type does not reach this pipeline. stb_image
+                // sniffs the bytes, so the cook works whatever this says.
+                materials = R"("images":[{"bufferView":4,"mimeType":"image/png"}],)";
+            } else {
+                materials = R"("images":[{"uri":")" + std::string{ image_uri } + R"("}],)";
+            }
             materials += R"("textures":[{"source":0}],)";
-            materials += R"("materials":[{"name":"only",)"
-                         R"("pbrMetallicRoughness":{"baseColorTexture":{"index":0},)"
-                         R"("baseColorFactor":[0.25,0.5,0.75,1.0],"metallicFactor":0.125},)"
-                         R"("normalTexture":{"index":0},"doubleSided":true}],)";
+
+            // Which slot the image lands in decides how it has to be read, and
+            // for an image with no file that is the only thing that can.
+            std::string slots;
+            if (slot != ImageSlot::Normal) {
+                slots += R"("pbrMetallicRoughness":{"baseColorTexture":{"index":0},)"
+                         R"("baseColorFactor":[0.25,0.5,0.75,1.0],"metallicFactor":0.125},)";
+            }
+            if (slot != ImageSlot::BaseColor) {
+                slots += R"("normalTexture":{"index":0},)";
+            }
+            materials += R"("materials":[{"name":"only",)" + slots + R"("doubleSided":true}],)";
             material_of = R"(,"material":0)";
         }
 
@@ -205,8 +245,8 @@ namespace {
 
     /// Writes a .glb, which carries its buffer inside rather than beside it.
     void write_glb(const std::filesystem::path& path, const Geometry& parts, int mesh_count,
-                   std::string_view image_uri = {}) {
-        std::string json = geometry_json(parts, mesh_count, "", image_uri);
+                   std::string_view image_uri = {}, ImageSlot slot = ImageSlot::Both) {
+        std::string json = geometry_json(parts, mesh_count, "", image_uri, slot);
         while (json.size() % 4 != 0) {
             json.push_back(' ');
         }
@@ -238,6 +278,13 @@ namespace {
         out.insert(out.end(), binary.begin(), binary.end());
 
         write_bytes(path, out);
+    }
+
+    /// Writes a .glb that carries its image in a buffer view, with no URI.
+    void write_glb_with_image(const std::filesystem::path& path, const Geometry& parts,
+                              std::span<const std::byte> image,
+                              ImageSlot slot = ImageSlot::BaseColor) {
+        write_glb(path, with_image(parts, image), 1, {}, slot);
     }
 
     /// Writes a .gltf and the .bin it names, which is the two-file form.
@@ -710,18 +757,42 @@ namespace {
      * would then need a compressor to write one. The cooker reads both through
      * the same stb_image call, so the format proves the same thing.
      */
-    void write_tga(const std::filesystem::path& path) {
-        std::filesystem::create_directories(path.parent_path());
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    /// The bytes of a 1 by 1 uncompressed true color TGA.
+    std::vector<std::byte> tga_bytes() {
+        // 18 bytes of header. Type 2 is uncompressed true color, 1 by 1, 32
+        // bits, with the top-left origin flag so no row flip is needed. Then
+        // one texel, in the blue-green-red-alpha order TGA stores.
+        const std::array<std::uint8_t, 22> file{ 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                 0, 1, 0, 1, 0, 32, 0x28,
+                                                 255, 0, 0, 255 };
+        std::vector<std::byte> out(file.size());
+        std::memcpy(out.data(), file.data(), file.size());
+        return out;
+    }
 
-        // 18 bytes. Type 2 is uncompressed true color, 1 by 1, 32 bits, with
-        // the top-left origin flag so no row flip is needed.
-        const std::array<std::uint8_t, 18> header{ 0, 0, 2, 0, 0, 0, 0, 0, 0,
-                                                   0, 0, 0, 1, 0, 1, 0, 32, 0x28 };
-        file.write(reinterpret_cast<const char*>(header.data()),
-                   static_cast<std::streamsize>(header.size()));
-        const std::array<char, 4> texel{ 0, 0, 0, static_cast<char>(255) };
-        file.write(texel.data(), static_cast<std::streamsize>(texel.size()));
+    void write_tga(const std::filesystem::path& path) { write_bytes(path, tga_bytes()); }
+
+    /// Base64, so a test can put an image in a data URI the way a glTF does.
+    std::string base64(std::span<const std::byte> bytes) {
+        constexpr std::string_view kDigits =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        constexpr std::uint32_t kSixBits = 0x3FU;
+        std::string out;
+        for (std::size_t at = 0; at < bytes.size(); at += 3) {
+            const std::size_t left = bytes.size() - at;
+            std::uint32_t group = static_cast<std::uint32_t>(bytes[at]) << 16U;
+            if (left > 1) {
+                group |= static_cast<std::uint32_t>(bytes[at + 1]) << 8U;
+            }
+            if (left > 2) {
+                group |= static_cast<std::uint32_t>(bytes[at + 2]);
+            }
+            out.push_back(kDigits[(group >> 18U) & kSixBits]);
+            out.push_back(kDigits[(group >> 12U) & kSixBits]);
+            out.push_back(left > 1 ? kDigits[(group >> 6U) & kSixBits] : '=');
+            out.push_back(left > 2 ? kDigits[group & kSixBits] : '=');
+        }
+        return out;
     }
 
     /// Reads a cooked material file back.
@@ -895,43 +966,143 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
-    void test_an_inline_image_cooks_without_a_texture() {
+    void test_an_image_in_a_data_uri_gets_an_identity() {
         const std::filesystem::path source = scratch("inline/src");
         const std::filesystem::path out = scratch("inline/out");
 
         // A data URI carries the bytes inline, so there is no file and no
-        // sidecar and no identity. Issue #51 holds the work to extract one.
-        // Until then the model still has to cook, because failing it would
-        // stop a person from importing geometry over one embedded image.
+        // sidecar. The identity is derived from the parent instead, the way a
+        // mesh and a material already are.
         write_bytes(source / "inline.bin", build_triangle().buffer);
-        const std::string json = geometry_json(build_triangle(), 1, "inline.bin",
-                                               "data:image/png;base64,iVBORw0KGgo=");
+        const std::string uri = "data:image/tga;base64," + base64(tga_bytes());
+        const std::string json = geometry_json(build_triangle(), 1, "inline.bin", uri);
         write_bytes(source / "inline.gltf", std::as_bytes(std::span{ json.data(), json.size() }));
 
         const cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
-        check(cooker::cook_all(options, result), "a glTF whose image is a data URI still cooks");
+        check(cooker::cook_all(options, result), "a glTF whose image is a data URI cooks");
 
-        const as::Material material = read_material_file(out / "inline.gltf.0.material");
-        check(!material.base_color.valid(),
-              "and its material names no texture, because a data URI has no sidecar");
-
-        // The data URI is not a path, so nothing may go on the input list for
-        // it. An entry naming a file that is not there fails every later cook.
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
         const as::ManifestEntry* entry = as::find_by_source(manifest, "inline.gltf");
+        check(entry != nullptr, "and it holds the glTF");
+        if (entry == nullptr) {
+            return;
+        }
+
+        const engine::Guid wanted = engine::Guid::derive(entry->guid, "texture", 0);
+        const as::Material material = read_material_file(out / "inline.gltf.0.material");
+        check(material.base_color == wanted, "the material names the derived texture identity");
+        check(as::find_by_guid(manifest, wanted) != nullptr,
+              "and the manifest can find that texture");
+        check(std::filesystem::exists(out / "inline.gltf.0.tex"),
+              "and the cooked texture landed beside the mesh");
+
+        // The cooked file has to be a real texture, not only a file of the
+        // right name. read_texture is what the runtime calls.
+        as::TextureView view;
+        const std::vector<std::byte> bytes = read_bytes(out / "inline.gltf.0.tex");
+        check(as::read_texture(bytes, view, "inline"), "the cooked texture reads back");
+        check(view.width == 1 && view.height == 1, "and it holds the texel the data URI carried");
+
+        // The data URI is not a path, so nothing may go on the input list for
+        // it. An entry naming a file that is not there fails every later cook.
         bool names_a_data_uri = false;
-        if (entry != nullptr) {
-            for (const std::string& input : entry->inputs) {
-                names_a_data_uri = names_a_data_uri || input.find("data:") != std::string::npos;
-            }
+        for (const std::string& input : entry->inputs) {
+            names_a_data_uri = names_a_data_uri || input.find("data:") != std::string::npos;
         }
         check(!names_a_data_uri, "and no input names the data URI");
 
         cooker::Result second;
         check(cooker::cook_all(options, second), "a second cook works");
-        check(second.skipped == 1, "and it skips the glTF rather than failing it");
+        check(second.skipped == 1, "and it skips the glTF");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_an_image_in_a_glb_buffer_gets_an_identity() {
+        const std::filesystem::path source = scratch("glbimg/src");
+        const std::filesystem::path out = scratch("glbimg/out");
+
+        // The form most exporters produce. The image sits in a buffer view
+        // inside the .glb, so it has no URI at all.
+        write_glb_with_image(source / "packed.glb", build_triangle(), tga_bytes());
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a .glb carrying its image cooks");
+
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads back");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "packed.glb");
+        check(entry != nullptr, "and it holds the glTF");
+        if (entry == nullptr) {
+            return;
+        }
+
+        const engine::Guid wanted = engine::Guid::derive(entry->guid, "texture", 0);
+        const as::Material material = read_material_file(out / "packed.glb.0.material");
+        check(material.base_color == wanted, "the material names the derived texture identity");
+
+        as::TextureView view;
+        const std::vector<std::byte> bytes = read_bytes(out / "packed.glb.0.tex");
+        check(as::read_texture(bytes, view, "packed"), "the cooked texture reads back");
+
+        // The base color slot holds color and the normal slot holds numbers.
+        // An image inside the file has no name to guess from, so the slot is
+        // the only thing that can say. Reading a base color as linear washes
+        // it out everywhere, and it is the mistake nobody traces to the import.
+        check(view.color_space == as::ColorSpace::Srgb,
+              "and a base color slot makes it read as sRGB");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_an_inline_normal_map_reads_as_linear() {
+        const std::filesystem::path source = scratch("linear/src");
+        const std::filesystem::path out = scratch("linear/out");
+
+        // The same bytes in the normal slot alone. Nothing about the image
+        // says which it is, so the slot has to decide.
+        write_glb_with_image(source / "packed.glb", build_triangle(), tga_bytes(),
+                             ImageSlot::Normal);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "it cooks");
+
+        as::TextureView view;
+        check(as::read_texture(read_bytes(out / "packed.glb.0.tex"), view, "packed"),
+              "the cooked texture reads back");
+        check(view.color_space == as::ColorSpace::Linear,
+              "an image used only as a normal map reads as linear");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_an_inline_image_in_both_kinds_of_slot_reads_as_color() {
+        const std::filesystem::path source = scratch("both/src");
+        const std::filesystem::path out = scratch("both/out");
+
+        // One image in a color slot and a data slot at once. That is a broken
+        // model, and it still has to cook one way rather than depend on which
+        // slot the reader looked at first.
+        write_glb_with_image(source / "packed.glb", build_triangle(), tga_bytes(),
+                             ImageSlot::Both);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "it cooks");
+
+        as::TextureView view;
+        check(as::read_texture(read_bytes(out / "packed.glb.0.tex"), view, "packed"),
+              "the cooked texture reads back");
+
+        // Color wins. Reading color as linear washes it out everywhere, and
+        // that is the failure a person notices. Reading a normal map as color
+        // is wrong too, but it is the quieter of the two.
+        check(view.color_space == as::ColorSpace::Srgb,
+              "an image used as both color and data reads as sRGB");
 
         std::filesystem::remove_all(source.parent_path());
     }
@@ -972,7 +1143,11 @@ int main() {
     test_the_image_sidecar_is_an_input();
     test_the_gltf_rule_guesses_the_color_space();
     test_an_escaped_uri_names_the_file_it_means();
-    test_an_inline_image_cooks_without_a_texture();
     test_a_material_naming_a_missing_image_fails();
+    test::section("images with no file of their own");
+    test_an_image_in_a_data_uri_gets_an_identity();
+    test_an_image_in_a_glb_buffer_gets_an_identity();
+    test_an_inline_normal_map_reads_as_linear();
+    test_an_inline_image_in_both_kinds_of_slot_reads_as_color();
     return test::report();
 }

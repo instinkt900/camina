@@ -66,6 +66,12 @@ one material for each glTF material, a submesh names the one it uses, and an ima
 now an input of the glTF file. `render::TextureCache` and `render::MaterialCache` turn those
 GUIDs into handles, and `MeshPass` binds the base color of each submesh. The format carries
 the whole metallic-roughness set and the renderer reads the base color. M5 reads the rest.
+
+An image a glTF carries inside itself, in a buffer view or in a data URI, has no file and so
+no sidecar. It gets a derived GUID under the kind word `texture`, and its color space comes
+from the material slot that uses it rather than from a file name. That covers the `.glb`,
+which is what most exporters produce.
+
 What is left of M4.4 is the prefab from the node tree, which also retires `CubePass`.
 
 M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
