@@ -412,6 +412,42 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    void test_an_older_manifest_cooks_again() {
+        const std::filesystem::path source = scratch("upgrade/src");
+        const std::filesystem::path out = scratch("upgrade/out");
+        write_file(source / "one.scene", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        // A manifest an older cooker wrote, which named fewer inputs. is_fresh()
+        // hashes the inputs the old entry names, so an entry like this would
+        // stay fresh forever against a list this build no longer uses. That is
+        // how the sidecar quietly stopped counting as an input when it was
+        // added, and every asset kept skipping.
+        as::Manifest older;
+        check(as::load_manifest(out, older), "the manifest reads back");
+        check(older.entries.size() == 1 && older.entries.front().inputs.size() == 2,
+              "and the entry names the asset and its sidecar");
+        older.entries.front().inputs.resize(1);
+        check(as::hash_inputs(source, older.entries.front().inputs,
+                              older.entries.front().hash),
+              "the shorter list hashes");
+        check(as::save_manifest(out, older), "and the older manifest writes");
+
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+        check(second.cooked == 1, "an entry with an older input list cooks again");
+
+        as::Manifest now;
+        check(as::load_manifest(out, now), "the new manifest reads back");
+        check(now.entries.size() == 1 && now.entries.front().inputs.size() == 2,
+              "and the entry names both inputs again");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
     void test_compression_and_mip_switches() {
         const std::filesystem::path source = scratch("switch/src");
         const std::filesystem::path out = scratch("switch/out");
@@ -460,6 +496,74 @@ namespace {
 
         // Uncompressed keeps every texel, so the first one is still black.
         check(static_cast<int>(view.payload[0]) == 0, "and the texels came through unchanged");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    /**
+     * Sizes that are not powers of two, and sizes below one block.
+     *
+     * Every step here divides: the box filter picks a source range, the chain
+     * runs down to 1 by 1, and BC7 rounds up to whole blocks. An off-by-one in
+     * any of those reads past the end of a level or writes a payload the header
+     * does not describe. read_texture() checks the payload against the
+     * dimensions, so it fails the moment the two disagree.
+     */
+    void test_awkward_sizes() {
+        const std::filesystem::path source = scratch("odd/src");
+        const std::filesystem::path out = scratch("odd/out");
+
+        struct Size {
+            std::uint32_t width;
+            std::uint32_t height;
+            std::uint32_t levels;
+        };
+        const std::array<Size, 7> sizes{ {
+            { .width = 1, .height = 1, .levels = 1 },
+            { .width = 3, .height = 1, .levels = 2 },
+            { .width = 1, .height = 7, .levels = 3 },
+            { .width = 5, .height = 3, .levels = 3 },
+            { .width = 17, .height = 5, .levels = 5 },
+            { .width = 4, .height = 4, .levels = 3 },
+            { .width = 6, .height = 10, .levels = 4 },
+        } };
+
+        for (const Size& size : sizes) {
+            // A gradient, so the box filter has something to average that a
+            // wrong source range would change.
+            std::vector<std::uint8_t> texels;
+            texels.reserve(static_cast<std::size_t>(size.width) * size.height * 4);
+            for (std::uint32_t y = 0; y < size.height; ++y) {
+                for (std::uint32_t x = 0; x < size.width; ++x) {
+                    const auto value = static_cast<std::uint8_t>((x * 37 + y * 11) % 256);
+                    texels.insert(texels.end(), { value, value, value, 255 });
+                }
+            }
+
+            const std::string name =
+                std::to_string(size.width) + "x" + std::to_string(size.height) + ".tga";
+            write_tga(source / name, size.width, size.height, texels);
+        }
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "every awkward size cooks");
+        check(result.cooked == sizes.size(), "and all of them are new");
+
+        for (const Size& size : sizes) {
+            const std::string name =
+                std::to_string(size.width) + "x" + std::to_string(size.height) + ".tga";
+
+            std::vector<std::byte> bytes;
+            as::TextureView view;
+            check(read_cooked(out / (name + ".tex"), bytes, view),
+                  ("the cooked " + name + " reads back").c_str());
+            check(view.mip_count == size.levels,
+                  ("and " + name + " has the level count the size allows").c_str());
+            check(view.payload.size() ==
+                      as::chain_bytes(view.format, size.width, size.height, size.levels),
+                  ("and its payload is exactly the chain for " + name).c_str());
+        }
 
         std::filesystem::remove_all(source.parent_path());
     }
@@ -542,7 +646,9 @@ int main() {
     std::printf("textures\n");
     test_color_space_decides_the_mip_chain();
     test_editing_the_sidecar_cooks_again();
+    test_an_older_manifest_cooks_again();
     test_compression_and_mip_switches();
+    test_awkward_sizes();
     test_a_broken_image_fails_the_cook();
     std::printf("reading it back\n");
     test_content_reads_what_the_cooker_wrote();
