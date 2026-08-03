@@ -44,7 +44,12 @@ closes M3. See `DESIGN.md` §10.
 M4 is in progress. M4.1 gives an asset its identity. It adds `engine::Guid` in
 `src/core/guid.h`, a `.meta` sidecar next to each source file, and `assets::AssetDatabase`.
 The database turns a GUID into a handle that stays valid when the asset loads or reloads.
-Nothing reads a cooked file yet. The cooker is M4.2.
+
+M4.2 adds `tools/cooker/`. It walks a source tree, cooks what it has a rule for, copies what
+it does not, and writes a manifest of every output and its inputs. A hash of the input bytes
+decides what to skip, so a second cook of an unchanged tree does nothing. Shaders are the
+first asset type on it, and `cmake/Shaders.cmake` is gone. Cooked content now sits next to
+the executable, and `platform::cooked_content_root()` finds it there.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings
