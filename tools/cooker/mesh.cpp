@@ -407,33 +407,20 @@ namespace cooker {
             return false;
         }
 
-        const std::filesystem::path directory = relative.parent_path();
-
         // A GLB holds its buffers and its images inside itself, and a data URI
-        // carries the bytes inline. Neither one names a file to watch.
-        const auto named = [&directory](const char* uri, std::filesystem::path& path) {
-            if (uri == nullptr || std::string_view{ uri }.starts_with("data:")) {
-                return false;
-            }
-            // A URI escapes a space as %20 and so on, so the text is not a path
-            // until it is decoded. cgltf decodes in place, so this works on a
-            // copy rather than on the parsed data.
-            std::string decoded{ uri };
-            cgltf_decode_uri(decoded.data());
-            decoded.resize(std::strlen(decoded.c_str()));
-            path = directory / decoded;
-            return true;
-        };
+        // carries the bytes inline. Neither one names a file to watch, and
+        // gltf_uri_path reports that.
+        const std::filesystem::path directory = relative.parent_path();
 
         for (cgltf_size at = 0; at < held.data->buffers_count; ++at) {
             std::filesystem::path path;
-            if (named(held.data->buffers[at].uri, path)) {
+            if (gltf_uri_path(held.data->buffers[at].uri, directory, path)) {
                 out.buffers.push_back(std::move(path));
             }
         }
         for (cgltf_size at = 0; at < held.data->images_count; ++at) {
             std::filesystem::path path;
-            if (named(held.data->images[at].uri, path)) {
+            if (gltf_uri_path(held.data->images[at].uri, directory, path)) {
                 out.images.push_back(std::move(path));
             }
         }
@@ -443,6 +430,23 @@ namespace cooker {
     bool is_mesh_extension(const std::string& extension) {
         const std::string lower = lowered(extension);
         return lower == ".gltf" || lower == ".glb";
+    }
+
+    bool gltf_uri_path(const char* uri, const std::filesystem::path& directory,
+                       std::filesystem::path& out) {
+        if (uri == nullptr || std::string_view{ uri }.starts_with("data:")) {
+            return false;
+        }
+
+        // cgltf decodes in place, so this works on a copy rather than on the
+        // parsed data. The decode only ever shortens the text, and it leaves
+        // the old terminator behind, so the length comes from strlen.
+        std::string decoded{ uri };
+        cgltf_decode_uri(decoded.data());
+        decoded.resize(std::strlen(decoded.c_str()));
+
+        out = directory / decoded;
+        return true;
     }
 
     bool cook_gltf(const std::filesystem::path& source, const std::filesystem::path& out_root,

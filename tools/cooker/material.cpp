@@ -3,14 +3,13 @@
 #include "assets/material.h"
 #include "assets/meta.h"
 #include "core/log.h"
+#include "mesh.h"
 #include "texture.h"
 
 #include <cgltf.h>
 
-#include <cstring>
 #include <fstream>
 #include <string>
-#include <string_view>
 
 namespace cooker {
 
@@ -37,31 +36,17 @@ namespace cooker {
                 return true;
             }
 
-            const char* uri = texture->image->uri;
-            if (uri == nullptr) {
-                // A GLB carries its images inside the file, and a data URI
-                // carries them inline. Neither one is a file with a sidecar, so
-                // neither one has an identity this pipeline can store.
-                ENGINE_LOG_WARN("{}: an image lives inside the file, so it has no identity "
-                                "yet and the material names no texture.",
-                                where);
-                return true;
-            }
-            if (std::string_view{ uri }.starts_with("data:")) {
-                ENGINE_LOG_WARN("{}: an image arrives as a data URI, so it has no identity "
-                                "yet and the material names no texture.",
+            // A GLB carries its images inside the file, and a data URI carries
+            // them inline. Neither one is a file, so neither one can carry a
+            // sidecar, and neither one has an identity this pipeline can store.
+            std::filesystem::path image;
+            if (!gltf_uri_path(texture->image->uri, directory, image)) {
+                ENGINE_LOG_WARN("{}: an image has no file of its own, so it has no identity "
+                                "yet and the material names no texture. See issue #51.",
                                 where);
                 return true;
             }
 
-            // A URI escapes a space as %20 and so on, so the text is not a path
-            // until it is decoded. cgltf decodes in place, so this works on a
-            // copy rather than on the parsed data.
-            std::string decoded{ uri };
-            cgltf_decode_uri(decoded.data());
-            decoded.resize(std::strlen(decoded.c_str()));
-
-            const std::filesystem::path image = directory / decoded;
             std::error_code error;
             if (!std::filesystem::is_regular_file(image, error)) {
                 ENGINE_LOG_ERROR("{}: it names the image {}, and there is no such file.", where,
@@ -112,10 +97,14 @@ namespace cooker {
          * model and every other one an extension, so a material with no
          * `pbrMetallicRoughness` block is legal and rare. Such a material takes
          * the defaults, which give a white surface.
+         *
+         * The name says glTF because `assets::read_material` reads a cooked
+         * one. The two do opposite things, and an unqualified call here would
+         * find both by argument-dependent lookup.
          */
-        [[nodiscard]] bool read_material(const cgltf_material& source,
-                                         const std::filesystem::path& directory,
-                                         std::string_view where, as::Material& out) {
+        [[nodiscard]] bool read_gltf_material(const cgltf_material& source,
+                                              const std::filesystem::path& directory,
+                                              std::string_view where, as::Material& out) {
             if (source.has_pbr_metallic_roughness != 0) {
                 const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
                 if (!texture_guid(pbr.base_color_texture.texture, directory, where,
@@ -178,7 +167,7 @@ namespace cooker {
             const std::string where = source.string() + " material " + std::to_string(at);
 
             as::Material material;
-            if (!read_material(data.materials[at], directory, where, material)) {
+            if (!read_gltf_material(data.materials[at], directory, where, material)) {
                 return false;
             }
 

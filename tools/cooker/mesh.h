@@ -38,6 +38,25 @@ namespace cooker {
      */
     [[nodiscard]] bool is_mesh_extension(const std::string& extension);
 
+    /**
+     * @brief Turns a URI a glTF file holds into the path it names.
+     *
+     * A URI escapes a space as `%20` and so on, so the text is not a path until
+     * it is decoded. Two callers need this: the scan that lists what a glTF
+     * names, and the material rule that resolves an image to its sidecar. They
+     * have to agree about which file a URI names, so they share one function.
+     *
+     * @param uri The URI, as cgltf holds it. A null pointer is allowed.
+     * @param directory The directory the glTF sits in. A URI resolves against
+     * it.
+     * @param out The path. It is untouched when this returns false.
+     * @return True when the URI names a file. False for a null URI, which is
+     * what a `.glb` gives, and for a data URI, which carries the bytes inline.
+     * Neither one is a file, so neither one can carry a sidecar. See issue #51.
+     */
+    [[nodiscard]] bool gltf_uri_path(const char* uri, const std::filesystem::path& directory,
+                                     std::filesystem::path& out);
+
     /// @brief The files a glTF file names besides itself.
     struct GltfReferences {
         /**

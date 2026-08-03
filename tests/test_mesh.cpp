@@ -846,6 +846,96 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    void test_an_escaped_uri_names_the_file_it_means() {
+        const std::filesystem::path source = scratch("escape/src");
+        const std::filesystem::path out = scratch("escape/out");
+
+        // A URI escapes a space as %20, so the text is not a path until it is
+        // decoded. A cooker that skipped the decode would look for a file
+        // called "flight%20helmet.bin", which is not there, and the model
+        // would fail to cook with a message naming a file nobody wrote.
+        write_bytes(source / "flight helmet.bin", build_triangle().buffer);
+        write_tga(source / "skin BaseColor.tga");
+        const std::string json = geometry_json(build_triangle(), 1, "flight%20helmet.bin",
+                                               "skin%20BaseColor.tga");
+        write_bytes(source / "one.gltf", std::as_bytes(std::span{ json.data(), json.size() }));
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a glTF whose URIs hold an escaped space cooks");
+
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads back");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "one.gltf");
+        check(entry != nullptr, "and it holds the glTF");
+
+        // The decoded name, not the escaped one. An input list holding
+        // "flight%20helmet.bin" would name a file that is not there, and
+        // hash_inputs would fail the cook rather than track the geometry.
+        bool names_the_decoded_buffer = false;
+        bool names_the_decoded_sidecar = false;
+        if (entry != nullptr) {
+            for (const std::string& input : entry->inputs) {
+                names_the_decoded_buffer =
+                    names_the_decoded_buffer || input == "flight helmet.bin";
+                names_the_decoded_sidecar =
+                    names_the_decoded_sidecar || input == "skin BaseColor.tga.meta";
+            }
+        }
+        check(names_the_decoded_buffer, "the buffer input holds the decoded name");
+        check(names_the_decoded_sidecar, "and so does the image sidecar input");
+
+        // The material has to resolve too, through the same decode.
+        as::AssetMeta image;
+        check(as::load_meta(source / "skin BaseColor.tga", image), "the image sidecar reads");
+        const as::Material material = read_material_file(out / "one.gltf.0.material");
+        check(material.base_color == image.guid,
+              "and the material names the image the escaped URI meant");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_an_inline_image_cooks_without_a_texture() {
+        const std::filesystem::path source = scratch("inline/src");
+        const std::filesystem::path out = scratch("inline/out");
+
+        // A data URI carries the bytes inline, so there is no file and no
+        // sidecar and no identity. Issue #51 holds the work to extract one.
+        // Until then the model still has to cook, because failing it would
+        // stop a person from importing geometry over one embedded image.
+        write_bytes(source / "inline.bin", build_triangle().buffer);
+        const std::string json = geometry_json(build_triangle(), 1, "inline.bin",
+                                               "data:image/png;base64,iVBORw0KGgo=");
+        write_bytes(source / "inline.gltf", std::as_bytes(std::span{ json.data(), json.size() }));
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a glTF whose image is a data URI still cooks");
+
+        const as::Material material = read_material_file(out / "inline.gltf.0.material");
+        check(!material.base_color.valid(),
+              "and its material names no texture, because a data URI has no sidecar");
+
+        // The data URI is not a path, so nothing may go on the input list for
+        // it. An entry naming a file that is not there fails every later cook.
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads back");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "inline.gltf");
+        bool names_a_data_uri = false;
+        if (entry != nullptr) {
+            for (const std::string& input : entry->inputs) {
+                names_a_data_uri = names_a_data_uri || input.find("data:") != std::string::npos;
+            }
+        }
+        check(!names_a_data_uri, "and no input names the data URI");
+
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "a second cook works");
+        check(second.skipped == 1, "and it skips the glTF rather than failing it");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
     void test_a_material_naming_a_missing_image_fails() {
         const std::filesystem::path source = scratch("missing/src");
         const std::filesystem::path out = scratch("missing/out");
@@ -881,6 +971,8 @@ int main() {
     test_a_material_names_its_textures_by_guid();
     test_the_image_sidecar_is_an_input();
     test_the_gltf_rule_guesses_the_color_space();
+    test_an_escaped_uri_names_the_file_it_means();
+    test_an_inline_image_cooks_without_a_texture();
     test_a_material_naming_a_missing_image_fails();
     return test::report();
 }
