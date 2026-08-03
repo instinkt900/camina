@@ -1,8 +1,11 @@
 #include "core/guid.h"
 
+#include "core/hash.h"
+
 #include <array>
 #include <cstddef>
 #include <random>
+#include <span>
 
 namespace engine {
 
@@ -89,6 +92,45 @@ namespace engine {
 
         guid.high = (guid.high & ~kVersionMask) | kVersionFour;
         guid.low = (guid.low & ~kVariantMask) | kVariantRfc4122;
+        return guid;
+    }
+
+    Guid Guid::derive(Guid parent, std::string_view kind, std::uint32_t index) {
+        // A null parent has no identity to derive from, and returning something
+        // that looked valid would give every part of every unidentified asset
+        // the same GUID.
+        if (!parent.valid()) {
+            return Guid{};
+        }
+
+        // FNV-1a, because core/hash.h already fixes the algorithm and two
+        // machines have to agree.
+        //
+        // The two halves fold the same material and differ only in where they
+        // start. That is enough: FNV-1a carries its starting value through every
+        // step, so two seeds give two unrelated results for the same input.
+        const auto fold = [&](std::uint64_t seed) {
+            std::uint64_t value = hash_text(kind, seed);
+            value = hash_bytes(std::as_bytes(std::span{ &parent.high, 1 }), value);
+            value = hash_bytes(std::as_bytes(std::span{ &parent.low, 1 }), value);
+            return hash_bytes(std::as_bytes(std::span{ &index, 1 }), value);
+        };
+
+        Guid guid{ .high = fold(kHashOffsetBasis), .low = fold(kHashPrime) };
+
+        // RFC 9562 version 8 says the layout is custom, which is exactly what
+        // this is. Setting it keeps the text a UUID that other tools accept, and
+        // it separates a derived GUID from the version 4 that generate() makes.
+        constexpr std::uint64_t kVersionMask = 0xF000;
+        constexpr std::uint64_t kVersionEight = 0x8000;
+        constexpr std::uint64_t kVariantMask = 0xC000000000000000ULL;
+        constexpr std::uint64_t kVariantRfc4122 = 0x8000000000000000ULL;
+
+        guid.high = (guid.high & ~kVersionMask) | kVersionEight;
+        guid.low = (guid.low & ~kVariantMask) | kVariantRfc4122;
+
+        // The masking above cannot make both halves zero, because the version
+        // nibble it sets is not zero. So the result is always valid.
         return guid;
     }
 

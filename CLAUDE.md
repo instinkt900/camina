@@ -51,6 +51,13 @@ decides what to skip, so a second cook of an unchanged tree does nothing. Shader
 first asset type on it, and `cmake/Shaders.cmake` is gone. Cooked content now sits next to
 the executable, and `platform::cooked_content_root()` finds it there.
 
+M4.4 is in progress and comes in three parts. M4.4a makes glTF the third asset type. The
+cooker reads a `.gltf` or a `.glb` with cgltf, builds tangents when the source has none,
+and reorders with meshoptimizer. One glTF holds several meshes, so the manifest now maps
+one source to many outputs. A sub-asset has no sidecar, so `Guid::derive` works out its
+identity from the parent GUID, a kind word, and an index. M4.4b adds materials and the
+prefab. M4.4c adds `MeshRenderer` and the pass that replaces `CubePass`.
+
 M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
 and both the cooker and the runtime read that one header. The cooker reads an image with
 stb_image and builds the mip chain in linear light. It then compresses to BC7 with

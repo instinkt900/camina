@@ -5,6 +5,7 @@
 # cook a tree and check what came out.
 add_library(cooker_lib STATIC
     cook.cpp
+    mesh.cpp
     texture.cpp
     stb_image_impl.cpp
 )
@@ -31,6 +32,8 @@ target_link_libraries(cooker_lib
     PRIVATE
         stb::stb
         bc7enc
+        cgltf::cgltf
+        meshoptimizer::meshoptimizer
 )
 
 engine_set_warnings(cooker_lib)

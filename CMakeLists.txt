@@ -48,6 +48,8 @@ find_package(imgui REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(EnTT REQUIRED)
 find_package(stb REQUIRED)
+find_package(cgltf REQUIRED)
+find_package(meshoptimizer REQUIRED)
 
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.

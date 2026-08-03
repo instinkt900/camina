@@ -70,10 +70,31 @@ namespace engine::assets {
         return nullptr;
     }
 
-    const ManifestEntry* find_by_guid(const Manifest& manifest, Guid guid) {
+    const ManifestOutput* find_by_guid(const Manifest& manifest, Guid guid) {
+        // A null GUID names nothing. Without this, an entry whose sidecar was
+        // broken would answer for every lookup that had no identity to give.
+        if (!guid.valid()) {
+            return nullptr;
+        }
         for (const ManifestEntry& entry : manifest.entries) {
-            if (entry.guid == guid) {
-                return &entry;
+            for (const ManifestOutput& output : entry.outputs) {
+                if (output.guid == guid) {
+                    return &output;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    const ManifestEntry* find_source_of(const Manifest& manifest, Guid guid) {
+        if (!guid.valid()) {
+            return nullptr;
+        }
+        for (const ManifestEntry& entry : manifest.entries) {
+            for (const ManifestOutput& output : entry.outputs) {
+                if (output.guid == guid) {
+                    return &entry;
+                }
             }
         }
         return nullptr;
@@ -81,9 +102,16 @@ namespace engine::assets {
 
     bool is_fresh(const ManifestEntry& entry, const std::filesystem::path& source_root,
                   const std::filesystem::path& cooked_root) {
-        std::error_code error;
-        if (!std::filesystem::is_regular_file(cooked_root / entry.cooked, error)) {
+        // Every output has to be there. A glTF writes several, and one of them
+        // deleted is as stale as all of them deleted.
+        if (entry.outputs.empty()) {
             return false;
+        }
+        std::error_code error;
+        for (const ManifestOutput& output : entry.outputs) {
+            if (!std::filesystem::is_regular_file(cooked_root / output.cooked, error)) {
+                return false;
+            }
         }
 
         std::uint64_t hash = 0;

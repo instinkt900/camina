@@ -174,19 +174,73 @@ namespace {
         check(kept.target == original.target, "and the field keeps the GUID it held");
     }
 
+    void test_derive_is_stable() {
+        const Guid parent = Guid::generate();
+
+        // The whole point. Nothing is stored, so the answer has to come out the
+        // same on every run and on every machine. A cook that derived a new GUID
+        // each time would break every prefab that named a mesh.
+        check(Guid::derive(parent, "mesh", 0) == Guid::derive(parent, "mesh", 0),
+              "the same parent, kind, and index give the same GUID");
+
+        const Guid derived = Guid::derive(parent, "mesh", 0);
+        check(derived.valid(), "a derived GUID is not null");
+        check(derived != parent, "and it is not the parent");
+
+        // Version 8 is what RFC 9562 reserves for a custom scheme. Keeping it
+        // apart from the version 4 that generate() makes means a derived GUID
+        // can never collide with one somebody generated.
+        check(derived.to_text().at(14) == '8', "a derived GUID carries UUID version 8");
+        check(Guid::generate().to_text().at(14) == '4', "and a generated one carries version 4");
+
+        // A parent with no identity has nothing to derive from. Answering
+        // anything else would give every part of every broken asset one GUID.
+        check(!Guid::derive(Guid{}, "mesh", 0).valid(), "a null parent derives nothing");
+    }
+
+    void test_derive_separates_its_inputs() {
+        const Guid parent = Guid::generate();
+        const Guid other = Guid::generate();
+
+        check(Guid::derive(parent, "mesh", 0) != Guid::derive(parent, "mesh", 1),
+              "two indices give two GUIDs");
+        check(Guid::derive(parent, "mesh", 0) != Guid::derive(parent, "material", 0),
+              "two kinds give two GUIDs");
+        check(Guid::derive(parent, "mesh", 0) != Guid::derive(other, "mesh", 0),
+              "two parents give two GUIDs");
+
+        // The two halves must fold their material differently. Folding it the
+        // same way would make every derived GUID a pair of equal halves, which
+        // halves the space and shows up as a repeat far sooner than it should.
+        const Guid derived = Guid::derive(parent, "mesh", 0);
+        check(derived.high != derived.low, "the two halves of a derived GUID differ");
+
+        // A run of derivations from one parent, all distinct. This is the shape
+        // a glTF file with many meshes produces.
+        constexpr std::uint32_t kParts = 64;
+        std::set<Guid> seen;
+        for (std::uint32_t at = 0; at < kParts; ++at) {
+            seen.insert(Guid::derive(parent, "mesh", at));
+        }
+        check(seen.size() == kParts, "64 parts of one asset give 64 distinct GUIDs");
+    }
+
 } // namespace
 
 int main() {
-    std::printf("the value\n");
+    test::section("the value");
     test_default_is_null();
     test_generate_does_not_repeat();
     test_ordering();
-    std::printf("text\n");
+    test::section("text");
     test_text_round_trip();
     test_text_shape();
     test_case_and_bad_text();
-    std::printf("reflection\n");
+    test::section("reflection");
     test_field_round_trip();
     test_field_refuses_bad_documents();
+    test::section("derived identities");
+    test_derive_is_stable();
+    test_derive_separates_its_inputs();
     return test::report();
 }
