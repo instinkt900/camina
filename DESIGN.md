@@ -577,6 +577,29 @@ forward pass the engine draws today, and it costs one bind rather than four. A d
 or a shadow pass reads position alone and would rather have it separate, so M5 is the
 milestone that may split this.
 
+**Drawing what the scene names.** M4.4c added `scene::MeshRenderer`, which names a mesh by
+GUID, and `render::MeshPass`, which draws every entity that carries one. `render::MeshCache`
+turns a GUID into a pair of GPU buffers and uploads each mesh once however many entities
+name it. The cache owns the buffers rather than `assets::AssetDatabase`, because a GPU
+buffer needs the device to free it and the database frees a value by running its destructor.
+M4.5 brings the two together, when hot reload has to replace a mesh while the program runs.
+
+The shading is a placeholder until M4.4b writes a material. A submesh carries a material
+GUID and it is null, so every surface takes the same neutral shade under a key light and a
+hemisphere. One flat colour would show a silhouette and nothing else, and the mistakes a new
+importer makes are an inverted normal, a mirrored winding, and a mesh inside out. Those are
+visible under lighting and invisible under a flat fill.
+
+`CubePass` still draws an entity that names no mesh. That is what the M3 crates are, and it
+keeps that scene readable while the mesh path grows beside it. #38 retires it.
+
+**Looking at what was drawn.** `gfx::capture_frame` copies the frame that was presented last
+into host memory, and `runtime --screenshot <file>` writes it as a PNG. A run that ends with
+no error says the commands were valid. It says nothing about geometry that came out
+mirrored, inside out, or upside down, and a renderer with no way to look at its own output
+can only be checked by a person with the window open. The capture waits for the device to go
+idle, so it is for the end of a run and not for every frame.
+
 meshoptimizer runs two passes, and the order matters. The vertex cache pass reorders the
 indices inside each submesh so a triangle reuses a vertex the GPU still holds. The vertex
 fetch pass then reorders the vertices so the ones a triangle reads sit near each other.

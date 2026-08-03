@@ -83,8 +83,15 @@ namespace engine::gfx {
         };
 
         VkFormat to_vk_format(VertexFormat format) {
-            return format == VertexFormat::Float2 ? VK_FORMAT_R32G32_SFLOAT
-                                                  : VK_FORMAT_R32G32B32_SFLOAT;
+            switch (format) {
+            case VertexFormat::Float2:
+                return VK_FORMAT_R32G32_SFLOAT;
+            case VertexFormat::Float3:
+                return VK_FORMAT_R32G32B32_SFLOAT;
+            case VertexFormat::Float4:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            }
+            return VK_FORMAT_R32G32B32_SFLOAT;
         }
 
         /// Leaves the state empty when the pipeline builds its positions from

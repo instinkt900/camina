@@ -150,7 +150,13 @@ namespace engine::gfx {
             info.imageColorSpace = format.colorSpace;
             info.imageExtent = extent;
             info.imageArrayLayers = 1;
+            // TRANSFER_SRC is what lets capture_frame() read a frame back.
+            // Every driver this engine targets offers it, and a driver that
+            // does not gets a swapchain it can draw to and not capture from.
             info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            if ((capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0U) {
+                info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            }
             info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.preTransform = capabilities.currentTransform;
             info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;

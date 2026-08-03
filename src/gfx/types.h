@@ -138,6 +138,7 @@ namespace engine::gfx {
     enum class VertexFormat : std::uint32_t {
         Float2 = 0, ///< Two 32-bit floats.
         Float3,     ///< Three 32-bit floats.
+        Float4,     ///< Four 32-bit floats. A tangent, with its sign in w.
     };
 
     /// @brief One input to the vertex shader.

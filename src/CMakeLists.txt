@@ -22,6 +22,8 @@ add_library(engine_core STATIC
     gfx/vulkan/vk_imgui.cpp
     gfx/vulkan/vk_vma.cpp
     render/cube_pass.cpp
+    render/mesh_cache.cpp
+    render/mesh_pass.cpp
     scene/world.cpp
     scene/component_registry.cpp
     scene/scene_file.cpp
