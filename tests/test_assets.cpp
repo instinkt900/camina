@@ -263,9 +263,18 @@ namespace {
         // The color space reaches the file as a word, not as a number. A person
         // opens this file to fix a texture that came out wrong, and "1" says
         // nothing about which one it is.
-        std::ifstream file(as::meta_path(source));
-        const std::string text{ std::istreambuf_iterator<char>{ file },
-                                std::istreambuf_iterator<char>{} };
+        //
+        // The stream lives in a scope of its own, so it closes before the
+        // remove_all below. Windows refuses to delete a file that is open, and
+        // the throwing remove_all then ends the process with no message at all.
+        // Linux unlinks an open file without complaint, so this kind of mistake
+        // only ever shows up in CI.
+        std::string text;
+        {
+            std::ifstream file(as::meta_path(source));
+            text.assign(std::istreambuf_iterator<char>{ file },
+                        std::istreambuf_iterator<char>{});
+        }
         check(text.find("\"Linear\"") != std::string::npos,
               "and the file names the color space in words");
 
@@ -390,21 +399,21 @@ namespace {
 } // namespace
 
 int main() {
-    std::printf("handles\n");
+    test::section("handles");
     test_resolve_is_stable();
     test_reference_survives_later_loads();
     test_null_guid_gets_no_slot();
     test_stale_handle_after_clear();
     test_types_stay_apart();
-    std::printf("placeholders\n");
+    test::section("placeholders");
     test_placeholder_stands_in();
-    std::printf("sidecars\n");
+    test::section("sidecars");
     test_meta_path();
     test_meta_is_written_once();
     test_meta_refuses_and_repairs();
     test_meta_reports_who_wrote_it();
     test_meta_carries_import_settings();
-    std::printf("the cooked texture format\n");
+    test::section("the cooked texture format");
     test_mip_arithmetic();
     test_read_texture_refuses_a_bad_file();
     test_color_space_text();

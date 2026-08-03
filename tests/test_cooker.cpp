@@ -634,23 +634,23 @@ namespace {
 } // namespace
 
 int main() {
-    std::printf("hashing\n");
+    test::section("hashing");
     test_hash_is_content_not_time();
     test_input_order_matters();
-    std::printf("cooking\n");
+    test::section("cooking");
     test_cook_and_skip();
     test_missing_output_recooks();
     test_new_identity_recooks();
     test_shell_metacharacters_are_refused();
     test_bad_input();
-    std::printf("textures\n");
+    test::section("textures");
     test_color_space_decides_the_mip_chain();
     test_editing_the_sidecar_cooks_again();
     test_an_older_manifest_cooks_again();
     test_compression_and_mip_switches();
     test_awkward_sizes();
     test_a_broken_image_fails_the_cook();
-    std::printf("reading it back\n");
+    test::section("reading it back");
     test_content_reads_what_the_cooker_wrote();
     return test::report();
 }
