@@ -205,7 +205,38 @@ namespace {
         as::Manifest after;
         check(as::load_manifest(out, after), "the manifest reads back");
         const as::ManifestEntry* fresh = as::find_by_source(after, "one.scene");
-        check(fresh != nullptr && fresh->guid != entry->guid, "and the identity did change");
+        // check() records a failure and carries on, so both pointers need a
+        // guard here. Without it a failed lookup above crashes this line, and
+        // the crash hides every test after it.
+        check(entry != nullptr && fresh != nullptr && fresh->guid != entry->guid,
+              "and the identity did change");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_shell_metacharacters_are_refused() {
+        // A shader whose name a shell would read as a command. Double quotes
+        // do not stop a POSIX shell expanding $(...), so the cooker refuses
+        // the name rather than handing it to the shell. Without this, cooking
+        // a content tree from anywhere but your own machine runs whatever the
+        // file name says.
+        //
+        // The file is a .vert, because only the shader rule builds a command.
+        // Nothing here runs glslc: the name is refused before that.
+        const std::filesystem::path source = scratch("inject/src");
+        const std::filesystem::path out = scratch("inject/out");
+#if defined(_WIN32)
+        const char* dangerous = "a%PATH%.vert";
+#else
+        const char* dangerous = "a$(id).vert";
+#endif
+        write_file(source / dangerous, "#version 450\nvoid main() {}\n");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a name a shell would expand fails the cook");
+        check(result.failed == 1, "and it counts as a failure rather than a skip");
+        check(!std::filesystem::exists(out / dangerous), "nothing was written for it");
 
         std::filesystem::remove_all(source.parent_path());
     }
@@ -268,6 +299,7 @@ int main() {
     test_cook_and_skip();
     test_missing_output_recooks();
     test_new_identity_recooks();
+    test_shell_metacharacters_are_refused();
     test_bad_input();
     std::printf("reading it back\n");
     test_content_reads_what_the_cooker_wrote();

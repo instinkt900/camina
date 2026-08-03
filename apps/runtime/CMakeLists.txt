@@ -9,8 +9,3 @@ target_link_libraries(runtime PRIVATE engine::core camina::sandbox SDL3::SDL3 im
 engine_set_warnings(runtime)
 engine_enable_clang_tidy(runtime)
 
-# The shaders and the game assets, cooked next to this executable. The engine
-# tree holds the shaders that render/ reads. The game tree holds the scene and
-# the prefabs that sandbox/ reads.
-engine_cook_content(runtime engine "${CMAKE_SOURCE_DIR}/src/render/shaders")
-engine_cook_content(runtime game "${CMAKE_SOURCE_DIR}/sandbox/content")

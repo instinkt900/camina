@@ -499,9 +499,10 @@ M4.2 moved this out of CMake and into the cooker. A shader is an asset now, with
 sidecar and a manifest entry, and `assets::Content` reads it at startup.
 
 The cooker invokes `glslc` as a separate program rather than linking `libshaderc`. Conan 2
-has no per-target requirement, so linking it would put shaderc in the graph of every consumer
-of the package for the sake of one tool. Issue #43 holds the reasons to change that, and the
-first one to arrive is M5, where permutations turn one process for each shader into many.
+has no per-target requirement. Linking it would therefore put shaderc in the graph of every
+consumer of the package, for the sake of one tool. Issue #43 holds the reasons to change
+that. The first one to arrive is M5, where permutations turn one process for each shader
+into many.
 
 The trade is the error text. glslc writes it to stderr and the cooker passes it through, so
 nothing can read a file and a line out of it yet.

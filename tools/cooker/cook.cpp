@@ -42,6 +42,37 @@ namespace cooker {
         }
 
         /**
+         * Whether a string is safe to put inside double quotes.
+         *
+         * Double quotes are not enough on their own. A POSIX shell still
+         * expands `$name`, `$(command)`, and a backtick inside them, so an
+         * asset named `a$(id).vert` would run a command during a cook. cmd.exe
+         * expands `%NAME%` in the same way.
+         *
+         * This refuses those characters rather than escaping them. No asset
+         * needs one in its name, the rule is easy to read, and an escape that
+         * is subtly wrong on one of the two shells is worse than a refusal.
+         * Issue #43 removes the question by spawning the process directly.
+         */
+        [[nodiscard]] bool shell_safe(const std::string& text, const char* what) {
+#if defined(_WIN32)
+            // A backslash is an ordinary separator here, and cmd does not
+            // treat it as an escape inside quotes.
+            constexpr std::string_view kUnsafe = "\"%\r\n";
+#else
+            constexpr std::string_view kUnsafe = "\"$`\\\r\n";
+#endif
+            const std::size_t bad = text.find_first_of(kUnsafe);
+            if (bad == std::string::npos) {
+                return true;
+            }
+            ENGINE_LOG_ERROR("{} holds '{}', which a shell would read as a command rather "
+                             "than as part of the name: {}",
+                             what, text.at(bad), text);
+            return false;
+        }
+
+        /**
          * Builds the command line for one glslc run.
          *
          * Two things here are Windows only, and both are about cmd.exe rather
@@ -56,19 +87,27 @@ namespace cooker {
          * error it gives back names no file. Wrapping the whole command in one
          * more pair is what cmd documents as the way to keep the inner quotes.
          */
-        [[nodiscard]] std::string shader_command(const Options& options,
-                                                 const std::filesystem::path& source,
-                                                 const std::filesystem::path& destination) {
+        [[nodiscard]] bool shader_command(const Options& options,
+                                          const std::filesystem::path& source,
+                                          const std::filesystem::path& destination,
+                                          std::string& out) {
+            const std::string tool = native(options.glslc);
+            const std::string in = native(source);
+            const std::string to = native(destination);
+            if (!shell_safe(tool, "The path to glslc") || !shell_safe(in, "A source path") ||
+                !shell_safe(to, "A cooked path")) {
+                return false;
+            }
+
             // --target-env matches the Vulkan version the device asks for, and
             // -O is the same optimization the old CMake rule used. No -mfmt,
             // because the cooked file is now SPIR-V rather than a C header.
-            std::string command = quoted(native(options.glslc)) +
-                                  " --target-env=vulkan1.3 -O -o " +
-                                  quoted(native(destination)) + " " + quoted(native(source));
+            out = quoted(tool) + " --target-env=vulkan1.3 -O -o " + quoted(to) + " " +
+                  quoted(in);
 #if defined(_WIN32)
-            command = "\"" + command + "\"";
+            out = "\"" + out + "\"";
 #endif
-            return command;
+            return true;
         }
 
         /**
@@ -81,7 +120,11 @@ namespace cooker {
         [[nodiscard]] bool cook_shader(const Options& options,
                                        const std::filesystem::path& source,
                                        const std::filesystem::path& destination) {
-            const std::string command = shader_command(options, source, destination);
+            std::string command;
+            if (!shader_command(options, source, destination, command)) {
+                return false;
+            }
+
             // std::system gives back a wait status rather than an exit code,
             // and the two differ on POSIX, where exit code 1 arrives as 256.
             // So this reports that glslc failed and leaves the number out.

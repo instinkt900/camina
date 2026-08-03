@@ -52,10 +52,15 @@ find_package(EnTT REQUIRED)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)
 
-# Where every cooked content tree lands, next to the executables. The runtime
-# reads its content from here unless --content says otherwise.
-set(ENGINE_COOKED_CONTENT_DIR "${CMAKE_BINARY_DIR}/content"
-    CACHE PATH "Where the cooker writes its output")
+# Every executable lands in one directory, and the cooked content sits inside
+# it. platform::cooked_content_root() looks next to the running executable, so
+# putting them together is what makes that call find anything.
+#
+# This also means one cook serves the runtime, the editor, and the tests. The
+# presets use single-config Ninja on both platforms. A multi-config generator
+# would need the per-config form of this variable.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(ENGINE_COOKED_CONTENT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/content")
 
 add_subdirectory(src)
 

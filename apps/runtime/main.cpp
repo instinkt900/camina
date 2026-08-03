@@ -726,7 +726,7 @@ int main(int argc, char** argv) {
     sandbox::register_components();
 
     const std::filesystem::path content = options.content.empty()
-                                              ? engine::platform::cooked_content_root() / sandbox::kContentName
+                                              ? sandbox::default_content_directory()
                                               : std::filesystem::path{ options.content };
 
     engine::scene::World world;

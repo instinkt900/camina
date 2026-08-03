@@ -33,24 +33,24 @@ if(NOT ENGINE_GLSLC_EXE)
 endif()
 message(STATUS "Using glslc at ${ENGINE_GLSLC_EXE}")
 
-# Cooks one source tree next to a target's executable, and makes it a
-# dependency of that target.
+# Cooks one source tree into the directory the executables run from.
 #
-# The output lands beside the executable rather than in a fixed build path,
-# because platform::cooked_content_root() finds it that way at run time. So a
-# runtime started from a shell, a debugger, or a file manager all read the same
-# directory.
+# The output goes beside the executables rather than under a build path,
+# because platform::cooked_content_root() looks next to the running program.
+# One cook therefore serves the runtime, the editor, and the tests.
 #
-# target:  the executable that needs the cooked content at run time.
-# name:    the subdirectory under the cooked root, so two trees stay apart.
-# source:  the source content directory.
-function(engine_cook_content target name source)
-    set(out_dir "$<TARGET_FILE_DIR:${target}>/content/${name}")
-    set(stamp "${CMAKE_CURRENT_BINARY_DIR}/${name}.cooked")
+# The stamp lives inside the cooked directory rather than in the build tree, so
+# the two cannot drift. Deleting the cooked content deletes the stamp with it,
+# and the next build cooks again. A stamp left behind in the build tree would
+# stay newer than every input, the build would skip the cooker, and a program
+# would start with nothing to draw.
+#
+# name:   the subdirectory under the cooked root, so two trees stay apart.
+# source: the source content directory.
+function(engine_cook_content name source)
+    set(out_dir "${ENGINE_COOKED_CONTENT_DIR}/${name}")
+    set(stamp "${out_dir}/.cooked")
 
-    # The stamp exists because the cooker writes a directory rather than one
-    # file, and a custom command needs an output CMake can compare. The cooker
-    # skips what it already built, so a rerun is cheap.
     file(GLOB_RECURSE cook_inputs CONFIGURE_DEPENDS "${source}/*")
 
     add_custom_command(
@@ -65,6 +65,10 @@ function(engine_cook_content target name source)
         VERBATIM
     )
 
-    add_custom_target(${target}_content_${name} DEPENDS "${stamp}")
-    add_dependencies(${target} ${target}_content_${name})
+    add_custom_target(content_${name} ALL DEPENDS "${stamp}")
 endfunction()
+
+# The engine tree holds the shaders that render/ reads. The game tree holds the
+# scene and the prefabs that sandbox/ reads.
+engine_cook_content(engine "${CMAKE_SOURCE_DIR}/src/render/shaders")
+engine_cook_content(game "${CMAKE_SOURCE_DIR}/sandbox/content")
