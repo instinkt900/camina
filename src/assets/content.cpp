@@ -52,6 +52,15 @@ namespace engine::assets {
         return true;
     }
 
+    bool Content::read_bytes(std::string_view source, std::vector<std::byte>& out) const {
+        const ManifestEntry* entry = find(source);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("{} is not in the manifest. The cooker did not make it.", source);
+            return false;
+        }
+        return read_bytes(*entry, out);
+    }
+
     bool Content::read_words(std::string_view source, std::vector<std::uint32_t>& out) const {
         const ManifestEntry* entry = find(source);
         if (entry == nullptr) {

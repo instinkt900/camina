@@ -47,6 +47,7 @@ find_package(VulkanMemoryAllocator REQUIRED)
 find_package(imgui REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(EnTT REQUIRED)
+find_package(stb REQUIRED)
 
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
@@ -61,6 +62,10 @@ include(ImGuiBackends)
 # would need the per-config form of this variable.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(ENGINE_COOKED_CONTENT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/content")
+
+# The vendored submodules. Rule 4.4 keeps this list short. Only the cooker
+# links anything from here.
+add_subdirectory(third_party)
 
 add_subdirectory(src)
 

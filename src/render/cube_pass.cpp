@@ -1,8 +1,10 @@
 #include "render/cube_pass.h"
 
+#include "assets/texture.h"
 #include "core/log.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -84,35 +86,20 @@ namespace engine::render {
 
         constexpr auto kIndices = build_indices();
 
-        constexpr std::uint32_t kTextureSize = 8;
-        constexpr std::uint32_t kCheckerSize = 2;
-        constexpr std::size_t kBytesPerTexel = 4;
-
-        /// Builds a checkerboard, because the asset pipeline arrives at M4.
-        std::array<std::uint8_t, kTextureSize * kTextureSize * kBytesPerTexel> build_texture() {
-            constexpr std::uint8_t kLight = 0xE0;
-            constexpr std::uint8_t kDark = 0x40;
-            constexpr std::uint8_t kOpaque = 0xFF;
-
-            std::array<std::uint8_t, kTextureSize * kTextureSize * kBytesPerTexel> pixels{};
-            for (std::uint32_t y = 0; y < kTextureSize; ++y) {
-                for (std::uint32_t x = 0; x < kTextureSize; ++x) {
-                    const bool light = ((x / kCheckerSize) + (y / kCheckerSize)) % 2 == 0;
-                    const std::size_t offset =
-                        (static_cast<std::size_t>(y) * kTextureSize + x) * kBytesPerTexel;
-                    const std::uint8_t value = light ? kLight : kDark;
-                    pixels[offset + 0] = value;
-                    pixels[offset + 1] = value;
-                    pixels[offset + 2] = kLight;
-                    pixels[offset + 3] = kOpaque;
-                }
-            }
-            return pixels;
-        }
-
-        /// Where the cooker put the two shaders, inside the engine content tree.
+        /// What this pass reads out of the engine content tree, by source path.
         constexpr const char* kVertexShaderSource = "cube.vert";
         constexpr const char* kFragmentShaderSource = "cube.frag";
+        constexpr const char* kTextureSource = "cube.png";
+
+        /// The gfx format that matches a cooked format and a cooked color space.
+        [[nodiscard]] gfx::TextureFormat to_gfx_format(assets::TextureFormat format,
+                                                       assets::ColorSpace space) {
+            const bool srgb = space == assets::ColorSpace::Srgb;
+            if (format == assets::TextureFormat::BC7) {
+                return srgb ? gfx::TextureFormat::BC7Srgb : gfx::TextureFormat::BC7Unorm;
+            }
+            return srgb ? gfx::TextureFormat::RGBA8Srgb : gfx::TextureFormat::RGBA8Unorm;
+        }
 
     } // namespace
 
@@ -159,14 +146,29 @@ namespace engine::render {
             return false;
         }
 
-        const auto pixels = build_texture();
+        // The texture is a cooked file now, not a checkerboard this file builds.
+        // It arrives with its mip chain and its color space already decided, so
+        // nothing here has to know which of the two it is.
+        std::vector<std::byte> texture_bytes;
+        if (!content.read_bytes(kTextureSource, texture_bytes)) {
+            return false;
+        }
+        assets::TextureView texture_view;
+        if (!assets::read_texture(texture_bytes, texture_view, kTextureSource)) {
+            return false;
+        }
+
         const gfx::TextureDesc texture_desc{
-            .pixels = pixels.data(),
-            .width = kTextureSize,
-            .height = kTextureSize,
-            // Nearest on purpose. The checkerboard is the reference the M1.3
-            // pixel check reads, and blending would soften the texel edges.
-            .sampler = { .filter = gfx::Filter::Nearest },
+            .pixels = texture_view.payload.data(),
+            .size = texture_view.payload.size(),
+            .width = texture_view.width,
+            .height = texture_view.height,
+            .mip_count = texture_view.mip_count,
+            .format = to_gfx_format(texture_view.format, texture_view.color_space),
+            // Linear, now that the texture carries a mip chain. Without mips a
+            // checkerboard at a distance aliases badly, which is what M1 lived
+            // with and what this milestone fixes.
+            .sampler = { .filter = gfx::Filter::Linear },
         };
         result = gfx::create_texture(device, texture_desc, &texture_);
         if (!gfx::succeeded(result)) {

@@ -5,13 +5,33 @@
 # cook a tree and check what came out.
 add_library(cooker_lib STATIC
     cook.cpp
+    texture.cpp
+    stb_image_impl.cpp
+)
+
+# stb_image carries its own implementation, and this file asks for it. It holds
+# nothing of ours, so the engine warning set and clang-tidy stay off it. Rule
+# 4.4 keeps the file in the Conan cache rather than in third_party/, because we
+# do not patch it.
+set_source_files_properties(stb_image_impl.cpp PROPERTIES
+    SKIP_LINTING ON
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
 )
 
 target_include_directories(cooker_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # engine::core brings the GUID, the sidecar, and the manifest. It brings no
 # Vulkan into this target, because engine_core keeps volk PRIVATE.
-target_link_libraries(cooker_lib PUBLIC engine::core)
+#
+# stb and bc7enc are PRIVATE. They are how this target reads an image and
+# compresses it, and no consumer of the cooker needs either one.
+target_link_libraries(cooker_lib
+    PUBLIC
+        engine::core
+    PRIVATE
+        stb::stb
+        bc7enc
+)
 
 engine_set_warnings(cooker_lib)
 engine_enable_clang_tidy(cooker_lib)
@@ -68,7 +88,7 @@ function(engine_cook_content name source)
     add_custom_target(content_${name} ALL DEPENDS "${stamp}")
 endfunction()
 
-# The engine tree holds the shaders that render/ reads. The game tree holds the
-# scene and the prefabs that sandbox/ reads.
-engine_cook_content(engine "${CMAKE_SOURCE_DIR}/src/render/shaders")
+# The engine tree holds the shaders and the textures that render/ reads. The
+# game tree holds the scene and the prefabs that sandbox/ reads.
+engine_cook_content(engine "${CMAKE_SOURCE_DIR}/src/render/content")
 engine_cook_content(game "${CMAKE_SOURCE_DIR}/sandbox/content")

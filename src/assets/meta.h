@@ -14,9 +14,15 @@
  * every engine that uses sidecars pays it.
  *
  * The file is JSON, written through reflect/, so it grows the same way every
- * other described type does. M4.3 adds the texture color space here.
+ * other described type does.
+ *
+ * Import settings live in a nested struct for each asset kind, and only the
+ * cooker rule for that kind reads its own. A shader sidecar therefore carries a
+ * texture block it ignores. That costs a few lines in a file nobody reads often,
+ * and it buys one sidecar type rather than one for each asset kind.
  */
 
+#include "assets/texture.h"
 #include "core/guid.h"
 #include "reflect/reflect.h"
 
@@ -28,10 +34,41 @@ namespace engine::assets {
     inline constexpr const char* kMetaExtension = ".meta";
 
     /**
+     * @brief How the cooker must turn an image file into a cooked texture.
+     *
+     * The cooker guesses these once, when it writes a new sidecar, and then
+     * honors what the file says forever. Change the file and cook again to
+     * change a texture.
+     */
+    struct TextureImport {
+        /**
+         * @brief How a shader must read the texels.
+         *
+         * This is the setting that goes wrong quietly. A normal map read as
+         * sRGB gives lighting that is subtly wrong everywhere, and a base color
+         * read as linear washes out. See DESIGN.md section 3.
+         */
+        ColorSpace color_space = ColorSpace::Srgb;
+
+        /**
+         * @brief Whether to compress to BC7.
+         *
+         * BC7 loses a little quality and saves three quarters of the memory.
+         * Turn it off for an image whose exact texel values matter, such as a
+         * lookup table.
+         */
+        bool compress = true;
+
+        /// @brief Whether to build a mip chain. Off gives one level.
+        bool mips = true;
+    };
+
+    /**
      * @brief What the engine keeps about a source asset, next to the file.
      */
     struct AssetMeta {
-        Guid guid; ///< The identity every reference to this asset stores.
+        Guid guid;             ///< The identity every reference to this asset stores.
+        TextureImport texture; ///< Read by the texture rule. Ignored by every other rule.
     };
 
     /**
@@ -72,11 +109,37 @@ namespace engine::assets {
      *
      * @param source The source asset path. The file must exist.
      * @param out The metadata to fill.
+     * @param created Set to true when this call wrote the sidecar, and to false
+     * when it read one that was already there. Pass null when you do not care.
+     * A cooker rule reads this to know when it may fill in a guess.
      * @return True when @p out holds a valid GUID.
      */
-    [[nodiscard]] bool meta_for(const std::filesystem::path& source, AssetMeta& out);
+    [[nodiscard]] bool meta_for(const std::filesystem::path& source, AssetMeta& out,
+                                bool* created = nullptr);
 
 } // namespace engine::assets
+
+/// @brief Field descriptors for the texture import settings.
+template <>
+struct engine::reflect::Describe<engine::assets::TextureImport> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "TextureImport";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::assets::TextureImport, color_space,
+                         engine::reflect::Tooltip{
+                             "sRGB for base color and emissive. Linear for normal, "
+                             "roughness, metallic, and occlusion." }),
+            ENGINE_FIELD(engine::assets::TextureImport, compress,
+                         engine::reflect::Tooltip{ "BC7. Turn it off when the exact texel "
+                                                   "values matter." }),
+            ENGINE_FIELD(engine::assets::TextureImport, mips,
+                         engine::reflect::Tooltip{ "Build a mip chain." }));
+    }
+};
 
 /// @brief Field descriptors for the sidecar, so reflect/ reads and writes it.
 template <>
@@ -87,10 +150,13 @@ struct engine::reflect::Describe<engine::assets::AssetMeta> {
     /// @brief The fields, in the order a document holds them.
     /// @return The field descriptors.
     static constexpr auto fields() {
-        return std::make_tuple(ENGINE_FIELD(engine::assets::AssetMeta, guid,
-                                            engine::reflect::ReadOnly{},
-                                            engine::reflect::Tooltip{
-                                                "The identity every reference stores. "
-                                                "Changing it breaks them all." }));
+        return std::make_tuple(
+            ENGINE_FIELD(engine::assets::AssetMeta, guid, engine::reflect::ReadOnly{},
+                         engine::reflect::Tooltip{ "The identity every reference stores. "
+                                                   "Changing it breaks them all." }),
+            // Version 2, so a sidecar written before M4.3 reads back without a
+            // warning about a field it cannot have.
+            ENGINE_FIELD(engine::assets::AssetMeta, texture, engine::reflect::Version{ 2 },
+                         engine::reflect::Tooltip{ "Read by the texture rule alone." }));
     }
 };

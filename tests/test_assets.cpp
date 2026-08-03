@@ -11,11 +11,16 @@
 
 #include "assets/database.h"
 #include "assets/meta.h"
+#include "assets/texture.h"
 #include "check.h"
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -220,20 +225,197 @@ namespace {
         std::filesystem::remove_all(directory);
     }
 
+    void test_meta_reports_who_wrote_it() {
+        const std::filesystem::path directory = scratch_directory();
+        const std::filesystem::path source = directory / "crate.png";
+        write_file(source, "not really a png");
+
+        // A cooker rule fills in a guessed import setting only on the call that
+        // wrote the sidecar. Getting this backwards would overwrite what a
+        // person typed, every cook, and the edit would look like it did nothing.
+        as::AssetMeta meta;
+        bool created = false;
+        check(as::meta_for(source, meta, &created) && created, "the first call writes it");
+
+        created = true;
+        check(as::meta_for(source, meta, &created) && !created, "the second call reads it");
+
+        std::filesystem::remove_all(directory);
+    }
+
+    void test_meta_carries_import_settings() {
+        const std::filesystem::path directory = scratch_directory();
+        const std::filesystem::path source = directory / "crate.png";
+        write_file(source, "not really a png");
+
+        as::AssetMeta written;
+        written.guid = Guid::generate();
+        written.texture.color_space = as::ColorSpace::Linear;
+        written.texture.compress = false;
+        written.texture.mips = false;
+        check(as::save_meta(source, written), "a sidecar with import settings writes");
+
+        as::AssetMeta read;
+        check(as::load_meta(source, read), "and it reads back");
+        check(read.texture.color_space == as::ColorSpace::Linear, "the color space survived");
+        check(!read.texture.compress && !read.texture.mips, "and so did the two switches");
+
+        // The color space reaches the file as a word, not as a number. A person
+        // opens this file to fix a texture that came out wrong, and "1" says
+        // nothing about which one it is.
+        //
+        // The stream lives in a scope of its own, so it closes before the
+        // remove_all below. Windows refuses to delete a file that is open, and
+        // the throwing remove_all then ends the process with no message at all.
+        // Linux unlinks an open file without complaint, so this kind of mistake
+        // only ever shows up in CI.
+        std::string text;
+        {
+            std::ifstream file(as::meta_path(source));
+            text.assign(std::istreambuf_iterator<char>{ file },
+                        std::istreambuf_iterator<char>{});
+        }
+        check(text.find("\"Linear\"") != std::string::npos,
+              "and the file names the color space in words");
+
+        std::filesystem::remove_all(directory);
+    }
+
+    void test_mip_arithmetic() {
+        check(as::mip_count_for(256, 256) == 9, "256 by 256 holds 9 levels");
+        check(as::mip_count_for(256, 1) == 9, "and so does 256 by 1, down to 1 by 1");
+        check(as::mip_count_for(1, 1) == 1, "1 by 1 holds one level");
+        check(as::mip_count_for(0, 4) == 0, "an empty texture holds none");
+
+        check(as::mip_extent(256, 3) == 32, "level 3 of 256 is 32");
+        check(as::mip_extent(1, 4) == 1, "a level never falls below one texel");
+        check(as::mip_extent(256, 40) == 1, "and a level past the end does not shift off");
+
+        check(as::level_bytes(as::TextureFormat::RGBA8, 4, 4) == 64, "16 texels cost 64 bytes");
+
+        // The rounding that a caller must not do itself. A 2 by 2 level does not
+        // fill a block, and it still costs a whole one.
+        check(as::level_bytes(as::TextureFormat::BC7, 4, 4) == 16, "one block is 16 bytes");
+        check(as::level_bytes(as::TextureFormat::BC7, 2, 2) == 16,
+              "a level below one block still costs one");
+        check(as::level_bytes(as::TextureFormat::BC7, 5, 5) == 64,
+              "5 by 5 rounds up to 2 blocks each way");
+
+        // 65536 + 16384 + 4096 + 1024 + 256 + 64 + 16 + 16 + 16.
+        check(as::chain_bytes(as::TextureFormat::BC7, 256, 256, 9) == 87408,
+              "a whole BC7 chain adds up, with the small levels rounded up");
+    }
+
+    /// Builds a cooked texture file in memory, so a test can then break it.
+    std::vector<std::byte> make_texture_file(const as::TextureHeader& header,
+                                             std::size_t payload_size) {
+        std::vector<std::byte> bytes(sizeof(as::TextureHeader) + payload_size);
+        std::memcpy(bytes.data(), &header, sizeof(header));
+        return bytes;
+    }
+
+    as::TextureHeader good_header() {
+        as::TextureHeader header;
+        header.format = static_cast<std::uint32_t>(as::TextureFormat::RGBA8);
+        header.color_space = static_cast<std::uint32_t>(as::ColorSpace::Linear);
+        header.width = 4;
+        header.height = 4;
+        header.mip_count = 3;
+        header.payload_size =
+            static_cast<std::uint32_t>(as::chain_bytes(as::TextureFormat::RGBA8, 4, 4, 3));
+        return header;
+    }
+
+    void test_read_texture_refuses_a_bad_file() {
+        // Every branch here ends in a device upload that reads past the end of
+        // the buffer, or in a driver rejecting a texture with a message that
+        // names nothing. Catching it at the file is the whole point.
+        as::TextureView view;
+
+        const as::TextureHeader header = good_header();
+        const std::vector<std::byte> good = make_texture_file(header, header.payload_size);
+        check(as::read_texture(good, view, "good"), "a whole file reads");
+        check(view.width == 4 && view.mip_count == 3, "and the view carries the header");
+        check(view.color_space == as::ColorSpace::Linear, "and the color space");
+        check(view.payload.size() == header.payload_size, "and it points at every level");
+
+        check(!as::read_texture({}, view, "empty"), "an empty file is refused");
+        check(!as::read_texture(std::span{ good }.first(8), view, "short"),
+              "a file too short for a header is refused");
+
+        as::TextureHeader wrong = header;
+        wrong.magic = 0;
+        check(!as::read_texture(make_texture_file(wrong, wrong.payload_size), view, "magic"),
+              "a file that is not a cooked texture is refused");
+
+        wrong = header;
+        wrong.version = as::kTextureVersion + 1;
+        check(!as::read_texture(make_texture_file(wrong, wrong.payload_size), view, "version"),
+              "a file from a later format version is refused");
+
+        wrong = header;
+        wrong.format = 99;
+        check(!as::read_texture(make_texture_file(wrong, wrong.payload_size), view, "format"),
+              "a format this build does not have is refused");
+
+        wrong = header;
+        wrong.color_space = 99;
+        check(!as::read_texture(make_texture_file(wrong, wrong.payload_size), view, "space"),
+              "a color space this build does not have is refused");
+
+        wrong = header;
+        wrong.mip_count = 0;
+        check(!as::read_texture(make_texture_file(wrong, 0), view, "no levels"),
+              "a file with no levels is refused");
+
+        wrong = header;
+        wrong.mip_count = 9;
+        check(!as::read_texture(make_texture_file(wrong, wrong.payload_size), view, "too many"),
+              "more levels than the size can hold is refused");
+
+        // The two that matter most. A short file makes the upload read past the
+        // end, and a long one means the header describes something else.
+        check(!as::read_texture(std::span{ good }.first(good.size() - 4), view, "truncated"),
+              "a file shorter than its header claims is refused");
+        check(!as::read_texture(make_texture_file(header, header.payload_size + 4), view, "long"),
+              "a file longer than its header claims is refused");
+    }
+
+    void test_color_space_text() {
+        as::ColorSpace space = as::ColorSpace::Srgb;
+        check(as::from_text("Linear", space) && space == as::ColorSpace::Linear, "Linear reads");
+        check(as::from_text("srgb", space) && space == as::ColorSpace::Srgb,
+              "and letter case does not matter");
+        check(as::to_text(as::ColorSpace::Linear) == "Linear", "Linear writes");
+        check(as::to_text(as::ColorSpace::Srgb) == "sRGB", "and sRGB writes");
+
+        // A word nobody recognizes leaves the value alone, so a typo in a
+        // sidecar keeps the default rather than silently picking one.
+        space = as::ColorSpace::Linear;
+        check(!as::from_text("gamma", space), "an unknown word is refused");
+        check(space == as::ColorSpace::Linear, "and it changes nothing");
+    }
+
 } // namespace
 
 int main() {
-    std::printf("handles\n");
+    test::section("handles");
     test_resolve_is_stable();
     test_reference_survives_later_loads();
     test_null_guid_gets_no_slot();
     test_stale_handle_after_clear();
     test_types_stay_apart();
-    std::printf("placeholders\n");
+    test::section("placeholders");
     test_placeholder_stands_in();
-    std::printf("sidecars\n");
+    test::section("sidecars");
     test_meta_path();
     test_meta_is_written_once();
     test_meta_refuses_and_repairs();
+    test_meta_reports_who_wrote_it();
+    test_meta_carries_import_settings();
+    test::section("the cooked texture format");
+    test_mip_arithmetic();
+    test_read_texture_refuses_a_bad_file();
+    test_color_space_text();
     return test::report();
 }

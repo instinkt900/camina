@@ -2,7 +2,9 @@
 
 #include "assets/manifest.h"
 #include "assets/meta.h"
+#include "assets/texture.h"
 #include "core/log.h"
+#include "texture.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -17,8 +19,9 @@ namespace cooker {
 
         /// What rule turns one source file into one cooked file.
         enum class Rule : std::uint8_t {
-            Shader, ///< GLSL through glslc, out as SPIR-V.
-            Copy,   ///< No rule yet. The bytes go through unchanged.
+            Shader,  ///< GLSL through glslc, out as SPIR-V.
+            Texture, ///< An image through stb, out as mip levels and BC7 blocks.
+            Copy,    ///< No rule yet. The bytes go through unchanged.
         };
 
         [[nodiscard]] Rule rule_for(const std::filesystem::path& source) {
@@ -26,7 +29,25 @@ namespace cooker {
             if (extension == ".vert" || extension == ".frag" || extension == ".comp") {
                 return Rule::Shader;
             }
+            if (is_image_extension(extension)) {
+                return Rule::Texture;
+            }
             return Rule::Copy;
+        }
+
+        /// The name a rule adds to the source name, or nothing for a copy.
+        [[nodiscard]] const char* cooked_suffix(Rule rule) {
+            switch (rule) {
+            case Rule::Shader:
+                // cube.vert becomes cube.vert.spv, so cube.vert and cube.frag
+                // stay two files rather than collapsing onto one name.
+                return ".spv";
+            case Rule::Texture:
+                return as::kTextureExtension;
+            case Rule::Copy:
+                break;
+            }
+            return "";
         }
 
         /// Wraps an argument so a shell treats it as one word.
@@ -152,14 +173,25 @@ namespace cooker {
         /// The cooked path for a source path, under the same relative directory.
         [[nodiscard]] std::filesystem::path cooked_name(const std::filesystem::path& relative,
                                                         Rule rule) {
-            if (rule != Rule::Shader) {
-                return relative;
-            }
-            // cube.vert becomes cube.vert.spv, so cube.vert and cube.frag stay
-            // two files rather than collapsing onto one name.
             std::filesystem::path named = relative;
-            named += ".spv";
+            named += cooked_suffix(rule);
             return named;
+        }
+
+        /// Runs the one rule that matches this asset.
+        [[nodiscard]] bool cook_one(const Options& options, Rule rule,
+                                    const std::filesystem::path& source,
+                                    const std::filesystem::path& destination,
+                                    const as::AssetMeta& meta) {
+            switch (rule) {
+            case Rule::Shader:
+                return cook_shader(options, source, destination);
+            case Rule::Texture:
+                return cook_texture(source, destination, meta.texture);
+            case Rule::Copy:
+                break;
+            }
+            return copy_through(source, destination);
         }
 
         /// Every regular file under the tree, sorted, so two runs agree on the order.
@@ -225,9 +257,24 @@ namespace cooker {
             const Rule rule = rule_for(relative);
 
             as::AssetMeta meta;
-            if (!as::meta_for(source, meta)) {
+            bool created = false;
+            if (!as::meta_for(source, meta, &created)) {
                 ++result.failed;
                 continue;
+            }
+
+            // A new sidecar carries the defaults, and a texture wants a better
+            // starting guess than "sRGB" for every file. So the guess goes in
+            // once, when the file is written, and after that the file decides.
+            // A wrong guess is one edit to fix and it never comes back.
+            if (created && rule == Rule::Texture) {
+                meta.texture.color_space = guess_color_space(source);
+                if (!as::save_meta(source, meta)) {
+                    ++result.failed;
+                    continue;
+                }
+                ENGINE_LOG_INFO("{}: reading it as {}. Edit the sidecar to change that.",
+                                source.string(), as::to_text(meta.texture.color_space));
             }
 
             as::ManifestEntry entry;
@@ -235,13 +282,22 @@ namespace cooker {
             entry.guid = meta.guid;
             entry.cooked = as::manifest_path(cooked_name(relative, rule));
             entry.inputs.push_back(entry.source);
+            // The sidecar is an input, not only a place to keep the identity.
+            // It carries the import settings, so flipping a texture from sRGB
+            // to linear has to cook that texture again. Without this the edit
+            // would look like it did nothing.
+            entry.inputs.push_back(as::manifest_path(as::meta_path(relative)));
 
             // Skip only when the identity also matches. A sidecar somebody
             // replaced gives the asset a new identity, and every reference to
             // it has to see the new one.
+            //
+            // The input list has to match as well. is_fresh() hashes the inputs
+            // the old entry names, so an entry written by an older cooker would
+            // stay fresh forever against a list this build no longer uses.
             const as::ManifestEntry* old = as::find_by_source(previous, entry.source);
             if (!options.force && old != nullptr && old->guid == entry.guid &&
-                old->cooked == entry.cooked &&
+                old->cooked == entry.cooked && old->inputs == entry.inputs &&
                 as::is_fresh(*old, options.content, options.out)) {
                 next.entries.push_back(*old);
                 ++result.skipped;
@@ -251,8 +307,7 @@ namespace cooker {
             const std::filesystem::path destination = options.out / entry.cooked;
             std::filesystem::create_directories(destination.parent_path(), error);
 
-            const bool ok = rule == Rule::Shader ? cook_shader(options, source, destination)
-                                                 : copy_through(source, destination);
+            const bool ok = cook_one(options, rule, source, destination, meta);
             if (!ok) {
                 ++result.failed;
                 continue;

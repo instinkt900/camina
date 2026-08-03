@@ -21,7 +21,11 @@ namespace engine::assets {
         return reflect::save_json(meta_path(source), meta);
     }
 
-    bool meta_for(const std::filesystem::path& source, AssetMeta& out) {
+    bool meta_for(const std::filesystem::path& source, AssetMeta& out, bool* created) {
+        if (created != nullptr) {
+            *created = false;
+        }
+
         std::error_code error;
         if (!std::filesystem::is_regular_file(source, error)) {
             ENGINE_LOG_ERROR("{} is not a file, so it gets no asset identity.",
@@ -42,12 +46,16 @@ namespace engine::assets {
                             sidecar.string());
         }
 
-        const AssetMeta fresh{ .guid = Guid::generate() };
+        AssetMeta fresh;
+        fresh.guid = Guid::generate();
         if (!save_meta(source, fresh)) {
             return false;
         }
         ENGINE_LOG_INFO("{} is now {}.", source.string(), fresh.guid.to_text());
         out = fresh;
+        if (created != nullptr) {
+            *created = true;
+        }
         return true;
     }
 

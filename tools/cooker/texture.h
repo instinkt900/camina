@@ -1,0 +1,56 @@
+#pragma once
+
+/**
+ * @file
+ * @brief The cooker rule that turns an image file into a cooked texture.
+ *
+ * This is the only place that reads a PNG, builds a mip chain, or runs a block
+ * compressor. `src/assets/texture.h` holds the file format the two sides agree
+ * on, and the runtime reads that and nothing else.
+ */
+
+#include "assets/meta.h"
+#include "assets/texture.h"
+
+#include <filesystem>
+
+namespace cooker {
+
+    /**
+     * @brief Whether this rule handles a file with this extension.
+     * @param extension The extension, with the dot, in any letter case.
+     * @return True for an image format stb_image reads.
+     */
+    [[nodiscard]] bool is_image_extension(const std::string& extension);
+
+    /**
+     * @brief Guesses how a texture must be read, from its file name.
+     *
+     * A guess is only ever written into a new sidecar. After that the sidecar
+     * decides, so a wrong guess is one edit to fix and it never comes back.
+     *
+     * The rule follows the names that glTF exporters produce. A name that holds
+     * `normal`, `roughness`, `metallic`, `occlusion`, `height`, `mask`, or the
+     * packed `orm` reads as linear. Everything else reads as sRGB, because base
+     * color is the common case and it is the one that looks wrong immediately.
+     *
+     * @param source The source image path.
+     * @return The color space to record in a new sidecar.
+     */
+    [[nodiscard]] engine::assets::ColorSpace guess_color_space(
+        const std::filesystem::path& source);
+
+    /**
+     * @brief Cooks one image into one cooked texture file.
+     *
+     * @param source The image to read. PNG, JPG, TGA, BMP, or PSD.
+     * @param destination The cooked file to write. The directory must exist.
+     * @param settings What the sidecar says to do.
+     * @return True when the cooked file was written. False reports why in the
+     * log, by source path.
+     */
+    [[nodiscard]] bool cook_texture(const std::filesystem::path& source,
+                                    const std::filesystem::path& destination,
+                                    const engine::assets::TextureImport& settings);
+
+} // namespace cooker

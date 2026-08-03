@@ -61,6 +61,11 @@ class CaminaConan(ConanFile):
         # M3. The scene lives in an EnTT registry. See DESIGN.md section 10.
         self.requires("entt/3.16.0")
 
+        # M4.3. tools/cooker reads a PNG with this. Nothing in src/ includes it,
+        # because a cooked texture needs no decoder at run time. It is a header
+        # library, so it costs the runtime nothing to have it in the graph.
+        self.requires("stb/cci.20240531")
+
         if self.options.with_editor:
             self.requires("imguizmo/1.83")
 

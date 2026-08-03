@@ -7,6 +7,7 @@ add_library(engine_core STATIC
     assets/database.cpp
     assets/manifest.cpp
     assets/meta.cpp
+    assets/texture.cpp
     platform/window.cpp
     platform/paths.cpp
     gfx/types.cpp

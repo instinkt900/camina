@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstring>
+#include <vector>
 
 namespace engine::gfx {
 
@@ -62,18 +63,107 @@ namespace engine::gfx {
             return VK_FORMAT_UNDEFINED;
         }
 
+        VkFormat to_vk_format(TextureFormat format) {
+            switch (format) {
+            case TextureFormat::RGBA8Srgb:
+                return VK_FORMAT_R8G8B8A8_SRGB;
+            case TextureFormat::RGBA8Unorm:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case TextureFormat::BC7Srgb:
+                return VK_FORMAT_BC7_SRGB_BLOCK;
+            case TextureFormat::BC7Unorm:
+                return VK_FORMAT_BC7_UNORM_BLOCK;
+            }
+            return VK_FORMAT_R8G8B8A8_SRGB;
+        }
+
+        const char* texture_format_name(TextureFormat format) {
+            switch (format) {
+            case TextureFormat::RGBA8Srgb:
+                return "RGBA8Srgb";
+            case TextureFormat::RGBA8Unorm:
+                return "RGBA8Unorm";
+            case TextureFormat::BC7Srgb:
+                return "BC7Srgb";
+            case TextureFormat::BC7Unorm:
+                return "BC7Unorm";
+            }
+            return "an unknown format";
+        }
+
+        /// Whether this GPU can sample the format at all.
+        bool can_sample(VkPhysicalDevice physical, VkFormat format) {
+            VkFormatProperties properties{};
+            vkGetPhysicalDeviceFormatProperties(physical, format, &properties);
+            return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0U;
+        }
+
+        /// The size of one mip level on one axis, never smaller than one texel.
+        std::uint32_t mip_extent(std::uint32_t base, std::uint32_t level) {
+            const std::uint32_t shifted = level >= 32U ? 0U : base >> level;
+            return shifted < 1U ? 1U : shifted;
+        }
+
+        /// How many levels an extent can hold. The chain runs down to 1 by 1.
+        std::uint32_t max_mip_levels(std::uint32_t width, std::uint32_t height) {
+            std::uint32_t levels = 1;
+            std::uint32_t size = width > height ? width : height;
+            while (size > 1) {
+                size /= 2;
+                ++levels;
+            }
+            return levels;
+        }
+
+        /// How many bytes one mip level takes in the staging buffer.
+        std::size_t level_bytes(TextureFormat format, std::uint32_t width,
+                                std::uint32_t height) {
+            if (format == TextureFormat::BC7Srgb || format == TextureFormat::BC7Unorm) {
+                // A block covers 4 by 4 texels whether or not the level fills
+                // it, so a 2 by 2 level still costs one whole block.
+                constexpr std::uint32_t kBlockSize = 4;
+                constexpr std::size_t kBytesPerBlock = 16;
+                const std::size_t across = (width + kBlockSize - 1) / kBlockSize;
+                const std::size_t down = (height + kBlockSize - 1) / kBlockSize;
+                return across * down * kBytesPerBlock;
+            }
+            return static_cast<std::size_t>(width) * height * kBytesPerTexel;
+        }
+
         void record_texture_upload(VkCommandBuffer buffer, VkImage image, VkBuffer staging,
-                                   std::uint32_t width, std::uint32_t height) {
+                                   const TextureDesc& desc) {
             vk::transition_image(buffer, image, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  VK_IMAGE_ASPECT_COLOR_BIT);
 
-            VkBufferImageCopy region{};
-            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            region.imageSubresource.layerCount = 1;
-            region.imageExtent = VkExtent3D{ width, height, 1 };
-            vkCmdCopyBufferToImage(buffer, staging, image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            // One copy for each level. The levels sit end to end in the staging
+            // buffer, largest first, which is the order the cooked file holds
+            // them in. So the offset only has to run forward.
+            //
+            // bufferRowLength and bufferImageHeight stay 0, which tells the
+            // driver the rows are tightly packed. A block-compressed level
+            // counts in blocks there, and 0 avoids having to say so.
+            std::vector<VkBufferImageCopy> regions;
+            regions.reserve(desc.mip_count);
+
+            VkDeviceSize offset = 0;
+            for (std::uint32_t level = 0; level < desc.mip_count; ++level) {
+                const std::uint32_t width = mip_extent(desc.width, level);
+                const std::uint32_t height = mip_extent(desc.height, level);
+
+                VkBufferImageCopy region{};
+                region.bufferOffset = offset;
+                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.imageSubresource.mipLevel = level;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent = VkExtent3D{ width, height, 1 };
+                regions.push_back(region);
+
+                offset += level_bytes(desc.format, width, height);
+            }
+
+            vkCmdCopyBufferToImage(buffer, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<std::uint32_t>(regions.size()), regions.data());
 
             vk::transition_image(buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -413,13 +503,49 @@ namespace engine::gfx {
         ENGINE_CHECK(out_texture != nullptr, "create_texture needs somewhere to put the handle.");
         *out_texture = TextureHandle{};
 
-        if (desc.pixels == nullptr || desc.width == 0 || desc.height == 0) {
-            ENGINE_LOG_ERROR("create_texture needs pixels and a size.");
+        if (desc.pixels == nullptr || desc.width == 0 || desc.height == 0 ||
+            desc.mip_count == 0) {
+            ENGINE_LOG_ERROR("create_texture needs pixels, a size, and at least one mip level.");
             return Result::ErrorInit;
         }
 
-        const std::size_t size =
-            static_cast<std::size_t>(desc.width) * desc.height * kBytesPerTexel;
+        // Vulkan allows no more levels than the extent can halve down to. The
+        // size check below does not catch an oversized count, because
+        // mip_extent clamps at one texel, so every extra level asks for a few
+        // more bytes and a caller can hand over a buffer that matches.
+        // assets::read_texture holds this bound for a cooked file, and this
+        // call is public, so any other caller reaches here as well. Without
+        // this, vkCreateImage fails and the validation layer explains it rather
+        // than the engine.
+        const std::uint32_t allowed = max_mip_levels(desc.width, desc.height);
+        if (desc.mip_count > allowed) {
+            ENGINE_LOG_ERROR("create_texture got {} levels, and {} by {} texels hold {}.",
+                             desc.mip_count, desc.width, desc.height, allowed);
+            return Result::ErrorInit;
+        }
+
+        // The caller says how many bytes it holds, and this works out how many
+        // the levels need. A mismatch means the two disagree about the layout,
+        // and copying anyway would read past the end of the caller's buffer.
+        std::size_t size = 0;
+        for (std::uint32_t level = 0; level < desc.mip_count; ++level) {
+            size += level_bytes(desc.format, mip_extent(desc.width, level),
+                                mip_extent(desc.height, level));
+        }
+        if (desc.size != size) {
+            ENGINE_LOG_ERROR("create_texture got {} bytes, and {} by {} texels in {} levels of "
+                             "{} needs {}.",
+                             desc.size, desc.width, desc.height, desc.mip_count,
+                             texture_format_name(desc.format), size);
+            return Result::ErrorInit;
+        }
+
+        const VkFormat format = to_vk_format(desc.format);
+        if (!can_sample(device->physical, format)) {
+            ENGINE_LOG_ERROR("This GPU cannot sample {}. Cook the texture without compression.",
+                             texture_format_name(desc.format));
+            return Result::ErrorInit;
+        }
 
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation staging_allocation = VK_NULL_HANDLE;
@@ -433,10 +559,12 @@ namespace engine::gfx {
         VkImageCreateInfo image{};
         image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         image.imageType = VK_IMAGE_TYPE_2D;
-        // sRGB, so the sampler converts to linear on read. See DESIGN.md section 3.
-        image.format = VK_FORMAT_R8G8B8A8_SRGB;
+        // An sRGB format makes the sampler convert to linear on read, which is
+        // what DESIGN.md section 3 asks for. The cooker decided which one this
+        // is, and recorded it in the file.
+        image.format = format;
         image.extent = VkExtent3D{ desc.width, desc.height, 1 };
-        image.mipLevels = 1;
+        image.mipLevels = desc.mip_count;
         image.arrayLayers = 1;
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -449,11 +577,9 @@ namespace engine::gfx {
                                               &built.allocation, nullptr));
 
         if (succeeded(result)) {
-            const std::uint32_t width = desc.width;
-            const std::uint32_t height = desc.height;
             VkImage target = built.image;
             result = vk::immediate_submit(*device, [&](VkCommandBuffer commands) {
-                record_texture_upload(commands, target, staging, width, height);
+                record_texture_upload(commands, target, staging, desc);
             });
         }
 
@@ -464,9 +590,9 @@ namespace engine::gfx {
             view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             view.image = built.image;
             view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view.format = VK_FORMAT_R8G8B8A8_SRGB;
+            view.format = format;
             view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            view.subresourceRange.levelCount = 1;
+            view.subresourceRange.levelCount = desc.mip_count;
             view.subresourceRange.layerCount = 1;
             result = vk::to_result(
                 vkCreateImageView(device->device, &view, nullptr, &built.view));
