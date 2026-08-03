@@ -594,6 +594,31 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    void test_documentation_is_not_an_asset() {
+        const std::filesystem::path source = scratch("docs/src");
+        const std::filesystem::path out = scratch("docs/out");
+        write_file(source / "one.scene", "{}");
+        write_file(source / "README.md", "Where this model came from.");
+        write_file(source / "LICENSE", "CC0 1.0 Universal");
+        write_file(source / "notes.txt", "Anything.");
+
+        // A content directory holds a note saying where a model came from and
+        // what its license is, next to the files it describes. Cooking one
+        // would give it a GUID, write it a sidecar, and copy it into the cooked
+        // tree where nothing reads it.
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+        check(result.cooked == 1, "and it cooks the asset and not the documentation");
+        check(!std::filesystem::exists(out / "README.md"), "the README was not copied through");
+        check(!std::filesystem::exists(out / "LICENSE"), "nor a file with no extension");
+        check(!std::filesystem::exists(out / "notes.txt"), "nor a text file");
+        check(!std::filesystem::exists(as::meta_path(source / "README.md")),
+              "and no sidecar was written beside it");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
     void test_bad_input() {
         const std::filesystem::path out = scratch("bad/out");
         cooker::Result result;
@@ -664,6 +689,7 @@ int main() {
     test_missing_output_recooks();
     test_new_identity_recooks();
     test_shell_metacharacters_are_refused();
+    test_documentation_is_not_an_asset();
     test_bad_input();
     test::section("textures");
     test_color_space_decides_the_mip_chain();

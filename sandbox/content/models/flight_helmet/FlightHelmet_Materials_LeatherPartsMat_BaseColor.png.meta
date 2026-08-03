@@ -1,0 +1,10 @@
+{
+  "__version": 2,
+  "guid": "ceb12680-0da0-463e-88f8-c000f35068e1",
+  "texture": {
+    "__version": 1,
+    "color_space": "sRGB",
+    "compress": true,
+    "mips": true
+  }
+}

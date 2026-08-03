@@ -43,6 +43,27 @@ namespace cooker {
             return Rule::Copy;
         }
 
+        /**
+         * Whether a file is documentation rather than content.
+         *
+         * A content directory holds a note saying where a model came from and
+         * what its license is. That note belongs next to the files it
+         * describes, and it is not an asset. A file with no extension counts
+         * too, which covers LICENSE and COPYING.
+         */
+        [[nodiscard]] bool is_documentation(const std::filesystem::path& relative) {
+            const std::string extension = relative.extension().string();
+            if (extension.empty()) {
+                return true;
+            }
+            std::string lower;
+            lower.reserve(extension.size());
+            for (const char c : extension) {
+                lower.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+            }
+            return lower == ".md" || lower == ".txt";
+        }
+
         /// The name a rule adds to the source name, or nothing for a copy.
         [[nodiscard]] const char* cooked_suffix(Rule rule) {
             switch (rule) {
@@ -284,6 +305,14 @@ namespace cooker {
                 }
                 // A sidecar describes an asset. It is not one.
                 if (relative.extension() == as::kMetaExtension) {
+                    continue;
+                }
+                // Documentation is not an asset either. A content directory
+                // holds a note saying where a model came from and what its
+                // license is, and that note belongs next to the files it
+                // describes. Cooking it would give it a GUID and copy it where
+                // nothing reads it.
+                if (is_documentation(relative)) {
                     continue;
                 }
                 out.push_back(relative);

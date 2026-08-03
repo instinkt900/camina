@@ -1,0 +1,10 @@
+{
+  "__version": 2,
+  "guid": "6af0c0c1-f11b-439b-8b7e-9bb4b4d0ad15",
+  "texture": {
+    "__version": 1,
+    "color_space": "Linear",
+    "compress": true,
+    "mips": true
+  }
+}
