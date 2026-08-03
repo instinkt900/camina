@@ -74,11 +74,9 @@ namespace cooker {
         /**
          * Runs glslc over one shader.
          *
-         * This spawns a process rather than linking libshaderc. The build
-         * already finds glslc for the rule this replaces, so it costs no new
-         * dependency. The trade is the error text: glslc writes it to stderr
-         * and the cooker passes it through rather than reading it. Link
-         * libshaderc instead when that stops being good enough.
+         * This spawns a process rather than linking libshaderc, because the
+         * build already finds glslc and Conan 2 has no per-target requirement.
+         * Issue #43 holds the reasons to change that and the trade it makes.
          */
         [[nodiscard]] bool cook_shader(const Options& options,
                                        const std::filesystem::path& source,

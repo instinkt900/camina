@@ -496,10 +496,15 @@ graph layer later.
 layouts with SPIRV-Reflect. Cache permutations. Support hot reload.
 
 M4.2 moved this out of CMake and into the cooker. A shader is an asset now, with a `.meta`
-sidecar and a manifest entry, and `assets::Content` reads it at startup. The cooker invokes
-`glslc` as a separate program rather than linking `libshaderc`. That costs no new dependency,
-and the trade is the error text, which glslc writes to stderr and the cooker passes through.
-Link `libshaderc` when that stops being good enough.
+sidecar and a manifest entry, and `assets::Content` reads it at startup.
+
+The cooker invokes `glslc` as a separate program rather than linking `libshaderc`. Conan 2
+has no per-target requirement, so linking it would put shaderc in the graph of every consumer
+of the package for the sake of one tool. Issue #43 holds the reasons to change that, and the
+first one to arrive is M5, where permutations turn one process for each shader into many.
+
+The trade is the error text. glslc writes it to stderr and the cooker passes it through, so
+nothing can read a file and a line out of it yet.
 
 The cooked SPIR-V is a file rather than a header the build generates. `engine_core` therefore
 has no build-time dependency on the cooker, and a shader reloads through the same path every
