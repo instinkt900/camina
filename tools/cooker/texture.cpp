@@ -249,6 +249,78 @@ namespace cooker {
             return true;
         }
 
+        /**
+         * Builds the mip chain and writes the file, once the texels are decoded.
+         *
+         * Two entry points decode into this. One reads a file, and one reads
+         * bytes a glTF carried inside itself. Everything after the decode is the
+         * same for both, so it lives here rather than in each of them.
+         */
+        [[nodiscard]] bool cook_decoded(const StbImage& image,
+                                        const std::filesystem::path& destination,
+                                        const as::TextureImport& settings,
+                                        std::string_view where) {
+            if (image.width <= 0 || image.height <= 0) {
+                ENGINE_LOG_ERROR("{}: it holds no texels.", where);
+                return false;
+            }
+
+            Level base;
+            base.width = static_cast<std::uint32_t>(image.width);
+            base.height = static_cast<std::uint32_t>(image.height);
+            base.texels.assign(image.pixels,
+                               image.pixels + (static_cast<std::size_t>(base.width) *
+                                               base.height * kChannels));
+
+            const std::uint32_t mip_count =
+                settings.mips ? as::mip_count_for(base.width, base.height) : 1U;
+
+            // BC7 needs at least one whole block. An image narrower or shorter
+            // than a block would be all padding, so it stays uncompressed rather
+            // than growing.
+            const bool compress = settings.compress && base.width >= as::kBlockSize &&
+                                  base.height >= as::kBlockSize;
+            const as::TextureFormat format =
+                compress ? as::TextureFormat::BC7 : as::TextureFormat::RGBA8;
+
+            bc7enc_compress_block_params params{};
+            bc7enc_compress_block_params_init(&params);
+            if (settings.color_space == as::ColorSpace::Linear) {
+                // The perceptual default weights the error as an eye sees color.
+                // A normal map or a roughness map holds numbers, not color, so
+                // it wants every channel weighted the same.
+                bc7enc_compress_block_params_init_linear_weights(&params);
+            }
+            if (compress) {
+                bc7enc_compress_block_init();
+            }
+
+            std::vector<std::byte> payload;
+            payload.reserve(as::chain_bytes(format, base.width, base.height, mip_count));
+
+            Level level = std::move(base);
+            for (std::uint32_t index = 0; index < mip_count; ++index) {
+                if (index > 0) {
+                    level = halve(level, settings.color_space);
+                }
+                if (compress) {
+                    compress_level(level, params, payload);
+                } else {
+                    copy_level(level, payload);
+                }
+            }
+
+            as::TextureHeader header;
+            header.format = static_cast<std::uint32_t>(format);
+            header.color_space = static_cast<std::uint32_t>(settings.color_space);
+            header.width = static_cast<std::uint32_t>(image.width);
+            header.height = static_cast<std::uint32_t>(image.height);
+            header.mip_count = mip_count;
+            header.payload_size = static_cast<std::uint32_t>(payload.size());
+
+            return write_file(destination, header, payload);
+        }
+
     } // namespace
 
     bool is_image_extension(const std::string& extension) {
@@ -314,66 +386,23 @@ namespace cooker {
                              stbi_failure_reason());
             return false;
         }
-        if (image.width <= 0 || image.height <= 0) {
-            ENGINE_LOG_ERROR("{}: it holds no texels.", source.string());
+        return cook_decoded(image, destination, settings, source.string());
+    }
+
+    bool cook_texture_bytes(std::span<const std::byte> bytes,
+                            const std::filesystem::path& destination,
+                            const as::TextureImport& settings, std::string_view where) {
+        StbImage image;
+        int channels = 0;
+        image.pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()),
+                                             static_cast<int>(bytes.size()), &image.width,
+                                             &image.height, &channels,
+                                             static_cast<int>(kChannels));
+        if (image.pixels == nullptr) {
+            ENGINE_LOG_ERROR("{}: stb_image will not read it. {}", where, stbi_failure_reason());
             return false;
         }
-
-        Level base;
-        base.width = static_cast<std::uint32_t>(image.width);
-        base.height = static_cast<std::uint32_t>(image.height);
-        base.texels.assign(image.pixels,
-                           image.pixels + (static_cast<std::size_t>(base.width) * base.height *
-                                           kChannels));
-
-        const std::uint32_t mip_count =
-            settings.mips ? as::mip_count_for(base.width, base.height) : 1U;
-
-        // BC7 needs at least one whole block. An image narrower or shorter than
-        // a block would be all padding, so it stays uncompressed rather than
-        // growing.
-        const bool compress = settings.compress && base.width >= as::kBlockSize &&
-                              base.height >= as::kBlockSize;
-        const as::TextureFormat format =
-            compress ? as::TextureFormat::BC7 : as::TextureFormat::RGBA8;
-
-        bc7enc_compress_block_params params{};
-        bc7enc_compress_block_params_init(&params);
-        if (settings.color_space == as::ColorSpace::Linear) {
-            // The perceptual default weights the error as an eye sees color.
-            // A normal map or a roughness map holds numbers, not color, so it
-            // wants every channel weighted the same.
-            bc7enc_compress_block_params_init_linear_weights(&params);
-        }
-        if (compress) {
-            bc7enc_compress_block_init();
-        }
-
-        std::vector<std::byte> payload;
-        payload.reserve(
-            as::chain_bytes(format, base.width, base.height, mip_count));
-
-        Level level = std::move(base);
-        for (std::uint32_t index = 0; index < mip_count; ++index) {
-            if (index > 0) {
-                level = halve(level, settings.color_space);
-            }
-            if (compress) {
-                compress_level(level, params, payload);
-            } else {
-                copy_level(level, payload);
-            }
-        }
-
-        as::TextureHeader header;
-        header.format = static_cast<std::uint32_t>(format);
-        header.color_space = static_cast<std::uint32_t>(settings.color_space);
-        header.width = static_cast<std::uint32_t>(image.width);
-        header.height = static_cast<std::uint32_t>(image.height);
-        header.mip_count = mip_count;
-        header.payload_size = static_cast<std::uint32_t>(payload.size());
-
-        return write_file(destination, header, payload);
+        return cook_decoded(image, destination, settings, where);
     }
 
 } // namespace cooker

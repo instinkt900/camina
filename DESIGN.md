@@ -616,6 +616,27 @@ A material lives on the submesh rather than on `MeshRenderer`. One mesh can use 
 a single field on the component could not say which submesh got which. A per-entity override
 belongs with the editor work in M8.
 
+**An image with no file is a sub-asset too.** A glTF names its images three ways: a file
+beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a
+file can carry a `.meta` sidecar. The other two get a derived GUID under the kind word
+`texture`, the same mechanism a mesh and a material already use, and the cooker writes the
+cooked texture beside them.
+
+That matters for the M4 done-when test. A `.glb` is the form most exporters produce by
+default, so a person dropping one into `content/` is the common case rather than the odd one.
+Leaving those images with no identity gave geometry and no textures.
+
+**The color space of such an image comes from the material slot, not from a file name.** There
+is no file name to read. A base color or an emissive map holds color, and a normal,
+metallic-roughness, or occlusion map holds numbers, so the slot says which. That is a better
+answer than the heuristic gives for a file, because it reads what the glTF states rather than
+what somebody chose to call a file. An image used in both kinds of slot is a broken model, and
+color wins: reading color as linear washes it out everywhere, which is the failure a person
+notices.
+
+Nothing can override these settings, because there is no sidecar to hold an override. Making
+one would mean writing a file back into the source tree beside an asset that has none.
+
 **Looking at what was drawn.** `gfx::capture_frame` copies the frame that was presented last
 into host memory, and `runtime --screenshot <file>` writes it as a PNG. A run that ends with
 no error says the commands were valid. It says nothing about geometry that came out

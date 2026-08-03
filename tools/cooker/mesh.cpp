@@ -482,11 +482,21 @@ namespace cooker {
             return false;
         }
 
-        // The materials come first, because a submesh stores the identity of
-        // the one it uses. Their outputs go on the list after the meshes, so
-        // the first output of a glTF file is still its first mesh.
+        // The order here is what each part needs, not the order they go out in.
+        // An image inside the file has to cook before the materials, because a
+        // material stores its identity. A material has to cook before the
+        // meshes, because a submesh stores its identity.
+        //
+        // The outputs go out meshes first. The cooker checks the name of the
+        // first output to decide whether it may skip a source, so a glTF file
+        // has to keep naming its first mesh there.
+        InlineImages images;
+        if (!cook_inline_images(*held.data, source, out_root, relative, parent, images)) {
+            return false;
+        }
+
         CookedMaterials materials;
-        if (!cook_materials(*held.data, source, out_root, relative, parent, materials)) {
+        if (!cook_materials(*held.data, source, out_root, relative, parent, images, materials)) {
             return false;
         }
 
@@ -532,6 +542,7 @@ namespace cooker {
         }
 
         outputs.insert(outputs.end(), materials.outputs.begin(), materials.outputs.end());
+        outputs.insert(outputs.end(), images.outputs.begin(), images.outputs.end());
         return true;
     }
 
