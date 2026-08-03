@@ -109,6 +109,34 @@ namespace engine::gfx {
     [[nodiscard]] Result end_frame(Device* device);
 
     /**
+     * @brief Copies the frame that was presented last into host memory.
+     *
+     * This is how a person or a test looks at what the renderer drew. A run
+     * that ends with no error says the commands were valid. It says nothing
+     * about a mesh that came out mirrored, inside out, or upside down, and
+     * those are exactly the mistakes a new importer makes.
+     *
+     * The pixels arrive as 8 bits for each channel in RGBA order, whatever the
+     * swapchain format is. The alpha is whatever the frame wrote.
+     *
+     * This waits for the device to go idle, so it costs a stall. Call it once
+     * at the end of a run and not on every frame.
+     *
+     * @warning Call this after end_frame() and not between begin_frame() and
+     * end_frame(). There is no frame to read while one is still being recorded.
+     *
+     * @param device The device that drew the frame.
+     * @param pixels Where to write. It must hold width times height times 4 bytes.
+     * @param size How many bytes @p pixels holds.
+     * @param out_extent The size that was written. Ask for it with a null
+     * @p pixels to size a buffer before the second call.
+     * @return Result::Success when the pixels were written. Result::ErrorInit
+     * when @p size is too small, or when the swapchain cannot be read from.
+     */
+    [[nodiscard]] Result capture_frame(Device* device, void* pixels, std::size_t size,
+                                       Extent2D* out_extent);
+
+    /**
      * @brief Opens dynamic rendering into the current swapchain image.
      *
      * The image loads with a clear to @p clear_color and stores at the end. There

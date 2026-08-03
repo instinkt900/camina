@@ -63,6 +63,7 @@ namespace engine::scene {
     void register_builtin_components(ComponentRegistry& registry) {
         registry.add<Transform>();
         registry.add<Name>();
+        registry.add<MeshRenderer>();
         // Hierarchy and WorldTransform stay out on purpose. A scene file stores
         // the parent link itself, and World rebuilds both from it.
     }

@@ -38,6 +38,29 @@ namespace engine::gfx {
             return Result::Success;
         }
 
+        /**
+         * Copies a captured frame out as RGBA, whatever the surface handed over.
+         *
+         * Most surfaces are BGRA rather than RGBA, so the red and the blue
+         * channel swap on the way out. Getting this backwards makes a
+         * screenshot that looks almost right, which is worse than one that
+         * looks obviously wrong.
+         */
+        void copy_as_rgba(const void* source, void* destination, std::size_t bytes,
+                          VkFormat format) {
+            constexpr std::size_t kBytesPerPixel = 4;
+            const bool swap = format == VK_FORMAT_B8G8R8A8_SRGB ||
+                              format == VK_FORMAT_B8G8R8A8_UNORM;
+            const auto* from = static_cast<const std::uint8_t*>(source);
+            auto* to = static_cast<std::uint8_t*>(destination);
+            for (std::size_t at = 0; at < bytes; at += kBytesPerPixel) {
+                to[at + 0] = swap ? from[at + 2] : from[at + 0];
+                to[at + 1] = from[at + 1];
+                to[at + 2] = swap ? from[at + 0] : from[at + 2];
+                to[at + 3] = from[at + 3];
+            }
+        }
+
     } // namespace
 
     Result begin_frame(Device* device, FrameInfo* out_frame) {
@@ -203,6 +226,85 @@ namespace engine::gfx {
     void cmd_end_rendering(CommandList* commands) {
         ENGINE_CHECK(commands != nullptr, "cmd_end_rendering needs a command list.");
         vkCmdEndRendering(commands->buffer);
+    }
+
+    Result capture_frame(Device* device, void* pixels, std::size_t size, Extent2D* out_extent) {
+        ENGINE_CHECK(device != nullptr, "capture_frame needs a device.");
+        ENGINE_ASSERT(!device->frame_open,
+                      "capture_frame was called while a frame was still open.");
+
+        if (device->swapchain == VK_NULL_HANDLE || device->images.empty()) {
+            return Result::ErrorInit;
+        }
+
+        const std::uint32_t width = device->swapchain_extent.width;
+        const std::uint32_t height = device->swapchain_extent.height;
+        if (out_extent != nullptr) {
+            *out_extent = Extent2D{ width, height };
+        }
+        if (pixels == nullptr) {
+            // The caller is asking how big a buffer it needs.
+            return Result::Success;
+        }
+
+        constexpr std::size_t kBytesPerPixel = 4;
+        const std::size_t wanted =
+            static_cast<std::size_t>(width) * height * kBytesPerPixel;
+        if (width == 0 || height == 0 || size < wanted) {
+            ENGINE_LOG_ERROR("capture_frame got {} bytes and {} by {} pixels need {}.", size,
+                             width, height, wanted);
+            return Result::ErrorInit;
+        }
+
+        // The frame has been presented, so nothing is reading the image. Waiting
+        // is the simplest correct synchronization, and a capture happens once.
+        vkDeviceWaitIdle(device->device);
+
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = wanted;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO;
+        allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                           VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        VkBuffer readback = VK_NULL_HANDLE;
+        VmaAllocation readback_allocation = VK_NULL_HANDLE;
+        VmaAllocationInfo mapped{};
+        ENGINE_VK_TRY(vmaCreateBuffer(device->allocator, &buffer_info, &allocation, &readback,
+                                      &readback_allocation, &mapped));
+
+        VkImage image = device->images[device->image_index];
+        Result result = vk::immediate_submit(*device, [&](VkCommandBuffer commands) {
+            // The image is in PRESENT_SRC because end_frame left it there.
+            vk::transition_image(commands, image, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                 VK_IMAGE_ASPECT_COLOR_BIT);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = VkExtent3D{ width, height, 1 };
+            vkCmdCopyImageToBuffer(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   readback, 1, &region);
+
+            // Put it back, because the presentation engine still owns it and the
+            // next acquire expects to find it as it was.
+            vk::transition_image(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
+        });
+
+        if (succeeded(result)) {
+            copy_as_rgba(mapped.pMappedData, pixels, wanted, device->swapchain_format);
+        } else {
+            ENGINE_LOG_ERROR("capture_frame could not read the swapchain: {}",
+                             result_name(result));
+        }
+
+        vmaDestroyBuffer(device->allocator, readback, readback_allocation);
+        return result;
     }
 
 } // namespace engine::gfx

@@ -55,8 +55,11 @@ M4.4 is in progress and comes in three parts. M4.4a makes glTF the third asset t
 cooker reads a `.gltf` or a `.glb` with cgltf, builds tangents when the source has none,
 and reorders with meshoptimizer. One glTF holds several meshes, so the manifest now maps
 one source to many outputs. A sub-asset has no sidecar, so `Guid::derive` works out its
-identity from the parent GUID, a kind word, and an index. M4.4b adds materials and the
-prefab. M4.4c adds `MeshRenderer` and the pass that replaces `CubePass`.
+identity from the parent GUID, a kind word, and an index. M4.4c draws it: `scene::MeshRenderer` names a mesh by GUID, `render::MeshPass` draws every
+entity that has one, and `render::MeshCache` uploads each mesh once. The shading is a
+placeholder until M4.4b writes materials. `runtime --screenshot <file>` writes the last
+frame as a PNG, which is the only way to check that geometry is not mirrored or inside out.
+M4.4b adds materials and the prefab, and retires `CubePass`.
 
 M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
 and both the cooker and the runtime read that one header. The cooker reads an image with

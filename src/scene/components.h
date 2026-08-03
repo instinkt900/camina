@@ -10,6 +10,7 @@
  */
 
 #include "core/entt.h"
+#include "core/guid.h"
 #include "math/conventions.h"
 #include "reflect/attributes.h"
 #include "reflect/reflect.h"
@@ -77,6 +78,20 @@ namespace engine::scene {
         std::string value; ///< Free text. It does not have to be unique.
     };
 
+    /**
+     * @brief The mesh an entity draws, named by identity rather than by path.
+     *
+     * The GUID is what the cooker gave the mesh, which for a glTF file is the
+     * identity `Guid::derive` worked out for that one mesh inside it. A rename
+     * inside the content tree therefore changes nothing here.
+     *
+     * An entity with this and a WorldTransform is what MeshPass draws.
+     */
+    struct MeshRenderer {
+        /// @brief The cooked mesh. A null GUID draws nothing.
+        Guid mesh;
+    };
+
 } // namespace engine::scene
 
 /// @brief Describes Name for the inspector and for scene files.
@@ -87,5 +102,18 @@ struct engine::reflect::Describe<engine::scene::Name> {
     /// @return A tuple of field descriptors.
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(engine::scene::Name, value));
+    }
+};
+
+/// @brief Field descriptors for the mesh an entity draws.
+template <>
+struct engine::reflect::Describe<engine::scene::MeshRenderer> {
+    static constexpr const char* name = "MeshRenderer"; ///< The name a scene file stores.
+    /// @brief The one field.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::scene::MeshRenderer, mesh,
+                         engine::reflect::Tooltip{ "The cooked mesh this entity draws." }));
     }
 };

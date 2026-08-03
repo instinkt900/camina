@@ -12,6 +12,8 @@
 #include "reflect/json.h"
 #include "reflect/registry.h"
 #include "render/cube_pass.h"
+#include "render/mesh_pass.h"
+#include "screenshot.h"
 #include "sandbox/game.h"
 #include "scene/component_registry.h"
 #include "scene/scene_file.h"
@@ -67,6 +69,8 @@ namespace {
 
     struct Options {
         std::uint64_t max_frames = 0; ///< 0 means run until the user quits.
+        /// Where to write a PNG of the last frame. Empty writes nothing.
+        std::string screenshot;
         bool validation = true;
         /// Where the game reads its content. Empty means the compiled-in default.
         std::string content;
@@ -145,6 +149,9 @@ namespace {
                 ++i;
             } else if (arg == "--content" && i + 1 < argc) {
                 options.content = argv[i + 1];
+            } else if (arg == "--screenshot" && i + 1 < argc) {
+                options.screenshot = argv[i + 1];
+                ++i;
                 ++i;
             } else if (arg == "--no-validation") {
                 options.validation = false;
@@ -468,6 +475,9 @@ namespace {
     struct FrameContext {
         engine::gfx::Device* device = nullptr;
         const engine::render::CubePass* pass = nullptr;
+        engine::render::MeshPass* mesh_pass = nullptr;
+        /// The game content tree, which holds the cooked meshes.
+        const engine::assets::Content* game_content = nullptr;
         ViewSettings* settings = nullptr;
         engine::scene::World* world = nullptr;
         /// The entity the inspector edits, or entt::null for none.
@@ -510,12 +520,21 @@ namespace {
                                             settings.clear_color.b, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, clear);
 
-        // One cube for each entity, at the matrix World composed for it. Until
-        // M4 brings meshes, every entity is a cube, and that is the whole
-        // renderer. Nothing here asks what a component means.
         const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
+
+        // Every entity that names a mesh draws it. This is the pipeline made
+        // visible: the geometry comes from a cooked file that a glTF produced,
+        // and nothing here knows which file that was.
+        context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world);
+
+        // A cube for every entity that names no mesh. That is what the crates
+        // and the beacon still are, and it keeps the M3 scene readable while
+        // the mesh path grows around it.
         for (const auto [entity, placed] :
-             world.registry().view<const engine::scene::WorldTransform>().each()) {
+             world.registry()
+                 .view<const engine::scene::WorldTransform>(
+                     entt::exclude<engine::scene::MeshRenderer>)
+                 .each()) {
             context.pass->draw(info.commands, clip_from_world * placed.matrix);
         }
 
@@ -550,6 +569,9 @@ namespace {
         /// The engine's own cooked assets, which today means the two shaders.
         engine::assets::Content engine_content;
         engine::render::CubePass cube;
+        engine::render::MeshPass mesh;
+        /// The game's cooked assets, which today means the meshes a scene names.
+        engine::assets::Content game_content;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
 
@@ -580,6 +602,10 @@ namespace {
         }
 
         if (!runtime.cube.create(runtime.device, runtime.engine_content)) {
+            return false;
+        }
+
+        if (!runtime.mesh.create(runtime.device, runtime.engine_content)) {
             return false;
         }
 
@@ -683,6 +709,12 @@ namespace {
 
             if (options.max_frames != 0 && frame >= options.max_frames) {
                 ENGINE_LOG_INFO("Frame limit of {} reached. Exiting.", options.max_frames);
+                // The frame just presented is the one to capture, and the loop
+                // has not started another. So this is the only place a capture
+                // is certain of what it will read.
+                if (!options.screenshot.empty()) {
+                    (void)runtime::write_screenshot(runtime.device, options.screenshot);
+                }
                 break;
             }
 
@@ -729,6 +761,16 @@ int main(int argc, char** argv) {
                                               ? sandbox::default_content_directory()
                                               : std::filesystem::path{ options.content };
 
+    // The cooked meshes a scene names live here. Opening it after start()
+    // is fine, because nothing draws until the frame loop begins.
+    if (!runtime.game_content.open(content)) {
+        ENGINE_LOG_CRITICAL("The game content is missing. Build the cooker target.");
+        stop(runtime);
+        engine::jobs::shutdown();
+        engine::log::shutdown();
+        return 1;
+    }
+
     engine::scene::World world;
     if (!sandbox::load(content, world)) {
         ENGINE_LOG_CRITICAL("The game did not load. There is nothing to draw.");
@@ -742,6 +784,8 @@ int main(int argc, char** argv) {
     const FrameContext context{
         .device = runtime.device,
         .pass = &runtime.cube,
+        .mesh_pass = &runtime.mesh,
+        .game_content = &runtime.game_content,
         .settings = &settings,
         .world = &world,
         .selected = &selected,

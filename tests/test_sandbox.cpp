@@ -4,6 +4,7 @@
 // scene would pass while the shipped files were broken, and the shipped files
 // are what the runtime opens.
 
+#include "assets/content.h"
 #include "check.h"
 #include "math/transform.h"
 #include "sandbox/components.h"
@@ -54,7 +55,44 @@ namespace {
 
         // The engine never names a game type. The game joins the same registry.
         const sc::ComponentRegistry full = make_registry();
-        check(full.size() == 3, "the engine types and the game type share one registry");
+        check(full.size() == 4, "the engine types and the game type share one registry");
+    }
+
+    /**
+     * Every mesh the scene names has to be a mesh the cooker wrote.
+     *
+     * The scene stores those GUIDs as text. They are derived rather than
+     * generated, so they are stable, and nothing checks them at load: a mesh
+     * that will not resolve draws nothing and the scene still opens. The
+     * failure is therefore silent, and it looks exactly like a mesh that
+     * failed to upload.
+     *
+     * This is what catches a stale GUID after somebody replaces the model or
+     * its sidecar.
+     */
+    void test_every_named_mesh_is_cooked() {
+        const sc::ComponentRegistry registry = make_registry();
+        sc::PrefabLibrary library;
+        sc::World world;
+        check(sandbox::load(sandbox::default_content_directory(), world, registry, library),
+              "the shipped content loads");
+
+        engine::assets::Content content;
+        check(content.open(sandbox::default_content_directory()), "the cooked content opens");
+
+        std::size_t named = 0;
+        std::size_t resolved = 0;
+        for (const auto [entity, renderer] :
+             world.registry().view<const sc::MeshRenderer>().each()) {
+            ++named;
+            if (renderer.mesh.valid() &&
+                engine::assets::find_by_guid(content.manifest(), renderer.mesh) != nullptr) {
+                ++resolved;
+            }
+        }
+
+        check(named == 6, "the scene names the six meshes the flight helmet holds");
+        check(resolved == named, "and the cooker wrote every one of them");
     }
 
     void test_content_is_there() {
@@ -75,8 +113,9 @@ namespace {
               "the shipped content loads");
         check(library.size() == 1, "the crate prefab went into the library");
 
-        // Four crate instances of two entities each, and one plain entity.
-        check(world.size() == 9, "the scene holds nine entities");
+        // Four crate instances of two entities each, one beacon, and one
+        // entity for each of the six meshes the flight helmet holds.
+        check(world.size() == 15, "the scene holds fifteen entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
@@ -221,6 +260,7 @@ int main() {
     std::printf("shipped content\n");
     test_content_is_there();
     test_shipped_scene_loads();
+    test_every_named_mesh_is_cooked();
     test_scene_round_trips();
     test_overrides_reach_the_world();
     std::printf("the game loop\n");
