@@ -456,6 +456,60 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    /**
+     * A cooker that learned to write a new output has to cook the tree again.
+     *
+     * This is the one change no per-entry check can see. The freshness check
+     * compares identities, input names, and input bytes, and a rule that
+     * started writing a second kind of file changes none of them. The old
+     * manifest therefore stays fresh forever and the new output never appears.
+     *
+     * A person meets that as content missing after an engine update, with no
+     * message and no failing build, and cooking into a clean directory fixes it
+     * without ever saying what was wrong.
+     */
+    void test_an_older_cooker_cooks_again() {
+        const std::filesystem::path source = scratch("cookerver/src");
+        const std::filesystem::path out = scratch("cookerver/out");
+        write_file(source / "one.scene", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+        check(first.cooked == 1, "and it cooks the asset");
+
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+        check(second.skipped == 1, "and it skips, because nothing changed");
+
+        // The manifest as an older cooker left it. save_manifest() stamps the
+        // current version, so this goes in as text.
+        const std::filesystem::path file = out / as::kManifestFile;
+        std::string text = read_file(file);
+        const std::string field = "\"cooker\": " + std::to_string(as::kCookerVersion);
+        check(text.find(field) != std::string::npos, "the manifest records the cooker version");
+        text.replace(text.find(field), field.size(), "\"cooker\": 1");
+        write_file(file, text);
+
+        cooker::Result third;
+        check(cooker::cook_all(options, third), "the third cook works");
+        check(third.cooked == 1, "a manifest from an older cooker cooks again");
+
+        // A manifest older still, from before the field existed. It has to read
+        // as an unknown cooker rather than as the current one.
+        text = read_file(file);
+        const std::size_t at = text.find("\"cooker\"");
+        check(at != std::string::npos, "the field is back");
+        text.erase(at, text.find('\n', at) + 1 - at);
+        write_file(file, text);
+
+        cooker::Result fourth;
+        check(cooker::cook_all(options, fourth), "the fourth cook works");
+        check(fourth.cooked == 1, "and a manifest with no cooker field cooks again too");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
     void test_compression_and_mip_switches() {
         const std::filesystem::path source = scratch("switch/src");
         const std::filesystem::path out = scratch("switch/out");
@@ -695,6 +749,7 @@ int main() {
     test_color_space_decides_the_mip_chain();
     test_editing_the_sidecar_cooks_again();
     test_an_older_manifest_cooks_again();
+    test_an_older_cooker_cooks_again();
     test_compression_and_mip_switches();
     test_awkward_sizes();
     test_a_broken_image_fails_the_cook();

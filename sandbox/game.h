@@ -13,6 +13,7 @@
  * application decides how to show it.
  */
 
+#include "assets/content.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
 #include "scene/world.h"
@@ -24,8 +25,21 @@ namespace sandbox {
     /// @brief The scene the game opens with, inside the content directory.
     inline constexpr const char* kSceneFile = "main.scene";
 
-    /// @brief The one prefab the game ships, inside the content directory.
+    /// @brief The hand-authored prefab the game ships, inside the content directory.
     inline constexpr const char* kCratePrefab = "crate";
+
+    /**
+     * @brief The model whose node tree the cooker turned into a prefab.
+     *
+     * This is a source path rather than a GUID. A cooked prefab has a derived
+     * identity that nobody chose, so naming it here would mean cooking once and
+     * copying the answer out. The manifest turns the path into the identity, and
+     * that is what `Content::find` is for.
+     */
+    inline constexpr const char* kHelmetSource = "models/flight_helmet/FlightHelmet.gltf";
+
+    /// @brief The name the scene uses for the model prefab above.
+    inline constexpr const char* kHelmetPrefab = "flight helmet";
 
     /**
      * @brief The game's directory inside the cooked content root.
@@ -64,13 +78,17 @@ namespace sandbox {
      * them.
      *
      * @param content The directory holding the prefabs and the scene.
+     * @param cooked The open cooked content, which resolves a model prefab from
+     * its source path. Pass null to load only the hand-authored prefabs, which
+     * is what a test with no cooked tree does.
      * @param world The world to fill.
      * @param registry The component types to build. Register the game types
      * first, or the scene loses them.
      * @param library The library to read the prefabs into.
      * @return True when every file parsed and the scene loaded.
      */
-    [[nodiscard]] bool load(const std::filesystem::path& content, engine::scene::World& world,
+    [[nodiscard]] bool load(const std::filesystem::path& content,
+                            const engine::assets::Content* cooked, engine::scene::World& world,
                             const engine::scene::ComponentRegistry& registry =
                                 engine::scene::components(),
                             engine::scene::PrefabLibrary& library = engine::scene::prefabs());

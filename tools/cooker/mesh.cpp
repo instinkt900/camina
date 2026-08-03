@@ -3,6 +3,7 @@
 #include "assets/mesh.h"
 #include "core/log.h"
 #include "material.h"
+#include "prefab.h"
 
 #include <cgltf.h>
 #include <meshoptimizer.h>
@@ -485,7 +486,8 @@ namespace cooker {
         // The order here is what each part needs, not the order they go out in.
         // An image inside the file has to cook before the materials, because a
         // material stores its identity. A material has to cook before the
-        // meshes, because a submesh stores its identity.
+        // meshes, because a submesh stores its identity. The prefab comes last,
+        // because a node that draws a mesh stores the identity of that mesh.
         //
         // The outputs go out meshes first. The cooker checks the name of the
         // first output to decide whether it may skip a source, so a glTF file
@@ -499,6 +501,9 @@ namespace cooker {
         if (!cook_materials(*held.data, source, out_root, relative, parent, images, materials)) {
             return false;
         }
+
+        std::vector<engine::Guid> mesh_guids;
+        mesh_guids.reserve(held.data->meshes_count);
 
         for (cgltf_size at = 0; at < held.data->meshes_count; ++at) {
             const cgltf_mesh& mesh = held.data->meshes[at];
@@ -535,15 +540,17 @@ namespace cooker {
             if (!write_mesh(out_root / cooked_relative, built)) {
                 return false;
             }
+            const engine::Guid mesh_guid =
+                engine::Guid::derive(parent, kMeshPartKind, static_cast<std::uint32_t>(at));
+            mesh_guids.push_back(mesh_guid);
             outputs.push_back(as::ManifestOutput{
-                .cooked = as::manifest_path(cooked_relative),
-                .guid = engine::Guid::derive(parent, kMeshPartKind,
-                                             static_cast<std::uint32_t>(at)) });
+                .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
         }
 
         outputs.insert(outputs.end(), materials.outputs.begin(), materials.outputs.end());
         outputs.insert(outputs.end(), images.outputs.begin(), images.outputs.end());
-        return true;
+
+        return cook_prefabs(*held.data, source, out_root, relative, parent, mesh_guids, outputs);
     }
 
 } // namespace cooker

@@ -11,7 +11,6 @@
 #include "reflect/inspector.h"
 #include "reflect/json.h"
 #include "reflect/registry.h"
-#include "render/cube_pass.h"
 #include "render/mesh_pass.h"
 #include "screenshot.h"
 #include "sandbox/game.h"
@@ -474,7 +473,6 @@ namespace {
     /// What draw_frame() needs that does not change from one frame to the next.
     struct FrameContext {
         engine::gfx::Device* device = nullptr;
-        const engine::render::CubePass* pass = nullptr;
         engine::render::MeshPass* mesh_pass = nullptr;
         /// The game content tree, which holds the cooked meshes.
         const engine::assets::Content* game_content = nullptr;
@@ -522,21 +520,11 @@ namespace {
 
         const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
 
-        // Every entity that names a mesh draws it. This is the pipeline made
-        // visible: the geometry comes from a cooked file that a glTF produced,
-        // and nothing here knows which file that was.
+        // Every entity that names a mesh draws it, and that is now every
+        // entity that draws at all. This is the pipeline made visible: the
+        // geometry comes from a cooked file that a glTF produced, and nothing
+        // here knows which file that was.
         context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world);
-
-        // A cube for every entity that names no mesh. That is what the crates
-        // and the beacon still are, and it keeps the M3 scene readable while
-        // the mesh path grows around it.
-        for (const auto [entity, placed] :
-             world.registry()
-                 .view<const engine::scene::WorldTransform>(
-                     entt::exclude<engine::scene::MeshRenderer>)
-                 .each()) {
-            context.pass->draw(info.commands, clip_from_world * placed.matrix);
-        }
 
         engine::gfx::imgui_render(info.commands);
         engine::gfx::cmd_end_rendering(info.commands);
@@ -568,7 +556,6 @@ namespace {
         engine::gfx::Device* device = nullptr;
         /// The engine's own cooked assets, which today means the two shaders.
         engine::assets::Content engine_content;
-        engine::render::CubePass cube;
         engine::render::MeshPass mesh;
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
@@ -601,10 +588,6 @@ namespace {
             return false;
         }
 
-        if (!runtime.cube.create(runtime.device, runtime.engine_content)) {
-            return false;
-        }
-
         if (!runtime.mesh.create(runtime.device, runtime.engine_content)) {
             return false;
         }
@@ -634,7 +617,6 @@ namespace {
         if (runtime.overlay) {
             engine::gfx::imgui_shutdown(runtime.device);
         }
-        runtime.cube.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
         }
@@ -772,7 +754,7 @@ int main(int argc, char** argv) {
     }
 
     engine::scene::World world;
-    if (!sandbox::load(content, world)) {
+    if (!sandbox::load(content, &runtime.game_content, world)) {
         ENGINE_LOG_CRITICAL("The game did not load. There is nothing to draw.");
         stop(runtime);
         engine::jobs::shutdown();
@@ -783,7 +765,6 @@ int main(int argc, char** argv) {
     entt::entity selected = entt::null;
     const FrameContext context{
         .device = runtime.device,
-        .pass = &runtime.cube,
         .mesh_pass = &runtime.mesh,
         .game_content = &runtime.game_content,
         .settings = &settings,

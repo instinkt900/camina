@@ -584,8 +584,33 @@ name it. The cache owns the buffers rather than `assets::AssetDatabase`, because
 buffer needs the device to free it and the database frees a value by running its destructor.
 M4.5 brings the two together, when hot reload has to replace a mesh while the program runs.
 
-`CubePass` still draws an entity that names no mesh. That is what the M3 crates are, and it
-keeps that scene readable while the mesh path grows beside it. #38 retires it.
+**The node tree becomes a prefab.** A glTF node tree is a scene fragment with one root and
+parents that come first, which is the shape M3.3 already reads. So the importer writes a
+prefab and a scene instances it, and there is no second hierarchy format. Every node becomes
+an entity with a Name and a Transform, and a node with a mesh also carries a MeshRenderer.
+The components go through the reflection descriptors, so rule 4.5 holds.
+
+This is what makes a model usable without hand-writing an identity. Before it, a scene named
+each cooked mesh itself, and those identities are derived rather than chosen, so a person had
+to cook once and copy them out. The sandbox scene held six such lines for one model. It now
+holds one prefab instance.
+
+A prefab has exactly one root and a glTF scene may list several, so the cooker adds a root
+when it has to. The Flight Helmet lists six. The added root sits at the identity transform,
+so it moves nothing, and it gives an instance one entity to place.
+
+The sandbox finds that prefab by source path rather than by identity, through the manifest.
+The path is what a person edits and the identity is what the path became, so nothing in the
+game names a GUID.
+
+**`CubePass` is gone.** Every entity that draws now goes through `MeshPass`, which is what
+made the pass worth removing rather than keeping as a fallback. The crates became a
+`crate.gltf` in the game content tree, so the shape they draw is a cooked asset like anything
+else. The engine content tree holds only the two mesh shaders now.
+
+A hand-authored file still names a derived identity: `crate.prefab` holds the GUID of the
+cube mesh. A cooked prefab does not, because the cooker derives it. That gap is the reason
+authored content wants a way to name an asset by path, and it is not solved here.
 
 **Materials.** M4.4b made the material the fourth asset type. A cooked material is one fixed
 size header and no payload, because a material is a handful of numbers and a list of
@@ -636,6 +661,19 @@ notices.
 
 Nothing can override these settings, because there is no sidecar to hold an override. Making
 one would mean writing a file back into the source tree beside an asset that has none.
+
+**The manifest records which cooker wrote it.** A rule that starts writing a new kind of
+output changes nothing the freshness check looks at. The check compares identities, input
+names, and input bytes, and a new output touches none of them, so an old manifest stays fresh
+forever and the new output never appears. A person meets that as content missing after an
+engine update, with no message and no failing build, and cooking into a clean directory fixes
+it without ever saying what was wrong.
+
+So `Manifest` carries a cooker version, and a tree an older cooker wrote cooks again in full.
+The field defaults to zero rather than to the current version, because zero is what a
+manifest written before the field existed reads back as. Defaulting it to the current version
+would make every old manifest claim to be current, which is the failure the field exists to
+catch. `save_manifest` stamps it, so no caller can forget.
 
 **Looking at what was drawn.** `gfx::capture_frame` copies the frame that was presented last
 into host memory, and `runtime --screenshot <file>` writes it as a PNG. A run that ends with

@@ -72,7 +72,15 @@ no sidecar. It gets a derived GUID under the kind word `texture`, and its color 
 from the material slot that uses it rather than from a file name. That covers the `.glb`,
 which is what most exporters produce.
 
-What is left of M4.4 is the prefab from the node tree, which also retires `CubePass`.
+M4.4 is complete. The importer turns the glTF node tree into a prefab, so a scene instances a
+model rather than naming each of its cooked meshes by hand. The cooker adds a root when a
+glTF scene lists several, because a prefab holds exactly one. `CubePass` is gone and every
+entity draws through `MeshPass`, which needed the crates to become a real `crate.gltf` in the
+game content tree.
+
+The manifest now records which cooker wrote it. A rule that starts writing a new kind of
+output changes nothing the freshness check looks at, so without this an old cooked tree stays
+fresh forever and the new output never appears.
 
 M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
 and both the cooker and the runtime read that one header. The cooker reads an image with

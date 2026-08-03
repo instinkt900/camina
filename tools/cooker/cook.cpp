@@ -389,8 +389,12 @@ namespace cooker {
          */
         [[nodiscard]] bool can_skip(const Options& options, const std::filesystem::path& relative,
                                     Rule rule, const as::ManifestEntry& entry,
-                                    const as::ManifestEntry* old) {
-            if (options.force || old == nullptr) {
+                                    const as::ManifestEntry* old, bool same_cooker) {
+            // A rule that started writing a new kind of output changes none of
+            // the checks below. The manifest would stay fresh forever and the
+            // new output would never appear, which a person meets as content
+            // missing after an engine update with nothing said about it.
+            if (options.force || old == nullptr || !same_cooker) {
                 return false;
             }
             const std::string first = as::manifest_path(cooked_name(relative, rule, 0));
@@ -403,7 +407,7 @@ namespace cooker {
         [[nodiscard]] Outcome cook_source(const Options& options,
                                           const std::filesystem::path& relative,
                                           const as::Manifest& previous, const Named& named,
-                                          as::ManifestEntry& entry) {
+                                          bool same_cooker, as::ManifestEntry& entry) {
             const std::filesystem::path source = options.content / relative;
             const Rule rule = rule_for(relative);
 
@@ -423,7 +427,7 @@ namespace cooker {
             gather_inputs(relative, named, entry);
 
             const as::ManifestEntry* old = as::find_by_source(previous, entry.source);
-            if (can_skip(options, relative, rule, entry, old)) {
+            if (can_skip(options, relative, rule, entry, old, same_cooker)) {
                 entry = *old;
                 return Outcome::Skipped;
             }
@@ -467,6 +471,16 @@ namespace cooker {
         as::Manifest previous;
         (void)as::load_manifest(options.out, previous);
 
+        // A manifest an older cooker wrote may be missing an output this build
+        // produces, and no per-entry check can see that. So the whole tree
+        // cooks again when the version moves.
+        const bool same_cooker = previous.cooker == as::kCookerVersion;
+        if (!same_cooker && !previous.entries.empty()) {
+            ENGINE_LOG_INFO("The cooked tree came from cooker {} and this is cooker {}, so "
+                            "everything cooks again.",
+                            previous.cooker, as::kCookerVersion);
+        }
+
         Named named;
         scan_gltf(options, sources, named);
 
@@ -478,7 +492,7 @@ namespace cooker {
             }
 
             as::ManifestEntry entry;
-            switch (cook_source(options, relative, previous, named, entry)) {
+            switch (cook_source(options, relative, previous, named, same_cooker, entry)) {
             case Outcome::Cooked:
                 next.entries.push_back(std::move(entry));
                 ++result.cooked;
