@@ -487,8 +487,15 @@ namespace {
         const std::filesystem::path file = out / as::kManifestFile;
         std::string text = read_file(file);
         const std::string field = "\"cooker\": " + std::to_string(as::kCookerVersion);
-        check(text.find(field) != std::string::npos, "the manifest records the cooker version");
-        text.replace(text.find(field), field.size(), "\"cooker\": 1");
+        const std::size_t stamped = text.find(field);
+        // check() records a failure and carries on, so a miss here would reach
+        // replace() with npos and throw. That ends the process, and every test
+        // after this one reports nothing at all.
+        check(stamped != std::string::npos, "the manifest records the cooker version");
+        if (stamped == std::string::npos) {
+            return;
+        }
+        text.replace(stamped, field.size(), "\"cooker\": 1");
         write_file(file, text);
 
         cooker::Result third;
@@ -500,6 +507,9 @@ namespace {
         text = read_file(file);
         const std::size_t at = text.find("\"cooker\"");
         check(at != std::string::npos, "the field is back");
+        if (at == std::string::npos) {
+            return;
+        }
         text.erase(at, text.find('\n', at) + 1 - at);
         write_file(file, text);
 

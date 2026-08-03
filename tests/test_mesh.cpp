@@ -106,6 +106,18 @@ namespace {
          * for them the two are the same entity.
          */
         Deep,
+        /**
+         * One node whose matrix mirrors on X.
+         *
+         * The scale of an axis is the length of its basis column, which is
+         * never negative, so a mirror is invisible to length alone. It has to
+         * come out of the determinant.
+         */
+        Mirrored,
+        /// One node whose matrix holds shear, which a Transform cannot say.
+        Sheared,
+        /// A scene that lists no node, so there is nothing to instance.
+        EmptyScene,
     };
 
     /// Which material slot uses the image, which is what decides its color space.
@@ -214,6 +226,26 @@ namespace {
         std::string roots;
 
         switch (tree) {
+        case NodeTree::EmptyScene:
+            // The node is there and the scene names none of it, which is legal
+            // glTF and describes nothing an instance could place.
+            list = R"({"name":"unused","mesh":0})";
+            roots = "";
+            break;
+        case NodeTree::Mirrored:
+            // Column major, the order glTF stores. The X basis is negated, so
+            // the determinant is negative and the matrix mirrors.
+            list = R"({"name":"flipped","mesh":0,"matrix":)"
+                   R"([-2,0,0,0, 0,1,0,0, 0,0,1,0, 3,0,0,1]})";
+            roots = "0";
+            break;
+        case NodeTree::Sheared:
+            // The Y basis leans into X, so the basis is not orthogonal and no
+            // translate, rotate, scale triple describes it.
+            list = R"({"name":"skewed","mesh":0,"matrix":)"
+                   R"([1,0,0,0, 0.5,1,0,0, 0,0,1,0, 0,0,0,1]})";
+            roots = "0";
+            break;
         case NodeTree::Deep:
             // node0 holds node1 holds node2. Only the first two draw, so the
             // third proves a node with no mesh still becomes an entity.
@@ -1249,6 +1281,12 @@ namespace {
         // exactly one and the scene listed two.
         const nlohmann::json& entities = document.at("entities");
         check(entities.size() == 3, "two mesh nodes give three entities with the added root");
+        // check() carries on after a failure, so a short array would reach at()
+        // below and throw. That ends the process and every later test reports
+        // nothing.
+        if (entities.size() != 3) {
+            return;
+        }
         check(entities.at(0).at("parent") == -1, "the root has no parent");
         check(entities.at(1).at("parent") == 0 && entities.at(2).at("parent") == 0,
               "and both mesh nodes hang from it");
@@ -1299,6 +1337,9 @@ namespace {
         // another root would put an entity in every instance for no reason.
         const nlohmann::json& entities = document.at("entities");
         check(entities.size() == 1, "one root node gives one entity and no added root");
+        if (entities.size() != 1) {
+            return;
+        }
         check(entities.at(0).at("components").contains("MeshRenderer"),
               "and that entity is the one that draws");
 
@@ -1326,6 +1367,9 @@ namespace {
         // does not exist yet, and the instance would not build.
         const nlohmann::json& entities = document.at("entities");
         check(entities.size() == 3, "the group and its two children give three entities");
+        if (entities.size() != 3) {
+            return;
+        }
         bool parents_come_first = true;
         for (std::size_t at = 0; at < entities.size(); ++at) {
             const int parent = entities.at(at).at("parent");
@@ -1360,6 +1404,9 @@ namespace {
         // put it.
         const nlohmann::json& entities = document.at("entities");
         check(entities.size() == 3, "the chain gives three entities");
+        if (entities.size() != 3) {
+            return;
+        }
         check(entities.at(0).at("parent") == -1, "the top is the root");
         check(entities.at(1).at("parent") == 0, "the middle hangs from the top");
         check(entities.at(2).at("parent") == 1,
@@ -1369,6 +1416,81 @@ namespace {
         // its children need the space it defines.
         check(!entities.at(2).at("components").contains("MeshRenderer"),
               "a node with no mesh becomes an entity that draws nothing");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_mirrored_matrix_keeps_its_mirror() {
+        const std::filesystem::path source = scratch("mirror/src");
+        const std::filesystem::path out = scratch("mirror/out");
+        write_glb(source / "flip.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::Mirrored);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a node with a mirroring matrix cooks");
+
+        const nlohmann::json document = read_prefab(out / "flip.glb.0.prefab");
+        check(!document.is_discarded(), "the cooked prefab parses");
+        if (document.is_discarded()) {
+            return;
+        }
+
+        const nlohmann::json& transform =
+            document.at("entities").at(0).at("components").at("Transform");
+
+        // The scale of an axis is the length of its basis column, and a length
+        // is never negative. A decomposition that used length alone would turn
+        // this mirror into a plain scale of 2 with a rotation that puts the
+        // geometry inside out, and nothing downstream could see it. That is
+        // the failure DESIGN.md section 3 exists to stop.
+        const float x = transform.at("scale").at(0);
+        check(x < 0.0F, "a mirror comes back as a negative scale, not a positive one");
+        check(std::abs(std::abs(x) - 2.0F) < 1.0e-4F, "and it keeps the size the matrix had");
+
+        const float position = transform.at("position").at(0);
+        check(std::abs(position - 3.0F) < 1.0e-4F, "the translation came across as well");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_sheared_matrix_fails_the_cook() {
+        const std::filesystem::path source = scratch("shear/src");
+        const std::filesystem::path out = scratch("shear/out");
+        write_glb(source / "skew.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::Sheared);
+
+        // A Transform holds a position, a rotation, and a scale, and none of
+        // those says shear. Writing the nearest transform instead would place
+        // the part somewhere the model never put it, with nothing said.
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a node whose matrix holds shear fails");
+        check(result.failed == 1, "and the glTF is the source that failed");
+        check(!std::filesystem::exists(out / "skew.glb.0.prefab"),
+              "and no prefab was left behind");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_scene_with_no_nodes_writes_no_prefab() {
+        const std::filesystem::path source = scratch("emptyscene/src");
+        const std::filesystem::path out = scratch("emptyscene/out");
+        write_glb(source / "bare.glb", build_triangle(), 1, {}, ImageSlot::Both,
+                  NodeTree::EmptyScene);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a glTF whose scene lists no node still cooks");
+
+        // The mesh is still worth cooking. A scene can name it, and a person
+        // may have exported a file whose scene graph is empty by accident.
+        check(std::filesystem::exists(out / "bare.glb.0.mesh"), "and the mesh is there");
+
+        // A prefab holding only the root the cooker adds would give every
+        // instance one entity that does nothing.
+        check(!std::filesystem::exists(out / "bare.glb.0.prefab"),
+              "but there is no prefab, because there is nothing to instance");
 
         std::filesystem::remove_all(source.parent_path());
     }
@@ -1404,5 +1526,8 @@ int main() {
     test_a_single_root_needs_no_added_root();
     test_a_child_comes_after_its_parent();
     test_a_grandchild_names_its_own_parent();
+    test_a_mirrored_matrix_keeps_its_mirror();
+    test_a_sheared_matrix_fails_the_cook();
+    test_a_scene_with_no_nodes_writes_no_prefab();
     return test::report();
 }

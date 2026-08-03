@@ -617,6 +617,10 @@ namespace {
         if (runtime.overlay) {
             engine::gfx::imgui_shutdown(runtime.device);
         }
+        // Before the device goes. MeshPass frees buffers, textures, and a
+        // pipeline through the device, and its destructor runs when Runtime
+        // goes out of scope, which is after this function returns.
+        runtime.mesh.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
         }
