@@ -74,7 +74,16 @@ Steps:
    A squash merge uses that title as the commit subject.
 4. Wait for CI. The format, docs, vulkan-containment, and build jobs all run on a pull
    request.
-5. Ask the user before you merge. Do not merge your own pull request on your own.
+5. Read the automated code review as well. It runs on each push, and it often finishes
+   after the other jobs. A green CI therefore does not mean the pull request is clear.
+6. **Collect every change before you push again.** Gather the CI failures, the review
+   comments, and any work you still owe the branch. Fix them together, and push once.
+7. Ask the user before you merge. Do not merge your own pull request on your own.
+
+Step 6 matters because a push restarts every CI job and starts a new review. Two pushes
+five minutes apart cost two full runs and two reviews, and the second review reads a
+branch the first one already covered. Waiting costs nothing, because the review has to
+arrive before the branch is ready either way.
 
 Squash merge is the default here. `cliff.toml` skips merge commits and strips the
 `(#12)` suffix that GitHub adds to a squashed subject, so one pull request becomes one
