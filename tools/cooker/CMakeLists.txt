@@ -5,6 +5,7 @@
 # cook a tree and check what came out.
 add_library(cooker_lib STATIC
     cook.cpp
+    material.cpp
     mesh.cpp
     texture.cpp
     stb_image_impl.cpp

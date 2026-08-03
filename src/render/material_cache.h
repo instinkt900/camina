@@ -1,0 +1,81 @@
+#pragma once
+
+/**
+ * @file
+ * @brief Cooked materials, read once and bound many times.
+ *
+ * A submesh names a material by GUID, and several submeshes name the same one.
+ * This reads that material once and resolves the textures it names through a
+ * TextureCache.
+ *
+ * The renderer binds the base color today. The cooked material carries the
+ * whole glTF metallic-roughness set, and M5 is the milestone that shades with
+ * the rest. See DESIGN.md section 10.
+ */
+
+#include "assets/content.h"
+#include "assets/material.h"
+#include "core/guid.h"
+#include "gfx/device.h"
+#include "render/texture_cache.h"
+
+#include <cstddef>
+#include <map>
+
+namespace engine::render {
+
+    /// @brief One cooked material, with its textures resolved.
+    struct GpuMaterial {
+        assets::Material source;       ///< Every field the cooked file held.
+        gfx::TextureHandle base_color; ///< The base color, or the fallback texel.
+    };
+
+    /**
+     * @brief Holds every material the submeshes asked for.
+     *
+     * This owns nothing on the device. The textures belong to the TextureCache
+     * that resolved them, so destroy() only drops what it remembers.
+     */
+    class MaterialCache {
+    public:
+        MaterialCache() = default;
+        MaterialCache(const MaterialCache&) = delete;
+        MaterialCache& operator=(const MaterialCache&) = delete;
+        MaterialCache(MaterialCache&&) = delete;
+        MaterialCache& operator=(MaterialCache&&) = delete;
+        ~MaterialCache() = default;
+
+        /**
+         * @brief Finds a material, and reads it the first time it is asked for.
+         *
+         * A GUID that will not load is remembered as a failure, so a submesh
+         * that names a missing material reports once rather than on every frame.
+         * Such a submesh still draws, with the fallback texture.
+         *
+         * @param device The device that owns the textures.
+         * @param content The cooked content to read from.
+         * @param textures Where the textures this material names come from.
+         * @param guid The material identity, as a submesh stores it. A null GUID
+         * is not an error and gives the defaults.
+         * @return The material. It is never null, so a draw call needs no check.
+         */
+        [[nodiscard]] const GpuMaterial& get(gfx::Device* device,
+                                             const assets::Content& content,
+                                             TextureCache& textures, Guid guid);
+
+        /// @brief Forgets every material. The textures belong elsewhere.
+        void destroy();
+
+        /// @brief How many materials are loaded.
+        /// @return The count, the default and the failures not included.
+        [[nodiscard]] std::size_t size() const { return loaded_.size(); }
+
+    private:
+        std::map<Guid, GpuMaterial> loaded_;
+        /// The GUIDs that failed, so one bad reference reports once.
+        std::map<Guid, bool> failed_;
+        /// What a null GUID and a broken one both get.
+        GpuMaterial fallback_;
+    };
+
+} // namespace engine::render

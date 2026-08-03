@@ -56,10 +56,17 @@ cooker reads a `.gltf` or a `.glb` with cgltf, builds tangents when the source h
 and reorders with meshoptimizer. One glTF holds several meshes, so the manifest now maps
 one source to many outputs. A sub-asset has no sidecar, so `Guid::derive` works out its
 identity from the parent GUID, a kind word, and an index. M4.4c draws it: `scene::MeshRenderer` names a mesh by GUID, `render::MeshPass` draws every
-entity that has one, and `render::MeshCache` uploads each mesh once. The shading is a
-placeholder until M4.4b writes materials. `runtime --screenshot <file>` writes the last
-frame as a PNG, which is the only way to check that geometry is not mirrored or inside out.
-M4.4b adds materials and the prefab, and retires `CubePass`.
+entity that has one, and `render::MeshCache` uploads each mesh once.
+`runtime --screenshot <file>` writes the last frame as a PNG, which is the only way to check
+that geometry is not mirrored or inside out.
+
+M4.4b makes the material the fourth asset type. `src/assets/material.h` holds the cooked
+format, which is one fixed-size header that names five textures by GUID. The importer writes
+one material for each glTF material, a submesh names the one it uses, and an image sidecar is
+now an input of the glTF file. `render::TextureCache` and `render::MaterialCache` turn those
+GUIDs into handles, and `MeshPass` binds the base color of each submesh. The format carries
+the whole metallic-roughness set and the renderer reads the base color. M5 reads the rest.
+What is left of M4.4 is the prefab from the node tree, which also retires `CubePass`.
 
 M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
 and both the cooker and the runtime read that one header. The cooker reads an image with

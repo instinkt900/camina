@@ -277,6 +277,28 @@ namespace cooker {
         return as::ColorSpace::Srgb;
     }
 
+    bool image_meta(const std::filesystem::path& source, as::AssetMeta& out) {
+        bool created = false;
+        if (!as::meta_for(source, out, &created)) {
+            return false;
+        }
+        if (!created) {
+            return true;
+        }
+
+        // A new sidecar carries the defaults, and an image wants a better
+        // starting guess than "sRGB" for every file. So the guess goes in once,
+        // when the file is written, and after that the file decides. A wrong
+        // guess is one edit to fix and it never comes back.
+        out.texture.color_space = guess_color_space(source);
+        if (!as::save_meta(source, out)) {
+            return false;
+        }
+        ENGINE_LOG_INFO("{}: reading it as {}. Edit the sidecar to change that.", source.string(),
+                        as::to_text(out.texture.color_space));
+        return true;
+    }
+
     bool cook_texture(const std::filesystem::path& source,
                       const std::filesystem::path& destination,
                       const as::TextureImport& settings) {

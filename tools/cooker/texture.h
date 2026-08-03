@@ -41,6 +41,26 @@ namespace cooker {
         const std::filesystem::path& source);
 
     /**
+     * @brief Reads the sidecar of an image, and writes one with a guess when
+     * there is none.
+     *
+     * Two rules ask an image for its identity. The texture rule asks because it
+     * is about to cook it, and the glTF rule asks because a material stores the
+     * identity of every texture it names. Whichever one arrives first may find
+     * no sidecar and write it.
+     *
+     * So the guess belongs here rather than in either rule. A sidecar the glTF
+     * rule wrote would otherwise carry the default of sRGB, and every normal map
+     * in that model would read as color from then on.
+     *
+     * @param source The image path. The file must exist.
+     * @param out The metadata to fill.
+     * @return True when @p out holds a valid GUID.
+     */
+    [[nodiscard]] bool image_meta(const std::filesystem::path& source,
+                                  engine::assets::AssetMeta& out);
+
+    /**
      * @brief Cooks one image into one cooked texture file.
      *
      * @param source The image to read. PNG, JPG, TGA, BMP, or PSD.

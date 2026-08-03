@@ -70,7 +70,7 @@ namespace engine::assets {
     struct MeshSubmesh {
         std::uint32_t first_index = 0; ///< Where this run starts in the index list.
         std::uint32_t index_count = 0; ///< How many indices the run holds.
-        Guid material;                 ///< The material asset. Null until M4.4b writes one.
+        Guid material;                 ///< The material asset, or null for none.
     };
 
     /**

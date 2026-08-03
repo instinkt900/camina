@@ -10,6 +10,7 @@
 // artist with a half-cooked directory has to be able to keep working.
 
 #include "assets/database.h"
+#include "assets/material.h"
 #include "assets/meta.h"
 #include "assets/texture.h"
 #include "check.h"
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -396,6 +398,103 @@ namespace {
         check(space == as::ColorSpace::Linear, "and it changes nothing");
     }
 
+    /// A material with every field set to something a default would not give.
+    as::Material distinctive_material() {
+        as::Material material;
+        material.base_color = Guid{ .high = 1, .low = 2 };
+        material.metallic_roughness = Guid{ .high = 3, .low = 4 };
+        material.normal = Guid{ .high = 5, .low = 6 };
+        material.occlusion = Guid{ .high = 7, .low = 8 };
+        material.emissive = Guid{ .high = 9, .low = 10 };
+        material.base_color_factor = engine::Vec4{ 0.1F, 0.2F, 0.3F, 0.4F };
+        material.emissive_factor = engine::Vec3{ 0.5F, 0.6F, 0.7F };
+        material.metallic_factor = 0.25F;
+        material.roughness_factor = 0.75F;
+        material.normal_scale = 2.0F;
+        material.occlusion_strength = 0.125F;
+        material.alpha_cutoff = 0.375F;
+        material.alpha_mode = as::AlphaMode::Mask;
+        material.double_sided = true;
+        return material;
+    }
+
+    std::vector<std::byte> make_material_file(const as::MaterialHeader& header) {
+        std::vector<std::byte> bytes(sizeof(header));
+        std::memcpy(bytes.data(), &header, sizeof(header));
+        return bytes;
+    }
+
+    void test_material_round_trips() {
+        // Every field, not a sample of them. A writer that skipped one and a
+        // reader that skipped the same one would agree with each other and
+        // lose the value, and no other test would notice.
+        const as::Material wrote = distinctive_material();
+        const std::vector<std::byte> bytes = make_material_file(as::pack_material(wrote));
+
+        as::Material read;
+        check(as::read_material(bytes, read, "round"), "a packed material reads back");
+        check(read.base_color == wrote.base_color && read.metallic_roughness ==
+                                                         wrote.metallic_roughness,
+              "with the base color and the metallic-roughness map");
+        check(read.normal == wrote.normal && read.occlusion == wrote.occlusion &&
+                  read.emissive == wrote.emissive,
+              "and the normal, occlusion, and emissive maps");
+        check(read.base_color_factor == wrote.base_color_factor &&
+                  read.emissive_factor == wrote.emissive_factor,
+              "and both color factors");
+        check(read.metallic_factor == wrote.metallic_factor &&
+                  read.roughness_factor == wrote.roughness_factor &&
+                  read.normal_scale == wrote.normal_scale &&
+                  read.occlusion_strength == wrote.occlusion_strength &&
+                  read.alpha_cutoff == wrote.alpha_cutoff,
+              "and every scalar");
+        check(read.alpha_mode == as::AlphaMode::Mask && read.double_sided,
+              "and the alpha mode and the double sided flag");
+    }
+
+    void test_read_material_refuses_a_bad_file() {
+        as::Material material;
+        const std::vector<std::byte> good =
+            make_material_file(as::pack_material(distinctive_material()));
+
+        check(!as::read_material({}, material, "empty"), "an empty file is refused");
+        check(!as::read_material(std::span{ good }.first(good.size() - 1), material, "short"),
+              "a file shorter than the format is refused");
+        std::vector<std::byte> longer = good;
+        longer.push_back(std::byte{ 0 });
+        check(!as::read_material(longer, material, "long"),
+              "a file longer than the format is refused");
+
+        as::MaterialHeader wrong = as::pack_material(distinctive_material());
+        wrong.magic = 0;
+        check(!as::read_material(make_material_file(wrong), material, "magic"),
+              "a file that is not a cooked material is refused");
+
+        wrong = as::pack_material(distinctive_material());
+        wrong.version = as::kMaterialVersion + 1;
+        check(!as::read_material(make_material_file(wrong), material, "version"),
+              "a file from a later format version is refused");
+
+        wrong = as::pack_material(distinctive_material());
+        wrong.alpha_mode = as::kAlphaModeMax + 1;
+        check(!as::read_material(make_material_file(wrong), material, "mode"),
+              "an alpha mode this build does not have is refused");
+
+        // A factor that is not a number multiplies a surface into nothing, and
+        // it survives every size and range check above. The failure it causes
+        // is a mesh that draws in the wrong color, or not at all, with no
+        // message that names the material.
+        wrong = as::pack_material(distinctive_material());
+        wrong.base_color_factor[2] = std::numeric_limits<float>::quiet_NaN();
+        check(!as::read_material(make_material_file(wrong), material, "nan"),
+              "a base color factor that is not a number is refused");
+
+        wrong = as::pack_material(distinctive_material());
+        wrong.roughness_factor = std::numeric_limits<float>::infinity();
+        check(!as::read_material(make_material_file(wrong), material, "inf"),
+              "and so is a roughness that runs off to infinity");
+    }
+
 } // namespace
 
 int main() {
@@ -417,5 +516,8 @@ int main() {
     test_mip_arithmetic();
     test_read_texture_refuses_a_bad_file();
     test_color_space_text();
+    test::section("the cooked material format");
+    test_material_round_trips();
+    test_read_material_refuses_a_bad_file();
     return test::report();
 }

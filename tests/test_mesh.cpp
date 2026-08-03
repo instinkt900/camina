@@ -1,4 +1,4 @@
-// M4.4 tests for the glTF importer and the cooked mesh format.
+// M4.4 tests for the glTF importer, the cooked mesh, and the cooked material.
 //
 // The property that carries this part is that a cooked mesh describes itself
 // exactly. A file whose header disagrees with its contents becomes a draw call
@@ -11,7 +11,9 @@
 // case needs, including the broken ones.
 
 #include "assets/manifest.h"
+#include "assets/material.h"
 #include "assets/mesh.h"
+#include "assets/meta.h"
 #include "check.h"
 #include "cook.h"
 #include "mesh.h"
@@ -133,7 +135,7 @@ namespace {
      * test that nobody can read is a test nobody will fix.
      */
     std::string geometry_json(const Geometry& parts, int mesh_count,
-                              std::string_view buffer_uri) {
+                              std::string_view buffer_uri, std::string_view image_uri = {}) {
         const auto number = [](std::size_t value) { return std::to_string(value); };
         const auto bytes = [&](std::uint32_t count, std::size_t stride) {
             return number(static_cast<std::size_t>(count) * stride);
@@ -162,6 +164,21 @@ namespace {
         accessors += R"({"bufferView":3,"componentType":5123,"count":)" +
                      number(parts.index_count) + R"(,"type":"SCALAR"}],)";
 
+        // One material over one image, when the caller asked for it. The
+        // material names the image as both a base color and a normal map, so a
+        // test can tell the two fields apart from one file.
+        std::string materials;
+        std::string material_of;
+        if (!image_uri.empty()) {
+            materials = R"("images":[{"uri":")" + std::string{ image_uri } + R"("}],)";
+            materials += R"("textures":[{"source":0}],)";
+            materials += R"("materials":[{"name":"only",)"
+                         R"("pbrMetallicRoughness":{"baseColorTexture":{"index":0},)"
+                         R"("baseColorFactor":[0.25,0.5,0.75,1.0],"metallicFactor":0.125},)"
+                         R"("normalTexture":{"index":0},"doubleSided":true}],)";
+            material_of = R"(,"material":0)";
+        }
+
         // Every mesh names the same accessors. That is enough to give a file
         // several meshes, which is what the sub-asset identities need.
         std::string meshes = R"("meshes":[)";
@@ -171,7 +188,8 @@ namespace {
             }
             meshes += R"({"name":"mesh)" + std::to_string(at) +
                       R"(","primitives":[{"attributes":)"
-                      R"({"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]})";
+                      R"({"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3)" +
+                      material_of + "}]}";
         }
         meshes += "]";
 
@@ -181,12 +199,14 @@ namespace {
         }
         buffer += R"("byteLength":)" + number(parts.buffer.size()) + "}],";
 
-        return R"({"asset":{"version":"2.0"},)" + buffer + views + accessors + meshes + "}";
+        return R"({"asset":{"version":"2.0"},)" + buffer + views + accessors + materials +
+               meshes + "}";
     }
 
     /// Writes a .glb, which carries its buffer inside rather than beside it.
-    void write_glb(const std::filesystem::path& path, const Geometry& parts, int mesh_count) {
-        std::string json = geometry_json(parts, mesh_count, "");
+    void write_glb(const std::filesystem::path& path, const Geometry& parts, int mesh_count,
+                   std::string_view image_uri = {}) {
+        std::string json = geometry_json(parts, mesh_count, "", image_uri);
         while (json.size() % 4 != 0) {
             json.push_back(' ');
         }
@@ -228,19 +248,29 @@ namespace {
         write_bytes(path, std::as_bytes(std::span{ json.data(), json.size() }));
     }
 
+    /// A parent identity for a test that calls the rule rather than the cooker.
+    const engine::Guid kParent{ .high = 0x0102030405060708ULL, .low = 0x090A0B0C0D0E0F10ULL };
+
+    /// Calls the glTF rule with that parent, so a case reads as one line.
+    bool cook_gltf(const std::filesystem::path& source, const std::filesystem::path& out,
+                   const std::filesystem::path& relative,
+                   std::vector<as::ManifestOutput>& outputs) {
+        return cooker::cook_gltf(source, out, relative, kParent, outputs);
+    }
+
     void test_glb_cooks() {
         const std::filesystem::path dir = scratch("glb");
         const std::filesystem::path out = scratch("glb_out");
         write_glb(dir / "one.glb", build_triangle(), 1);
 
-        std::vector<std::filesystem::path> cooked;
-        check(cooker::cook_gltf(dir / "one.glb", out, "one.glb", cooked), "a .glb cooks");
-        check(cooked.size() == 1, "and one mesh gives one cooked file");
-        check(cooked.at(0).generic_string() == "one.glb.0.mesh",
+        std::vector<as::ManifestOutput> cooked;
+        check(cook_gltf(dir / "one.glb", out, "one.glb", cooked), "a .glb cooks");
+        check(cooked.size() == 1, "and one mesh with no material gives one cooked file");
+        check(cooked.at(0).cooked == "one.glb.0.mesh",
               "and the name numbers the part before the extension");
 
         as::Mesh mesh;
-        const std::vector<std::byte> bytes = read_bytes(out / cooked.at(0));
+        const std::vector<std::byte> bytes = read_bytes(out / cooked.at(0).cooked);
         check(as::read_mesh(bytes, mesh, "one.glb.0.mesh"), "the cooked mesh reads back");
         check(mesh.vertices.size() == 3, "and it holds the three vertices");
         check(mesh.indices.size() == 3, "and the three indices");
@@ -263,13 +293,13 @@ namespace {
         // The .bin sits next to the .gltf and the loader has to find it there.
         // A path that resolved against the working directory instead would work
         // on the machine that wrote the test and fail everywhere else.
-        std::vector<std::filesystem::path> cooked;
-        check(cooker::cook_gltf(dir / "two.gltf", out, "two.gltf", cooked),
+        std::vector<as::ManifestOutput> cooked;
+        check(cook_gltf(dir / "two.gltf", out, "two.gltf", cooked),
               "a .gltf with a separate buffer cooks");
         check(cooked.size() == 2, "and two meshes give two cooked files");
-        check(cooked.at(1).generic_string() == "two.gltf.1.mesh", "numbered in mesh order");
-        check(std::filesystem::exists(out / cooked.at(0)) &&
-                  std::filesystem::exists(out / cooked.at(1)),
+        check(cooked.at(1).cooked == "two.gltf.1.mesh", "numbered in mesh order");
+        check(std::filesystem::exists(out / cooked.at(0).cooked) &&
+                  std::filesystem::exists(out / cooked.at(1).cooked),
               "and both landed");
 
         std::filesystem::remove_all(dir.parent_path());
@@ -280,11 +310,11 @@ namespace {
         const std::filesystem::path out = scratch("tangent_out");
         write_glb(dir / "flat.glb", build_triangle(), 1);
 
-        std::vector<std::filesystem::path> cooked;
-        check(cooker::cook_gltf(dir / "flat.glb", out, "flat.glb", cooked), "it cooks");
+        std::vector<as::ManifestOutput> cooked;
+        check(cook_gltf(dir / "flat.glb", out, "flat.glb", cooked), "it cooks");
 
         as::Mesh mesh;
-        const std::vector<std::byte> bytes = read_bytes(out / cooked.at(0));
+        const std::vector<std::byte> bytes = read_bytes(out / cooked.at(0).cooked);
         check(as::read_mesh(bytes, mesh, "flat.glb.0.mesh"), "it reads back");
 
         // The source names no TANGENT. A zero tangent would give a normal map
@@ -386,11 +416,12 @@ namespace {
         constexpr std::size_t kQuads = static_cast<std::size_t>(kSide) * kSide;
         write_glb(dir / "grid.glb", build_grid(kSide), 1);
 
-        std::vector<std::filesystem::path> cooked;
-        check(cooker::cook_gltf(dir / "grid.glb", out, "grid.glb", cooked), "a grid cooks");
+        std::vector<as::ManifestOutput> cooked;
+        check(cook_gltf(dir / "grid.glb", out, "grid.glb", cooked), "a grid cooks");
 
         as::Mesh mesh;
-        check(as::read_mesh(read_bytes(out / cooked.at(0)), mesh, "grid"), "it reads back");
+        check(as::read_mesh(read_bytes(out / cooked.at(0).cooked), mesh, "grid"),
+              "it reads back");
         check(mesh.indices.size() == kQuads * 6, "and it holds every triangle");
         check(mesh.vertices.size() == static_cast<std::size_t>(kSide + 1) * (kSide + 1),
               "and every vertex, with none added and none dropped");
@@ -431,8 +462,8 @@ namespace {
         const std::string junk = "this is not glTF";
         write_bytes(dir / "junk.gltf", std::as_bytes(std::span{ junk.data(), junk.size() }));
 
-        std::vector<std::filesystem::path> cooked;
-        check(!cooker::cook_gltf(dir / "junk.gltf", out, "junk.gltf", cooked),
+        std::vector<as::ManifestOutput> cooked;
+        check(!cook_gltf(dir / "junk.gltf", out, "junk.gltf", cooked),
               "a file that is not glTF fails");
         check(cooked.empty(), "and nothing was recorded for it");
 
@@ -441,10 +472,10 @@ namespace {
         // its own message.
         write_gltf(dir / "orphan.gltf", build_triangle(), 1);
         std::filesystem::remove(dir / "orphan.bin");
-        check(!cooker::cook_gltf(dir / "orphan.gltf", out, "orphan.gltf", cooked),
+        check(!cook_gltf(dir / "orphan.gltf", out, "orphan.gltf", cooked),
               "a .gltf whose buffer is missing fails");
 
-        check(!cooker::cook_gltf(dir / "not_there.gltf", out, "not_there.gltf", cooked),
+        check(!cook_gltf(dir / "not_there.gltf", out, "not_there.gltf", cooked),
               "a file that is not there fails");
 
         // A position that is not a number poisons the bounds, and the bounds
@@ -455,7 +486,7 @@ namespace {
         const float nan = std::numeric_limits<float>::quiet_NaN();
         std::memcpy(poisoned.buffer.data(), &nan, sizeof(nan));
         write_glb(dir / "nan.glb", poisoned, 1);
-        check(!cooker::cook_gltf(dir / "nan.glb", out, "nan.glb", cooked),
+        check(!cook_gltf(dir / "nan.glb", out, "nan.glb", cooked),
               "a vertex position that is not a number fails the cook");
 
         std::filesystem::remove_all(dir.parent_path());
@@ -672,6 +703,165 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    /**
+     * Writes a 32-bit uncompressed TGA, which stb_image reads.
+     *
+     * A TGA and not a PNG, because a PNG needs a deflate stream and the test
+     * would then need a compressor to write one. The cooker reads both through
+     * the same stb_image call, so the format proves the same thing.
+     */
+    void write_tga(const std::filesystem::path& path) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+
+        // 18 bytes. Type 2 is uncompressed true color, 1 by 1, 32 bits, with
+        // the top-left origin flag so no row flip is needed.
+        const std::array<std::uint8_t, 18> header{ 0, 0, 2, 0, 0, 0, 0, 0, 0,
+                                                   0, 0, 0, 1, 0, 1, 0, 32, 0x28 };
+        file.write(reinterpret_cast<const char*>(header.data()),
+                   static_cast<std::streamsize>(header.size()));
+        const std::array<char, 4> texel{ 0, 0, 0, static_cast<char>(255) };
+        file.write(texel.data(), static_cast<std::streamsize>(texel.size()));
+    }
+
+    /// Reads a cooked material file back.
+    as::Material read_material_file(const std::filesystem::path& path) {
+        as::Material material;
+        check(as::read_material(read_bytes(path), material, path.string()),
+              "the cooked material reads back");
+        return material;
+    }
+
+    void test_a_material_names_its_textures_by_guid() {
+        const std::filesystem::path source = scratch("mat/src");
+        const std::filesystem::path out = scratch("mat/out");
+        write_tga(source / "skin_BaseColor.tga");
+        write_glb(source / "one.glb", build_triangle(), 1, "skin_BaseColor.tga");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a glTF with a material cooks");
+
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads back");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "one.glb");
+        check(entry != nullptr, "and it holds the glTF");
+        if (entry == nullptr) {
+            return;
+        }
+
+        // One mesh and one material. The mesh comes first, because the cooker
+        // checks the name of the first output to decide whether it may skip.
+        check(entry->outputs.size() == 2, "one mesh and one material give two outputs");
+        check(entry->outputs.at(0).cooked == "one.glb.0.mesh", "the mesh is first");
+        check(entry->outputs.at(1).cooked == "one.glb.0.material", "and the material follows");
+        check(entry->outputs.at(1).guid == engine::Guid::derive(entry->guid, "material", 0),
+              "with an identity derived from the source and the index");
+        check(entry->outputs.at(0).guid != entry->outputs.at(1).guid,
+              "and a mesh and a material at the same index differ");
+
+        // The identity in the material has to be the one the image sidecar
+        // holds. Any other value points at nothing, and the surface would draw
+        // white with no message saying why.
+        as::AssetMeta image;
+        check(as::load_meta(source / "skin_BaseColor.tga", image), "the image sidecar reads");
+
+        const as::Material material = read_material_file(out / "one.glb.0.material");
+        check(material.base_color == image.guid, "the base color names the image sidecar GUID");
+        check(material.normal == image.guid, "and so does the normal map");
+        check(!material.metallic_roughness.valid(),
+              "a map the source leaves out stays the null GUID");
+        check(material.base_color_factor == engine::Vec4(0.25F, 0.5F, 0.75F, 1.0F),
+              "and the factors come across");
+        check(material.metallic_factor == 0.125F, "including the metallic factor");
+        check(material.double_sided, "and the double sided flag");
+
+        // The submesh has to name the material, or nothing ties the two files
+        // together and the renderer draws the fallback.
+        as::Mesh mesh;
+        check(as::read_mesh(read_bytes(out / "one.glb.0.mesh"), mesh, "one"),
+              "the cooked mesh reads back");
+        check(mesh.submeshes.size() == 1 &&
+                  mesh.submeshes.at(0).material == entry->outputs.at(1).guid,
+              "and its submesh names the material");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_the_image_sidecar_is_an_input() {
+        const std::filesystem::path source = scratch("input/src");
+        const std::filesystem::path out = scratch("input/out");
+        write_tga(source / "skin_BaseColor.tga");
+        write_glb(source / "one.glb", build_triangle(), 1, "skin_BaseColor.tga");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+        check(second.cooked == 0, "and nothing cooks twice");
+
+        // Replace the image sidecar, which is what deleting one and cooking
+        // again does. The glTF itself does not change at all, so an entry that
+        // hashed only the .glb would keep a material pointing at a GUID that
+        // no longer names anything.
+        as::AssetMeta replaced;
+        replaced.guid = engine::Guid::generate();
+        check(as::save_meta(source / "skin_BaseColor.tga", replaced),
+              "a new identity writes to the sidecar");
+
+        cooker::Result third;
+        check(cooker::cook_all(options, third), "the third cook works");
+        check(third.cooked == 2, "a replaced image sidecar cooks the image and the glTF");
+
+        const as::Material material = read_material_file(out / "one.glb.0.material");
+        check(material.base_color == replaced.guid,
+              "and the material now names the new identity");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_the_gltf_rule_guesses_the_color_space() {
+        const std::filesystem::path source = scratch("guess/src");
+        const std::filesystem::path out = scratch("guess/out");
+
+        // The glTF sorts before the image, so the glTF rule reaches the image
+        // first and writes its sidecar. A rule that wrote the defaults there
+        // would record sRGB, and every normal map in the model would read as
+        // color from then on. Nothing about the result would look broken
+        // enough to find.
+        write_tga(source / "skin_Normal.tga");
+        write_glb(source / "a.glb", build_triangle(), 1, "skin_Normal.tga");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        as::AssetMeta image;
+        check(as::load_meta(source / "skin_Normal.tga", image), "the image sidecar reads");
+        check(image.texture.color_space == as::ColorSpace::Linear,
+              "a normal map reads as linear even when the glTF rule wrote the sidecar");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_a_material_naming_a_missing_image_fails() {
+        const std::filesystem::path source = scratch("missing/src");
+        const std::filesystem::path out = scratch("missing/out");
+        write_glb(source / "one.glb", build_triangle(), 1, "not_there.tga");
+
+        // A model that names an image nobody shipped is a broken model. Cooking
+        // it anyway would give a material with a null texture, and the surface
+        // would draw white with nothing in the log naming the file.
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a material naming a missing image fails");
+        check(result.failed == 1, "and the glTF is the source that failed");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
 } // namespace
 
 int main() {
@@ -687,5 +877,10 @@ int main() {
     test_the_cooker_gives_each_mesh_its_own_identity();
     test_the_separate_buffer_is_an_input();
     test_a_missing_part_cooks_again();
+    test::section("materials");
+    test_a_material_names_its_textures_by_guid();
+    test_the_image_sidecar_is_an_input();
+    test_the_gltf_rule_guesses_the_color_space();
+    test_a_material_naming_a_missing_image_fails();
     return test::report();
 }
