@@ -68,6 +68,15 @@ namespace engine::assets {
             ENGINE_LOG_ERROR("{} is not in the manifest. The cooker did not make it.", source);
             return nullptr;
         }
+        // Zero and many are two different problems, and the advice for many
+        // does not work for zero. No rule writes an entry with no outputs, so
+        // this reports a manifest somebody edited or a write that was cut off.
+        if (entry->outputs.empty()) {
+            ENGINE_LOG_ERROR("{} has no cooked files in the manifest. Cook the content tree "
+                             "again.",
+                             source);
+            return nullptr;
+        }
         if (entry->outputs.size() != 1) {
             ENGINE_LOG_ERROR("{} cooked into {} files, so its path does not name one. Ask for "
                              "the part you want by its GUID.",

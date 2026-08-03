@@ -261,6 +261,18 @@ namespace cooker {
                 }
 
                 const Vec3 position{ vertex.position[0], vertex.position[1], vertex.position[2] };
+
+                // A position that is not a number poisons the bounds, and the
+                // bounds decide culling in M5 and picking in #34. Refusing here
+                // names the source file. Letting it through gives a mesh that
+                // never draws, or always draws, for no visible reason.
+                if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+                    !std::isfinite(position.z)) {
+                    ENGINE_LOG_ERROR("{}: vertex {} has a position that is not a number.", where,
+                                     at);
+                    return false;
+                }
+
                 built.min = glm::min(built.min, position);
                 built.max = glm::max(built.max, position);
 

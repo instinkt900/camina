@@ -107,6 +107,22 @@ namespace engine::assets {
             }
         }
 
+        // The bounds get the same treatment as the counts above. #34 picks an
+        // entity with this box and M5 culls with it. An inverted box culls the
+        // mesh always or never, and a NaN corner makes the answer undefined.
+        // Neither failure names the mesh that caused it.
+        //
+        // The comparison is written as !(min <= max) rather than as min > max,
+        // because every comparison against NaN is false. The negated form
+        // therefore rejects NaN and the plain form would let it through.
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            if (!(header.min[axis] <= header.max[axis])) {
+                ENGINE_LOG_ERROR("{}: the bounds on axis {} run from {} to {}.", where, axis,
+                                 header.min[axis], header.max[axis]);
+                return false;
+            }
+        }
+
         out.vertices = std::move(vertices);
         out.indices = std::move(indices);
         out.submeshes = std::move(submeshes);

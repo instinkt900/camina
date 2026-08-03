@@ -23,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <set>
 #include <span>
 #include <string>
@@ -124,58 +125,68 @@ namespace {
     }
 
     /// The glTF JSON for one or two meshes over the triangle buffer.
-    std::string triangle_json(const Geometry& parts, int mesh_count, std::string_view buffer_uri) {
-        std::string meshes;
+    /**
+     * The glTF JSON over one geometry buffer, with one mesh or several.
+     *
+     * Built with appends rather than as one expression. A single concatenation
+     * of this many pieces is what a formatter cannot lay out readably, and a
+     * test that nobody can read is a test nobody will fix.
+     */
+    std::string geometry_json(const Geometry& parts, int mesh_count,
+                              std::string_view buffer_uri) {
+        const auto number = [](std::size_t value) { return std::to_string(value); };
+        const auto bytes = [&](std::uint32_t count, std::size_t stride) {
+            return number(static_cast<std::size_t>(count) * stride);
+        };
+
+        // One view for each attribute, then the indices. The order matches the
+        // order build_triangle and build_grid write them in.
+        std::string views = R"("bufferViews":[)";
+        views += R"({"buffer":0,"byteOffset":)" + number(parts.positions_at) +
+                 R"(,"byteLength":)" + bytes(parts.vertex_count, 12) + "},";
+        views += R"({"buffer":0,"byteOffset":)" + number(parts.normals_at) +
+                 R"(,"byteLength":)" + bytes(parts.vertex_count, 12) + "},";
+        views += R"({"buffer":0,"byteOffset":)" + number(parts.uvs_at) +
+                 R"(,"byteLength":)" + bytes(parts.vertex_count, 8) + "},";
+        views += R"({"buffer":0,"byteOffset":)" + number(parts.indices_at) +
+                 R"(,"byteLength":)" + bytes(parts.index_count, 2) + "}],";
+
+        const std::string count = number(parts.vertex_count);
+        std::string accessors = R"("accessors":[)";
+        accessors += R"({"bufferView":0,"componentType":5126,"count":)" + count +
+                     R"(,"type":"VEC3"},)";
+        accessors += R"({"bufferView":1,"componentType":5126,"count":)" + count +
+                     R"(,"type":"VEC3"},)";
+        accessors += R"({"bufferView":2,"componentType":5126,"count":)" + count +
+                     R"(,"type":"VEC2"},)";
+        accessors += R"({"bufferView":3,"componentType":5123,"count":)" +
+                     number(parts.index_count) + R"(,"type":"SCALAR"}],)";
+
+        // Every mesh names the same accessors. That is enough to give a file
+        // several meshes, which is what the sub-asset identities need.
+        std::string meshes = R"("meshes":[)";
         for (int at = 0; at < mesh_count; ++at) {
             if (at > 0) {
                 meshes += ",";
             }
             meshes += R"({"name":"mesh)" + std::to_string(at) +
-                      R"(","primitives":[{"attributes":{"POSITION":0,"NORMAL":1,)"
-                      R"("TEXCOORD_0":2},"indices":3}]})";
+                      R"(","primitives":[{"attributes":)"
+                      R"({"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]})";
         }
+        meshes += "]";
 
-        const std::string uri = buffer_uri.empty() ? "" : R"("uri":")" + std::string{ buffer_uri } + R"(",)";
-        const std::string vertices = std::to_string(parts.vertex_count);
-        const std::string indices = std::to_string(parts.index_count);
-        const auto length = [](std::uint32_t count, std::size_t stride) {
-            return std::to_string(static_cast<std::size_t>(count) * stride);
-        };
+        std::string buffer = R"("buffers":[{)";
+        if (!buffer_uri.empty()) {
+            buffer += R"("uri":")" + std::string{ buffer_uri } + R"(",)";
+        }
+        buffer += R"("byteLength":)" + number(parts.buffer.size()) + "}],";
 
-        return R"({"asset":{"version":"2.0"},)"
-               R"("buffers":[{)" +
-               uri + R"("byteLength":)" + std::to_string(parts.buffer.size()) + R"(}],)"
-                                                                                R"("bufferViews":[)"
-                                                                                R"({"buffer":0,"byteOffset":)" +
-               std::to_string(parts.positions_at) +
-               R"(,"byteLength":)" + length(parts.vertex_count, 12) + R"(},)"
-                                                                      R"({"buffer":0,"byteOffset":)" +
-               std::to_string(parts.normals_at) +
-               R"(,"byteLength":)" + length(parts.vertex_count, 12) + R"(},)"
-                                                                      R"({"buffer":0,"byteOffset":)" +
-               std::to_string(parts.uvs_at) +
-               R"(,"byteLength":)" + length(parts.vertex_count, 8) + R"(},)"
-                                                                     R"({"buffer":0,"byteOffset":)" +
-               std::to_string(parts.indices_at) +
-               R"(,"byteLength":)" + length(parts.index_count, 2) + R"(}],)"
-                                                                    R"("accessors":[)"
-                                                                    R"({"bufferView":0,"componentType":5126,"count":)" +
-               vertices + R"(,"type":"VEC3"},)"
-                          R"({"bufferView":1,"componentType":5126,"count":)" +
-               vertices + R"(,"type":"VEC3"},)"
-                          R"({"bufferView":2,"componentType":5126,"count":)" +
-               vertices + R"(,"type":"VEC2"},)"
-                          R"({"bufferView":3,"componentType":5123,"count":)" +
-               indices +
-               R"(,"type":"SCALAR"}],)"
-               R"("meshes":[)" +
-               meshes + R"(])"
-                        R"(})";
+        return R"({"asset":{"version":"2.0"},)" + buffer + views + accessors + meshes + "}";
     }
 
     /// Writes a .glb, which carries its buffer inside rather than beside it.
     void write_glb(const std::filesystem::path& path, const Geometry& parts, int mesh_count) {
-        std::string json = triangle_json(parts, mesh_count, "");
+        std::string json = geometry_json(parts, mesh_count, "");
         while (json.size() % 4 != 0) {
             json.push_back(' ');
         }
@@ -213,7 +224,7 @@ namespace {
     void write_gltf(const std::filesystem::path& path, const Geometry& parts, int mesh_count) {
         const std::string bin_name = path.stem().string() + ".bin";
         write_bytes(path.parent_path() / bin_name, parts.buffer);
-        const std::string json = triangle_json(parts, mesh_count, bin_name);
+        const std::string json = geometry_json(parts, mesh_count, bin_name);
         write_bytes(path, std::as_bytes(std::span{ json.data(), json.size() }));
     }
 
@@ -436,6 +447,17 @@ namespace {
         check(!cooker::cook_gltf(dir / "not_there.gltf", out, "not_there.gltf", cooked),
               "a file that is not there fails");
 
+        // A position that is not a number poisons the bounds, and the bounds
+        // decide culling and picking. Catching it at the cook names the source
+        // file. Letting it through gives a mesh that never draws for no
+        // visible reason, much later.
+        Geometry poisoned = build_triangle();
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        std::memcpy(poisoned.buffer.data(), &nan, sizeof(nan));
+        write_glb(dir / "nan.glb", poisoned, 1);
+        check(!cooker::cook_gltf(dir / "nan.glb", out, "nan.glb", cooked),
+              "a vertex position that is not a number fails the cook");
+
         std::filesystem::remove_all(dir.parent_path());
     }
 
@@ -510,6 +532,20 @@ namespace {
         };
         check(!as::read_mesh(make_mesh_file(header, vertices, indices, empty_run), mesh, "none"),
               "a submesh covering no indices is refused");
+
+        // The bounds decide culling in M5 and picking in #34. An inverted box
+        // culls the mesh always or never, and a NaN corner makes the answer
+        // undefined. Neither one names the mesh that caused it.
+        wrong = header;
+        wrong.min = { 1.0F, 0.0F, 0.0F };
+        wrong.max = { -1.0F, 0.0F, 0.0F };
+        check(!as::read_mesh(make_mesh_file(wrong, vertices, indices, submeshes), mesh, "flip"),
+              "bounds whose low corner is above the high one are refused");
+
+        wrong = header;
+        wrong.max = { std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F };
+        check(!as::read_mesh(make_mesh_file(wrong, vertices, indices, submeshes), mesh, "nan"),
+              "bounds holding a value that is not a number are refused");
 
         check(!as::read_mesh(std::span{ good }.first(good.size() - 4), mesh, "cut"),
               "a file shorter than its header claims is refused");
