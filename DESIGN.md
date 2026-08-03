@@ -246,7 +246,7 @@ engine/
     platform/          SDL3 window, input, filesystem, dynamic library loading
     gfx/               PUBLIC render interface: handles, descs, command list
       vulkan/          the ONLY place vulkan.h is legal (rule 4.1)
-    render/            render graph, PBR passes, materials, culling, shaders/
+    render/            render graph, PBR passes, materials, culling, content/
     scene/             EnTT world, transform hierarchy, serialization, prefabs
     physics/           box3d integration, fixed-step loop, debug draw
     script/            sol2 bindings, ScriptComponent, hot reload
@@ -373,8 +373,15 @@ serializer through the list branch that M2 already had. The `Guid` field went th
 `TextValue` branch M4.1 added, so a manifest reads as paths and identities rather than as
 pairs of large integers.
 
-That is six consumers on one description, and the descriptor format has changed once. The one
-change was a new kind of field value, not a new kind of descriptor.
+**What the texture settings needed.** M4.3 put a `ColorSpace` enum in the sidecar and needed
+nothing new. The enum branch would have written `"color_space": 1`, which says nothing to the
+person who opens that file to fix a texture that came out wrong. So `ColorSpace` declares
+`to_text` and `from_text` and reaches the same `TextValue` branch, and the sidecar reads
+`"Linear"`. `TextureImport` itself is an ordinary described struct nested in `AssetMeta`, and
+it carries `Version{2}`, so a sidecar written before M4.3 reads back with no warning.
+
+That is seven consumers on one description, and the descriptor format has changed once. The
+one change was a new kind of field value, not a new kind of descriptor.
 
 The inspector needed one thing the other consumers did not. A value that must parse cannot
 be written back on each keystroke, because a half-typed GUID is not a GUID. So
@@ -510,6 +517,33 @@ nothing can read a file and a line out of it yet.
 The cooked SPIR-V is a file rather than a header the build generates. `engine_core` therefore
 has no build-time dependency on the cooker, and a shader reloads through the same path every
 other asset uses.
+
+**Textures.** M4.3 made a texture the second asset type on the cooker. `src/assets/texture.h`
+holds the file format, and both sides read that one header. A cooked texture is a 32-byte
+header and then every mip level, largest first, packed with no padding. The runtime reads the
+file into one buffer and hands the payload to `gfx::create_texture`. There is no decode step
+and no second copy.
+
+The `.meta` sidecar decides three things: the color space, whether to compress, and whether
+to build mips. The cooker guesses the color space once, from the file name, and writes it
+into the new sidecar. After that the file decides. A guess that keeps overwriting what a
+person typed is worse than no guess at all.
+
+**The color space is the reason any of this is a cook step.** A mip chain has to average
+light, not the bytes that encode it. Two black texels and two white ones are half the light,
+and half the light writes back as 188 in sRGB, not as 128. A chain built the naive way gets
+darker at every level, distant surfaces go muddy, and the cause is very hard to find. So the
+cooker converts sRGB color channels to linear, averages, and converts back. Alpha never goes
+through the transfer function, because alpha is coverage and it is already linear.
+
+BC7 comes from `bc7enc_rdo`, which §5 vendors as a submodule. Only `bc7enc.cpp` is compiled.
+An image narrower or shorter than one 4 by 4 block stays uncompressed, because it would be
+mostly padding. `TextureImport::compress` turns it off for a lookup table, where an exact
+texel matters more than the memory does.
+
+`gfx::TextureFormat` carries the four combinations of RGBA8 or BC7 with sRGB or Unorm. The
+sRGB entries make the sampler convert on read, which is what §3 asks for. Rule 4.2 holds:
+the enum is a plain `uint32_t` and `TextureDesc` stays POD.
 
 **Profiling.** Add Tracy in M0. It integrates quickly and it changes how you work for the
 rest of the project.

@@ -62,6 +62,15 @@ namespace engine::assets {
                                       std::vector<std::byte>& out) const;
 
         /**
+         * @brief Reads the bytes of a cooked asset, by source path.
+         * @param source The source path, as find() takes it.
+         * @param out The bytes.
+         * @return True when the asset was there and it read.
+         */
+        [[nodiscard]] bool read_bytes(std::string_view source,
+                                      std::vector<std::byte>& out) const;
+
+        /**
          * @brief Reads a cooked asset as 32-bit words, which is what SPIR-V is.
          *
          * This reports a file whose length is not a multiple of four, because

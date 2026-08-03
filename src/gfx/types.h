@@ -96,16 +96,42 @@ namespace engine::gfx {
     };
 
     /**
+     * @brief How the texels of a texture are stored, and how a shader reads them.
+     *
+     * The sRGB entries make the sampler convert to linear on read, which is what
+     * DESIGN.md section 3 asks for. The Unorm entries hand the texel through
+     * unchanged, which is what a normal map or a roughness map needs.
+     *
+     * A BC7 entry needs the `textureCompressionBC` device feature. Every desktop
+     * GPU that runs Vulkan 1.3 has it. create_texture() reports it by name when
+     * a device does not.
+     */
+    enum class TextureFormat : std::uint32_t {
+        RGBA8Srgb = 0, ///< Four 8-bit channels, converted from sRGB on read.
+        RGBA8Unorm,    ///< Four 8-bit channels, read as they are.
+        BC7Srgb,       ///< BC7 blocks, converted from sRGB on read.
+        BC7Unorm,      ///< BC7 blocks, read as they are.
+    };
+
+    /**
      * @brief Settings for create_texture().
      *
-     * The pixels are 8 bits for each channel in RGBA order, and the device reads
-     * them as sRGB. DESIGN.md section 3 converts to linear at the texture read.
+     * The pixels hold every mip level, largest first, packed with no padding
+     * between them. That is the layout a cooked texture file already has, so the
+     * caller passes a pointer into the bytes it read and the device copies once.
+     *
+     * @warning @c size must cover every level. The device works out where each
+     * level starts from the format and the extent, and a short buffer would make
+     * it read past the end.
      */
     struct TextureDesc {
-        const void* pixels = nullptr; ///< Width times height times 4 bytes. Required.
-        std::uint32_t width = 0;      ///< Width in texels.
-        std::uint32_t height = 0;     ///< Height in texels.
-        SamplerDesc sampler;          ///< How the shader reads it. Shared, not owned.
+        const void* pixels = nullptr;                    ///< The first byte of mip level 0. Required.
+        std::size_t size = 0;                            ///< Bytes of every level together. Required.
+        std::uint32_t width = 0;                         ///< Width of mip level 0, in texels.
+        std::uint32_t height = 0;                        ///< Height of mip level 0, in texels.
+        std::uint32_t mip_count = 1;                     ///< How many levels @c pixels holds. At least 1.
+        TextureFormat format = TextureFormat::RGBA8Srgb; ///< How the texels are stored.
+        SamplerDesc sampler;                             ///< How the shader reads it. Shared, not owned.
     };
 
     /// @brief The element type of one vertex attribute.

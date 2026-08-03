@@ -51,6 +51,13 @@ decides what to skip, so a second cook of an unchanged tree does nothing. Shader
 first asset type on it, and `cmake/Shaders.cmake` is gone. Cooked content now sits next to
 the executable, and `platform::cooked_content_root()` finds it there.
 
+M4.3 makes a texture the second asset type. `src/assets/texture.h` holds the cooked format,
+and both the cooker and the runtime read that one header. The cooker reads an image with
+stb_image, builds the mip chain in linear light, and compresses to BC7 with `bc7enc_rdo`,
+the first entry in `third_party/`. The `.meta` sidecar records the color space, and the
+cooker guesses it from the file name only on the cook that writes a new sidecar. The cube
+reads `cube.png` from the cooked tree, and `build_texture()` is gone.
+
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings
 under the full warning set.
@@ -173,17 +180,24 @@ here, consider whether moth_ui wants the same change.
   backend must see `IMGUI_IMPL_VULKAN_USE_VOLK`, because the engine never links the
   Vulkan loader library. Rule 4.4 keeps these files in the Conan cache, not in
   `third_party/`, since we do not patch them.
-- **Sandbox content.** `sandbox/` reads its prefabs and its scene from the source
-  directory, through a `SANDBOX_CONTENT_DIR` definition that CMake sets. That is a
-  stand-in, and M4 replaces it with a cooked content directory next to the executable.
-  `runtime --content <dir>` overrides it.
-- **Shaders.** `cmake/Shaders.cmake` compiles GLSL to SPIR-V with glslc at build time
-  and writes a braced list of 32-bit words. The consumer embeds it with
-  `std::to_array`, so the runtime carries no shader compiler. glslc arrives through
-  the `shaderc` tool requirement in `conanfile.py`. Conan Center has no binary for
-  our profile, so the first install builds shaderc, glslang, and SPIRV-Tools from
-  source. That takes several minutes once, then the cache serves it. M4 moves shader
-  cooking into `tools/cooker/`.
+- **Content trees.** There are two, and the cooker builds both into
+  `<executable dir>/content/`. `src/render/content/` holds what `render/` reads, which is
+  the two shaders and the cube texture. `sandbox/content/` holds the game scene and its
+  prefabs. `runtime --content <dir>` overrides the game one.
+- **Shaders.** `tools/cooker/` compiles GLSL to SPIR-V by running glslc, and writes the
+  module as a file next to the executable. glslc arrives through the `shaderc` tool
+  requirement in `conanfile.py`. Conan Center has no binary for our profile, so the first
+  install builds shaderc, glslang, and SPIRV-Tools from source. That takes several minutes
+  once, then the cache serves it. Issue #43 holds the reasons to link `libshaderc` instead.
+- **Submodules.** `third_party/bc7enc_rdo` is the first one. A fresh clone needs
+  `git submodule update --init --recursive`, and `third_party/bc7enc/CMakeLists.txt` fails
+  the build with that command in the message when the directory is empty. Only
+  `bc7enc.cpp` is compiled. The rest of that repository holds an ISPC kernel, a PNG
+  reader, and a DDS writer that we do not use.
+- **Third-party sources we compile.** `SKIP_LINTING` is a source file property, not a
+  target property. Setting it on a target does nothing and reports nothing.
+  `gfx/vulkan/vk_vma.cpp`, `tools/cooker/stb_image_impl.cpp`, and `bc7enc.cpp` all carry
+  it on the file, with `-w` alongside.
 - **EnTT assertions.** `src/core/entt.h` points `ENTT_ASSERT` at `ENGINE_ASSERT`.
   Include it before any EnTT header. Every engine header that includes one does that
   already, and the file fails the build with a message when the order is wrong.
