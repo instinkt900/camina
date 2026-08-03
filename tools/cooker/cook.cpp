@@ -34,6 +34,43 @@ namespace cooker {
             return "\"" + text + "\"";
         }
 
+        /// A path with the separators this platform's shell expects.
+        [[nodiscard]] std::string native(const std::filesystem::path& path) {
+            std::filesystem::path copy = path;
+            copy.make_preferred();
+            return copy.string();
+        }
+
+        /**
+         * Builds the command line for one glslc run.
+         *
+         * Two things here are Windows only, and both are about cmd.exe rather
+         * than about glslc.
+         *
+         * cmd reads a forward slash at the start of a word as a switch, so the
+         * program path needs backslashes. CMake hands out forward slashes on
+         * both platforms, so this cannot rely on what the caller passed.
+         *
+         * cmd also removes the first and the last quote of a command that
+         * starts with one. That splits a quoted program path in half, and the
+         * error it gives back names no file. Wrapping the whole command in one
+         * more pair is what cmd documents as the way to keep the inner quotes.
+         */
+        [[nodiscard]] std::string shader_command(const Options& options,
+                                                 const std::filesystem::path& source,
+                                                 const std::filesystem::path& destination) {
+            // --target-env matches the Vulkan version the device asks for, and
+            // -O is the same optimization the old CMake rule used. No -mfmt,
+            // because the cooked file is now SPIR-V rather than a C header.
+            std::string command = quoted(native(options.glslc)) +
+                                  " --target-env=vulkan1.3 -O -o " +
+                                  quoted(native(destination)) + " " + quoted(native(source));
+#if defined(_WIN32)
+            command = "\"" + command + "\"";
+#endif
+            return command;
+        }
+
         /**
          * Runs glslc over one shader.
          *
@@ -46,16 +83,14 @@ namespace cooker {
         [[nodiscard]] bool cook_shader(const Options& options,
                                        const std::filesystem::path& source,
                                        const std::filesystem::path& destination) {
-            // --target-env matches the Vulkan version the device asks for, and
-            // -O is the same optimization the old CMake rule used. No -mfmt,
-            // because the cooked file is now SPIR-V rather than a C header.
-            const std::string command = quoted(options.glslc) + " --target-env=vulkan1.3 -O -o " +
-                                        quoted(destination.string()) + " " +
-                                        quoted(source.string());
-
-            const int status = std::system(command.c_str());
-            if (status != 0) {
-                ENGINE_LOG_ERROR("{}: glslc returned {}.", source.string(), status);
+            const std::string command = shader_command(options, source, destination);
+            // std::system gives back a wait status rather than an exit code,
+            // and the two differ on POSIX, where exit code 1 arrives as 256.
+            // So this reports that glslc failed and leaves the number out.
+            // glslc already wrote what is wrong, with a line number.
+            if (std::system(command.c_str()) != 0) {
+                ENGINE_LOG_ERROR("{}: glslc did not compile it. Its messages are above.",
+                                 source.string());
                 return false;
             }
             return true;
