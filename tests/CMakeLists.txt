@@ -66,6 +66,11 @@ engine_enable_clang_tidy(test_sandbox)
 
 add_test(NAME sandbox COMMAND test_sandbox)
 
+# The test reads the content the game actually ships, and the game now reads it
+# from next to its own executable. So the cooked tree has to land next to this
+# test binary as well as next to the runtime.
+engine_cook_content(test_sandbox game "${CMAKE_SOURCE_DIR}/sandbox/content")
+
 # The EnTT preconditions reach ENGINE_ASSERT through src/core/entt.h. This
 # program reads a component the entity does not carry, so it is expected to die.
 # It passes only when the engine assertion reported the failure first. Without

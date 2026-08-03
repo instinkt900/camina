@@ -28,13 +28,20 @@ namespace sandbox {
     inline constexpr const char* kCratePrefab = "crate";
 
     /**
+     * @brief The game's directory inside the cooked content root.
+     *
+     * The cooker writes each source tree under its own name, so the engine's
+     * assets and the game's assets do not collide.
+     */
+    inline constexpr const char* kContentName = "game";
+
+    /**
      * @brief Where the game reads its content from when nobody says otherwise.
      *
-     * This is the source directory, baked in at build time. It is a stand-in.
-     * M4 brings the asset pipeline and a cooked content directory next to the
-     * executable, and this call goes away with it.
+     * This is the cooked directory next to the executable. An application that
+     * wants another one passes it to load() instead.
      *
-     * @return The content directory this build was compiled against.
+     * @return The cooked content directory for this game.
      */
     [[nodiscard]] std::filesystem::path default_content_directory();
 

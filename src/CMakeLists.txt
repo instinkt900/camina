@@ -3,9 +3,12 @@ add_library(engine_core STATIC
     core/jobs.cpp
     core/arena.cpp
     core/guid.cpp
+    assets/content.cpp
     assets/database.cpp
+    assets/manifest.cpp
     assets/meta.cpp
     platform/window.cpp
+    platform/paths.cpp
     gfx/types.cpp
     reflect/registry.cpp
     reflect/inspector.cpp
@@ -23,12 +26,9 @@ add_library(engine_core STATIC
     scene/prefab.cpp
 )
 
-# GLSL to SPIR-V at build time. render/cube_pass.cpp embeds the output, so the
-# runtime carries no shader compiler. See cmake/Shaders.cmake.
-engine_add_shaders(engine_core
-    render/shaders/cube.vert
-    render/shaders/cube.frag
-)
+# The shaders are cooked content now, not generated source. tools/cooker builds
+# them into ENGINE_COOKED_CONTENT_DIR, and render/cube_pass.cpp reads them from
+# there through assets::Content.
 
 # VMA is one large third-party header, and rule 4.4 says we do not patch it.
 # Compiling it under the engine warning set and clang-tidy reports problems in

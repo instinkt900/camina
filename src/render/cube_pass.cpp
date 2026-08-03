@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace engine::render {
 
@@ -109,13 +110,9 @@ namespace engine::render {
             return pixels;
         }
 
-        constexpr auto kCubeVertexShader = std::to_array<std::uint32_t>(
-#include "shaders/cube.vert.spv.inc"
-        );
-
-        constexpr auto kCubeFragmentShader = std::to_array<std::uint32_t>(
-#include "shaders/cube.frag.spv.inc"
-        );
+        /// Where the cooker put the two shaders, inside the engine content tree.
+        constexpr const char* kVertexShaderSource = "cube.vert";
+        constexpr const char* kFragmentShaderSource = "cube.frag";
 
     } // namespace
 
@@ -123,12 +120,22 @@ namespace engine::render {
         destroy();
     }
 
-    bool CubePass::create(gfx::Device* device) {
+    bool CubePass::create(gfx::Device* device, const assets::Content& content) {
         if (device == nullptr) {
             ENGINE_LOG_ERROR("CubePass::create needs a device.");
             return false;
         }
         device_ = device;
+
+        // The shaders come out of the cooked content tree now, rather than out
+        // of a header the build generated. So a missing or unbuilt content
+        // directory reports itself here, by name, rather than at draw time.
+        std::vector<std::uint32_t> vertex_words;
+        std::vector<std::uint32_t> fragment_words;
+        if (!content.read_words(kVertexShaderSource, vertex_words) ||
+            !content.read_words(kFragmentShaderSource, fragment_words)) {
+            return false;
+        }
 
         const gfx::BufferDesc vertex_desc{
             .data = kVertices.data(),
@@ -173,10 +180,9 @@ namespace engine::render {
         } };
 
         const gfx::GraphicsPipelineDesc pipeline_desc{
-            .vertex = { .spirv = kCubeVertexShader.data(),
-                        .word_count = kCubeVertexShader.size() },
-            .fragment = { .spirv = kCubeFragmentShader.data(),
-                          .word_count = kCubeFragmentShader.size() },
+            .vertex = { .spirv = vertex_words.data(), .word_count = vertex_words.size() },
+            .fragment = { .spirv = fragment_words.data(),
+                          .word_count = fragment_words.size() },
             .attributes = attributes.data(),
             .attribute_count = attributes.size(),
             .vertex_stride = sizeof(Vertex),

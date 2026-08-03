@@ -48,15 +48,21 @@ find_package(imgui REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(EnTT REQUIRED)
 
-# Shaders.cmake looks for glslc and fails when it is missing, so it must come
-# after the docs-only return above. The docs job has no Conan and no glslc.
-include(Shaders)
-
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)
 
+# Where every cooked content tree lands, next to the executables. The runtime
+# reads its content from here unless --content says otherwise.
+set(ENGINE_COOKED_CONTENT_DIR "${CMAKE_BINARY_DIR}/content"
+    CACHE PATH "Where the cooker writes its output")
+
 add_subdirectory(src)
+
+# The cooker comes after src, because it links engine::core. It looks for
+# glslc and fails when it is missing, so it must come after the docs-only
+# return above. The docs job has no Conan and no glslc.
+add_subdirectory(tools/cooker)
 
 # The game module comes before the applications, because both link it. Rule 4.3.
 add_subdirectory(sandbox)
