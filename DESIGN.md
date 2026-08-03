@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M2 complete
-Last updated: 2026-08-02
+Status: M3 complete, M4 in progress
+Last updated: 2026-08-03
 
 ---
 
@@ -367,6 +367,15 @@ consumers still call only `for_each_field()`. This is not a change to the descri
 a change to what a field may hold. Keep the two apart. The libclang step in the first
 paragraph of this section has to replace the descriptors without touching the field types.
 
+**What the cooker needed.** M4.2 added the manifest, and it needed nothing new either. A
+`ManifestEntry` is an ordinary described struct, and `std::vector<ManifestEntry>` reached the
+serializer through the list branch that M2 already had. The `Guid` field went through the
+`TextValue` branch M4.1 added, so a manifest reads as paths and identities rather than as
+pairs of large integers.
+
+That is six consumers on one description, and the descriptor format has changed once. The one
+change was a new kind of field value, not a new kind of descriptor.
+
 The inspector needed one thing the other consumers did not. A value that must parse cannot
 be written back on each keystroke, because a half-typed GUID is not a GUID. So
 `widget::edit_text_value()` reports a change when the user leaves the field, and text the
@@ -485,6 +494,22 @@ graph layer later.
 
 **Shader pipeline.** Compile GLSL to SPIR-V offline with shaderc. Derive descriptor set
 layouts with SPIRV-Reflect. Cache permutations. Support hot reload.
+
+M4.2 moved this out of CMake and into the cooker. A shader is an asset now, with a `.meta`
+sidecar and a manifest entry, and `assets::Content` reads it at startup.
+
+The cooker invokes `glslc` as a separate program rather than linking `libshaderc`. Conan 2
+has no per-target requirement. Linking it would therefore put shaderc in the graph of every
+consumer of the package, for the sake of one tool. Issue #43 holds the reasons to change
+that. The first one to arrive is M5, where permutations turn one process for each shader
+into many.
+
+The trade is the error text. glslc writes it to stderr and the cooker passes it through, so
+nothing can read a file and a line out of it yet.
+
+The cooked SPIR-V is a file rather than a header the build generates. `engine_core` therefore
+has no build-time dependency on the cooker, and a shader reloads through the same path every
+other asset uses.
 
 **Profiling.** Add Tracy in M0. It integrates quickly and it changes how you work for the
 rest of the project.

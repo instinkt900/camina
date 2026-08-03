@@ -44,7 +44,12 @@ closes M3. See `DESIGN.md` §10.
 M4 is in progress. M4.1 gives an asset its identity. It adds `engine::Guid` in
 `src/core/guid.h`, a `.meta` sidecar next to each source file, and `assets::AssetDatabase`.
 The database turns a GUID into a handle that stays valid when the asset loads or reloads.
-Nothing reads a cooked file yet. The cooker is M4.2.
+
+M4.2 adds `tools/cooker/`. It walks a source tree, cooks what it has a rule for, and copies
+what it does not. It writes a manifest of every output and the inputs it came from. A hash of the input bytes
+decides what to skip, so a second cook of an unchanged tree does nothing. Shaders are the
+first asset type on it, and `cmake/Shaders.cmake` is gone. Cooked content now sits next to
+the executable, and `platform::cooked_content_root()` finds it there.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings
@@ -279,7 +284,7 @@ conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang -b missing
 cmake --preset conan-relwithdebinfo
 cmake --build --preset conan-relwithdebinfo
 ctest --preset conan-relwithdebinfo --output-on-failure
-./build/RelWithDebInfo/apps/runtime/runtime --frames 300
+./build/RelWithDebInfo/bin/runtime --frames 300
 ```
 
 Windows uses the same commands with `profiles/windows-msvc`, from a "x64 Native Tools

@@ -6,6 +6,7 @@
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "math/conventions.h"
+#include "platform/paths.h"
 #include "platform/window.h"
 #include "reflect/inspector.h"
 #include "reflect/json.h"
@@ -546,13 +547,22 @@ namespace {
     struct Runtime {
         engine::platform::Window window;
         engine::gfx::Device* device = nullptr;
+        /// The engine's own cooked assets, which today means the two shaders.
+        engine::assets::Content engine_content;
         engine::render::CubePass cube;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
 
     /// @return True when everything started. The caller calls stop() either way.
     bool start(Runtime& runtime, const Options& options) {
-        if (!runtime.window.create({ .title = "Camina Engine (M3 sandbox)" })) {
+        // The engine content tree holds the shaders, so it opens before the
+        // device builds a pipeline out of them.
+        if (!runtime.engine_content.open(engine::platform::cooked_content_root() / "engine")) {
+            ENGINE_LOG_CRITICAL("The engine content is missing. Build the cooker target.");
+            return false;
+        }
+
+        if (!runtime.window.create({ .title = "Camina Engine (M4 sandbox)" })) {
             return false;
         }
 
@@ -569,7 +579,7 @@ namespace {
             return false;
         }
 
-        if (!runtime.cube.create(runtime.device)) {
+        if (!runtime.cube.create(runtime.device, runtime.engine_content)) {
             return false;
         }
 
@@ -715,9 +725,9 @@ int main(int argc, char** argv) {
     engine::scene::register_builtin_components();
     sandbox::register_components();
 
-    const std::filesystem::path content =
-        options.content.empty() ? sandbox::default_content_directory()
-                                : std::filesystem::path{ options.content };
+    const std::filesystem::path content = options.content.empty()
+                                              ? sandbox::default_content_directory()
+                                              : std::filesystem::path{ options.content };
 
     engine::scene::World world;
     if (!sandbox::load(content, world)) {

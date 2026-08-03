@@ -158,9 +158,9 @@ jobs:
           name=camina-${{ needs.check-version.outputs.version }}
           mkdir -p "$name"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp build/Release/apps/runtime/runtime.exe "$name/"
+            cp build/Release/bin/runtime.exe "$name/"
           else
-            cp build/Release/apps/runtime/runtime "$name/"
+            cp build/Release/bin/runtime "$name/"
           fi
           cp README.md DESIGN.md "$name/"
           if [ "${{ matrix.platform }}" = "windows" ]; then

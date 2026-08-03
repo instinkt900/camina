@@ -13,12 +13,8 @@ target_include_directories(sandbox PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 target_link_libraries(sandbox PUBLIC engine::core)
 
-# Where the game reads its prefabs and its scene. This is the source directory,
-# which is a stand-in. M4 brings the asset pipeline and a cooked content
-# directory next to the executable, and this definition goes away with it.
-target_compile_definitions(sandbox PRIVATE
-    SANDBOX_CONTENT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/content"
-)
+# The game reads cooked content from next to the executable now. The cooker
+# builds sandbox/content into it, and tools/cooker/CMakeLists.txt wires that up.
 
 engine_set_warnings(sandbox)
 engine_enable_clang_tidy(sandbox)

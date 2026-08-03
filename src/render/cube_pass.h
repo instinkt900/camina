@@ -8,6 +8,7 @@
  * DESIGN.md keeps it that way. M5 replaces it with the render graph.
  */
 
+#include "assets/content.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
 
@@ -31,10 +32,16 @@ namespace engine::render {
 
         /**
          * @brief Uploads the mesh and the texture, then builds the pipeline.
+         *
+         * The shaders come from the cooked content tree, so @p content has to
+         * be open before this call. A content directory the cooker never wrote
+         * fails here and names the shader it wanted.
+         *
          * @param device The device that owns the resources.
+         * @param content The open engine content tree, holding the shaders.
          * @return True on success. On failure the reason is logged.
          */
-        [[nodiscard]] bool create(gfx::Device* device);
+        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content);
 
         /// @brief Releases everything this pass owns. Safe to call twice.
         void destroy();

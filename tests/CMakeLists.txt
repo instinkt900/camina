@@ -50,6 +50,15 @@ engine_enable_clang_tidy(test_guid)
 
 add_test(NAME guid COMMAND test_guid)
 
+# The cooker. This links cooker_lib rather than the executable, so a test can
+# cook a tree in a temporary directory and read the counts back.
+add_executable(test_cooker test_cooker.cpp)
+target_link_libraries(test_cooker PRIVATE cooker_lib)
+engine_set_warnings(test_cooker)
+engine_enable_clang_tidy(test_cooker)
+
+add_test(NAME cooker COMMAND test_cooker)
+
 add_executable(test_assets test_assets.cpp)
 target_link_libraries(test_assets PRIVATE engine::core)
 engine_set_warnings(test_assets)

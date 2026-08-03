@@ -1,5 +1,7 @@
 #include "sandbox/game.h"
 
+#include "platform/paths.h"
+
 #include "core/log.h"
 #include "math/transform.h"
 #include "sandbox/components.h"
@@ -19,9 +21,7 @@ namespace sandbox {
     } // namespace
 
     std::filesystem::path default_content_directory() {
-        // SANDBOX_CONTENT_DIR is the source directory, and CMake sets it. M4
-        // replaces this with a cooked content directory next to the executable.
-        return { SANDBOX_CONTENT_DIR };
+        return engine::platform::cooked_content_root() / kContentName;
     }
 
     void register_components(engine::scene::ComponentRegistry& registry) {
