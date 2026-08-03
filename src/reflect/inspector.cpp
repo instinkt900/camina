@@ -141,6 +141,43 @@ namespace engine::reflect {
             return ImGui::InputText(label, &value);
         }
 
+        bool edit_text_value(const char* label, std::string& text) {
+            // The field the user is typing in needs a buffer that survives the
+            // frame, because a half-typed value does not parse and the caller
+            // therefore does not store it. Rebuilding the buffer from the value
+            // on each frame would delete what the user typed, one keystroke at
+            // a time.
+            //
+            // ImGui edits one item at a time, so one such buffer is enough.
+            // Every other field of this kind draws from a copy that lives for
+            // the call, which keeps an idle field from writing over the buffer
+            // the active field owns.
+            static std::string editing;
+            static ImGuiID editing_id = 0;
+
+            const ImGuiID id = ImGui::GetID(label);
+            std::string idle = text;
+            std::string& buffer = editing_id == id ? editing : idle;
+
+            ImGui::InputText(label, &buffer);
+
+            if (ImGui::IsItemActivated()) {
+                // The field takes the buffer, holding what the value says now.
+                // This frame already drew from the copy, which holds the same.
+                editing = text;
+                editing_id = id;
+            }
+
+            const bool committed = ImGui::IsItemDeactivatedAfterEdit();
+            if (committed) {
+                text = editing;
+            }
+            if (ImGui::IsItemDeactivated()) {
+                editing_id = 0;
+            }
+            return committed;
+        }
+
         void show_unhandled(const char* label) {
             ImGui::TextDisabled("%s: the inspector has no editor for this type", label);
         }

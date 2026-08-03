@@ -113,6 +113,19 @@ namespace engine::reflect {
         [[nodiscard]] bool edit_string(const char* label, std::string& value);
 
         /**
+         * @brief Draws a text box for a value that has to parse before it counts.
+         *
+         * This reports a change when the user leaves the field, not on each
+         * keystroke, because a half-typed value does not parse.
+         *
+         * @param label The field name.
+         * @param text The current text. The call replaces it with what the user
+         * typed, but only when it reports a change.
+         * @return True when the user finished an edit.
+         */
+        [[nodiscard]] bool edit_text_value(const char* label, std::string& text);
+
+        /**
          * @brief Draws a field the inspector cannot edit.
          *
          * The field still appears, so a missing widget is visible instead of
@@ -193,6 +206,14 @@ namespace engine::reflect {
                     widget::end_node();
                 }
                 return changed;
+            } else if constexpr (TextValue<Value>) {
+                std::string text = to_text(value);
+                if (!widget::edit_text_value(label, text)) {
+                    return false;
+                }
+                // A text the reader rejects leaves the value alone. A typo then
+                // costs the user the keystrokes and nothing else.
+                return from_text(text, value);
             } else if constexpr (std::is_same_v<Value, bool>) {
                 return widget::edit_bool(label, value);
             } else if constexpr (std::is_same_v<Value, std::string>) {

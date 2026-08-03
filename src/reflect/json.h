@@ -81,6 +81,8 @@ namespace engine::reflect {
 
             if constexpr (Described<Value>) {
                 out = to_json(value);
+            } else if constexpr (TextValue<Value>) {
+                out = to_text(value);
             } else if constexpr (GlmVector<Value>::value) {
                 out = nlohmann::json::array();
                 for (glm::length_t i = 0; i < GlmVector<Value>::length; ++i) {
@@ -152,6 +154,20 @@ namespace engine::reflect {
             return true;
         }
 
+        /// Reads a value that carries its own text form, such as a Guid.
+        template <typename V>
+        [[nodiscard]] bool read_text(const nlohmann::json& in, V& value, const char* where) {
+            if (!in.is_string()) {
+                return wrong_type(where, "a string", in);
+            }
+            if (!from_text(in.template get_ref<const std::string&>(), value)) {
+                ENGINE_LOG_ERROR("{}: \"{}\" is not a valid value for this field", where,
+                                 in.template get_ref<const std::string&>());
+                return false;
+            }
+            return true;
+        }
+
         /// Reads a plain number, a boolean, a string, or an enumerator.
         template <typename V>
         [[nodiscard]] bool read_simple(const nlohmann::json& in, V& value, const char* where) {
@@ -210,6 +226,8 @@ namespace engine::reflect {
 
             if constexpr (Described<Value>) {
                 return from_json(in, value);
+            } else if constexpr (TextValue<Value>) {
+                return read_text(in, value, where);
             } else if constexpr (GlmVector<Value>::value) {
                 return read_glm_vector(in, value, where);
             } else if constexpr (GlmQuat<Value>::value) {

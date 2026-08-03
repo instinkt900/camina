@@ -350,6 +350,29 @@ That is the third operation on the pile in `scene::ComponentRegistry`, and it sh
 issue #25 rather than settling it. The set is now save, load, and inspect, which is enough
 of a shape to fold into `reflect::Registry` when a fourth caller asks.
 
+**What the asset identity needed.** M4.1 put a `Guid` in a described field, and that was the
+first field type neither consumer could carry. Both held a closed list: a described type, a
+glm vector, a quaternion, a list, or a plain scalar. A GUID is none of those. Describing it
+as two 64-bit numbers would have compiled, and it would have written a nested object of two
+large integers where a person reading a diff needs one string.
+
+`reflect::TextValue` in `reflect/traits.h` answers it. A type declares `to_text` and
+`from_text` next to itself, and argument-dependent lookup finds them. The serializer then
+writes a string, and the inspector draws a text box that commits when the user leaves the
+field. The reflection layer names no such type, so `core/` can define one without `reflect/`
+depending on a layer above it.
+
+Note what did not change. `Describe<T>` is the same, every attribute is the same, and both
+consumers still call only `for_each_field()`. This is not a change to the descriptors. It is
+a change to what a field may hold, and the two are worth keeping apart, because the libclang
+step in the first paragraph of this section has to replace the first without touching the
+second.
+
+The inspector needed one thing the other consumers did not. A value that must parse cannot
+be written back on each keystroke, because a half-typed GUID is not a GUID. So
+`widget::edit_text_value()` reports a change when the user leaves the field, and text the
+reader rejects leaves the value alone.
+
 ---
 
 ## 8. Game UI — moth_ui

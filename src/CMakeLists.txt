@@ -2,6 +2,9 @@ add_library(engine_core STATIC
     core/log.cpp
     core/jobs.cpp
     core/arena.cpp
+    core/guid.cpp
+    assets/database.cpp
+    assets/meta.cpp
     platform/window.cpp
     gfx/types.cpp
     reflect/registry.cpp
