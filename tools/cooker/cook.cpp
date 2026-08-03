@@ -1,13 +1,17 @@
 #include "cook.h"
 
 #include "assets/manifest.h"
+#include "assets/mesh.h"
 #include "assets/meta.h"
 #include "assets/texture.h"
 #include "core/log.h"
+#include "mesh.h"
 #include "texture.h"
 
 #include <algorithm>
 #include <cstdlib>
+#include <map>
+#include <set>
 #include <system_error>
 #include <vector>
 
@@ -21,6 +25,7 @@ namespace cooker {
         enum class Rule : std::uint8_t {
             Shader,  ///< GLSL through glslc, out as SPIR-V.
             Texture, ///< An image through stb, out as mip levels and BC7 blocks.
+            Mesh,    ///< glTF through cgltf, out as one cooked mesh for each mesh.
             Copy,    ///< No rule yet. The bytes go through unchanged.
         };
 
@@ -31,6 +36,9 @@ namespace cooker {
             }
             if (is_image_extension(extension)) {
                 return Rule::Texture;
+            }
+            if (is_mesh_extension(extension)) {
+                return Rule::Mesh;
             }
             return Rule::Copy;
         }
@@ -44,11 +52,22 @@ namespace cooker {
                 return ".spv";
             case Rule::Texture:
                 return as::kTextureExtension;
+            case Rule::Mesh:
+                return as::kMeshExtension;
             case Rule::Copy:
                 break;
             }
             return "";
         }
+
+        /**
+         * What kind of part a sub-asset is, for Guid::derive.
+         *
+         * The word is part of the identity, so changing it changes every GUID
+         * derived with it, and every reference to those breaks. Treat it the
+         * same as a file format version.
+         */
+        constexpr const char* kMeshPartKind = "mesh";
 
         /// Wraps an argument so a shell treats it as one word.
         [[nodiscard]] std::string quoted(const std::string& text) {
@@ -170,28 +189,78 @@ namespace cooker {
             return true;
         }
 
-        /// The cooked path for a source path, under the same relative directory.
+        /**
+         * The cooked path for one part of a source, under the same directory.
+         *
+         * A rule that writes one file uses part 0 and adds only the suffix. The
+         * glTF rule numbers its parts, so `robot.gltf` gives `robot.gltf.0.mesh`
+         * and `robot.gltf.1.mesh`. The number comes before the suffix so the
+         * extension still says what the file is.
+         */
         [[nodiscard]] std::filesystem::path cooked_name(const std::filesystem::path& relative,
-                                                        Rule rule) {
+                                                        Rule rule, std::uint32_t part) {
             std::filesystem::path named = relative;
+            if (rule == Rule::Mesh) {
+                named += "." + std::to_string(part);
+            }
             named += cooked_suffix(rule);
             return named;
         }
 
-        /// Runs the one rule that matches this asset.
+        /**
+         * Runs the one rule that matches this asset, and says what it wrote.
+         *
+         * Every rule but the glTF one writes a single file, and that file goes
+         * by the source asset's own GUID. A glTF file writes one for each mesh,
+         * and each of those needs an identity of its own, because a prefab has
+         * to name one mesh. Guid::derive works those out from the source GUID
+         * with nothing stored, so they are the same on every machine.
+         */
         [[nodiscard]] bool cook_one(const Options& options, Rule rule,
-                                    const std::filesystem::path& source,
-                                    const std::filesystem::path& destination,
-                                    const as::AssetMeta& meta) {
+                                    const std::filesystem::path& relative,
+                                    const as::AssetMeta& meta,
+                                    std::vector<as::ManifestOutput>& outputs) {
+            const std::filesystem::path source = options.content / relative;
+
+            const auto single = [&](auto&& run) {
+                const std::filesystem::path cooked = cooked_name(relative, rule, 0);
+                const std::filesystem::path destination = options.out / cooked;
+                std::error_code error;
+                std::filesystem::create_directories(destination.parent_path(), error);
+                if (!run(destination)) {
+                    return false;
+                }
+                outputs.push_back(as::ManifestOutput{ .cooked = as::manifest_path(cooked),
+                                                      .guid = meta.guid });
+                return true;
+            };
+
             switch (rule) {
             case Rule::Shader:
-                return cook_shader(options, source, destination);
+                return single([&](const std::filesystem::path& to) {
+                    return cook_shader(options, source, to);
+                });
             case Rule::Texture:
-                return cook_texture(source, destination, meta.texture);
+                return single([&](const std::filesystem::path& to) {
+                    return cook_texture(source, to, meta.texture);
+                });
+            case Rule::Mesh: {
+                std::vector<std::filesystem::path> cooked;
+                if (!cook_gltf(source, options.out, relative, cooked)) {
+                    return false;
+                }
+                for (std::uint32_t part = 0; part < cooked.size(); ++part) {
+                    outputs.push_back(as::ManifestOutput{
+                        .cooked = as::manifest_path(cooked[part]),
+                        .guid = engine::Guid::derive(meta.guid, kMeshPartKind, part) });
+                }
+                return true;
+            }
             case Rule::Copy:
                 break;
             }
-            return copy_through(source, destination);
+            return single(
+                [&](const std::filesystem::path& to) { return copy_through(source, to); });
         }
 
         /// Every regular file under the tree, sorted, so two runs agree on the order.
@@ -224,6 +293,143 @@ namespace cooker {
             return true;
         }
 
+        /// What every glTF in the tree names besides itself.
+        struct Named {
+            /// Source path to the files that glTF names, for the input list.
+            std::map<std::filesystem::path, std::vector<std::filesystem::path>> inputs;
+            /// Every file some glTF names as a buffer, so no rule cooks one.
+            std::set<std::filesystem::path> buffers;
+        };
+
+        /**
+         * Reads every glTF for the files it names, before anything is cooked.
+         *
+         * This answers two questions at once. A named buffer is an input, so
+         * the manifest has to hash it, or editing the geometry would look like
+         * it did nothing. A named buffer is also not an asset: it is glTF
+         * payload with no meaning of its own, and the copy rule would put the
+         * vertex data in the cooked tree a second time where nothing reads it.
+         *
+         * A texture a glTF names is not like this. That one is a real asset
+         * with a sidecar of its own, and the texture rule cooks it.
+         */
+        void scan_gltf(const Options& options,
+                       const std::vector<std::filesystem::path>& sources, Named& out) {
+            for (const std::filesystem::path& relative : sources) {
+                if (rule_for(relative) != Rule::Mesh) {
+                    continue;
+                }
+                std::vector<std::filesystem::path> named;
+                // A file that will not parse names nothing here and fails in
+                // the rule, where the message belongs.
+                (void)gltf_extra_inputs(options.content / relative, relative, named);
+                for (const std::filesystem::path& path : named) {
+                    out.buffers.insert(path);
+                }
+                out.inputs.emplace(relative, std::move(named));
+            }
+        }
+
+        /// What happened to one source file.
+        enum class Outcome : std::uint8_t {
+            Cooked,  ///< The rule ran and wrote its outputs.
+            Skipped, ///< The manifest already had it, unchanged.
+            Failed,  ///< It did not cook. The reason is logged.
+        };
+
+        /// Builds the input list for one source, sidecar and glTF buffers included.
+        void gather_inputs(const std::filesystem::path& relative, const Named& named,
+                           as::ManifestEntry& entry) {
+            entry.inputs.push_back(entry.source);
+            // The sidecar is an input, not only a place to keep the identity.
+            // It carries the import settings, so flipping a texture from sRGB
+            // to linear has to cook that texture again. Without this the edit
+            // would look like it did nothing.
+            entry.inputs.push_back(as::manifest_path(as::meta_path(relative)));
+
+            // A .gltf keeps its geometry in a .bin next to it, and that file is
+            // an input as much as the .gltf is.
+            if (const auto found = named.inputs.find(relative); found != named.inputs.end()) {
+                for (const std::filesystem::path& path : found->second) {
+                    entry.inputs.push_back(as::manifest_path(path));
+                }
+            }
+        }
+
+        /**
+         * Whether the cooker can leave an old entry alone.
+         *
+         * Four things have to agree. The identity, because a replaced sidecar
+         * gives the asset a new one and every reference has to see it. The
+         * input list, because is_fresh hashes the inputs the old entry names,
+         * so an entry an older cooker wrote would stay fresh forever against a
+         * list this build no longer uses. The name of the first output, which
+         * catches a rule whose naming changed. And the hash of every input.
+         *
+         * A rule that started writing another number of files needs no check of
+         * its own. The count follows the source bytes, so the hash catches it.
+         */
+        [[nodiscard]] bool can_skip(const Options& options, const std::filesystem::path& relative,
+                                    Rule rule, const as::ManifestEntry& entry,
+                                    const as::ManifestEntry* old) {
+            if (options.force || old == nullptr) {
+                return false;
+            }
+            const std::string first = as::manifest_path(cooked_name(relative, rule, 0));
+            return old->guid == entry.guid && old->inputs == entry.inputs &&
+                   !old->outputs.empty() && old->outputs.front().cooked == first &&
+                   as::is_fresh(*old, options.content, options.out);
+        }
+
+        /// Cooks one source file, or says why it did not.
+        [[nodiscard]] Outcome cook_source(const Options& options,
+                                          const std::filesystem::path& relative,
+                                          const as::Manifest& previous, const Named& named,
+                                          as::ManifestEntry& entry) {
+            const std::filesystem::path source = options.content / relative;
+            const Rule rule = rule_for(relative);
+
+            as::AssetMeta meta;
+            bool created = false;
+            if (!as::meta_for(source, meta, &created)) {
+                return Outcome::Failed;
+            }
+
+            // A new sidecar carries the defaults, and a texture wants a better
+            // starting guess than "sRGB" for every file. So the guess goes in
+            // once, when the file is written, and after that the file decides.
+            // A wrong guess is one edit to fix and it never comes back.
+            if (created && rule == Rule::Texture) {
+                meta.texture.color_space = guess_color_space(source);
+                if (!as::save_meta(source, meta)) {
+                    return Outcome::Failed;
+                }
+                ENGINE_LOG_INFO("{}: reading it as {}. Edit the sidecar to change that.",
+                                source.string(), as::to_text(meta.texture.color_space));
+            }
+
+            entry.source = as::manifest_path(relative);
+            entry.guid = meta.guid;
+            gather_inputs(relative, named, entry);
+
+            const as::ManifestEntry* old = as::find_by_source(previous, entry.source);
+            if (can_skip(options, relative, rule, entry, old)) {
+                entry = *old;
+                return Outcome::Skipped;
+            }
+
+            if (!cook_one(options, rule, relative, meta, entry.outputs)) {
+                return Outcome::Failed;
+            }
+
+            if (!as::hash_inputs(options.content, entry.inputs, entry.hash)) {
+                ENGINE_LOG_ERROR("{}: cooked, but an input would not read back.",
+                                 source.string());
+                return Outcome::Failed;
+            }
+            return Outcome::Cooked;
+        }
+
     } // namespace
 
     bool cook_all(const Options& options, Result& result) {
@@ -251,77 +457,30 @@ namespace cooker {
         as::Manifest previous;
         (void)as::load_manifest(options.out, previous);
 
+        Named named;
+        scan_gltf(options, sources, named);
+
         as::Manifest next;
         for (const std::filesystem::path& relative : sources) {
-            const std::filesystem::path source = options.content / relative;
-            const Rule rule = rule_for(relative);
-
-            as::AssetMeta meta;
-            bool created = false;
-            if (!as::meta_for(source, meta, &created)) {
-                ++result.failed;
+            // A glTF buffer is payload, not an asset. scan_gltf found it.
+            if (named.buffers.contains(relative)) {
                 continue;
-            }
-
-            // A new sidecar carries the defaults, and a texture wants a better
-            // starting guess than "sRGB" for every file. So the guess goes in
-            // once, when the file is written, and after that the file decides.
-            // A wrong guess is one edit to fix and it never comes back.
-            if (created && rule == Rule::Texture) {
-                meta.texture.color_space = guess_color_space(source);
-                if (!as::save_meta(source, meta)) {
-                    ++result.failed;
-                    continue;
-                }
-                ENGINE_LOG_INFO("{}: reading it as {}. Edit the sidecar to change that.",
-                                source.string(), as::to_text(meta.texture.color_space));
             }
 
             as::ManifestEntry entry;
-            entry.source = as::manifest_path(relative);
-            entry.guid = meta.guid;
-            entry.cooked = as::manifest_path(cooked_name(relative, rule));
-            entry.inputs.push_back(entry.source);
-            // The sidecar is an input, not only a place to keep the identity.
-            // It carries the import settings, so flipping a texture from sRGB
-            // to linear has to cook that texture again. Without this the edit
-            // would look like it did nothing.
-            entry.inputs.push_back(as::manifest_path(as::meta_path(relative)));
-
-            // Skip only when the identity also matches. A sidecar somebody
-            // replaced gives the asset a new identity, and every reference to
-            // it has to see the new one.
-            //
-            // The input list has to match as well. is_fresh() hashes the inputs
-            // the old entry names, so an entry written by an older cooker would
-            // stay fresh forever against a list this build no longer uses.
-            const as::ManifestEntry* old = as::find_by_source(previous, entry.source);
-            if (!options.force && old != nullptr && old->guid == entry.guid &&
-                old->cooked == entry.cooked && old->inputs == entry.inputs &&
-                as::is_fresh(*old, options.content, options.out)) {
-                next.entries.push_back(*old);
+            switch (cook_source(options, relative, previous, named, entry)) {
+            case Outcome::Cooked:
+                next.entries.push_back(std::move(entry));
+                ++result.cooked;
+                break;
+            case Outcome::Skipped:
+                next.entries.push_back(std::move(entry));
                 ++result.skipped;
-                continue;
-            }
-
-            const std::filesystem::path destination = options.out / entry.cooked;
-            std::filesystem::create_directories(destination.parent_path(), error);
-
-            const bool ok = cook_one(options, rule, source, destination, meta);
-            if (!ok) {
+                break;
+            case Outcome::Failed:
                 ++result.failed;
-                continue;
+                break;
             }
-
-            if (!as::hash_inputs(options.content, entry.inputs, entry.hash)) {
-                ENGINE_LOG_ERROR("{}: cooked, but an input would not read back.",
-                                 source.string());
-                ++result.failed;
-                continue;
-            }
-
-            next.entries.push_back(std::move(entry));
-            ++result.cooked;
         }
 
         if (!as::save_manifest(options.out, next)) {

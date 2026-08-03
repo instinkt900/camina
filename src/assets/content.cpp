@@ -24,8 +24,8 @@ namespace engine::assets {
         return find_by_source(manifest_, source);
     }
 
-    bool Content::read_bytes(const ManifestEntry& entry, std::vector<std::byte>& out) const {
-        const std::filesystem::path path = root_ / entry.cooked;
+    bool Content::read_bytes(const ManifestOutput& output, std::vector<std::byte>& out) const {
+        const std::filesystem::path path = root_ / output.cooked;
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) {
             ENGINE_LOG_ERROR("Could not open {}.", path.string());
@@ -52,31 +52,60 @@ namespace engine::assets {
         return true;
     }
 
-    bool Content::read_bytes(std::string_view source, std::vector<std::byte>& out) const {
+    bool Content::read_bytes(Guid guid, std::vector<std::byte>& out) const {
+        const ManifestOutput* output = find_by_guid(manifest_, guid);
+        if (output == nullptr) {
+            ENGINE_LOG_ERROR("{} is not in the manifest. Nothing cooked that identity.",
+                             guid.to_text());
+            return false;
+        }
+        return read_bytes(*output, out);
+    }
+
+    const ManifestOutput* Content::sole_output(std::string_view source) const {
         const ManifestEntry* entry = find(source);
         if (entry == nullptr) {
             ENGINE_LOG_ERROR("{} is not in the manifest. The cooker did not make it.", source);
-            return false;
+            return nullptr;
         }
-        return read_bytes(*entry, out);
+        // Zero and many are two different problems, and the advice for many
+        // does not work for zero. No rule writes an entry with no outputs, so
+        // this reports a manifest somebody edited or a write that was cut off.
+        if (entry->outputs.empty()) {
+            ENGINE_LOG_ERROR("{} has no cooked files in the manifest. Cook the content tree "
+                             "again.",
+                             source);
+            return nullptr;
+        }
+        if (entry->outputs.size() != 1) {
+            ENGINE_LOG_ERROR("{} cooked into {} files, so its path does not name one. Ask for "
+                             "the part you want by its GUID.",
+                             source, entry->outputs.size());
+            return nullptr;
+        }
+        return &entry->outputs.front();
+    }
+
+    bool Content::read_bytes(std::string_view source, std::vector<std::byte>& out) const {
+        const ManifestOutput* output = sole_output(source);
+        return output != nullptr && read_bytes(*output, out);
     }
 
     bool Content::read_words(std::string_view source, std::vector<std::uint32_t>& out) const {
-        const ManifestEntry* entry = find(source);
-        if (entry == nullptr) {
-            ENGINE_LOG_ERROR("{} is not in the manifest. The cooker did not make it.", source);
+        const ManifestOutput* output = sole_output(source);
+        if (output == nullptr) {
             return false;
         }
 
         std::vector<std::byte> bytes;
-        if (!read_bytes(*entry, bytes)) {
+        if (!read_bytes(*output, bytes)) {
             return false;
         }
 
         constexpr std::size_t kWordSize = sizeof(std::uint32_t);
         if (bytes.empty() || bytes.size() % kWordSize != 0) {
             ENGINE_LOG_ERROR("{} is {} bytes, which is not a whole number of 32-bit words.",
-                             entry->cooked, bytes.size());
+                             output->cooked, bytes.size());
             return false;
         }
 

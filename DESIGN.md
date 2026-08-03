@@ -545,6 +545,43 @@ texel matters more than the memory does.
 sRGB entries make the sampler convert on read, which is what §3 asks for. Rule 4.2 holds:
 the enum is a plain `uint32_t` and `TextureDesc` stays POD.
 
+**Meshes, and the sub-asset problem.** M4.4 made glTF the third asset type, and it forced a
+change the first two did not need. One glTF file holds several meshes and several materials.
+A prefab has to name one mesh, so a cooked file holding all of them could not be referenced.
+
+The manifest therefore maps one source to many outputs. `ManifestEntry` gained a list of
+`ManifestOutput`, and each output carries the identity that a scene, a prefab, or another
+asset stores. A rule that writes one file gives its output the source asset's own GUID, so
+nothing about a texture or a shader changed.
+
+**A sub-asset has no sidecar, so its GUID is derived rather than stored.** `Guid::derive`
+folds the parent GUID, a kind word, and an index with the FNV-1a in `core/hash.h`. The same
+three inputs give the same answer on every machine and on every run, and nothing has to stay
+in step. The result carries UUID version 8, which RFC 9562 reserves for a custom scheme, so
+it is a real UUID and it can never collide with the version 4 that `Guid::generate` returns.
+
+The cost is that the index is positional. Reordering the meshes inside a source file moves
+which part holds which index, and every reference to the moved part then points at another
+one. A file a person edits keeps its order. An exporter that reorders is the reason to store
+a name instead, and that change would move the format version.
+
+**A glTF buffer is payload, not an asset.** A `.gltf` keeps its geometry in a `.bin` beside
+it. That file is an input, so the manifest hashes it and editing the geometry cooks the mesh
+again. It is also not an asset: the copy rule would put the vertex data in the cooked tree a
+second time, where nothing reads it. So the cooker reads every glTF before it cooks anything,
+and skips the files they name. A texture a glTF names is not like this. That one is a real
+asset with a sidecar of its own, and the texture rule cooks it.
+
+The vertices are interleaved rather than one stream for each attribute. One stream suits the
+forward pass the engine draws today, and it costs one bind rather than four. A depth prepass
+or a shadow pass reads position alone and would rather have it separate, so M5 is the
+milestone that may split this.
+
+meshoptimizer runs two passes, and the order matters. The vertex cache pass reorders the
+indices inside each submesh so a triangle reuses a vertex the GPU still holds. The vertex
+fetch pass then reorders the vertices so the ones a triangle reads sit near each other.
+Running fetch first would undo it.
+
 **Profiling.** Add Tracy in M0. It integrates quickly and it changes how you work for the
 rest of the project.
 

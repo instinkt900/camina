@@ -53,16 +53,34 @@ namespace engine::assets {
         [[nodiscard]] const ManifestEntry* find(std::string_view source) const;
 
         /**
-         * @brief Reads the bytes of a cooked asset.
-         * @param entry The entry to read, from find().
+         * @brief Reads the bytes of one cooked file.
+         * @param output The output to read, from find_by_guid() or from an entry.
          * @param out The bytes.
          * @return True when the file was read.
          */
-        [[nodiscard]] bool read_bytes(const ManifestEntry& entry,
+        [[nodiscard]] bool read_bytes(const ManifestOutput& output,
                                       std::vector<std::byte>& out) const;
 
         /**
+         * @brief Reads the bytes of a cooked asset, by the identity it goes by.
+         *
+         * This is the call everything past the first lookup uses. A prefab
+         * names a mesh by GUID, and a rename inside the content tree therefore
+         * changes nothing.
+         *
+         * @param guid The identity, from an asset that names another asset.
+         * @param out The bytes.
+         * @return True when the manifest holds that identity and the file read.
+         */
+        [[nodiscard]] bool read_bytes(Guid guid, std::vector<std::byte>& out) const;
+
+        /**
          * @brief Reads the bytes of a cooked asset, by source path.
+         *
+         * @warning This works only for a source that produced exactly one file.
+         * A glTF file produces one for each mesh, and naming the path cannot
+         * say which. Such a source reports, and the caller must ask by GUID.
+         *
          * @param source The source path, as find() takes it.
          * @param out The bytes.
          * @return True when the asset was there and it read.
@@ -97,6 +115,9 @@ namespace engine::assets {
         [[nodiscard]] AssetDatabase& database() { return database_; }
 
     private:
+        /// The one output of a source, or nullptr with a reason in the log.
+        [[nodiscard]] const ManifestOutput* sole_output(std::string_view source) const;
+
         std::filesystem::path root_;
         Manifest manifest_;
         AssetDatabase database_;

@@ -59,6 +59,15 @@ engine_enable_clang_tidy(test_cooker)
 
 add_test(NAME cooker COMMAND test_cooker)
 
+# The glTF importer and the cooked mesh format. This links cooker_lib for the
+# same reason test_cooker does.
+add_executable(test_mesh test_mesh.cpp)
+target_link_libraries(test_mesh PRIVATE cooker_lib)
+engine_set_warnings(test_mesh)
+engine_enable_clang_tidy(test_mesh)
+
+add_test(NAME mesh COMMAND test_mesh)
+
 add_executable(test_assets test_assets.cpp)
 target_link_libraries(test_assets PRIVATE engine::core)
 engine_set_warnings(test_assets)

@@ -66,6 +66,13 @@ class CaminaConan(ConanFile):
         # library, so it costs the runtime nothing to have it in the graph.
         self.requires("stb/cci.20240531")
 
+        # M4.4. tools/cooker reads glTF with cgltf and reorders the indices with
+        # meshoptimizer. Both are cooker only, for the same reason as stb: a
+        # cooked mesh needs no importer at run time. DESIGN.md section 5 rejects
+        # assimp, so glTF is the only import format.
+        self.requires("cgltf/1.15")
+        self.requires("meshoptimizer/0.25")
+
         if self.options.with_editor:
             self.requires("imguizmo/1.83")
 

@@ -56,6 +56,35 @@ namespace engine {
         [[nodiscard]] static Guid generate();
 
         /**
+         * @brief Makes the GUID of a part of another asset, with no stored state.
+         *
+         * One glTF file holds several meshes and several materials, and each one
+         * becomes a cooked asset that a prefab names by GUID. Those parts cannot
+         * each carry a sidecar, because they have no file of their own until the
+         * cooker writes them.
+         *
+         * So the identity comes from the parent instead. The same parent, kind,
+         * and index always give the same answer, on every machine and on every
+         * run. Nothing is stored, and nothing has to stay in step.
+         *
+         * The result carries UUID version 8, which RFC 9562 reserves for a
+         * custom scheme. It is therefore a real UUID, and it never collides with
+         * a version 4 GUID that generate() returned.
+         *
+         * @warning Reordering the meshes inside a source file changes which part
+         * holds which index, and every reference to the moved part then points
+         * at another one. A source file that a person edits keeps its order, and
+         * an exporter that reorders is a reason to store a name instead.
+         *
+         * @param parent The GUID of the source asset, from its sidecar.
+         * @param kind What sort of part this is, for example "mesh".
+         * @param index Which part of that kind, counting from zero.
+         * @return The derived GUID. It is null only when @p parent is null.
+         */
+        [[nodiscard]] static Guid derive(Guid parent, std::string_view kind,
+                                         std::uint32_t index);
+
+        /**
          * @brief Writes the GUID in the 8-4-4-4-12 form, with lowercase digits.
          * @return The text, 36 characters long. A null GUID writes all zeros.
          */

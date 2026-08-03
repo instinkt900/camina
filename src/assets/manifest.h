@@ -34,7 +34,23 @@ namespace engine::assets {
     inline constexpr const char* kManifestFile = "manifest.json";
 
     /**
-     * @brief One cooked output, and what it came from.
+     * @brief One file the cooker wrote, and the identity it goes by.
+     *
+     * A source file with one rule produces one of these, and it carries the
+     * source file's own GUID. A glTF file produces several, one for each mesh
+     * and later one for each material, and each of those carries a GUID that
+     * `Guid::derive` worked out from the source GUID.
+     */
+    struct ManifestOutput {
+        /// @brief The cooked path, relative to the cooked root, with forward slashes.
+        std::string cooked;
+
+        /// @brief The identity a scene, a prefab, or another asset stores.
+        Guid guid;
+    };
+
+    /**
+     * @brief One source asset, what it produced, and what it was built from.
      */
     struct ManifestEntry {
         /// @brief The source path, relative to the content root, with forward slashes.
@@ -43,10 +59,15 @@ namespace engine::assets {
         /// @brief The identity, from the source file's `.meta` sidecar.
         Guid guid;
 
-        /// @brief The cooked path, relative to the cooked root, with forward slashes.
-        std::string cooked;
+        /**
+         * @brief Every file this source produced.
+         *
+         * Most rules write one. The glTF rule writes one for each mesh, because
+         * a prefab has to name a single mesh and not the file it came from.
+         */
+        std::vector<ManifestOutput> outputs;
 
-        /// @brief Every source file this output was built from, @ref source first.
+        /// @brief Every source file these outputs were built from, @ref source first.
         std::vector<std::string> inputs;
 
         /// @brief The hash of every input, folded together in order.
@@ -94,12 +115,25 @@ namespace engine::assets {
                                                       std::string_view source);
 
     /**
-     * @brief Finds the entry for a GUID.
+     * @brief Finds the cooked output for a GUID.
+     *
+     * This searches the outputs rather than the entries, because a GUID names
+     * one cooked file. A glTF file holds several meshes, and asking for the
+     * entry would say which glTF a mesh came from and not which mesh it is.
+     *
+     * @param manifest The manifest to search.
+     * @param guid The identity to look for.
+     * @return The output, or nullptr when nothing cooked that identity.
+     */
+    [[nodiscard]] const ManifestOutput* find_by_guid(const Manifest& manifest, Guid guid);
+
+    /**
+     * @brief Finds the entry that produced a GUID.
      * @param manifest The manifest to search.
      * @param guid The identity to look for.
      * @return The entry, or nullptr when nothing cooked that identity.
      */
-    [[nodiscard]] const ManifestEntry* find_by_guid(const Manifest& manifest, Guid guid);
+    [[nodiscard]] const ManifestEntry* find_source_of(const Manifest& manifest, Guid guid);
 
     /**
      * @brief Whether an entry still matches what is on disk.
@@ -157,9 +191,23 @@ struct engine::reflect::Describe<engine::assets::ManifestEntry> {
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(engine::assets::ManifestEntry, source),
                                ENGINE_FIELD(engine::assets::ManifestEntry, guid),
-                               ENGINE_FIELD(engine::assets::ManifestEntry, cooked),
+                               ENGINE_FIELD(engine::assets::ManifestEntry, outputs),
                                ENGINE_FIELD(engine::assets::ManifestEntry, inputs),
                                ENGINE_FIELD(engine::assets::ManifestEntry, hash));
+    }
+};
+
+/// @brief Describes one cooked output, so reflect/ reads and writes it.
+template <>
+struct engine::reflect::Describe<engine::assets::ManifestOutput> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "ManifestOutput";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(engine::assets::ManifestOutput, cooked),
+                               ENGINE_FIELD(engine::assets::ManifestOutput, guid));
     }
 };
 

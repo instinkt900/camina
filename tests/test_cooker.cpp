@@ -621,10 +621,21 @@ namespace {
 
         const as::ManifestEntry* entry = content.find("one.scene");
         check(entry != nullptr, "an asset is findable by its source path");
+        check(entry != nullptr && entry->outputs.size() == 1, "and a copy writes one file");
 
         std::vector<std::byte> bytes;
-        check(entry != nullptr && content.read_bytes(*entry, bytes), "its bytes read");
+        check(entry != nullptr && content.read_bytes(entry->outputs.front(), bytes),
+              "its bytes read");
         check(bytes.size() == 2, "and they are the bytes the source held");
+
+        // The GUID is the path everything past the first lookup uses. A copy
+        // rule gives its one output the source asset's own identity.
+        std::vector<std::byte> by_guid;
+        check(entry != nullptr && content.read_bytes(entry->guid, by_guid),
+              "the same bytes read by identity");
+        check(by_guid == bytes, "and they are the same bytes");
+        check(!content.read_bytes(engine::Guid::generate(), by_guid),
+              "an identity nothing cooked is refused");
 
         std::vector<std::uint32_t> words;
         check(content.read_words("words.bin", words), "a four-byte asset reads as words");
