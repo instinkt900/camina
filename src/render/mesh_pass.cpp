@@ -41,6 +41,12 @@ namespace engine::render {
         }
         device_ = device;
 
+        // Before the pipeline, because every draw call binds a texture and a
+        // submesh with no material has to bind this one.
+        if (!textures_.create(device)) {
+            return false;
+        }
+
         std::vector<std::uint32_t> vertex_words;
         std::vector<std::uint32_t> fragment_words;
         if (!content.read_words(kVertexShaderSource, vertex_words) ||
@@ -53,7 +59,7 @@ namespace engine::render {
         using assets::MeshVertex;
         // Three of the four. The tangent is in the vertex and no shader reads
         // it yet, and an attribute nothing consumes is a validation warning.
-        // M4.4b declares it when the normal mapping needs it.
+        // M5 declares it when the normal mapping needs it.
         const std::array<gfx::VertexAttribute, 3> attributes{ {
             { .location = 0,
               .offset = offsetof(MeshVertex, position),
@@ -73,10 +79,12 @@ namespace engine::render {
             .attribute_count = attributes.size(),
             .vertex_stride = sizeof(MeshVertex),
             .push_constant_size = sizeof(Push),
-            // No texture yet. A submesh carries a material GUID and it is null
-            // until M4.4b writes one.
-            .sample_texture = false,
+            // One sampler, for the base color of the submesh being drawn.
+            .sample_texture = true,
             .depth_test = true,
+            // A glTF material can ask for both faces, and the cooked material
+            // records it. Honoring it needs a second pipeline or a dynamic cull
+            // state, so M5 does that with the rest of the material state.
             .cull_back = true,
         };
 
@@ -92,6 +100,8 @@ namespace engine::render {
         if (device_ == nullptr) {
             return;
         }
+        materials_.destroy();
+        textures_.destroy(device_);
         meshes_.destroy(device_);
         gfx::destroy_pipeline(device_, pipeline_);
         pipeline_ = gfx::PipelineHandle{};
@@ -124,9 +134,12 @@ namespace engine::render {
             gfx::cmd_bind_index_buffer(commands, mesh->indices);
 
             // One draw call for each submesh. They share the two buffers, so
-            // only the index range changes between them. M4.4b binds a material
-            // here as well, which is the reason they are separate calls.
+            // only the material and the index range change between them. The
+            // material is the reason they are separate calls.
             for (const assets::MeshSubmesh& submesh : mesh->submeshes) {
+                const GpuMaterial& material =
+                    materials_.get(device_, content, textures_, submesh.material);
+                gfx::cmd_bind_texture(commands, pipeline_, material.base_color);
                 gfx::cmd_draw_indexed(commands, submesh.index_count, 1, submesh.first_index, 0);
                 ++draw_count_;
             }

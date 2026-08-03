@@ -81,15 +81,6 @@ namespace cooker {
             return "";
         }
 
-        /**
-         * What kind of part a sub-asset is, for Guid::derive.
-         *
-         * The word is part of the identity, so changing it changes every GUID
-         * derived with it, and every reference to those breaks. Treat it the
-         * same as a file format version.
-         */
-        constexpr const char* kMeshPartKind = "mesh";
-
         /// Wraps an argument so a shell treats it as one word.
         [[nodiscard]] std::string quoted(const std::string& text) {
             return "\"" + text + "\"";
@@ -232,10 +223,10 @@ namespace cooker {
          * Runs the one rule that matches this asset, and says what it wrote.
          *
          * Every rule but the glTF one writes a single file, and that file goes
-         * by the source asset's own GUID. A glTF file writes one for each mesh,
-         * and each of those needs an identity of its own, because a prefab has
-         * to name one mesh. Guid::derive works those out from the source GUID
-         * with nothing stored, so they are the same on every machine.
+         * by the source asset's own GUID. A glTF file writes one for each mesh
+         * and one for each material, and each of those needs an identity of its
+         * own, because a prefab has to name one mesh. That rule derives them
+         * itself, because it alone knows how many parts of each kind there are.
          */
         [[nodiscard]] bool cook_one(const Options& options, Rule rule,
                                     const std::filesystem::path& relative,
@@ -265,18 +256,8 @@ namespace cooker {
                 return single([&](const std::filesystem::path& to) {
                     return cook_texture(source, to, meta.texture);
                 });
-            case Rule::Mesh: {
-                std::vector<std::filesystem::path> cooked;
-                if (!cook_gltf(source, options.out, relative, cooked)) {
-                    return false;
-                }
-                for (std::uint32_t part = 0; part < cooked.size(); ++part) {
-                    outputs.push_back(as::ManifestOutput{
-                        .cooked = as::manifest_path(cooked[part]),
-                        .guid = engine::Guid::derive(meta.guid, kMeshPartKind, part) });
-                }
-                return true;
-            }
+            case Rule::Mesh:
+                return cook_gltf(source, options.out, relative, meta.guid, outputs);
             case Rule::Copy:
                 break;
             }
@@ -324,7 +305,7 @@ namespace cooker {
 
         /// What every glTF in the tree names besides itself.
         struct Named {
-            /// Source path to the files that glTF names, for the input list.
+            /// Extra input paths for each glTF, relative to the content root.
             std::map<std::filesystem::path, std::vector<std::filesystem::path>> inputs;
             /// Every file some glTF names as a buffer, so no rule cooks one.
             std::set<std::filesystem::path> buffers;
@@ -333,14 +314,16 @@ namespace cooker {
         /**
          * Reads every glTF for the files it names, before anything is cooked.
          *
-         * This answers two questions at once. A named buffer is an input, so
-         * the manifest has to hash it, or editing the geometry would look like
-         * it did nothing. A named buffer is also not an asset: it is glTF
-         * payload with no meaning of its own, and the copy rule would put the
-         * vertex data in the cooked tree a second time where nothing reads it.
+         * A named buffer is an input, so the manifest has to hash it, or
+         * editing the geometry would look like it did nothing. It is also not
+         * an asset: it is glTF payload with no meaning of its own, and the copy
+         * rule would put the vertex data in the cooked tree a second time where
+         * nothing reads it.
          *
-         * A texture a glTF names is not like this. That one is a real asset
-         * with a sidecar of its own, and the texture rule cooks it.
+         * An image a glTF names is not like this. That one is a real asset with
+         * a sidecar of its own, and the texture rule cooks it. Its sidecar is
+         * an input all the same, because a cooked material stores the identity
+         * out of that file.
          */
         void scan_gltf(const Options& options,
                        const std::vector<std::filesystem::path>& sources, Named& out) {
@@ -348,14 +331,20 @@ namespace cooker {
                 if (rule_for(relative) != Rule::Mesh) {
                     continue;
                 }
-                std::vector<std::filesystem::path> named;
+                GltfReferences named;
                 // A file that will not parse names nothing here and fails in
                 // the rule, where the message belongs.
-                (void)gltf_extra_inputs(options.content / relative, relative, named);
-                for (const std::filesystem::path& path : named) {
+                (void)gltf_references(options.content / relative, relative, named);
+
+                std::vector<std::filesystem::path> inputs;
+                for (const std::filesystem::path& path : named.buffers) {
                     out.buffers.insert(path);
+                    inputs.push_back(path);
                 }
-                out.inputs.emplace(relative, std::move(named));
+                for (const std::filesystem::path& path : named.images) {
+                    inputs.push_back(as::meta_path(path));
+                }
+                out.inputs.emplace(relative, std::move(inputs));
             }
         }
 
@@ -376,8 +365,8 @@ namespace cooker {
             // would look like it did nothing.
             entry.inputs.push_back(as::manifest_path(as::meta_path(relative)));
 
-            // A .gltf keeps its geometry in a .bin next to it, and that file is
-            // an input as much as the .gltf is.
+            // A .gltf keeps its geometry in a .bin next to it, and it names the
+            // images its materials use. Both are inputs as much as the .gltf is.
             if (const auto found = named.inputs.find(relative); found != named.inputs.end()) {
                 for (const std::filesystem::path& path : found->second) {
                     entry.inputs.push_back(as::manifest_path(path));
@@ -418,23 +407,15 @@ namespace cooker {
             const std::filesystem::path source = options.content / relative;
             const Rule rule = rule_for(relative);
 
+            // An image goes through image_meta(), which fills in the color
+            // space guess for a sidecar it has to write. The glTF rule calls
+            // the same function, so whichever rule reaches an image first
+            // records the same guess.
             as::AssetMeta meta;
-            bool created = false;
-            if (!as::meta_for(source, meta, &created)) {
+            const bool read = rule == Rule::Texture ? image_meta(source, meta)
+                                                    : as::meta_for(source, meta);
+            if (!read) {
                 return Outcome::Failed;
-            }
-
-            // A new sidecar carries the defaults, and a texture wants a better
-            // starting guess than "sRGB" for every file. So the guess goes in
-            // once, when the file is written, and after that the file decides.
-            // A wrong guess is one edit to fix and it never comes back.
-            if (created && rule == Rule::Texture) {
-                meta.texture.color_space = guess_color_space(source);
-                if (!as::save_meta(source, meta)) {
-                    return Outcome::Failed;
-                }
-                ENGINE_LOG_INFO("{}: reading it as {}. Edit the sidecar to change that.",
-                                source.string(), as::to_text(meta.texture.color_space));
             }
 
             entry.source = as::manifest_path(relative);

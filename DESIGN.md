@@ -584,14 +584,37 @@ name it. The cache owns the buffers rather than `assets::AssetDatabase`, because
 buffer needs the device to free it and the database frees a value by running its destructor.
 M4.5 brings the two together, when hot reload has to replace a mesh while the program runs.
 
-The shading is a placeholder until M4.4b writes a material. A submesh carries a material
-GUID and it is null, so every surface takes the same neutral shade under a key light and a
-hemisphere. One flat colour would show a silhouette and nothing else, and the mistakes a new
-importer makes are an inverted normal, a mirrored winding, and a mesh inside out. Those are
-visible under lighting and invisible under a flat fill.
-
 `CubePass` still draws an entity that names no mesh. That is what the M3 crates are, and it
 keeps that scene readable while the mesh path grows beside it. #38 retires it.
+
+**Materials.** M4.4b made the material the fourth asset type. A cooked material is one fixed
+size header and no payload, because a material is a handful of numbers and a list of
+references. It names its textures by GUID, and the glTF names them by URI, so the importer
+reads the sidecar of each image and stores the identity from there.
+
+That makes an image sidecar an input of the glTF file. Replacing a sidecar gives the image a
+new identity, and a material that still stored the old one would point at nothing. The image
+itself is not an input, because editing the pixels changes the texture and not the material.
+
+It also moves the color space guess. Two rules can now reach an image first, and whichever
+one gets there writes the sidecar. A sidecar the glTF rule wrote with the defaults would say
+sRGB, and every normal map in that model would read as color from then on. So the guess
+belongs to `image_meta()` in the texture rule, and both callers go through it.
+
+**The format carries more than the renderer reads.** A cooked material holds the whole glTF
+metallic-roughness set: five texture GUIDs, both color factors, the metallic, the roughness,
+the normal scale, the occlusion strength, the alpha mode, the cutoff, and the double sided
+flag. The pass binds the base color and shades it under the same key light and hemisphere
+that M4.4c used.
+
+That is deliberate. glTF hands the rest over for free, and a field added later would move the
+format version and cook every model again. Rule 4.6 governs systems, and this is a data
+format. M5 is the milestone that shades with the rest, and it is also where the double sided
+flag starts to matter, because honoring it needs a second pipeline or a dynamic cull state.
+
+A material lives on the submesh rather than on `MeshRenderer`. One mesh can use several, and
+a single field on the component could not say which submesh got which. A per-entity override
+belongs with the editor work in M8.
 
 **Looking at what was drawn.** `gfx::capture_frame` copies the frame that was presented last
 into host memory, and `runtime --screenshot <file>` writes it as a PNG. A run that ends with

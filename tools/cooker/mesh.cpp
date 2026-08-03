@@ -2,6 +2,7 @@
 
 #include "assets/mesh.h"
 #include "core/log.h"
+#include "material.h"
 
 #include <cgltf.h>
 #include <meshoptimizer.h>
@@ -180,8 +181,29 @@ namespace cooker {
             Vec3 max{ std::numeric_limits<float>::lowest() };
         };
 
+        /**
+         * The identity of the material a primitive names.
+         *
+         * cgltf stores a pointer, and the cooked file stores a GUID. The index
+         * is the distance from the start of the material list, which is the
+         * same index cook_materials() derived each GUID from.
+         */
+        [[nodiscard]] engine::Guid material_of(const cgltf_data& data,
+                                               const cgltf_material* material,
+                                               const CookedMaterials& materials) {
+            if (material == nullptr || data.materials == nullptr) {
+                return engine::Guid{};
+            }
+            const auto index = static_cast<std::size_t>(material - data.materials);
+            if (index >= materials.guids.size()) {
+                return engine::Guid{};
+            }
+            return materials.guids[index];
+        }
+
         /// Reads one primitive and appends it to the mesh being built.
-        [[nodiscard]] bool add_primitive(const cgltf_primitive& primitive, Built& built,
+        [[nodiscard]] bool add_primitive(const cgltf_primitive& primitive,
+                                         engine::Guid material, Built& built,
                                          std::string_view where, bool& has_tangents) {
             if (primitive.type != cgltf_primitive_type_triangles) {
                 // A point or a line primitive is legal glTF and this engine
@@ -305,12 +327,11 @@ namespace cooker {
             }
 
             // One submesh for each primitive, because a glTF primitive is
-            // exactly the run of triangles that shares a material. M4.4b fills
-            // in the material GUID.
+            // exactly the run of triangles that shares a material.
             built.submeshes.push_back(as::MeshSubmesh{
                 .first_index = first_index,
                 .index_count = static_cast<std::uint32_t>(local.size()),
-                .material = {} });
+                .material = material });
             return true;
         }
 
@@ -376,9 +397,8 @@ namespace cooker {
 
     } // namespace
 
-    bool gltf_extra_inputs(const std::filesystem::path& source,
-                           const std::filesystem::path& relative,
-                           std::vector<std::filesystem::path>& inputs) {
+    bool gltf_references(const std::filesystem::path& source,
+                         const std::filesystem::path& relative, GltfReferences& out) {
         const std::string name = source.string();
 
         cgltf_options options{};
@@ -387,23 +407,22 @@ namespace cooker {
             return false;
         }
 
+        // A GLB holds its buffers and its images inside itself, and a data URI
+        // carries the bytes inline. Neither one names a file to watch, and
+        // gltf_uri_path reports that.
         const std::filesystem::path directory = relative.parent_path();
+
         for (cgltf_size at = 0; at < held.data->buffers_count; ++at) {
-            const char* uri = held.data->buffers[at].uri;
-            // A GLB buffer has no URI, and a data URI carries the bytes in the
-            // file itself. Neither one names a file to watch.
-            if (uri == nullptr || std::string_view{ uri }.starts_with("data:")) {
-                continue;
+            std::filesystem::path path;
+            if (gltf_uri_path(held.data->buffers[at].uri, directory, path)) {
+                out.buffers.push_back(std::move(path));
             }
-
-            // A URI escapes a space as %20 and so on, so the text is not a path
-            // until it is decoded. cgltf decodes in place, so this works on a
-            // copy rather than on the parsed data.
-            std::string decoded{ uri };
-            cgltf_decode_uri(decoded.data());
-            decoded.resize(std::strlen(decoded.c_str()));
-
-            inputs.push_back(directory / decoded);
+        }
+        for (cgltf_size at = 0; at < held.data->images_count; ++at) {
+            std::filesystem::path path;
+            if (gltf_uri_path(held.data->images[at].uri, directory, path)) {
+                out.images.push_back(std::move(path));
+            }
         }
         return true;
     }
@@ -413,9 +432,26 @@ namespace cooker {
         return lower == ".gltf" || lower == ".glb";
     }
 
+    bool gltf_uri_path(const char* uri, const std::filesystem::path& directory,
+                       std::filesystem::path& out) {
+        if (uri == nullptr || std::string_view{ uri }.starts_with("data:")) {
+            return false;
+        }
+
+        // cgltf decodes in place, so this works on a copy rather than on the
+        // parsed data. The decode only ever shortens the text, and it leaves
+        // the old terminator behind, so the length comes from strlen.
+        std::string decoded{ uri };
+        cgltf_decode_uri(decoded.data());
+        decoded.resize(std::strlen(decoded.c_str()));
+
+        out = directory / decoded;
+        return true;
+    }
+
     bool cook_gltf(const std::filesystem::path& source, const std::filesystem::path& out_root,
-                   const std::filesystem::path& relative,
-                   std::vector<std::filesystem::path>& cooked) {
+                   const std::filesystem::path& relative, engine::Guid parent,
+                   std::vector<as::ManifestOutput>& outputs) {
         const std::string name = source.string();
 
         cgltf_options options{};
@@ -446,6 +482,14 @@ namespace cooker {
             return false;
         }
 
+        // The materials come first, because a submesh stores the identity of
+        // the one it uses. Their outputs go on the list after the meshes, so
+        // the first output of a glTF file is still its first mesh.
+        CookedMaterials materials;
+        if (!cook_materials(*held.data, source, out_root, relative, parent, materials)) {
+            return false;
+        }
+
         for (cgltf_size at = 0; at < held.data->meshes_count; ++at) {
             const cgltf_mesh& mesh = held.data->meshes[at];
             const std::string where = name + " mesh " + std::to_string(at);
@@ -453,7 +497,10 @@ namespace cooker {
             Built built;
             bool has_tangents = true;
             for (cgltf_size part = 0; part < mesh.primitives_count; ++part) {
-                if (!add_primitive(mesh.primitives[part], built, where, has_tangents)) {
+                const cgltf_primitive& primitive = mesh.primitives[part];
+                const engine::Guid material =
+                    material_of(*held.data, primitive.material, materials);
+                if (!add_primitive(primitive, material, built, where, has_tangents)) {
                     return false;
                 }
             }
@@ -478,9 +525,13 @@ namespace cooker {
             if (!write_mesh(out_root / cooked_relative, built)) {
                 return false;
             }
-            cooked.push_back(cooked_relative);
+            outputs.push_back(as::ManifestOutput{
+                .cooked = as::manifest_path(cooked_relative),
+                .guid = engine::Guid::derive(parent, kMeshPartKind,
+                                             static_cast<std::uint32_t>(at)) });
         }
 
+        outputs.insert(outputs.end(), materials.outputs.begin(), materials.outputs.end());
         return true;
     }
 

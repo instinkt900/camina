@@ -6,8 +6,8 @@ layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 // The tangent sits at offset 24 in the vertex and nothing reads it yet. An
 // attribute a shader does not consume is a validation warning, so the pipeline
-// declares three of the four. M4.4b adds it back with the normal mapping that
-// needs it. The stride stays 48 either way.
+// declares three of the four. The cooked material names a normal map already,
+// and M5 declares this again when it reads one. The stride stays 48 either way.
 layout(location = 3) in vec2 in_uv;
 
 layout(location = 0) out vec3 out_normal;
