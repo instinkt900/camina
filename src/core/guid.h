@@ -125,8 +125,8 @@ namespace engine {
 
 /// @cond
 // Hash support, so a GUID can key an unordered container. Doxygen 1.9.8 cannot
-// resolve a specialization of a std template, in the same way as Handle in
-// core/handle.h, so this is hidden from the docs rather than documented.
+// resolve a specialization of a std template. Handle in core/handle.h hits the
+// same problem. So this is hidden from the docs rather than documented.
 template <>
 struct std::hash<engine::Guid> {
     std::size_t operator()(const engine::Guid& guid) const noexcept {

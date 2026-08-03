@@ -144,17 +144,16 @@ namespace engine::reflect {
 
         bool edit_text_value(const char* label, std::string& text) {
             // The field the user is typing in needs a buffer that survives the
-            // frame, because a half-typed value does not parse and the caller
-            // therefore does not store it. Rebuilding the buffer from the value
-            // on each frame would delete what the user typed, one keystroke at
-            // a time.
+            // frame. A half-typed value does not parse, so the caller does not
+            // store it. Rebuilding the buffer from the value on each frame
+            // would delete what the user typed, one keystroke at a time.
             //
             // Each field keeps its own buffer, under its own item ID. One
-            // shared buffer is not enough, even though ImGui holds one item
-            // active at a time, because two fields change state in the same
-            // frame when the user clicks from one straight into the other. The
-            // field that takes focus seeds the buffer, and if it draws first,
-            // the field that gives up focus then commits the wrong text.
+            // shared buffer is not enough. ImGui holds one item active at a
+            // time, but two fields change state in the same frame. That
+            // happens when the user clicks from one straight into the other.
+            // The field that takes focus seeds the buffer. When it draws
+            // first, the field that gives up focus commits the wrong text.
             //
             // An entry lives only while its field is active, so the map holds
             // one string at a time in the normal case.

@@ -1,10 +1,13 @@
 // M4.1 tests for the asset database and the sidecar.
 //
-// Two properties carry the milestone. A handle that a caller resolved before
-// the asset loaded still points at the asset afterwards, because M4.5 replaces
-// an asset while the program runs and must not fix up every handle. And a
-// missing asset gives the placeholder rather than ending the process, because
-// an artist with a half-cooked directory has to be able to keep working.
+// Two properties carry the milestone.
+//
+// A handle that a caller resolved before the asset loaded still points at the
+// asset afterwards. M4.5 replaces an asset while the program runs, and it must
+// not fix up every handle to do so.
+//
+// A missing asset gives the placeholder rather than ending the process. An
+// artist with a half-cooked directory has to be able to keep working.
 
 #include "assets/database.h"
 #include "assets/meta.h"
@@ -71,10 +74,10 @@ namespace {
     }
 
     void test_reference_survives_later_loads() {
-        // get() hands out a reference into a slot, and resolve() adds slots. A
-        // renderer reads a mesh at the top of a frame and a load lands part way
-        // through, so the two happen together in the normal case. The pool
-        // therefore has to hold its slots in a container that does not move
+        // get() hands out a reference into a slot, and resolve() adds slots.
+        // A renderer reads a mesh at the top of a frame, and a load lands part
+        // way through. The two therefore happen together in the normal case.
+        // So the pool has to hold its slots in a container that does not move
         // them when it grows.
         as::AssetDatabase database;
         const as::AssetHandle<Image> first =
@@ -200,8 +203,8 @@ namespace {
         check(!as::meta_for(directory, meta), "a directory is not a source asset");
 
         // A sidecar somebody truncated, or a bad merge. Writing a new one beats
-        // refusing to cook, because the alternative is a cook that stops on a
-        // file the user can neither see nor fix.
+        // refusing to cook. The alternative is a cook that stops on a file the
+        // user can neither see nor fix.
         const std::filesystem::path source = directory / "crate.png";
         write_file(source, "not really a png");
         write_file(as::meta_path(source), "{}");

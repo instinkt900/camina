@@ -2,8 +2,8 @@
 //
 // The checks that matter are the round trip through text, and the refusal of
 // text that is not a GUID. A reader that accepts bad text writes a wrong
-// identity into a cooked file, and nothing reports it until a reference fails
-// to resolve much later.
+// identity into a cooked file. Nothing reports that until a reference fails to
+// resolve, much later.
 
 #include "check.h"
 #include "core/guid.h"

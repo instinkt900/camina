@@ -60,9 +60,9 @@ namespace engine {
         // platforms, and a cook run makes one GUID for every new source file.
         //
         // The seed comes from several random_device values rather than one.
-        // std::random_device::result_type is 32 bits wide on MSVC, so a single
-        // value picks one of 2^32 sequences, and two machines that pick the
-        // same one then hand out the same GUIDs. A GUID goes into a .meta file
+        // std::random_device::result_type is 32 bits wide on MSVC. A single
+        // value therefore picks one of 2^32 sequences. Two machines that pick
+        // the same one hand out the same GUIDs. A GUID goes into a .meta file
         // and stays there for the life of the asset, so a repeat is permanent.
         static thread_local std::mt19937_64 engine_state = [] {
             constexpr std::size_t kSeedWords = 8;

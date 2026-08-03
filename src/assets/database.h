@@ -240,9 +240,9 @@ namespace engine::assets {
             T value{};
             AssetState state = AssetState::Unloaded;
 
-            // Whether get() has already logged this slot. It is mutable because
-            // it records what the log has said, not what the asset is, and a
-            // caller with a const database still has to be able to read.
+            // Whether get() has already logged this slot. It is mutable
+            // because it records what the log has said, not what the asset is.
+            // A caller with a const database still has to be able to read.
             mutable bool reported = false;
         };
 
@@ -260,8 +260,8 @@ namespace engine::assets {
         }
 
         // The generation starts at 1, not at 0. A handle packs the index and
-        // the generation, and Handle::valid() reads a zero pack as no handle,
-        // so slot 0 of generation 0 would be indistinguishable from nothing.
+        // the generation, and Handle::valid() reads a zero pack as no handle.
+        // Slot 0 of generation 0 would therefore look like nothing at all.
         std::uint32_t generation_ = 1;
 
         // A deque, not a vector. get() returns a reference into a slot, and
