@@ -15,6 +15,11 @@
  *
  * Nothing here reads a file. The cooker (#36) and the loaders fill the
  * database, and a test fills it by hand.
+ *
+ * @warning One thread owns a database. Nothing here locks, so a second thread
+ * that resolves or stores while the first one reads corrupts the slot list.
+ * Today the runtime fills the database before it draws, so one thread does all
+ * of it. A background loader breaks that, and issue #41 covers the change.
  */
 
 #include "core/guid.h"

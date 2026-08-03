@@ -41,10 +41,10 @@ library that the runtime links, and it loads a scene of prefab instances and tur
 them. The runtime flies through that scene and edits any component on any entity, which
 closes M3. See `DESIGN.md` §10.
 
-M4 is in progress. M4.1 gives an asset its identity: `engine::Guid` in `src/core/guid.h`, a
-`.meta` sidecar next to each source file, and `assets::AssetDatabase`, which turns a GUID
-into a handle that stays valid when the asset loads or reloads. Nothing reads a cooked file
-yet. The cooker is M4.2.
+M4 is in progress. M4.1 gives an asset its identity. It adds `engine::Guid` in
+`src/core/guid.h`, a `.meta` sidecar next to each source file, and `assets::AssetDatabase`.
+The database turns a GUID into a handle that stays valid when the asset loads or reloads.
+Nothing reads a cooked file yet. The cooker is M4.2.
 
 Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. The build produces no warnings

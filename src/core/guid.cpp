@@ -58,7 +58,23 @@ namespace engine {
     Guid Guid::generate() {
         // Seeded once for each thread. std::random_device is slow on some
         // platforms, and a cook run makes one GUID for every new source file.
-        static thread_local std::mt19937_64 engine_state{ std::random_device{}() };
+        //
+        // The seed comes from several random_device values rather than one.
+        // std::random_device::result_type is 32 bits wide on MSVC, so a single
+        // value picks one of 2^32 sequences, and two machines that pick the
+        // same one then hand out the same GUIDs. A GUID goes into a .meta file
+        // and stays there for the life of the asset, so a repeat is permanent.
+        static thread_local std::mt19937_64 engine_state = [] {
+            constexpr std::size_t kSeedWords = 8;
+            std::random_device source;
+            std::array<std::random_device::result_type, kSeedWords> entropy{};
+            for (auto& word : entropy) {
+                word = source();
+            }
+            std::seed_seq sequence(entropy.begin(), entropy.end());
+            return std::mt19937_64{ sequence };
+        }();
+
         std::uniform_int_distribution<std::uint64_t> bits;
 
         Guid guid{ .high = bits(engine_state), .low = bits(engine_state) };

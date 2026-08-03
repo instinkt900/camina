@@ -353,8 +353,8 @@ of a shape to fold into `reflect::Registry` when a fourth caller asks.
 **What the asset identity needed.** M4.1 put a `Guid` in a described field, and that was the
 first field type neither consumer could carry. Both held a closed list: a described type, a
 glm vector, a quaternion, a list, or a plain scalar. A GUID is none of those. Describing it
-as two 64-bit numbers would have compiled, and it would have written a nested object of two
-large integers where a person reading a diff needs one string.
+as two 64-bit numbers would have compiled. It would also have written a nested object of two
+large integers. A person reading a diff needs one string instead.
 
 `reflect::TextValue` in `reflect/traits.h` answers it. A type declares `to_text` and
 `from_text` next to itself, and argument-dependent lookup finds them. The serializer then
@@ -364,9 +364,8 @@ depending on a layer above it.
 
 Note what did not change. `Describe<T>` is the same, every attribute is the same, and both
 consumers still call only `for_each_field()`. This is not a change to the descriptors. It is
-a change to what a field may hold, and the two are worth keeping apart, because the libclang
-step in the first paragraph of this section has to replace the first without touching the
-second.
+a change to what a field may hold. Keep the two apart. The libclang step in the first
+paragraph of this section has to replace the descriptors without touching the field types.
 
 The inspector needed one thing the other consumers did not. A value that must parse cannot
 be written back on each keystroke, because a half-typed GUID is not a GUID. So

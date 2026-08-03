@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstring>
 #include <string_view>
+#include <unordered_map>
 
 namespace engine::reflect {
 
@@ -148,32 +149,46 @@ namespace engine::reflect {
             // on each frame would delete what the user typed, one keystroke at
             // a time.
             //
-            // ImGui edits one item at a time, so one such buffer is enough.
-            // Every other field of this kind draws from a copy that lives for
-            // the call, which keeps an idle field from writing over the buffer
-            // the active field owns.
-            static std::string editing;
-            static ImGuiID editing_id = 0;
+            // Each field keeps its own buffer, under its own item ID. One
+            // shared buffer is not enough, even though ImGui holds one item
+            // active at a time, because two fields change state in the same
+            // frame when the user clicks from one straight into the other. The
+            // field that takes focus seeds the buffer, and if it draws first,
+            // the field that gives up focus then commits the wrong text.
+            //
+            // An entry lives only while its field is active, so the map holds
+            // one string at a time in the normal case.
+            static std::unordered_map<ImGuiID, std::string> pending;
 
             const ImGuiID id = ImGui::GetID(label);
-            std::string idle = text;
-            std::string& buffer = editing_id == id ? editing : idle;
+            const auto entry = pending.find(id);
+
+            // A field nobody is editing draws from a copy that lives for the
+            // call, so it never writes over another field's buffer.
+            std::string idle;
+            if (entry == pending.end()) {
+                idle = text;
+            }
+            std::string& buffer = entry == pending.end() ? idle : entry->second;
 
             ImGui::InputText(label, &buffer);
 
             if (ImGui::IsItemActivated()) {
-                // The field takes the buffer, holding what the value says now.
                 // This frame already drew from the copy, which holds the same.
-                editing = text;
-                editing_id = id;
+                pending[id] = text;
             }
 
-            const bool committed = ImGui::IsItemDeactivatedAfterEdit();
-            if (committed) {
-                text = editing;
+            bool committed = false;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                // Read this field's own buffer, not whichever one was written
+                // last. Look it up again, because the insert above can rehash.
+                if (const auto own = pending.find(id); own != pending.end()) {
+                    text = own->second;
+                    committed = true;
+                }
             }
             if (ImGui::IsItemDeactivated()) {
-                editing_id = 0;
+                pending.erase(id);
             }
             return committed;
         }
