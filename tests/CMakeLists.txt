@@ -43,6 +43,20 @@ engine_enable_clang_tidy(test_prefab)
 
 add_test(NAME prefab COMMAND test_prefab)
 
+add_executable(test_guid test_guid.cpp)
+target_link_libraries(test_guid PRIVATE engine::core)
+engine_set_warnings(test_guid)
+engine_enable_clang_tidy(test_guid)
+
+add_test(NAME guid COMMAND test_guid)
+
+add_executable(test_assets test_assets.cpp)
+target_link_libraries(test_assets PRIVATE engine::core)
+engine_set_warnings(test_assets)
+engine_enable_clang_tidy(test_assets)
+
+add_test(NAME assets COMMAND test_assets)
+
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
 add_executable(test_sandbox test_sandbox.cpp)

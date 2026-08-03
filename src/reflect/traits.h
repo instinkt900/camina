@@ -12,10 +12,40 @@
 
 #include "math/conventions.h"
 
+#include <concepts>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
 namespace engine::reflect {
+
+    /**
+     * @brief A value that reads and writes as one piece of text.
+     *
+     * A type opts in by declaring two free functions next to itself:
+     *
+     * @code
+     * std::string to_text(const Guid& value);
+     * bool from_text(std::string_view text, Guid& out);
+     * @endcode
+     *
+     * Argument-dependent lookup finds them, so reflect/ names no such type and
+     * gains no dependency on the layer that defines one. The serializer then
+     * writes a string instead of a nested object, and the inspector draws a
+     * text box.
+     *
+     * `from_text` reports a text it cannot read, and leaves @p out as it was.
+     * That is what lets both consumers keep the old value rather than accept a
+     * half-typed one.
+     *
+     * @tparam T The type to test.
+     */
+    template <typename T>
+    concept TextValue = requires(const T& value, std::string_view text, T& out) {
+        { to_text(value) } -> std::convertible_to<std::string>;
+        { from_text(text, out) } -> std::same_as<bool>;
+    };
 
     /**
      * @brief Whether a type is a glm vector, and how long it is.
