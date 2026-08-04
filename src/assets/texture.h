@@ -36,7 +36,10 @@ namespace engine::assets {
     inline constexpr std::uint32_t kTextureMagic = 0x58455443U;
 
     /// @brief The format version this build writes and reads.
-    inline constexpr std::uint32_t kTextureVersion = 1;
+    ///
+    /// Version 2 added the face count and the half float format, which is what
+    /// an HDR environment cubemap needs.
+    inline constexpr std::uint32_t kTextureVersion = 2;
 
     /// @brief The width and the height of one block-compressed block, in texels.
     inline constexpr std::uint32_t kBlockSize = 4;
@@ -62,7 +65,33 @@ namespace engine::assets {
         RGBA8 = 0,
         /// @brief BC7 blocks. 16 bytes for each 4 by 4 block of texels.
         BC7,
+        /**
+         * @brief Four 16-bit half floats in RGBA order. 8 bytes for each texel.
+         *
+         * This is what an HDR environment needs. An 8-bit channel holds values
+         * from 0 to 1, and a sky is brighter than 1 by a wide margin. A sun in
+         * an equirectangular capture reaches into the thousands, and clamping it
+         * to 1 removes the very thing that lights the scene.
+         *
+         * Half rather than full float, because a full float chain is twice the
+         * memory for range and precision a sky does not use. BC7 is not an
+         * option at all, because it is an 8-bit format.
+         */
+        RGBA16F,
     };
+
+    /// @brief The largest ::TextureFormat value, so a reader can reject the rest.
+    inline constexpr std::uint32_t kTextureFormatMax = static_cast<std::uint32_t>(
+        TextureFormat::RGBA16F);
+
+    /**
+     * @brief How many faces a cubemap holds.
+     *
+     * The order is the Vulkan one, which is also the glTF and the D3D one: +X,
+     * −X, +Y, −Y, +Z, −Z. A cooked cubemap stores every level of face 0, then
+     * every level of face 1, and so on. That is the order a device upload wants.
+     */
+    inline constexpr std::uint32_t kCubeFaceCount = 6;
 
     /**
      * @brief The fixed-size header at the start of a cooked texture file.
@@ -79,6 +108,12 @@ namespace engine::assets {
         std::uint32_t height = 0;                ///< Height of mip level 0, in texels.
         std::uint32_t mip_count = 0;             ///< How many levels follow. At least 1.
         std::uint32_t payload_size = 0;          ///< Bytes of texel data after this header.
+        /// @brief 1 for a flat texture, or ::kCubeFaceCount for a cubemap.
+        ///
+        /// A cubemap is a texture with six faces rather than an asset kind of
+        /// its own. The mip rules, the color space, and the reader are all the
+        /// same, and only the count of faces and the view type differ.
+        std::uint32_t face_count = 1;
     };
 
     /**
@@ -93,7 +128,8 @@ namespace engine::assets {
         std::uint32_t width = 0;                     ///< Width of mip level 0, in texels.
         std::uint32_t height = 0;                    ///< Height of mip level 0, in texels.
         std::uint32_t mip_count = 0;                 ///< How many levels the payload holds.
-        std::span<const std::byte> payload;          ///< Every level, largest first.
+        std::uint32_t face_count = 1;                ///< 1, or ::kCubeFaceCount for a cubemap.
+        std::span<const std::byte> payload;          ///< Every level of every face, face by face.
     };
 
     /**

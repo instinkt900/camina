@@ -108,6 +108,8 @@ namespace engine::gfx {
                 return VK_FORMAT_BC7_SRGB_BLOCK;
             case TextureFormat::BC7Unorm:
                 return VK_FORMAT_BC7_UNORM_BLOCK;
+            case TextureFormat::RGBA16F:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
             }
             return VK_FORMAT_R8G8B8A8_SRGB;
         }
@@ -122,6 +124,8 @@ namespace engine::gfx {
                 return "BC7Srgb";
             case TextureFormat::BC7Unorm:
                 return "BC7Unorm";
+            case TextureFormat::RGBA16F:
+                return "RGBA16F";
             }
             return "an unknown format";
         }
@@ -162,7 +166,84 @@ namespace engine::gfx {
                 const std::size_t down = (height + kBlockSize - 1) / kBlockSize;
                 return across * down * kBytesPerBlock;
             }
+            // Four half floats rather than four bytes. This has to agree with
+            // assets::level_bytes, because the cooker sizes the payload with
+            // that one and this call sizes the copy out of it.
+            if (format == TextureFormat::RGBA16F) {
+                constexpr std::size_t kBytesPerHalf4 = 8;
+                return static_cast<std::size_t>(width) * height * kBytesPerHalf4;
+            }
             return static_cast<std::size_t>(width) * height * kBytesPerTexel;
+        }
+
+        /// How many faces a cubemap holds. A texture is flat or it is a cube.
+        constexpr std::uint32_t kCubeFaces = 6;
+
+        /**
+         * Refuses a description that would build an image nothing can use.
+         *
+         * Every one of these is a case Vulkan would either reject with a
+         * message that names no caller, or accept and then read past the end of
+         * the caller's buffer. Doing it here names the engine call instead.
+         *
+         * @param desc What the caller asked for.
+         * @param out_size The bytes the levels really need, when this returns Ok.
+         */
+        [[nodiscard]] Result check_texture_desc(const TextureDesc& desc, std::size_t& out_size) {
+            if (desc.pixels == nullptr || desc.width == 0 || desc.height == 0 ||
+                desc.mip_count == 0) {
+                ENGINE_LOG_ERROR(
+                    "create_texture needs pixels, a size, and at least one mip level.");
+                return Result::ErrorInit;
+            }
+
+            // Vulkan would take any layer count, but a cubemap is the only array
+            // shape this engine has a view type for, and a count of two would
+            // build an image nothing can sample.
+            if (desc.face_count != 1 && desc.face_count != kCubeFaces) {
+                ENGINE_LOG_ERROR("create_texture got {} faces, and a texture holds 1 or {}.",
+                                 desc.face_count, kCubeFaces);
+                return Result::ErrorInit;
+            }
+            if (desc.face_count == kCubeFaces && desc.width != desc.height) {
+                ENGINE_LOG_ERROR(
+                    "create_texture got a {} by {} cubemap face, and a face is square.",
+                    desc.width, desc.height);
+                return Result::ErrorInit;
+            }
+
+            // Vulkan allows no more levels than the extent can halve down to.
+            // The size check below does not catch an oversized count, because
+            // mip_extent clamps at one texel, so every extra level asks for a
+            // few more bytes and a caller can hand over a buffer that matches.
+            const std::uint32_t allowed = max_mip_levels(desc.width, desc.height);
+            if (desc.mip_count > allowed) {
+                ENGINE_LOG_ERROR("create_texture got {} levels, and {} by {} texels hold {}.",
+                                 desc.mip_count, desc.width, desc.height, allowed);
+                return Result::ErrorInit;
+            }
+
+            // The caller says how many bytes it holds, and this works out how
+            // many the levels need. A mismatch means the two disagree about the
+            // layout, and copying anyway would read past the end of the buffer.
+            std::size_t size = 0;
+            for (std::uint32_t level = 0; level < desc.mip_count; ++level) {
+                size += level_bytes(desc.format, mip_extent(desc.width, level),
+                                    mip_extent(desc.height, level));
+            }
+            // Every face carries the whole chain.
+            size *= desc.face_count;
+            if (desc.size != size) {
+                ENGINE_LOG_ERROR(
+                    "create_texture got {} bytes, and {} by {} texels in {} levels of {} "
+                    "across {} face(s) needs {}.",
+                    desc.size, desc.width, desc.height, desc.mip_count,
+                    texture_format_name(desc.format), desc.face_count, size);
+                return Result::ErrorInit;
+            }
+
+            out_size = size;
+            return Result::Success;
         }
 
         void record_texture_upload(VkCommandBuffer buffer, VkImage image, VkBuffer staging,
@@ -178,23 +259,30 @@ namespace engine::gfx {
             // bufferRowLength and bufferImageHeight stay 0, which tells the
             // driver the rows are tightly packed. A block-compressed level
             // counts in blocks there, and 0 avoids having to say so.
+            //
+            // A cubemap holds the whole chain of face 0, then the whole chain of
+            // face 1, and so on. So the face is the outer loop and the offset
+            // still only runs forward.
             std::vector<VkBufferImageCopy> regions;
-            regions.reserve(desc.mip_count);
+            regions.reserve(static_cast<std::size_t>(desc.mip_count) * desc.face_count);
 
             VkDeviceSize offset = 0;
-            for (std::uint32_t level = 0; level < desc.mip_count; ++level) {
-                const std::uint32_t width = mip_extent(desc.width, level);
-                const std::uint32_t height = mip_extent(desc.height, level);
+            for (std::uint32_t face = 0; face < desc.face_count; ++face) {
+                for (std::uint32_t level = 0; level < desc.mip_count; ++level) {
+                    const std::uint32_t width = mip_extent(desc.width, level);
+                    const std::uint32_t height = mip_extent(desc.height, level);
 
-                VkBufferImageCopy region{};
-                region.bufferOffset = offset;
-                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                region.imageSubresource.mipLevel = level;
-                region.imageSubresource.layerCount = 1;
-                region.imageExtent = VkExtent3D{ width, height, 1 };
-                regions.push_back(region);
+                    VkBufferImageCopy region{};
+                    region.bufferOffset = offset;
+                    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.imageSubresource.mipLevel = level;
+                    region.imageSubresource.baseArrayLayer = face;
+                    region.imageSubresource.layerCount = 1;
+                    region.imageExtent = VkExtent3D{ width, height, 1 };
+                    regions.push_back(region);
 
-                offset += level_bytes(desc.format, width, height);
+                    offset += level_bytes(desc.format, width, height);
+                }
             }
 
             vkCmdCopyBufferToImage(buffer, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -613,41 +701,10 @@ namespace engine::gfx {
         ENGINE_CHECK(out_texture != nullptr, "create_texture needs somewhere to put the handle.");
         *out_texture = TextureHandle{};
 
-        if (desc.pixels == nullptr || desc.width == 0 || desc.height == 0 ||
-            desc.mip_count == 0) {
-            ENGINE_LOG_ERROR("create_texture needs pixels, a size, and at least one mip level.");
-            return Result::ErrorInit;
-        }
-
-        // Vulkan allows no more levels than the extent can halve down to. The
-        // size check below does not catch an oversized count, because
-        // mip_extent clamps at one texel, so every extra level asks for a few
-        // more bytes and a caller can hand over a buffer that matches.
-        // assets::read_texture holds this bound for a cooked file, and this
-        // call is public, so any other caller reaches here as well. Without
-        // this, vkCreateImage fails and the validation layer explains it rather
-        // than the engine.
-        const std::uint32_t allowed = max_mip_levels(desc.width, desc.height);
-        if (desc.mip_count > allowed) {
-            ENGINE_LOG_ERROR("create_texture got {} levels, and {} by {} texels hold {}.",
-                             desc.mip_count, desc.width, desc.height, allowed);
-            return Result::ErrorInit;
-        }
-
-        // The caller says how many bytes it holds, and this works out how many
-        // the levels need. A mismatch means the two disagree about the layout,
-        // and copying anyway would read past the end of the caller's buffer.
         std::size_t size = 0;
-        for (std::uint32_t level = 0; level < desc.mip_count; ++level) {
-            size += level_bytes(desc.format, mip_extent(desc.width, level),
-                                mip_extent(desc.height, level));
-        }
-        if (desc.size != size) {
-            ENGINE_LOG_ERROR("create_texture got {} bytes, and {} by {} texels in {} levels of "
-                             "{} needs {}.",
-                             desc.size, desc.width, desc.height, desc.mip_count,
-                             texture_format_name(desc.format), size);
-            return Result::ErrorInit;
+        const Result checked = check_texture_desc(desc, size);
+        if (!succeeded(checked)) {
+            return checked;
         }
 
         const VkFormat format = to_vk_format(desc.format);
@@ -675,7 +732,12 @@ namespace engine::gfx {
         image.format = format;
         image.extent = VkExtent3D{ desc.width, desc.height, 1 };
         image.mipLevels = desc.mip_count;
-        image.arrayLayers = 1;
+        image.arrayLayers = desc.face_count;
+        if (desc.face_count == kCubeFaces) {
+            // Without this flag the image is a plain array and no cube view can
+            // be made from it. It has to be set at creation, not at view time.
+            image.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        }
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
         image.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -699,11 +761,12 @@ namespace engine::gfx {
             VkImageViewCreateInfo view{};
             view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             view.image = built.image;
-            view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            view.viewType = desc.face_count == kCubeFaces ? VK_IMAGE_VIEW_TYPE_CUBE
+                                                          : VK_IMAGE_VIEW_TYPE_2D;
             view.format = format;
             view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             view.subresourceRange.levelCount = desc.mip_count;
-            view.subresourceRange.layerCount = 1;
+            view.subresourceRange.layerCount = desc.face_count;
             result = vk::to_result(
                 vkCreateImageView(device->device, &view, nullptr, &built.view));
         }

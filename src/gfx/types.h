@@ -124,6 +124,15 @@ namespace engine::gfx {
         RGBA8Unorm,    ///< Four 8-bit channels, read as they are.
         BC7Srgb,       ///< BC7 blocks, converted from sRGB on read.
         BC7Unorm,      ///< BC7 blocks, read as they are.
+        /**
+         * @brief Four 16-bit half floats, read as they are.
+         *
+         * There is no sRGB partner for this one, and there must not be. A half
+         * float already carries values above 1, which is the whole reason an
+         * HDR environment uses it, and an sRGB transfer function is defined
+         * only from 0 to 1.
+         */
+        RGBA16F,
     };
 
     /**
@@ -138,11 +147,19 @@ namespace engine::gfx {
      * it read past the end.
      */
     struct TextureDesc {
-        const void* pixels = nullptr;                    ///< The first byte of mip level 0. Required.
-        std::size_t size = 0;                            ///< Bytes of every level together. Required.
-        std::uint32_t width = 0;                         ///< Width of mip level 0, in texels.
-        std::uint32_t height = 0;                        ///< Height of mip level 0, in texels.
-        std::uint32_t mip_count = 1;                     ///< How many levels @c pixels holds. At least 1.
+        const void* pixels = nullptr; ///< The first byte of mip level 0. Required.
+        std::size_t size = 0;         ///< Bytes of every level together. Required.
+        std::uint32_t width = 0;      ///< Width of mip level 0, in texels.
+        std::uint32_t height = 0;     ///< Height of mip level 0, in texels.
+        std::uint32_t mip_count = 1;  ///< How many levels @c pixels holds. At least 1.
+        /**
+         * @brief 1 for a flat texture, or 6 for a cubemap.
+         *
+         * Six makes a texture the shader reads as a `samplerCube`. The pixels
+         * hold every level of face 0, then every level of face 1, and so on.
+         * The faces run +X, −X, +Y, −Y, +Z, −Z, and a cubemap face is square.
+         */
+        std::uint32_t face_count = 1;
         TextureFormat format = TextureFormat::RGBA8Srgb; ///< How the texels are stored.
         SamplerDesc sampler;                             ///< How the shader reads it. Shared, not owned.
     };
