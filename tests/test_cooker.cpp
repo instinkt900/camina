@@ -5,7 +5,7 @@
 // that skips too much ships a stale asset. Both failures are quiet, so the
 // tests here drive the second run and check the counts rather than the output.
 //
-// test_shell_metacharacters_are_refused is the one test that cooks a shader.
+// test_a_shell_metacharacter_name_still_cooks is the one test that cooks a shader.
 // It needs glslc, which the CMake test target passes through a compile
 // definition. The copy rule exercises the same manifest path for the rest of
 // the tests.
@@ -253,7 +253,7 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
-    void test_shell_metacharacters_are_refused() {
+    void test_a_shell_metacharacter_name_still_cooks() {
 #if defined(ENGINE_GLSLC_PATH)
         // A shader whose name a shell would read as a command. glslc now runs
         // through run_process, so no shell ever sees the name, and the cooker
@@ -355,6 +355,46 @@ void main() {
                       shader.params[1].offset == 16,
                   "the float member reflected, after the vec4");
         }
+
+        test::remove_tree(source.parent_path());
+#endif
+    }
+
+    /**
+     * A push constant block that does not start at zero.
+     *
+     * SPIRV-Reflect reports the lowest member offset in `offset`, and `size`
+     * already counts from the start of the range. Adding the two counts a late
+     * member twice, and the size that comes out can pass the 128 bytes every
+     * Vulkan device promises. The pipeline then fails to build, on a shader that
+     * is correct.
+     */
+    void test_a_push_block_that_starts_late_reports_its_real_size() {
+#if defined(ENGINE_GLSLC_PATH)
+        const std::filesystem::path source = scratch("push_offset/src");
+        const std::filesystem::path out = scratch("push_offset/out");
+        // One mat4 at offset 64, so the range runs to 128 and not to 192.
+        write_file(source / "late.frag", R"(#version 450
+layout(push_constant) uniform Push {
+    layout(offset = 64) mat4 model;
+} push;
+layout(location = 0) out vec4 out_color;
+void main() { out_color = push.model[0]; }
+)");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a shader with a late push block cooks");
+
+        const std::string cooked =
+            read_file(out / ("late.frag" + std::string(engine::assets::kShaderExtension)));
+        engine::assets::Shader shader;
+        check(engine::assets::read_shader(
+                  std::as_bytes(std::span(cooked.data(), cooked.size())), shader, "late.frag"),
+              "the cooked shader reads back");
+        check(shader.push_constant_size == 128,
+              "the push range ends at 128, not at the offset plus the size");
 
         test::remove_tree(source.parent_path());
 #endif
@@ -1676,11 +1716,12 @@ int main() {
     test_missing_output_recooks();
     test_new_identity_recooks();
     test_duplicate_identity_is_refused();
-    test_shell_metacharacters_are_refused();
+    test_a_shell_metacharacter_name_still_cooks();
     test_documentation_is_not_an_asset();
     test_bad_input();
     test::section("shader reflection");
     test_the_cooker_reflects_what_a_shader_reads();
+    test_a_push_block_that_starts_late_reports_its_real_size();
     test_a_shader_that_does_not_compile_writes_nothing();
     test::section("textures");
     test_color_space_decides_the_mip_chain();

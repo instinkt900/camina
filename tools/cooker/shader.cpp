@@ -201,12 +201,18 @@ namespace cooker {
 
             // Vulkan gives one push constant range to each stage, so the size is
             // the end of the last block rather than a sum of the blocks.
+            //
+            // absolute_offset and not offset. For a push constant block, offset
+            // is the lowest offset of any member, and size already counts from
+            // the start of the range. Adding the two would count a member that
+            // starts late twice. A block holding one mat4 at `layout(offset =
+            // 64)` reports offset 64 and size 128, and the range really is 128.
             for (const SpvReflectBlockVariable* block : blocks) {
                 if (block == nullptr) {
                     continue;
                 }
                 out.push_constant_size =
-                    std::max(out.push_constant_size, block->offset + block->size);
+                    std::max(out.push_constant_size, block->absolute_offset + block->size);
             }
             return true;
         }
@@ -310,7 +316,12 @@ namespace cooker {
         }
 
         // One exit, so the module is destroyed on every path below.
+        //
+        // Every field this fills is cleared first, because take_push_constant_size
+        // folds with std::max and would otherwise keep a larger size the caller
+        // left behind. The header promises to fill everything but the words.
         out.stage = stage;
+        out.push_constant_size = 0;
         out.bindings.clear();
         out.params.clear();
 

@@ -77,13 +77,20 @@ namespace engine::render {
          * Vulkan takes one set layout for the whole pipeline, so declaring it
          * twice would be two layouts for one set.
          *
+         * The two stages have to agree about a slot they share. The cooker
+         * cannot check that, because it reflects one module at a time and never
+         * sees the pair. So this is the only place the disagreement can be
+         * caught, and catching it here beats a validation error or a wrong read
+         * later.
+         *
          * The result comes out sorted by set and then by binding, which is what
          * GraphicsPipelineDesc::bindings asks for.
          */
-        [[nodiscard]] std::vector<gfx::DescriptorBinding> merge_bindings(
-            const assets::Shader& vertex, const assets::Shader& fragment) {
-            std::vector<gfx::DescriptorBinding> merged;
-            const auto add = [&merged](const assets::Shader& shader) {
+        [[nodiscard]] bool merge_bindings(const assets::Shader& vertex,
+                                          const assets::Shader& fragment,
+                                          std::vector<gfx::DescriptorBinding>& merged) {
+            bool ok = true;
+            const auto add = [&merged, &ok](const assets::Shader& shader) {
                 for (const assets::ShaderBinding& source : shader.bindings) {
                     const auto found = std::find_if(
                         merged.begin(), merged.end(),
@@ -91,6 +98,18 @@ namespace engine::render {
                             return entry.set == source.set && entry.binding == source.binding;
                         });
                     if (found != merged.end()) {
+                        const gfx::DescriptorKind kind = to_gfx_kind(source.kind);
+                        if (found->kind != kind || found->count != source.count) {
+                            ENGINE_LOG_ERROR(
+                                "The two stages declare set {} binding {} differently, so one "
+                                "layout cannot serve both. One says {} of kind {}, the other "
+                                "says {} of kind {}.",
+                                source.set, source.binding, found->count,
+                                static_cast<std::uint32_t>(found->kind), source.count,
+                                static_cast<std::uint32_t>(kind));
+                            ok = false;
+                            continue;
+                        }
                         found->stages |= to_gfx_stages(source.stages);
                         continue;
                     }
@@ -110,7 +129,7 @@ namespace engine::render {
                       [](const gfx::DescriptorBinding& a, const gfx::DescriptorBinding& b) {
                           return a.set != b.set ? a.set < b.set : a.binding < b.binding;
                       });
-            return merged;
+            return ok;
         }
 
     } // namespace
@@ -153,8 +172,10 @@ namespace engine::render {
         // The layout comes from the two modules rather than from this file. A
         // hand-written layout beside a shader that declares the same thing used
         // to drift from it with nothing to catch the difference.
-        const std::vector<gfx::DescriptorBinding> bindings =
-            merge_bindings(vertex_shader, fragment_shader);
+        std::vector<gfx::DescriptorBinding> bindings;
+        if (!merge_bindings(vertex_shader, fragment_shader, bindings)) {
+            return false;
+        }
 
         // The push block is the vertex stage's, and it must still match Push
         // above. Reflection now says how big the shader thinks it is, so the two
