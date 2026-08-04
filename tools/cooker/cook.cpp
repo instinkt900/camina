@@ -378,13 +378,28 @@ namespace cooker {
          * next start of the program would then fail on an asset that is sitting
          * right there. A person editing a shader meets this on the first typo.
          */
-        void carry_forward(const as::Manifest& previous, const std::filesystem::path& relative,
-                           as::Manifest& next) {
+        void carry_forward(const Options& options, const as::Manifest& previous,
+                           const std::filesystem::path& relative, as::Manifest& next) {
             const as::ManifestEntry* kept =
                 as::find_by_source(previous, as::manifest_path(relative));
             if (kept == nullptr) {
                 return;
             }
+
+            // Only when every file it names is still there. An entry pointing
+            // at a file somebody deleted is worse than no entry at all: the
+            // manifest then says the asset is available, and the read fails
+            // later and further from the cause.
+            for (const as::ManifestOutput& output : kept->outputs) {
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(options.out / output.cooked, error)) {
+                    ENGINE_LOG_WARN("{}: it did not cook, and {} is gone as well, so the "
+                                    "cooked tree no longer holds it.",
+                                    relative.generic_string(), output.cooked);
+                    return;
+                }
+            }
+
             ENGINE_LOG_WARN("{}: it did not cook, so the cooked tree keeps the one from "
                             "before.",
                             relative.generic_string());
@@ -526,7 +541,7 @@ namespace cooker {
                 // The entry goes back with the outputs it had, so the check
                 // below still finds every identity a kept document names. That
                 // document is in `unfinished`, so it is not checked again.
-                carry_forward(previous, relative, next);
+                carry_forward(options, previous, relative, next);
                 ++result.failed;
                 break;
             }

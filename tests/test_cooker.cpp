@@ -711,6 +711,39 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    void test_a_failed_cook_drops_the_entry_when_its_output_is_gone() {
+        const std::filesystem::path source = scratch("keep_none/src");
+        const std::filesystem::path out = scratch("keep_none/out");
+        write_tga(source / "wall.tga", 2, 2, half_black_half_white());
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content before;
+        check(before.open(out), "the cooked directory opens");
+        check(before.find("wall.tga") != nullptr, "and it holds the asset");
+        const std::filesystem::path cooked = out / before.find("wall.tga")->outputs.front().cooked;
+        check(std::filesystem::exists(cooked), "the cooked file is there");
+
+        // Take the cooked file away and break the source, so there is nothing
+        // left to keep. An entry naming a file that is gone is worse than no
+        // entry: the manifest would say the asset is there and the read would
+        // fail later, further from the cause.
+        std::filesystem::remove(cooked);
+        write_file(source / "wall.tga", "this is not a TGA at all");
+
+        cooker::Result second;
+        check(!cooker::cook_all(options, second), "the cook after the break fails");
+
+        as::Content after;
+        check(after.open(out), "the cooked directory still opens");
+        check(after.find("wall.tga") == nullptr,
+              "and the entry goes, because the file it named is gone");
+
+        test::remove_tree(source.parent_path());
+    }
+
     void test_a_broken_image_fails_the_cook() {
         const std::filesystem::path source = scratch("broken/src");
         const std::filesystem::path out = scratch("broken/out");
@@ -1341,6 +1374,7 @@ int main() {
     test_awkward_sizes();
     test_a_broken_image_fails_the_cook();
     test_a_failed_cook_keeps_the_asset_it_had();
+    test_a_failed_cook_drops_the_entry_when_its_output_is_gone();
     test::section("reading it back");
     test_content_reads_what_the_cooker_wrote();
     test::section("hot reload");
