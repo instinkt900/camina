@@ -15,6 +15,7 @@
  */
 
 #include "assets/manifest.h"
+#include "assets/reference.h"
 #include "core/guid.h"
 
 #include <filesystem>
@@ -23,12 +24,6 @@
 struct cgltf_data;
 
 namespace cooker {
-
-    /// @brief The kind word Guid::derive uses for a prefab inside a glTF file.
-    inline constexpr const char* kPrefabPartKind = "prefab";
-
-    /// @brief The name a cooked prefab file carries after the source name.
-    inline constexpr const char* kPrefabExtension = ".prefab";
 
     /**
      * @brief Writes one prefab for each scene in a glTF file.

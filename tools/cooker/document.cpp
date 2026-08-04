@@ -5,7 +5,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <charconv>
 #include <fstream>
 
 namespace cooker {
@@ -14,38 +13,12 @@ namespace cooker {
 
         namespace as = engine::assets;
 
+        using as::AssetReference;
+        using as::kAssetPrefix;
+        using as::parse_reference;
+
         /// How a cooked document is written. It is read by machine, not by hand.
         constexpr int kIndent = 2;
-
-        /**
-         * Whether a reference path stays inside the content tree.
-         *
-         * Resolving a path that leaves it would read a file the content tree
-         * does not own, and meta_for() would write a sidecar next to that file.
-         * A cook is run by a build machine over content that arrives from
-         * somewhere else, so this is a refusal and not a warning.
-         *
-         * A root name catches the Windows drive-relative form, `C:file`, which
-         * is not absolute and does not stay where it looks like it does.
-         */
-        [[nodiscard]] bool inside_content_tree(const std::filesystem::path& path,
-                                               std::string_view text) {
-            if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
-                ENGINE_LOG_ERROR("'{}' names an absolute path. A reference names a file "
-                                 "inside the content tree, written relative to its root.",
-                                 text);
-                return false;
-            }
-            for (const std::filesystem::path& part : path) {
-                if (part == "..") {
-                    ENGINE_LOG_ERROR("'{}' steps outside the content tree with '..'. A "
-                                     "reference names a file inside it.",
-                                     text);
-                    return false;
-                }
-            }
-            return true;
-        }
 
         /// Reads a JSON file, or reports why it could not.
         [[nodiscard]] bool read_json(const std::filesystem::path& path, nlohmann::json& out) {
@@ -159,67 +132,6 @@ namespace cooker {
         }
 
     } // namespace
-
-    bool parse_reference(std::string_view text, AssetReference& out) {
-        if (!text.starts_with(kAssetPrefix)) {
-            return false;
-        }
-        const std::string_view body = text.substr(kAssetPrefix.size());
-
-        const std::size_t marker = body.find(kPartSeparator);
-        const std::string_view path = body.substr(0, marker);
-        if (path.empty()) {
-            ENGINE_LOG_ERROR("'{}' names no file. Write asset:<path> or "
-                             "asset:<path>#<kind>:<index>.",
-                             text);
-            return false;
-        }
-        if (!inside_content_tree(std::filesystem::path{ path }, text)) {
-            return false;
-        }
-
-        if (marker == std::string_view::npos) {
-            out = AssetReference{ .source = std::filesystem::path{ path },
-                                  .kind = {},
-                                  .index = 0 };
-            return true;
-        }
-
-        // A part reference. Both halves have to be there, because a kind with
-        // no index and an index with no kind each name nothing.
-        const std::string_view part = body.substr(marker + 1);
-        const std::size_t colon = part.find(':');
-        if (colon == std::string_view::npos) {
-            ENGINE_LOG_ERROR("'{}' names a part with no kind or no index. Write "
-                             "asset:<path>#<kind>:<index>, as in asset:a.gltf#mesh:0.",
-                             text);
-            return false;
-        }
-
-        const std::string_view kind = part.substr(0, colon);
-        const std::string_view number = part.substr(colon + 1);
-        if (kind.empty() || number.empty()) {
-            ENGINE_LOG_ERROR("'{}' names a part with no kind or no index. Write "
-                             "asset:<path>#<kind>:<index>, as in asset:a.gltf#mesh:0.",
-                             text);
-            return false;
-        }
-
-        std::uint32_t index = 0;
-        const auto* const end = number.data() + number.size();
-        const auto read = std::from_chars(number.data(), end, index);
-        if (read.ec != std::errc{} || read.ptr != end) {
-            ENGINE_LOG_ERROR("'{}' has '{}' where the part index goes, and that is not a "
-                             "whole number.",
-                             text, number);
-            return false;
-        }
-
-        out = AssetReference{ .source = std::filesystem::path{ path },
-                              .kind = std::string{ kind },
-                              .index = index };
-        return true;
-    }
 
     void document_references(const std::filesystem::path& source,
                              std::vector<std::filesystem::path>& out) {

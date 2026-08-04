@@ -1,5 +1,6 @@
 #include "assets/hot_reload.h"
 #include "assets/manifest.h"
+#include "assets/reference.h"
 #include "core/arena.h"
 #include "core/jobs.h"
 #include "core/log.h"
@@ -31,6 +32,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -183,6 +185,76 @@ namespace {
             }
         }
         return options;
+    }
+
+    /**
+     * Where a person edits the game content, or empty when it is not there.
+     *
+     * A build away from its source tree has none, and neither has a shipped
+     * one. Hot reload turns itself off in that case, and the save reports
+     * rather than writing somewhere the next cook overwrites.
+     */
+    std::filesystem::path game_source_directory(const Options& options) {
+        const std::filesystem::path source =
+            options.watch.empty() ? std::filesystem::path{ ENGINE_GAME_CONTENT_SOURCE }
+                                  : std::filesystem::path{ options.watch };
+        std::error_code error;
+        return std::filesystem::is_directory(source, error) ? source : std::filesystem::path{};
+    }
+
+    /**
+     * Writes the scene where a person edits it, references and all.
+     *
+     * The world holds identities, because that is what the engine reads. The
+     * source document holds references, because an identity is derived and
+     * nobody chose it. Writing the world straight out would replace every
+     * reference with the GUID it resolved to, which undoes the reason a scene
+     * may name an asset by path at all.
+     */
+    bool write_scene_source(const std::filesystem::path& path, const engine::scene::World& world,
+                            const engine::assets::Content& content) {
+        nlohmann::json document = engine::scene::save_scene(world);
+        const std::size_t restored =
+            engine::assets::restore_references(document, content.manifest());
+
+        // Through a temporary in the same directory, then a rename. Writing
+        // over the scene directly means a disk that fills up, or a close that
+        // fails, leaves a person with half a scene and no copy of the whole
+        // one. The rename is what makes the swap all or nothing, and it is
+        // only reached once the bytes are down.
+        std::filesystem::path staged = path;
+        staged += ".writing";
+
+        {
+            std::ofstream file(staged, std::ios::binary | std::ios::trunc);
+            if (!file) {
+                ENGINE_LOG_ERROR("Could not open {} for writing.", staged.string());
+                return false;
+            }
+            constexpr int kIndent = 2;
+            file << document.dump(kIndent) << '\n';
+            file.close();
+            if (!file) {
+                ENGINE_LOG_ERROR("Could not write {}, so {} is untouched.", staged.string(),
+                                 path.string());
+                std::error_code ignored;
+                std::filesystem::remove(staged, ignored);
+                return false;
+            }
+        }
+
+        std::error_code error;
+        std::filesystem::rename(staged, path, error);
+        if (error) {
+            ENGINE_LOG_ERROR("Could not put {} in place of {}. {}", staged.string(),
+                             path.string(), error.message());
+            std::error_code ignored;
+            std::filesystem::remove(staged, ignored);
+            return false;
+        }
+
+        ENGINE_LOG_INFO("Wrote {}, with {} asset references put back.", path.string(), restored);
+        return true;
     }
 
     /**
@@ -396,7 +468,8 @@ namespace {
      * a different game in the same runtime shows the same tree.
      */
     void draw_world_window(const engine::scene::World& world, entt::entity& selected,
-                           const std::filesystem::path& scene_path) {
+                           const std::filesystem::path& scene_path,
+                           const engine::assets::Content& content) {
         ENGINE_PROFILE_ZONE_N("draw_world_window");
 
         if (begin_panel("World", { kPanelMargin, (2 * kPanelMargin) + kViewHeight },
@@ -404,17 +477,27 @@ namespace {
             ImGui::Text("Entities: %zu", world.size());
             ImGui::Text("Matrices rebuilt last frame: %zu", world.rebuilt_last_update());
 
-            if (ImGui::Button("Save scene")) {
+            // Without a source tree there is nowhere to save that a person
+            // would find again. Writing into the cooked tree looks like it
+            // worked and the next cook throws it away.
+            const bool can_save = !scene_path.empty();
+            ImGui::BeginDisabled(!can_save);
+            if (ImGui::Button("Save scene") && can_save) {
                 // Every prefab instance collapses again here, so what the user
                 // changed comes back as an override rather than as entities.
-                if (engine::scene::save_scene_file(scene_path, world)) {
-                    ENGINE_LOG_INFO("Wrote {}.", scene_path.string());
-                } else {
+                if (!write_scene_source(scene_path, world, content)) {
                     ENGINE_LOG_ERROR("The scene did not write to {}.", scene_path.string());
                 }
             }
+            ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::TextDisabled("%s", scene_path.filename().string().c_str());
+            // The whole path, because which of the two trees this writes to is
+            // the thing worth knowing.
+            ImGui::TextDisabled("%s", can_save ? scene_path.string().c_str()
+                                               : "no source tree, so there is nowhere to save");
+            if (can_save && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("The source scene. The cooker turns it into what runs.");
+            }
 
             ImGui::Separator();
 
@@ -508,6 +591,8 @@ namespace {
         entt::entity* selected = nullptr;
         /// The cooked game content directory, which holds the scene and the prefabs.
         std::filesystem::path content;
+        /// The scene a person edits, or empty when no source tree is there.
+        std::filesystem::path source_scene;
     };
 
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
@@ -532,7 +617,7 @@ namespace {
         // leaves an ImGui frame half open.
         engine::gfx::imgui_new_frame();
         draw_view_window(settings);
-        draw_world_window(world, *context.selected, context.content / sandbox::kSceneFile);
+        draw_world_window(world, *context.selected, context.source_scene, *context.game_content);
         draw_inspector_window(world, *context.selected);
 
         // An edit in the inspector went around set_local(), so the matrices are
@@ -624,6 +709,8 @@ namespace {
             .cooker = cooker_path(),
             .glslc = glslc,
         };
+        // HotReload::start reports a source tree that is not there, so this
+        // does not check for one first.
         (void)runtime.reload.start(desc);
 
         // The engine tree is watched as well, because it holds the shaders and
@@ -931,6 +1018,7 @@ int main(int argc, char** argv) {
     // After the first load, so the watcher takes its snapshot of a tree that
     // is already cooked and nothing arrives as a change on the first frame.
     start_hot_reload(runtime, options);
+    const std::filesystem::path source = game_source_directory(options);
 
     entt::entity selected = entt::null;
     const FrameContext context{
@@ -941,6 +1029,7 @@ int main(int argc, char** argv) {
         .world = &world,
         .selected = &selected,
         .content = content,
+        .source_scene = source.empty() ? std::filesystem::path{} : source / sandbox::kSceneFile,
     };
 
     const bool ok = run_frames(runtime, context, options, frame_arena, settings, world);

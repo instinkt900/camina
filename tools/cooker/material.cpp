@@ -350,7 +350,7 @@ namespace cooker {
             }
 
             const engine::Guid guid =
-                engine::Guid::derive(parent, kTexturePartKind, static_cast<std::uint32_t>(index));
+                engine::Guid::derive(parent, as::kTexturePartKind, static_cast<std::uint32_t>(index));
             out.guids.emplace(index, guid);
             out.outputs.push_back(
                 as::ManifestOutput{ .cooked = as::manifest_path(cooked), .guid = guid });
@@ -385,7 +385,7 @@ namespace cooker {
             }
 
             const engine::Guid guid =
-                engine::Guid::derive(parent, kMaterialPartKind, static_cast<std::uint32_t>(at));
+                engine::Guid::derive(parent, as::kMaterialPartKind, static_cast<std::uint32_t>(at));
             out.guids.push_back(guid);
             out.outputs.push_back(
                 as::ManifestOutput{ .cooked = as::manifest_path(cooked), .guid = guid });

@@ -5,6 +5,7 @@
 // are what the runtime opens.
 
 #include "assets/content.h"
+#include "assets/reference.h"
 #include "check.h"
 #include "math/transform.h"
 #include "sandbox/components.h"
@@ -176,6 +177,61 @@ namespace {
               "the shipped scene round trips unchanged");
     }
 
+    /**
+     * Issue #73. What the Save button does, minus the button.
+     *
+     * A live world holds identities and the source scene holds references, so
+     * saving has to put the references back. Without that a save replaces every
+     * name a person wrote with the GUID it resolved to, and the next person to
+     * read the file finds a value nobody chose.
+     */
+    void test_saving_puts_the_references_back() {
+        const sc::ComponentRegistry registry = make_registry();
+        sc::PrefabLibrary library;
+
+        engine::assets::Content content;
+        check(content.open(sandbox::default_content_directory()), "the cooked content opens");
+
+        sc::World world;
+        check(load_shipped(world, registry, library), "the shipped content loads");
+
+        nlohmann::json saved = sc::save_scene(world, registry, library);
+        const std::string identities = saved.dump();
+        check(identities.find("asset:") == std::string::npos,
+              "a world saves identities, because that is what it holds");
+
+        const std::size_t restored =
+            engine::assets::restore_references(saved, content.manifest());
+        check(restored > 0, "saving puts references back");
+
+        const std::string text = saved.dump();
+        check(text.find("asset:models/crate/crate.gltf#mesh:0") != std::string::npos,
+              "and the crate mesh reads as the path the source names");
+
+        // The names the scene carries are ordinary strings and must come
+        // through untouched.
+        check(text.find("\"beacon\"") != std::string::npos, "an ordinary name is untouched");
+
+        // What went back has to be what the cooker reads forward again, or the
+        // save writes a file the next cook cannot resolve.
+        for (const auto& entity : saved["entities"]) {
+            for (const auto& part : entity.value("components", nlohmann::json::object())) {
+                for (const auto& value : part) {
+                    if (!value.is_string()) {
+                        continue;
+                    }
+                    const auto text_value = value.get<std::string>();
+                    if (!text_value.starts_with(engine::assets::kAssetPrefix)) {
+                        continue;
+                    }
+                    engine::assets::AssetReference parsed;
+                    check(engine::assets::parse_reference(text_value, parsed),
+                          "every reference written back reads forward again");
+                }
+            }
+        }
+    }
+
     void test_overrides_reach_the_world() {
         const sc::ComponentRegistry registry = make_registry();
         sc::PrefabLibrary library;
@@ -289,6 +345,7 @@ int main() {
     test_shipped_scene_loads();
     test_every_named_mesh_is_cooked();
     test_scene_round_trips();
+    test_saving_puts_the_references_back();
     test_overrides_reach_the_world();
     std::printf("the game loop\n");
     test_update_turns_what_it_should();
