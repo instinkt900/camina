@@ -51,6 +51,11 @@ find_package(stb REQUIRED)
 find_package(cgltf REQUIRED)
 find_package(meshoptimizer REQUIRED)
 
+# The package exports one target and names it after the static library, so both
+# the package name and the target read "spirv-reflect-static". Only the cooker
+# links it. See tools/cooker/CMakeLists.txt.
+find_package(spirv-reflect-static REQUIRED)
+
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)

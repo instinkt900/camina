@@ -106,6 +106,14 @@ The runtime watches `src/render/content` as well, so a shader edit shows up live
 not build. A cook that fails now keeps the manifest entry the last cook gave that asset,
 because losing it hides a cooked file that is still on disk and stops the next start.
 
+M5 is in progress. The first half of M5.1 landed: a descriptor set layout now comes from the
+cooked SPIR-V rather than from hand-written C++. The cooker links SPIRV-Reflect and writes
+`src/assets/shader.h`, which carries the module, the bindings, and the members of every
+uniform block in one file. `gfx::GraphicsPipelineDesc` takes those bindings, and
+`sample_texture` is gone. The cook no longer passes `-O` to glslc, because spirv-opt strips
+the names the parameter block needs. See issue #90. The second half of M5.1 adds permutations,
+keyed by a variant list in the shader sidecar.
+
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. The build produces no warnings

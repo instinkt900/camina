@@ -9,6 +9,7 @@ add_library(cooker_lib STATIC
     material.cpp
     mesh.cpp
     prefab.cpp
+    shader.cpp
     texture.cpp
     stb_image_impl.cpp
 )
@@ -37,6 +38,7 @@ target_link_libraries(cooker_lib
         bc7enc
         cgltf::cgltf
         meshoptimizer::meshoptimizer
+        spirv-reflect-static
 )
 
 engine_set_warnings(cooker_lib)
