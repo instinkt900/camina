@@ -175,11 +175,14 @@ instruction to work on `main`.
 
 ### The loop
 
-**At the start of a milestone, before any code.** Read the `DESIGN.md` §10 definition,
-then create the tracker issues for the increments inside it. Name them `M<n>.<k> — ...`.
+**At the start of a milestone, before any code.** Read the `DESIGN.md` §10 definition, and
+read the GitHub milestone description beside it. They are two depths of one decision and
+they have to agree, so correct the milestone when it has drifted. See "Issue tracker" below.
+Then create the tracker issues for the increments inside the milestone, and name them
+`M<n>.<k> — ...`.
+
 Do this first, so the work has a shape before the first branch exists. An increment that
-turns out to be two increments gets split into two issues, not carried as one large
-branch.
+turns out to be two increments gets split into two issues, not carried as one large branch.
 
 **Then, for each issue, one at a time:**
 
@@ -312,11 +315,40 @@ Then push once and start the monitor again.
 
 `DESIGN.md` §10 defines the milestones. The GitHub tracker holds the state.
 
+### `DESIGN.md` and the GitHub milestones are two halves of one thing
+
+**`DESIGN.md` is the source of truth, and the GitHub milestones are not a copy of it.** They
+carry different depths of the same decision, and they have to agree.
+
+- **A GitHub milestone carries enough to understand the work without opening anything else.**
+  What it builds, roughly how, and its done-when test. A person reading the tracker should
+  know what the milestone is for and when it is finished. Keep it to a few sentences.
+- **`DESIGN.md` §10 carries the detail.** The full definition, the reasoning, the named
+  dependencies, and anything that had to be settled. When the two disagree, `DESIGN.md`
+  wins and the milestone gets corrected.
+- **Update both together.** A decision that changes a milestone changes the `DESIGN.md`
+  section and the milestone description in the same pass. Half an update is drift, and drift
+  here is quiet: a milestone description is read far more often than it is checked.
+
+Drift is real and not hypothetical. The M10 description said its foundation was M5.5, which
+is cascaded shadow maps, while `DESIGN.md` said M6, the moth_ui spike. Nothing failed. It
+just told the wrong story to anybody reading the tracker.
+
+Check the two against each other when you start a milestone, which is when the cost of a
+wrong description is highest:
+
+```bash
+gh api repos/instinkt900/camina/milestones --jq '.[]|"\(.title)\n  \(.description)\n"'
+```
+
+### Issues
+
 - **One GitHub Milestone for each `DESIGN.md` milestone**, M0 through M11.
 - **Issues are work increments, not milestones.** M1 was one line in `DESIGN.md` and became
   three pull requests. Split a milestone the same way, and name the issues `M<n>.<k> — ...`.
 - **An issue links to its `DESIGN.md` section. It never copies the definition.** Two copies
-  drift. The issue body holds the task list and the state.
+  drift. The issue body holds the task list and the state. This is the one place a copy is
+  wrong: a milestone summarizes, and an issue points.
 - **Create issues for the milestone in progress and the next one.** A detailed ticket for
   M9 written today will be wrong by the time it starts.
 - Labels are `area: build`, `area: gfx`, `area: render`, `area: core`, `area: assets`, and
