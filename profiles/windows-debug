@@ -1,0 +1,11 @@
+[settings]
+arch=x86_64
+os=Windows
+compiler=msvc
+compiler.version=194
+compiler.runtime=dynamic
+compiler.cppstd=20
+build_type=Debug
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja
