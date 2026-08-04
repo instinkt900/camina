@@ -5,6 +5,7 @@
 # cook a tree and check what came out.
 add_library(cooker_lib STATIC
     cook.cpp
+    document.cpp
     material.cpp
     mesh.cpp
     prefab.cpp

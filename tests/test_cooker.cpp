@@ -17,6 +17,7 @@
 #include "assets/texture.h"
 #include "check.h"
 #include "cook.h"
+#include "document.h"
 #include "platform/paths.h"
 
 #include <array>
@@ -125,20 +126,22 @@ namespace {
     void test_cook_and_skip() {
         const std::filesystem::path source = scratch("skip/src");
         const std::filesystem::path out = scratch("skip/out");
-        write_file(source / "one.scene", "{}");
-        write_file(source / "nested" / "two.prefab", "{}");
+        // A file with no rule of its own, so this stays a test of the copy
+        // rule and of the manifest. A scene and a prefab have a rule now.
+        write_file(source / "one.dat", "{}");
+        write_file(source / "nested" / "two.dat", "{}");
 
         cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
         check(cooker::cook_all(options, result), "the first cook works");
         check(result.cooked == 2 && result.skipped == 0, "and it cooks both assets");
-        check(std::filesystem::exists(out / "one.scene"), "the asset landed");
-        check(std::filesystem::exists(out / "nested" / "two.prefab"),
+        check(std::filesystem::exists(out / "one.dat"), "the asset landed");
+        check(std::filesystem::exists(out / "nested" / "two.dat"),
               "and so did the one in a subdirectory");
 
         // The sidecars are what make an identity survive. A first cook writes
         // them into the source tree, next to the asset.
-        check(std::filesystem::exists(as::meta_path(source / "one.scene")),
+        check(std::filesystem::exists(as::meta_path(source / "one.dat")),
               "the first cook wrote a sidecar");
 
         cooker::Result second;
@@ -146,18 +149,19 @@ namespace {
         check(second.cooked == 0 && second.skipped == 2, "and it cooks nothing");
 
         // Touching a file moves its time but not its bytes.
-        std::filesystem::last_write_time(source / "one.scene",
+        std::filesystem::last_write_time(source / "one.dat",
                                          std::filesystem::file_time_type::clock::now());
         cooker::Result touched;
         check(cooker::cook_all(options, touched), "a touched tree cooks");
         check(touched.cooked == 0 && touched.skipped == 2, "and a new time alone cooks nothing");
 
         // A real change cooks that asset, and only that asset.
-        write_file(source / "one.scene", "{\"changed\":true}");
+        write_file(source / "one.dat", "{\"changed\":true}");
         cooker::Result changed;
         check(cooker::cook_all(options, changed), "a changed tree cooks");
         check(changed.cooked == 1 && changed.skipped == 1, "and it cooks only what changed");
-        check(read_file(out / "one.scene") == "{\"changed\":true}", "the new bytes reached the output");
+        check(read_file(out / "one.dat") == "{\"changed\":true}",
+              "the new bytes reached the output");
 
         // --force is the escape hatch when somebody distrusts the manifest.
         cooker::Options forced = options;
@@ -723,7 +727,7 @@ namespace {
     void test_content_reads_what_the_cooker_wrote() {
         const std::filesystem::path source = scratch("read/src");
         const std::filesystem::path out = scratch("read/out");
-        write_file(source / "one.scene", "{}");
+        write_file(source / "one.dat", "{}");
         // Four bytes, so it is a whole number of 32-bit words.
         write_file(source / "words.bin", "abcd");
 
@@ -735,7 +739,7 @@ namespace {
         check(content.open(out), "the cooked directory opens");
         check(content.manifest().entries.size() == 2, "and it holds both entries");
 
-        const as::ManifestEntry* entry = content.find("one.scene");
+        const as::ManifestEntry* entry = content.find("one.dat");
         check(entry != nullptr, "an asset is findable by its source path");
         check(entry != nullptr && entry->outputs.size() == 1, "and a copy writes one file");
 
@@ -759,7 +763,7 @@ namespace {
 
         // Two bytes is not a whole number of words. Catching that here beats a
         // driver rejecting the module later with a message that names nothing.
-        check(!content.read_words("one.scene", words),
+        check(!content.read_words("one.dat", words),
               "an asset that is not a whole number of words is refused");
         check(!content.read_words("not_there", words), "an unknown source path is refused");
 
@@ -924,8 +928,10 @@ namespace {
         check(reload.poll(content, changed), "the next poll cooks and reloads");
         check(reload.cooks() == 1, "and it ran the cooker once");
         check(changed.size() == 1 && changed.front() == scene, "it names the changed asset");
-        check(read_file(out / "a.scene") == "{\"changed\":true}",
-              "and the new bytes reached the cooked tree");
+        // A document is parsed and written back out, so this compares what
+        // it says rather than the bytes it is made of.
+        check(read_file(out / "a.scene").find("\"changed\"") != std::string::npos,
+              "and the new value reached the cooked tree");
 
         test::remove_tree(source.parent_path());
     }
@@ -1002,6 +1008,279 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    /**
+     * One triangle, with its buffer inside the file.
+     *
+     * The reference tests need a real glTF and not a stand-in, because the
+     * check that matters is that the identity a reference resolves to is the
+     * one the mesh rule really wrote. A stand-in would prove only that the
+     * resolver agrees with itself.
+     */
+    constexpr const char* kMinimalGltf =
+        R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"scene":0,"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
+
+    /// The same triangle twice, so a reference to mesh 1 has something to name.
+    constexpr const char* kTwoMeshGltf =
+        R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"scene":0,"nodes":[{"mesh":0},{"mesh":1}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]},{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
+
+    // M4 issue #54. A scene and a prefab name an asset by source path, and the
+    // cooker turns that into the identity before it writes the file. The
+    // cooked document holds only GUIDs, because that is what survives a
+    // rename. These tests read the cooked JSON back rather than trusting the
+    // cook to have reported a success.
+
+    /// The value of the one "mesh" field in a cooked document.
+    [[nodiscard]] std::string cooked_mesh(const std::filesystem::path& document) {
+        const std::string text = read_file(document);
+        const std::string key = "\"mesh\": \"";
+        const std::size_t at = text.find(key);
+        if (at == std::string::npos) {
+            return {};
+        }
+        const std::size_t from = at + key.size();
+        const std::size_t to = text.find('"', from);
+        return to == std::string::npos ? std::string{} : text.substr(from, to - from);
+    }
+
+    void test_a_reference_reads_into_its_parts() {
+        cooker::AssetReference reference;
+        check(cooker::parse_reference("asset:models/crate.gltf#mesh:2", reference),
+              "a part reference parses");
+        check(reference.source == std::filesystem::path{ "models/crate.gltf" } &&
+                  reference.kind == "mesh" && reference.index == 2,
+              "and it gives the path, the kind, and the index");
+
+        check(cooker::parse_reference("asset:cube.png", reference),
+              "a whole-file reference parses");
+        check(reference.source == std::filesystem::path{ "cube.png" } &&
+                  reference.kind.empty() && reference.index == 0,
+              "and it names no part");
+
+        // A GUID is not a reference. This is what keeps a document written
+        // before any of this still readable.
+        check(!cooker::parse_reference("508dcd18-9d17-8eb2-b877-acfa91632504", reference),
+              "a GUID is left alone");
+        check(!cooker::parse_reference("crate", reference), "and so is an ordinary name");
+
+        // Each of these means to be a reference and cannot be one, so each has
+        // to be refused rather than passed through as a name.
+        check(!cooker::parse_reference("asset:", reference), "a reference to nothing fails");
+        check(!cooker::parse_reference("asset:a.gltf#mesh", reference),
+              "a kind with no index fails");
+        check(!cooker::parse_reference("asset:a.gltf#:0", reference),
+              "an index with no kind fails");
+        check(!cooker::parse_reference("asset:a.gltf#mesh:x", reference),
+              "an index that is not a number fails");
+        check(!cooker::parse_reference("asset:a.gltf#mesh:0x", reference),
+              "and so does one with something after the number");
+    }
+
+    void test_a_document_names_a_mesh_by_path() {
+        const std::filesystem::path source = scratch("reference/src");
+        const std::filesystem::path out = scratch("reference/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.prefab",
+                   R"({"__version":1,"entities":[{"parent":-1,"components":{)"
+                   R"("MeshRenderer":{"__version":1,"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        // The identity the reference resolved to has to be the one the glTF
+        // rule gave the mesh, or the prefab names a mesh nothing cooked.
+        as::AssetMeta meta;
+        check(as::load_meta(source / "models" / "crate.gltf", meta), "the glTF has a sidecar");
+        const engine::Guid expected = engine::Guid::derive(meta.guid, "mesh", 0);
+
+        check(cooked_mesh(out / "a.prefab") == expected.to_text(),
+              "the cooked prefab holds the identity the reference named");
+
+        // And that identity is really in the manifest, so the runtime can find
+        // it. A reference that resolved to a plausible GUID nothing cooked
+        // would pass the check above and draw nothing.
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+        check(as::find_by_guid(content.manifest(), expected) != nullptr,
+              "and the manifest holds that identity");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_document_keeps_a_guid_that_is_already_written() {
+        const std::filesystem::path source = scratch("plain_guid/src");
+        const std::filesystem::path out = scratch("plain_guid/out");
+        const engine::Guid written = engine::Guid::generate();
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":{"mesh":")" +
+                       written.to_text() + R"("}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+        check(cooked_mesh(out / "a.prefab") == written.to_text(),
+              "a document that already holds a GUID keeps it");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reference_that_names_nothing_fails_the_cook() {
+        const std::filesystem::path source = scratch("bad_reference/src");
+        const std::filesystem::path out = scratch("bad_reference/out");
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/gone.gltf#mesh:0"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        // The whole point. Before this a wrong identity drew nothing and
+        // reported one line at runtime, which looks exactly like a mesh that
+        // failed to upload.
+        check(!cooker::cook_all(options, result), "a reference to a file that is not there fails");
+        check(result.failed == 1, "and it is reported as a failure");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reference_that_will_not_read_fails_the_cook() {
+        const std::filesystem::path source = scratch("bad_fragment/src");
+        const std::filesystem::path out = scratch("bad_fragment/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        // A kind with no index. The file it names is really there, so the only
+        // thing wrong is the reference itself.
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        // Passing it through as an ordinary string is the failure to avoid.
+        // The cooked prefab would then hold "asset:models/crate.gltf#mesh"
+        // where a GUID goes, and the mesh would simply never load.
+        check(!cooker::cook_all(options, result),
+              "a reference that will not read fails the cook");
+        check(result.failed == 1, "and it is reported as a failure");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reference_that_leaves_the_content_tree_is_refused() {
+        cooker::AssetReference reference;
+
+        // Resolving one of these would read a file the content tree does not
+        // own, and writing its sidecar would put a file next to it. A cook runs
+        // over content that arrives from somewhere else, so this is a refusal.
+        check(!cooker::parse_reference("asset:/etc/passwd", reference),
+              "an absolute path is refused");
+        check(!cooker::parse_reference("asset:../outside.gltf", reference),
+              "a path that steps out with .. is refused");
+        check(!cooker::parse_reference("asset:models/../../outside.gltf", reference),
+              "and so is one that steps out part way along");
+
+        // The step has to be a whole component. A directory whose name merely
+        // starts with two dots is an ordinary directory.
+        check(cooker::parse_reference("asset:..models/a.gltf", reference),
+              "a name that only begins with dots is allowed");
+    }
+
+    void test_a_part_that_is_not_there_fails_the_cook() {
+        const std::filesystem::path source = scratch("missing_part/src");
+        const std::filesystem::path out = scratch("missing_part/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        // The glTF holds one mesh, so mesh 0 is the only part there is.
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:7"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        // Guid::derive answers for any index, so this used to cook happily and
+        // give the prefab an identity nothing wrote. The scene then drew
+        // nothing, which is the failure naming an asset by path is meant to
+        // remove.
+        check(!cooker::cook_all(options, result),
+              "a reference to a part that is not there fails the cook");
+        check(result.failed == 1, "and it is reported as a failure");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reference_stops_being_sound_when_the_model_changes() {
+        const std::filesystem::path source = scratch("stale_part/src");
+        const std::filesystem::path out = scratch("stale_part/out");
+        write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:1"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        // Replace the model with one that holds a single mesh. It is a valid
+        // model and it cooks, so nothing fails on its own account. The prefab
+        // still says mesh 1 and nobody edited it, so nothing about the prefab
+        // looks stale either. Only the finished manifest can say the identity
+        // it names is gone.
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        cooker::Result second;
+        check(!cooker::cook_all(options, second),
+              "a model that lost the part fails the cook of the document naming it");
+        check(second.failed == 1, "and the failure is the document, not the model");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_document_that_will_not_parse_fails_the_cook() {
+        const std::filesystem::path source = scratch("bad_document/src");
+        const std::filesystem::path out = scratch("bad_document/out");
+        write_file(source / "a.scene", "this is not json");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        // A scene used to be copied through, so a broken one reached the
+        // runtime and emptied the world there instead.
+        check(!cooker::cook_all(options, result), "a scene that will not parse fails the cook");
+        check(result.failed == 1, "and it is reported as a failure");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_new_sidecar_cooks_the_document_that_names_it() {
+        const std::filesystem::path source = scratch("ref_input/src");
+        const std::filesystem::path out = scratch("ref_input/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+        const std::string before = cooked_mesh(out / "a.prefab");
+
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+        check(second.cooked == 0, "and an unchanged tree cooks nothing");
+
+        // Replacing the sidecar gives the glTF a new identity, so every
+        // identity derived from it moves. The prefab has to be cooked again or
+        // it names a mesh that no longer exists.
+        std::filesystem::remove(as::meta_path(source / "models" / "crate.gltf"));
+        cooker::Result third;
+        check(cooker::cook_all(options, third), "the cook after the sidecar went works");
+        check(cooked_mesh(out / "a.prefab") != before,
+              "a new identity for the glTF moves what the prefab names");
+
+        as::AssetMeta meta;
+        check(as::load_meta(source / "models" / "crate.gltf", meta), "the glTF has a sidecar");
+        check(cooked_mesh(out / "a.prefab") ==
+                  engine::Guid::derive(meta.guid, "mesh", 0).to_text(),
+              "and it names the identity the new sidecar gives");
+
+        test::remove_tree(source.parent_path());
+    }
+
 } // namespace
 
 int main() {
@@ -1033,5 +1312,16 @@ int main() {
     test_hot_reload_cooks_what_changed();
     test_hot_reload_lives_through_a_cook_that_fails();
     test_hot_reload_is_off_when_it_cannot_cook();
+    test::section("asset references");
+    test_a_reference_reads_into_its_parts();
+    test_a_document_names_a_mesh_by_path();
+    test_a_document_keeps_a_guid_that_is_already_written();
+    test_a_reference_that_names_nothing_fails_the_cook();
+    test_a_reference_that_will_not_read_fails_the_cook();
+    test_a_reference_that_leaves_the_content_tree_is_refused();
+    test_a_part_that_is_not_there_fails_the_cook();
+    test_a_reference_stops_being_sound_when_the_model_changes();
+    test_a_document_that_will_not_parse_fails_the_cook();
+    test_a_new_sidecar_cooks_the_document_that_names_it();
     return test::report();
 }

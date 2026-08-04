@@ -5,6 +5,7 @@
 #include "assets/meta.h"
 #include "assets/texture.h"
 #include "core/log.h"
+#include "document.h"
 #include "mesh.h"
 #include "platform/process.h"
 #include "texture.h"
@@ -23,11 +24,17 @@ namespace cooker {
 
         /// What rule turns one source file into one cooked file.
         enum class Rule : std::uint8_t {
-            Shader,  ///< GLSL through glslc, out as SPIR-V.
-            Texture, ///< An image through stb, out as mip levels and BC7 blocks.
-            Mesh,    ///< glTF through cgltf, out as one cooked mesh for each mesh.
-            Copy,    ///< No rule yet. The bytes go through unchanged.
+            Shader,   ///< GLSL through glslc, out as SPIR-V.
+            Texture,  ///< An image through stb, out as mip levels and BC7 blocks.
+            Mesh,     ///< glTF through cgltf, out as one cooked mesh for each mesh.
+            Document, ///< A scene or a prefab, with its asset references resolved.
+            Copy,     ///< No rule yet. The bytes go through unchanged.
         };
+
+        /// Whether a file is a scene or a prefab, which name assets by path.
+        [[nodiscard]] bool is_document_extension(std::string_view extension) {
+            return extension == ".scene" || extension == ".prefab";
+        }
 
         [[nodiscard]] Rule rule_for(const std::filesystem::path& source) {
             const std::string extension = source.extension().string();
@@ -39,6 +46,9 @@ namespace cooker {
             }
             if (is_mesh_extension(extension)) {
                 return Rule::Mesh;
+            }
+            if (is_document_extension(extension)) {
+                return Rule::Document;
             }
             return Rule::Copy;
         }
@@ -75,6 +85,9 @@ namespace cooker {
                 return as::kTextureExtension;
             case Rule::Mesh:
                 return as::kMeshExtension;
+            case Rule::Document:
+                // It keeps its own name. A scene is still a scene after its
+                // references resolve, and the runtime opens it by that name.
             case Rule::Copy:
                 break;
             }
@@ -181,6 +194,10 @@ namespace cooker {
                 });
             case Rule::Mesh:
                 return cook_gltf(source, options.out, relative, meta.guid, outputs);
+            case Rule::Document:
+                return single([&](const std::filesystem::path& to) {
+                    return cook_document(source, to, options.content);
+                });
             case Rule::Copy:
                 break;
             }
@@ -265,6 +282,33 @@ namespace cooker {
                     inputs.push_back(path);
                 }
                 for (const std::filesystem::path& path : named.images) {
+                    inputs.push_back(as::meta_path(path));
+                }
+                out.inputs.emplace(relative, std::move(inputs));
+            }
+        }
+
+        /**
+         * Reads every scene and prefab for the assets it names, before cooking.
+         *
+         * The sidecar of a named asset is an input, because the identity comes
+         * out of that file. Replacing a sidecar gives the asset a new identity,
+         * and a document that still held the old one would name nothing. The
+         * asset itself is not an input: editing the pixels of a texture changes
+         * the texture and not the scene that names it.
+         */
+        void scan_documents(const Options& options,
+                            const std::vector<std::filesystem::path>& sources, Named& out) {
+            for (const std::filesystem::path& relative : sources) {
+                if (rule_for(relative) != Rule::Document) {
+                    continue;
+                }
+                std::vector<std::filesystem::path> named;
+                document_references(options.content / relative, named);
+
+                std::vector<std::filesystem::path> inputs;
+                inputs.reserve(named.size());
+                for (const std::filesystem::path& path : named) {
                     inputs.push_back(as::meta_path(path));
                 }
                 out.inputs.emplace(relative, std::move(inputs));
@@ -406,8 +450,11 @@ namespace cooker {
 
         Named named;
         scan_gltf(options, sources, named);
+        scan_documents(options, sources, named);
 
         as::Manifest next;
+        /// The sources that did not cook, so the check below leaves them alone.
+        std::set<std::filesystem::path> unfinished;
         for (const std::filesystem::path& relative : sources) {
             // A glTF buffer is payload, not an asset. scan_gltf found it.
             if (named.buffers.contains(relative)) {
@@ -425,6 +472,7 @@ namespace cooker {
                 ++result.skipped;
                 break;
             case Outcome::Failed:
+                unfinished.insert(relative);
                 ++result.failed;
                 break;
             }
@@ -450,6 +498,24 @@ namespace cooker {
                         return false;
                     }
                 }
+            }
+        }
+
+        // Deriving an identity answers for any index, so a reference to a part
+        // that is not there gives a GUID that looks like every other one and
+        // names nothing. Only the finished manifest can tell the two apart, so
+        // this runs after the whole tree is cooked. It covers a document the
+        // cooker skipped as well, because a model that lost a mesh breaks a
+        // reference that nobody touched.
+        for (const std::filesystem::path& relative : sources) {
+            // A document that did not cook has been reported once already, and
+            // it fails this check for the same reason. Checking it again would
+            // log the same line twice and count one failure as two.
+            if (rule_for(relative) != Rule::Document || unfinished.contains(relative)) {
+                continue;
+            }
+            if (!validate_references(options.content / relative, options.content, next)) {
+                ++result.failed;
             }
         }
 
