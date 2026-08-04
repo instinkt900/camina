@@ -140,6 +140,7 @@ namespace engine::render {
         }
 
         gfx::cmd_bind_pipeline(commands, pipeline_);
+        gfx::cmd_set_cull_mode(commands, true);
 
         const auto view =
             world.registry().view<const scene::WorldTransform, const scene::MeshRenderer>();
@@ -164,6 +165,8 @@ namespace engine::render {
                 const GpuMaterial& material =
                     materials_.get(device_, content, textures_, submesh.material);
                 gfx::cmd_bind_texture(commands, pipeline_, material.base_color);
+                gfx::cmd_set_cull_mode(commands,
+                                       !material.source.double_sided);
                 gfx::cmd_draw_indexed(commands, submesh.index_count, 1, submesh.first_index, 0);
                 ++draw_count_;
             }

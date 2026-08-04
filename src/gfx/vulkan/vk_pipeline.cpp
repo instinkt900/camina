@@ -252,8 +252,9 @@ namespace engine::gfx {
             VertexInput vertex_input;
             fill_vertex_input(vertex_input, state, desc);
 
-            const std::array<VkDynamicState, 2> dynamic_states{ VK_DYNAMIC_STATE_VIEWPORT,
-                                                                VK_DYNAMIC_STATE_SCISSOR };
+            const std::array<VkDynamicState, 3> dynamic_states{ VK_DYNAMIC_STATE_VIEWPORT,
+                                                                VK_DYNAMIC_STATE_SCISSOR,
+                                                                VK_DYNAMIC_STATE_CULL_MODE };
             VkPipelineDynamicStateCreateInfo dynamic{};
             dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
             dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size());
@@ -344,6 +345,12 @@ namespace engine::gfx {
         }
 
         vkCmdBindPipeline(commands->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, entry->pipeline);
+    }
+
+    void cmd_set_cull_mode(CommandList* commands, bool cull_back) {
+        ENGINE_CHECK(commands != nullptr, "cmd_set_cull_mode needs a command list.");
+        vkCmdSetCullMode(commands->buffer,
+                         cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE);
     }
 
     void cmd_bind_texture(CommandList* commands, PipelineHandle pipeline,
