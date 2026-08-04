@@ -39,10 +39,87 @@ namespace engine::render {
          * to the same 16 bytes, and a written padding word is easier to read
          * than an implied one.
          */
+        /**
+         * How many lights one frame can carry.
+         *
+         * The block is a fixed-size array rather than a buffer that grows,
+         * because the sandbox lights a scene with a handful and rule 4.6 says
+         * to build the system when something needs more. A light past this
+         * count is dropped with a message rather than ignored quietly.
+         */
+        constexpr std::uint32_t kMaxLights = 8;
+
+        /// One light, as the shader reads it. Two vec4 and nothing else.
+        struct GpuLight {
+            /// xyz is the direction it points for a directional light, or where
+            /// it is for a point light. w is 0 for directional and 1 for point.
+            std::array<float, 4> position{};
+            /// rgb is the color times the intensity. a is the range in meters,
+            /// which a directional light leaves at zero.
+            std::array<float, 4> color{};
+        };
+
         struct FrameUniforms {
             Mat4 view_projection{ 1.0F };
             std::array<float, 4> camera_position{};
+            /// x is how many entries of `lights` are real. The rest is padding,
+            /// because std140 puts the array on a 16-byte boundary anyway.
+            std::array<std::uint32_t, 4> light_count{};
+            std::array<GpuLight, kMaxLights> lights{};
         };
+
+        /// Collects every light in the world into the frame block.
+        void gather_lights(const scene::World& world, FrameUniforms& frame) {
+            std::uint32_t count = 0;
+            const auto add = [&frame, &count](const std::array<float, 4>& position,
+                                              const Vec3& color, float intensity, float range) {
+                if (count >= kMaxLights) {
+                    return false;
+                }
+                frame.lights[count] = GpuLight{
+                    .position = position,
+                    .color = { color.x * intensity, color.y * intensity, color.z * intensity,
+                               range },
+                };
+                ++count;
+                return true;
+            };
+
+            bool room = true;
+            const auto directional =
+                world.registry()
+                    .view<const scene::WorldTransform, const scene::DirectionalLight>();
+            for (const auto [entity, transform, light] : directional.each()) {
+                // Forward is local −Z turned into world space, per DESIGN.md
+                // section 3. So a light is aimed by turning its entity.
+                const Vec3 forward = glm::normalize(Vec3{ -transform.matrix[2] });
+                room = add({ forward.x, forward.y, forward.z, 0.0F }, light.color,
+                           light.intensity, 0.0F);
+                if (!room) {
+                    break;
+                }
+            }
+
+            if (room) {
+                const auto points =
+                    world.registry().view<const scene::WorldTransform, const scene::PointLight>();
+                for (const auto [entity, transform, light] : points.each()) {
+                    const Vec3 at{ transform.matrix[3] };
+                    room = add({ at.x, at.y, at.z, 1.0F }, light.color, light.intensity,
+                               light.range);
+                    if (!room) {
+                        break;
+                    }
+                }
+            }
+
+            if (!room) {
+                ENGINE_LOG_WARN("The scene has more than {} lights, and the rest are not lit. "
+                                "See kMaxLights in mesh_pass.cpp.",
+                                kMaxLights);
+            }
+            frame.light_count[0] = count;
+        }
 
         /// Which descriptor set the frame block binds to. The material is set 1.
         constexpr std::uint32_t kFrameSet = 0;
@@ -387,10 +464,11 @@ namespace engine::render {
         // change what the GPU is reading right now.
         frame_slot_ = (frame_slot_ + 1) % gfx::kFramesInFlight;
 
-        const FrameUniforms frame{
+        FrameUniforms frame{
             .view_projection = view_projection,
             .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
         };
+        gather_lights(world, frame);
         gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
 
         gfx::cmd_bind_pipeline(commands, pipeline_);

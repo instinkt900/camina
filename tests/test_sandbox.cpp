@@ -56,7 +56,7 @@ namespace {
 
         // The engine never names a game type. The game joins the same registry.
         const sc::ComponentRegistry full = make_registry();
-        check(full.size() == 4, "the engine types and the game type share one registry");
+        check(full.size() == 6, "the engine types and the game type share one registry");
     }
 
     /**
@@ -137,10 +137,10 @@ namespace {
         // from the glTF node tree.
         check(library.size() == 2, "both prefabs went into the library");
 
-        // Four crate instances of two entities each, one beacon, and seven for
-        // the flight helmet: the root the cooker added, and one for each of the
-        // six nodes the model holds.
-        check(world.size() == 16, "the scene holds sixteen entities");
+        // Four crate instances of two entities each, one beacon, seven for the
+        // flight helmet (the root the cooker added, and one for each of the six
+        // nodes the model holds), and the two lights M5.2 added.
+        check(world.size() == 18, "the scene holds eighteen entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");

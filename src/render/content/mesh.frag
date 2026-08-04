@@ -14,9 +14,23 @@ layout(location = 3) in vec2 in_uv;
 
 layout(location = 0) out vec4 out_color;
 
+// Must match kMaxLights in mesh_pass.cpp.
+const uint kMaxLights = 8u;
+
+struct Light {
+    // xyz is the direction it points for a directional light, or where it is for
+    // a point light. w is 0 for directional and 1 for point.
+    vec4 position;
+    // rgb is the color times the intensity. a is the range in meters, which a
+    // directional light leaves at zero.
+    vec4 color;
+};
+
 layout(set = 0, binding = 0) uniform Frame {
     mat4 view_projection;
     vec4 camera_position; // w is unused and keeps the block aligned.
+    uvec4 light_count;    // x is how many lights are real. The rest is padding.
+    Light lights[kMaxLights];
 } frame;
 
 // Every one of these is always a valid sampler. A material that names no
@@ -55,11 +69,6 @@ layout(set = 1, binding = 5) uniform Material {
     uint has_maps;
     uint padding;
 } material;
-
-// One directional light, still written here rather than read from the scene.
-// Light components are the second half of M5.2.
-const vec3 kLightDirection = normalize(vec3(0.4, 0.8, 0.5));
-const vec3 kLightColor = vec3(1.0, 0.97, 0.92);
 
 // The environment, until M5.4 replaces it with a cooked one.
 const vec3 kSkyColor = vec3(0.28, 0.34, 0.45);
@@ -130,26 +139,53 @@ void main() {
 
     vec3 n = shading_normal();
     vec3 v = normalize(frame.camera_position.xyz - in_world);
-    vec3 l = kLightDirection;
-    vec3 h = normalize(v + l);
-
     float n_dot_v = max(dot(n, v), 1e-4);
-    float n_dot_l = max(dot(n, l), 0.0);
-    float n_dot_h = max(dot(n, h), 0.0);
 
     // A metal has no diffuse term and it tints its reflection with its own
     // color. A dielectric reflects white and keeps its color in the diffuse.
     vec3 albedo = base.rgb;
     vec3 f0 = mix(kDielectricF0, albedo, metallic);
 
-    vec3 f = fresnel_schlick(max(dot(h, v), 0.0), f0);
-    float d = distribution_ggx(n_dot_h, roughness);
-    float g = geometry_smith(n_dot_v, n_dot_l, roughness);
+    vec3 direct = vec3(0.0);
+    for (uint i = 0u; i < min(frame.light_count.x, kMaxLights); ++i) {
+        Light light = frame.lights[i];
 
-    vec3 specular = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 1e-7);
-    vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / kPi;
+        // l points from the surface towards the light, which is the opposite of
+        // the way a directional light travels.
+        vec3 l;
+        float attenuation = 1.0;
+        if (light.position.w < 0.5) {
+            l = -light.position.xyz;
+        } else {
+            vec3 to_light = light.position.xyz - in_world;
+            float distance = length(to_light);
+            l = to_light / max(distance, 1e-4);
 
-    vec3 direct = (diffuse + specular) * kLightColor * n_dot_l;
+            // The inverse square, windowed so the light reaches zero at its
+            // range rather than going on forever. Without the window every
+            // light would touch every surface and nothing could cull one.
+            float range = max(light.color.a, 1e-4);
+            float window = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);
+            attenuation = (window * window) / max(distance * distance, 1e-4);
+        }
+
+        float n_dot_l = max(dot(n, l), 0.0);
+        if (n_dot_l <= 0.0 || attenuation <= 0.0) {
+            continue;
+        }
+
+        vec3 h = normalize(v + l);
+        float n_dot_h = max(dot(n, h), 0.0);
+
+        vec3 f = fresnel_schlick(max(dot(h, v), 0.0), f0);
+        float d = distribution_ggx(n_dot_h, roughness);
+        float g = geometry_smith(n_dot_v, n_dot_l, roughness);
+
+        vec3 specular = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 1e-7);
+        vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / kPi;
+
+        direct += (diffuse + specular) * light.color.rgb * n_dot_l * attenuation;
+    }
 
     // The environment, which M5.4 replaces with a cooked one. A metal reflects
     // it and has no diffuse, so a metal is nearly black until then.
