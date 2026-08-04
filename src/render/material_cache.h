@@ -83,6 +83,26 @@ namespace engine::render {
         /// @return The count, the default and the failures not included.
         [[nodiscard]] std::size_t size() const { return loaded_.size(); }
 
+        /**
+         * @brief Whether the cache holds a material for this identity.
+         * @param guid The identity to look for. A null GUID returns false.
+         * @return True when the material was loaded and is still here.
+         */
+        [[nodiscard]] bool has(Guid guid) const { return loaded_.contains(guid); }
+
+        /**
+         * @brief Inserts a material that was built by hand.
+         *
+         * A test that cannot open a content tree calls this. The caller must
+         * keep the cache whole: a duplicate GUID hides the first one.
+         *
+         * @param guid The identity the material goes by.
+         * @param material The material to insert, moved in.
+         */
+        void inject(Guid guid, GpuMaterial material) {
+            loaded_.emplace(guid, std::move(material));
+        }
+
     private:
         std::map<Guid, GpuMaterial> loaded_;
         /// The GUIDs that failed, so one bad reference reports once.
