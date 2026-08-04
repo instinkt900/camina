@@ -189,6 +189,18 @@ namespace engine::gfx {
     void cmd_bind_pipeline(CommandList* commands, PipelineHandle pipeline);
 
     /**
+     * @brief Sets whether back faces are culled for the draws that follow.
+     *
+     * The pipeline must declare dynamic cull mode, which the mesh pipeline does.
+     * A material whose glTF says doubleSided asks for no culling here.
+     *
+     * @param commands The command list from begin_frame().
+     * @param cull_back Pass true to cull back faces. Pass false to draw both
+     * faces, for thin geometry that the author meant to be seen from both sides.
+     */
+    void cmd_set_cull_mode(CommandList* commands, bool cull_back);
+
+    /**
      * @brief Draws without an index buffer.
      * @param commands The command list from begin_frame().
      * @param vertex_count How many vertices the vertex shader runs for.
