@@ -49,9 +49,9 @@ namespace engine::assets {
      * @code
      * engine::assets::HotReload reload;
      * if (reload.start(desc, content)) {
-     *     std::vector<engine::Guid> changed;
+     *     std::vector<engine::assets::AssetChange> changed;
      *     if (reload.poll(content, changed)) {
-     *         pass.reload(changed);
+     *         // Pull the identities out for the render caches.
      *     }
      * }
      * @endcode
@@ -85,15 +85,15 @@ namespace engine::assets {
          *
          * @param content The cooked content, which this cooks into and reads
          * the manifest of again.
-         * @param changed Receives every identity to load again. It is cleared
-         * first.
+         * @param changed Receives every identity to load again, with what it
+         * was. It is cleared first.
          * @return True when @p changed holds at least one identity.
          *
          * @warning This blocks while the cooker runs. A frame therefore takes
          * as long as the cook, which a person sees as one long frame after a
          * save.
          */
-        [[nodiscard]] bool poll(Content& content, std::vector<Guid>& changed);
+        [[nodiscard]] bool poll(Content& content, std::vector<AssetChange>& changed);
 
         /// @brief Whether start() found what it needed.
         /// @return True when poll() can do anything.

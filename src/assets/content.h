@@ -24,6 +24,27 @@
 namespace engine::assets {
 
     /**
+     * @brief One identity a reload found, and what it was.
+     *
+     * A caller that only loads assets needs the identity. A caller that has to
+     * decide what to do about the change needs to know what kind of asset it
+     * was, and the cooked path is what says so.
+     *
+     * That matters most for an asset that went away. It is not in the new
+     * manifest, so nothing can be looked up about it after the fact, and
+     * without this a caller could not tell a deleted prefab from a deleted
+     * texture.
+     */
+    struct AssetChange {
+        /// @brief The identity that appeared, changed, or went away.
+        Guid guid;
+        /// @brief The cooked path, relative to the root. For a removal, the one it had.
+        std::string cooked;
+        /// @brief True when the new manifest no longer holds this identity.
+        bool gone = false;
+    };
+
+    /**
      * @brief One cooked content directory, open for reading.
      *
      * @code
@@ -58,7 +79,7 @@ namespace engine::assets {
          * @return True when the manifest was read. On false the content keeps
          * the manifest it already had, and @p changed is empty.
          */
-        [[nodiscard]] bool reload(std::vector<Guid>& changed);
+        [[nodiscard]] bool reload(std::vector<AssetChange>& changed);
 
         /**
          * @brief Finds what the cooker made from a source path.

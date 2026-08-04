@@ -645,24 +645,34 @@ namespace {
      * and the world does not change. A scene or a prefab describes the
      * entities themselves, so the world has to be built again.
      *
-     * An identity that went away is not in the manifest any more, and nothing
-     * here can tell what it used to be. Deleting a prefab therefore needs a
-     * restart, and issue #59 covers that.
+     * The reload says what each identity was, a removal included, so deleting a
+     * prefab a scene instances is seen here rather than needing a restart.
+     *
+     * The rebuild is the whole world and not the part that changed. Doing less
+     * means knowing which entities came from which prefab and building only
+     * those, and holding a selection across it. That is the editor's job and it
+     * arrives with the editor. Rebuilding everything costs a scene load, which
+     * is what a person just asked for by saving.
      */
-    bool world_was_built_from(const engine::assets::Content& content,
-                              const std::vector<engine::Guid>& changed) {
-        for (const engine::Guid guid : changed) {
-            const engine::assets::ManifestOutput* output =
-                engine::assets::find_by_guid(content.manifest(), guid);
-            if (output == nullptr) {
-                continue;
-            }
-            const std::filesystem::path cooked{ output->cooked };
+    bool world_was_built_from(const std::vector<engine::assets::AssetChange>& changed) {
+        for (const engine::assets::AssetChange& change : changed) {
+            const std::filesystem::path cooked{ change.cooked };
             if (cooked.extension() == ".scene" || cooked.extension() == ".prefab") {
                 return true;
             }
         }
         return false;
+    }
+
+    /// The identities out of a change list, which is what the caches take.
+    std::vector<engine::Guid> identities_of(
+        const std::vector<engine::assets::AssetChange>& changed) {
+        std::vector<engine::Guid> out;
+        out.reserve(changed.size());
+        for (const engine::assets::AssetChange& change : changed) {
+            out.push_back(change.guid);
+        }
+        return out;
     }
 
     /**
@@ -673,7 +683,7 @@ namespace {
      */
     void apply_hot_reload(Runtime& runtime, const FrameContext& context,
                           engine::scene::World& world) {
-        std::vector<engine::Guid> changed;
+        std::vector<engine::assets::AssetChange> changed;
 
         // The engine tree holds the two shaders and nothing else, so any change
         // to it means the pipeline. Adding a third asset to that tree would
@@ -687,8 +697,10 @@ namespace {
             return;
         }
 
-        runtime.mesh.reload(changed);
-        if (!world_was_built_from(runtime.game_content, changed)) {
+        runtime.mesh.reload(identities_of(changed));
+        // A mesh or a texture swapped in behind the entities that name it, so
+        // the world stands and whatever was selected is still that entity.
+        if (!world_was_built_from(changed)) {
             return;
         }
 

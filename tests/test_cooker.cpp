@@ -885,7 +885,7 @@ namespace {
         const engine::Guid prefab = identity_of(content, "b.prefab");
         check(scene.valid() && prefab.valid(), "both identities are there");
 
-        std::vector<engine::Guid> changed;
+        std::vector<as::AssetChange> changed;
         check(content.reload(changed) && changed.empty(),
               "a reload over an unchanged tree names nothing");
 
@@ -899,7 +899,7 @@ namespace {
         if (changed.size() != 1) {
             return;
         }
-        check(changed.front() == scene, "which is the one that changed");
+        check(changed.front().guid == scene, "which is the one that changed");
 
         check(content.reload(changed) && changed.empty(),
               "reloading again names nothing, because nothing moved");
@@ -928,13 +928,77 @@ namespace {
         cooker::Result second;
         check(cooker::cook_all(options, second), "the cook after the delete works");
 
-        std::vector<engine::Guid> changed;
+        std::vector<as::AssetChange> changed;
         check(content.reload(changed), "the reload reads the new manifest");
         check(changed.size() == 1, "and it names one asset");
         if (changed.size() != 1) {
             return;
         }
-        check(changed.front() == prefab, "which is the one that went away");
+        check(changed.front().guid == prefab, "which is the one that went away");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reload_says_what_an_asset_that_went_away_was() {
+        const std::filesystem::path source = scratch("gone_kind/src");
+        const std::filesystem::path out = scratch("gone_kind/out");
+        write_file(source / "a.scene", "{}");
+        write_file(source / "b.prefab", "{}");
+        write_tga(source / "wall.tga", 2, 2, half_black_half_white());
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+
+        // Delete the prefab. It is not in the new manifest, so nothing can be
+        // looked up about it afterwards. Before this the runtime could not tell
+        // a deleted prefab from a deleted texture, and the world it built from
+        // that prefab stood until a restart.
+        std::filesystem::remove(source / "b.prefab");
+        std::filesystem::remove(as::meta_path(source / "b.prefab"));
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the cook after the delete works");
+
+        std::vector<as::AssetChange> changed;
+        check(content.reload(changed), "the reload reads the new manifest");
+        check(changed.size() == 1, "and it names one asset");
+        if (changed.size() != 1) {
+            return;
+        }
+        check(changed.front().gone, "which is reported as gone");
+        check(std::filesystem::path{ changed.front().cooked }.extension() == ".prefab",
+              "and it says the asset was a prefab");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reload_says_what_a_changed_asset_is() {
+        const std::filesystem::path source = scratch("changed_kind/src");
+        const std::filesystem::path out = scratch("changed_kind/out");
+        write_file(source / "a.scene", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+
+        write_file(source / "a.scene", R"({"changed":true})");
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+
+        std::vector<as::AssetChange> changed;
+        check(content.reload(changed) && changed.size() == 1, "the reload names one asset");
+        if (changed.size() != 1) {
+            return;
+        }
+        check(!changed.front().gone, "which is still there");
+        check(std::filesystem::path{ changed.front().cooked }.extension() == ".scene",
+              "and it says the asset is a scene");
 
         test::remove_tree(source.parent_path());
     }
@@ -954,7 +1018,7 @@ namespace {
 
         write_file(out / as::kManifestFile, "not json");
 
-        std::vector<engine::Guid> changed;
+        std::vector<as::AssetChange> changed;
         check(!content.reload(changed), "a manifest that will not read fails the reload");
         check(changed.empty(), "and it names nothing");
         // The point of the test. Dropping the manifest here would leave the
@@ -988,7 +1052,7 @@ namespace {
         reload.watcher().set_interval(std::chrono::milliseconds{ 0 });
         reload.watcher().set_settle(std::chrono::milliseconds{ 0 });
 
-        std::vector<engine::Guid> changed;
+        std::vector<as::AssetChange> changed;
         check(!reload.poll(content, changed), "an unchanged tree reloads nothing");
         check(reload.cooks() == 0, "and it does not run the cooker at all");
 
@@ -997,7 +1061,7 @@ namespace {
 
         check(reload.poll(content, changed), "the next poll cooks and reloads");
         check(reload.cooks() == 1, "and it ran the cooker once");
-        check(changed.size() == 1 && changed.front() == scene, "it names the changed asset");
+        check(changed.size() == 1 && changed.front().guid == scene, "it names the changed asset");
         // A document is parsed and written back out, so this compares what
         // it says rather than the bytes it is made of.
         check(read_file(out / "a.scene").find("\"changed\"") != std::string::npos,
@@ -1036,7 +1100,7 @@ namespace {
         write_file(source / "a.scene", "{\"changed\":true}");
         write_file(source / "broken.png", "this is not a PNG");
 
-        std::vector<engine::Guid> changed;
+        std::vector<as::AssetChange> changed;
         check(!reload.poll(content, changed), "the walk that first sees them waits");
         check(!reload.poll(content, changed), "a cook that fails reloads nothing");
         check(reload.cooks() == 1, "and it did run the cooker");
@@ -1049,7 +1113,7 @@ namespace {
         // The cooker writes its manifest even when one asset failed, so the
         // half-cooked tree really is on disk. Reading it here proves that the
         // check above refused something rather than finding nothing.
-        std::vector<engine::Guid> refused;
+        std::vector<as::AssetChange> refused;
         check(content.reload(refused) && refused.size() == 1,
               "the failed cook did change the tree, so refusing it was a decision");
 
@@ -1061,7 +1125,7 @@ namespace {
         write_file(source / "a.scene", "{}");
 
         as::Content content;
-        std::vector<engine::Guid> changed;
+        std::vector<as::AssetChange> changed;
 
         as::HotReload missing_cooker;
         check(!missing_cooker.start({ .source = source, .cooker = source / "no_cooker", .glslc = {} }),
@@ -1380,6 +1444,8 @@ int main() {
     test::section("hot reload");
     test_reload_names_only_what_changed();
     test_reload_names_an_asset_that_went_away();
+    test_a_reload_says_what_an_asset_that_went_away_was();
+    test_a_reload_says_what_a_changed_asset_is();
     test_reload_keeps_what_it_has_when_the_manifest_will_not_read();
     test_hot_reload_cooks_what_changed();
     test_hot_reload_lives_through_a_cook_that_fails();

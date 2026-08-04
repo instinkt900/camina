@@ -57,7 +57,7 @@ namespace engine::assets {
 
     } // namespace
 
-    bool Content::reload(std::vector<Guid>& changed) {
+    bool Content::reload(std::vector<AssetChange>& changed) {
         changed.clear();
 
         Manifest fresh;
@@ -79,14 +79,18 @@ namespace engine::assets {
         for (const auto& [guid, cooked] : after) {
             const auto was = before.find(guid);
             if (was == before.end() || was->second != cooked) {
-                changed.push_back(guid);
+                changed.push_back(
+                    AssetChange{ .guid = guid, .cooked = cooked.path, .gone = false });
             }
         }
         // An identity that is gone has to be reported too. A cache holding it
-        // would otherwise keep drawing an asset the content no longer has.
+        // would otherwise keep drawing an asset the content no longer has. The
+        // path comes from the manifest being replaced, because that is the last
+        // record there is of what the asset was.
         for (const auto& [guid, cooked] : before) {
             if (!after.contains(guid)) {
-                changed.push_back(guid);
+                changed.push_back(
+                    AssetChange{ .guid = guid, .cooked = cooked.path, .gone = true });
             }
         }
 

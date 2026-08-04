@@ -80,7 +80,7 @@ namespace engine::assets {
         return true;
     }
 
-    bool HotReload::poll(Content& content, std::vector<Guid>& changed) {
+    bool HotReload::poll(Content& content, std::vector<AssetChange>& changed) {
         changed.clear();
         if (!active_) {
             return false;
