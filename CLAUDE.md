@@ -173,25 +173,66 @@ one-line tweak. When you are not sure which one applies, use a branch.
 a convention, not a lock. The user can set it aside at any time. Follow an explicit
 instruction to work on `main`.
 
-Steps:
+### The loop
 
-1. Branch from current `main`. Name the branch `<type>/<short-topic>`, for example
-   `feat/vulkan-swapchain` or `fix/arena-alignment`.
-2. Commit on the branch in the conventional style.
-3. Open a pull request with `gh pr create`. Write the title in the conventional style.
-   A squash merge uses that title as the commit subject.
-4. Wait for CI. The format, docs, vulkan-containment, and build jobs all run on a pull
-   request.
-5. Read the automated code review as well. It runs on each push, and it often finishes
-   after the other jobs. A green CI therefore does not mean the pull request is clear.
-6. **Collect every change before you push again.** Gather the CI failures, the review
-   comments, and any work you still owe the branch. Fix them together, and push once.
-7. Ask the user before you merge. Do not merge your own pull request on your own.
+**At the start of a milestone, before any code.** Read the `DESIGN.md` §10 definition,
+then create the tracker issues for the increments inside it. Name them `M<n>.<k> — ...`.
+Do this first, so the work has a shape before the first branch exists. An increment that
+turns out to be two increments gets split into two issues, not carried as one large
+branch.
 
-Step 6 matters because a push restarts every CI job and starts a new review. Two pushes
-five minutes apart cost two full runs and two reviews, and the second review reads a
-branch the first one already covered. Waiting costs nothing, because the review has to
-arrive before the branch is ready either way.
+**Then, for each issue, one at a time:**
+
+1. Branch from **current** `main`, after `git pull`. Name the branch
+   `<type>/<short-topic>`, for example `feat/vulkan-swapchain` or `fix/arena-alignment`.
+2. Do the work. Commit on the branch in the conventional style, and commit as you go
+   rather than at the end. A commit is cheap and losing an afternoon of edits is not.
+3. Open a pull request with `gh pr create`. Write the title in the conventional style,
+   because a squash merge uses it as the commit subject.
+4. **Start a monitor.** See "Monitoring a pull request" below. It is a regular source of
+   mistakes, so follow that section rather than writing a fresh watch loop.
+5. Read the automated review when it lands. Fix what is real. Say so, with a reason, when
+   a finding is wrong. Push once, then monitor again.
+6. When the checks are green and the review is either answered or absent, **post a summary
+   of the work and wait.** Do not merge.
+
+**Ask the user before you merge. Never merge your own pull request.**
+
+### One issue, one branch, one pull request
+
+**Open the pull request at the seam, not at the end of the issue.** An issue whose work
+splits cleanly in half is two pull requests. M5.1 was the cooker half in #103 and the
+renderer half in #106, and each was reviewable on its own. Holding both on one branch
+would have made one large review of work that was already finished.
+
+The test for a good seam is whether the first half stands up alone. A cooker change that
+alters no pixel and carries its own tests is a seam. Half a shader rewrite that leaves the
+sandbox rendering wrongly is not, and that half has to stay with its other half.
+
+Several commits on one branch are not the same thing as several pull requests. Commit
+often. Submit at the seam.
+
+### A finding during the work becomes an issue, not a detour
+
+When you find a bug, a shortcut, dead code, or a question the current work does not answer,
+**file an issue and carry on.** Do not fix it on the current branch.
+
+The exception is narrow: fix it here when it blocks this branch, or when it is genuinely
+part of the issue you are working on. A texture format that cannot express a cubemap blocks
+an environment rule, so it belongs. An unrelated overflow two functions away does not.
+
+The rules for such an issue are under "Issue tracker" below. A finding that lives only in a
+chat reply or a pull-request comment is lost.
+
+### Collect every change before you push again
+
+Gather the CI failures, the review comments, and any work you still owe the branch. Fix
+them together, and push once.
+
+This matters because a push restarts every CI job and starts a new review. Two pushes five
+minutes apart cost two full runs and two reviews, and the second review reads a branch the
+first one already covered. Waiting costs nothing, because the review has to arrive before
+the branch is ready either way.
 
 Squash merge is the default here. `cliff.toml` skips merge commits and strips the
 `(#12)` suffix that GitHub adds to a squashed subject, so one pull request becomes one
@@ -204,6 +245,68 @@ owns the repository.
 
 Change `version.txt` in its own small commit on `main`, or in a release pull request of
 its own. A push to `main` that changes `version.txt` starts a release.
+
+## Monitoring a pull request
+
+Every mistake in this section has actually happened. Follow it exactly.
+
+**Start a background monitor as soon as the pull request exists.** Watch for two separate
+things: the checks finishing, and the automated review arriving. They are unrelated
+signals, and the review usually lands after the checks.
+
+### Watching the checks
+
+`gh` here is 2.45 and **`gh pr checks` has no `--json` flag**. A watch loop built on it
+writes its error to stderr, reads empty input, never becomes true, and spins silently until
+timeout. Silence looks exactly like "CI is still running".
+
+Use `gh pr view`, which does support `--json`, and gate on `status`:
+
+```bash
+gh pr view <N> --json statusCheckRollup \
+  --jq '[.statusCheckRollup[] | select(.name != null) | {name, status, conclusion}]'
+```
+
+Two traps, both of which have produced a false green:
+
+- **A running check reports `conclusion` as `""`, not `null`.** So `all(.conclusion != null)`
+  is true while the builds are still going. **Gate on `status == "COMPLETED"`**, which is
+  unambiguous, and read `conclusion` only after that.
+- **A bare `length > 0` exits far too early.** The review bot registers before the workflow
+  jobs do, so the loop sees one finished check and reports success before the build starts.
+  Require the expected count, which is **five**: `format`, `docs`, `vulkan-containment`, and
+  the two `build` jobs.
+
+Make the loop print the per-check result it decided on, so a wrong exit is visible in the
+event rather than hidden behind the word "success". After the monitor reports, **query the
+state once by hand** and report from that, not from the monitor's summary.
+
+### Reading the review
+
+A review is spread over three endpoints. Checking one or two and finding nothing proves
+nothing:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<N>/reviews    # the review and its summary
+gh api repos/<owner>/<repo>/pulls/<N>/comments   # inline comments, anchored to a line
+gh api repos/<owner>/<repo>/issues/<N>/comments  # top-level, where the walkthrough goes
+```
+
+`gh pr view <N> --json reviews` covers only the first. The walkthrough lands on the
+**issues** endpoint, which is easy to miss because the subject is a pull request.
+
+**An empty result means "not yet", never "clear".** Say that the review has not arrived.
+CodeRabbit is rate limited and sometimes never reviews at all, which is a thing to state
+plainly rather than to treat as a pass.
+
+### Answering the review
+
+Verify each finding against the code before acting on it. A finding can be wrong, and
+several have been. When one is wrong, say so with evidence rather than with an argument:
+measure the file, run the check, quote the line. When one is right, fix it and say what the
+failure would have been.
+
+Then push once and start the monitor again.
 
 ## Issue tracker
 
