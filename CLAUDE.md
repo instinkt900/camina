@@ -89,6 +89,10 @@ stb_image and builds the mip chain in linear light. It then compresses to BC7 wi
 space. The cooker guesses it from the file name, and only on the cook that writes a new
 sidecar. The cube reads `cube.png` from the cooked tree, and `build_texture()` is gone.
 
+A prefab instance records shape as well as fields, which closes a gap M3.3 left. The scene
+format is version 3, and an instance record carries `removed`, `added`, and `reparented` next
+to `overrides`. `scene::instantiate` takes the whole record now, not just the field patch.
+
 M4.5 closes the milestone. `platform::DirectoryWatcher` polls the source tree and holds a
 change back until the file stops moving. `platform::run_process` starts the cooker without a
 shell. `assets::HotReload` joins them, and `Content::reload` compares the new manifest against

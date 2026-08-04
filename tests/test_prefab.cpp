@@ -82,11 +82,12 @@ namespace {
         return *found;
     }
 
-    /// The one override this suite uses: move the instance root sideways.
+    /// An instance record whose only change is where the root sits.
     nlohmann::json moved_to(float x) {
-        nlohmann::json patch = nlohmann::json::object();
-        patch["0"]["Transform"]["position"] = nlohmann::json::array({ x, 0.0F, 0.0F });
-        return patch;
+        nlohmann::json record = nlohmann::json::object();
+        record["overrides"]["0"]["Transform"]["position"] =
+            nlohmann::json::array({ x, 0.0F, 0.0F });
+        return record;
     }
 
     void test_parse() {
@@ -264,7 +265,7 @@ namespace {
               "a component the patch did not name still comes from the prefab");
 
         // Reading the overrides back must name that one field and nothing else.
-        const nlohmann::json found = sc::instance_overrides(world, root, crate, registry);
+        const nlohmann::json found = sc::instance_record(world, root, crate, registry);
         check(found == moved_to(7.0F), "the instance reports the one field it changed");
 
         sc::World clean;
@@ -281,12 +282,12 @@ namespace {
 
         sc::World world;
         check(sc::instantiate(world, crate, nlohmann::json::array(), registry) == entt::null,
-              "overrides that are not an object are refused");
+              "an instance record that is not an object is refused");
         check(world.size() == 0, "a refused build leaves nothing behind");
 
         // A patch that puts the wrong type in a field fails the component read.
         nlohmann::json wrong = nlohmann::json::object();
-        wrong["0"]["Transform"]["position"] = "over there";
+        wrong["overrides"]["0"]["Transform"]["position"] = "over there";
         check(sc::instantiate(world, crate, wrong, registry) == entt::null,
               "a field of the wrong type fails the build");
         check(world.size() == 0, "a failed build destroys the whole instance");
@@ -336,12 +337,216 @@ namespace {
         return found;
     }
 
+    // Issue #27. An instance can change the shape of what it built, not only
+    // the fields. Each of these makes one such change in a live world, saves,
+    // loads, and checks the change is still there.
+
+    /// The entity under @p parent whose Name is @p wanted, or entt::null.
+    entt::entity child_named(const sc::World& world, entt::entity parent,
+                             std::string_view wanted) {
+        const entt::registry& entities = world.registry();
+        for (entt::entity child = entities.get<sc::Hierarchy>(parent).first_child;
+             child != entt::null;
+             child = entities.get<sc::Hierarchy>(child).next_sibling) {
+            const auto* name = entities.try_get<sc::Name>(child);
+            if (name != nullptr && name->value == wanted) {
+                return child;
+            }
+        }
+        return entt::null;
+    }
+
+    /// How many entities hang under @p parent, counting only one level.
+    std::size_t child_count(const sc::World& world, entt::entity parent) {
+        const entt::registry& entities = world.registry();
+        std::size_t count = 0;
+        for (entt::entity child = entities.get<sc::Hierarchy>(parent).first_child;
+             child != entt::null;
+             child = entities.get<sc::Hierarchy>(child).next_sibling) {
+            ++count;
+        }
+        return count;
+    }
+
+    /// Saves a world and loads it back into a fresh one.
+    sc::World round_trip(const sc::World& world, const sc::ComponentRegistry& registry,
+                         const sc::PrefabLibrary& library, nlohmann::json& document) {
+        document = sc::save_scene(world, registry, library);
+        sc::World loaded;
+        check(sc::load_scene(document, loaded, registry, library), "the scene loads back");
+        return loaded;
+    }
+
+    void test_an_added_child_survives() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+
+        sc::World world;
+        const entt::entity root =
+            sc::instantiate(world, crate_of(library), nlohmann::json::object(), registry);
+        check(root != entt::null, "the crate builds");
+
+        // Hang a lamp off the crate. This is ordinary scene authoring, and
+        // before issue #27 the entity vanished on the next save with a warning
+        // as the only trace.
+        const entt::entity lamp = world.create();
+        world.registry().emplace<sc::Name>(lamp, sc::Name{ "lamp" });
+        world.set_local(lamp, engine::Transform{ .position = { 0.0F, 2.0F, 0.0F } });
+        check(world.set_parent(lamp, root), "the lamp attaches to the crate");
+
+        nlohmann::json document;
+        const sc::World loaded = round_trip(world, registry, library, document);
+
+        check(document["entities"].size() == 1,
+              "the instance is still one record, so the lamp went inside it");
+        check(document["entities"][0]["added"].size() == 1, "the record holds one addition");
+
+        const std::vector<entt::entity> roots = instance_roots(loaded);
+        check(roots.size() == 1, "the loaded world holds the instance");
+        if (roots.size() != 1) {
+            return;
+        }
+        const entt::entity back = child_named(loaded, roots.front(), "lamp");
+        check(back != entt::null, "the lamp came back");
+        if (back == entt::null) {
+            return;
+        }
+        check(loaded.local(back).position.y == 2.0F, "and it kept where it was put");
+        check(child_count(loaded, roots.front()) == 2, "the crate holds its lid and the lamp");
+    }
+
+    void test_a_destroyed_member_stays_destroyed() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+
+        sc::World world;
+        const entt::entity root =
+            sc::instantiate(world, crate_of(library), nlohmann::json::object(), registry);
+        check(root != entt::null, "the crate builds");
+
+        const entt::entity lid = child_named(world, root, "lid");
+        check(lid != entt::null, "the crate has a lid");
+        if (lid == entt::null) {
+            return;
+        }
+        world.destroy(lid);
+        check(child_count(world, root) == 0, "the lid is gone");
+
+        nlohmann::json document;
+        const sc::World loaded = round_trip(world, registry, library, document);
+        check(document["entities"][0]["removed"] == nlohmann::json::array({ 1 }),
+              "the record names the member it destroyed");
+
+        const std::vector<entt::entity> roots = instance_roots(loaded);
+        check(roots.size() == 1, "the loaded world holds the instance");
+        if (roots.size() != 1) {
+            return;
+        }
+        // The whole point. Without a record of the removal the prefab builds
+        // the lid again, so a destroyed member comes back every load.
+        check(child_count(loaded, roots.front()) == 0, "and the lid stayed destroyed");
+    }
+
+    void test_a_moved_member_stays_where_it_was_put() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+
+        sc::World world;
+        const entt::entity root =
+            sc::instantiate(world, crate_of(library), nlohmann::json::object(), registry);
+        check(root != entt::null, "the crate builds");
+
+        const entt::entity lid = child_named(world, root, "lid");
+        const entt::entity lamp = world.create();
+        world.registry().emplace<sc::Name>(lamp, sc::Name{ "lamp" });
+        check(world.set_parent(lamp, root), "the lamp attaches to the crate");
+        check(lid != entt::null && world.set_parent(lid, lamp),
+              "the lid moves under the lamp");
+
+        nlohmann::json document;
+        const sc::World loaded = round_trip(world, registry, library, document);
+        check(document["entities"][0].contains("reparented"),
+              "the record says a member moved");
+
+        const std::vector<entt::entity> roots = instance_roots(loaded);
+        check(roots.size() == 1, "the loaded world holds the instance");
+        if (roots.size() != 1) {
+            return;
+        }
+        // A member moved under an entity the instance added is the case that
+        // needs every entity built before any is attached. The added lamp has
+        // a higher index than the lid it now holds.
+        const entt::entity back = child_named(loaded, roots.front(), "lamp");
+        check(back != entt::null, "the lamp came back");
+        if (back == entt::null) {
+            return;
+        }
+        check(child_named(loaded, back, "lid") != entt::null, "and the lid is under it");
+        check(child_count(loaded, roots.front()) == 1, "the crate holds only the lamp");
+    }
+
+    void test_removing_a_parent_removes_what_hangs_under_it() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+
+        // A record somebody edited by hand. It removes the lid and adds an
+        // entity under the lid in the same breath, which a live world could
+        // never produce. Building the addition would attach it to an entity
+        // that does not exist.
+        nlohmann::json record = nlohmann::json::object();
+        record["removed"] = nlohmann::json::array({ 1 });
+        nlohmann::json added = nlohmann::json::object();
+        added["parent"] = 1;
+        added["components"]["Name"] = engine::reflect::to_json(sc::Name{ "hanger" });
+        record["added"] = nlohmann::json::array({ added });
+
+        sc::World world;
+        const entt::entity root = sc::instantiate(world, crate_of(library), record, registry);
+        check(root != entt::null, "the instance still builds");
+        check(world.size() == 1, "and only the root is left");
+        check(child_count(world, root) == 0, "nothing hangs off a member that is gone");
+    }
+
+    void test_a_record_that_will_not_read_is_refused() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+        const sc::Prefab& crate = crate_of(library);
+
+        const auto refused = [&](const nlohmann::json& record, const char* what) {
+            sc::World world;
+            check(sc::instantiate(world, crate, record, registry) == entt::null, what);
+            check(world.size() == 0, "and it leaves nothing behind");
+        };
+
+        nlohmann::json past_the_end = nlohmann::json::object();
+        past_the_end["removed"] = nlohmann::json::array({ 9 });
+        refused(past_the_end, "removing an entity the prefab does not hold is refused");
+
+        nlohmann::json no_root = nlohmann::json::object();
+        no_root["removed"] = nlohmann::json::array({ 0 });
+        refused(no_root, "removing the instance root is refused");
+
+        nlohmann::json forward = nlohmann::json::object();
+        nlohmann::json entry = nlohmann::json::object();
+        entry["parent"] = 5;
+        forward["added"] = nlohmann::json::array({ entry });
+        refused(forward, "an addition whose parent comes later is refused");
+
+        nlohmann::json stray = nlohmann::json::object();
+        stray["reparented"]["1"] = 7;
+        refused(stray, "moving a member under an entity that is not there is refused");
+
+        nlohmann::json root_moved = nlohmann::json::object();
+        root_moved["reparented"]["0"] = 1;
+        refused(root_moved, "moving the instance root is refused");
+    }
+
     void test_scene_collapses_an_instance() {
         const sc::ComponentRegistry registry = make_registry();
         const sc::PrefabLibrary library = crate_library();
         const nlohmann::json document = two_crates(registry, library);
 
-        check(document["__version"] == sc::kSceneVersion, "the scene carries version 2");
+        check(document["__version"] == sc::kSceneVersion, "the scene carries the current version");
         check(document["entities"].size() == 2,
               "two instances of a two-entity prefab give two records, not four");
 
@@ -352,7 +557,7 @@ namespace {
         check(!plain.contains("overrides"),
               "an instance that changed nothing stores no overrides");
 
-        check(document["entities"][1]["overrides"] == moved_to(5.0F),
+        check(document["entities"][1]["overrides"] == moved_to(5.0F)["overrides"],
               "the moved instance stores the one field it changed");
     }
 
@@ -461,6 +666,11 @@ int main() {
     test_instantiate_refuses_bad_input();
     test_unknown_component_is_a_warning();
     std::printf("scene files\n");
+    test_an_added_child_survives();
+    test_a_destroyed_member_stays_destroyed();
+    test_a_moved_member_stays_where_it_was_put();
+    test_removing_a_parent_removes_what_hangs_under_it();
+    test_a_record_that_will_not_read_is_refused();
     test_scene_collapses_an_instance();
     test_scene_round_trip();
     test_prefab_edit_reaches_instances();

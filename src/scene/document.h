@@ -36,6 +36,34 @@ namespace engine::scene {
     /// @brief The key on a prefab instance that holds the fields it changed.
     inline constexpr const char* kOverridesKey = "overrides";
 
+    /**
+     * @brief The key on a prefab instance listing the members it destroyed.
+     *
+     * An array of prefab entity indices. Everything under a destroyed member
+     * goes with it, the way destroying an entity does in a world.
+     */
+    inline constexpr const char* kRemovedKey = "removed";
+
+    /**
+     * @brief The key on a prefab instance holding the entities added under it.
+     *
+     * An array of records, each with a parent index and a component set, the
+     * same shape a prefab entity has. They continue the index space the prefab
+     * started: a prefab of N entities owns 0 to N-1, and the first added entity
+     * is N. One index space covers both, so a parent reads the same whichever
+     * kind it names.
+     */
+    inline constexpr const char* kAddedKey = "added";
+
+    /**
+     * @brief The key on a prefab instance holding the members that moved.
+     *
+     * An object from entity index to its new parent index, both written the way
+     * @ref kAddedKey describes. Only a member needs this, because an added
+     * entity already carries its own parent.
+     */
+    inline constexpr const char* kReparentedKey = "reparented";
+
     /// @brief The parent value a root stores. No entity holds index -1.
     inline constexpr int kNoParent = -1;
 

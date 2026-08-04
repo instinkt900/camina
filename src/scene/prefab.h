@@ -175,23 +175,29 @@ namespace engine::scene {
      *
      * @param world The world to build in.
      * @param prefab The template to copy.
-     * @param overrides The fields this instance changes. Pass an empty object
-     * for an instance that follows the prefab exactly. The keys are entity
-     * indices written as decimal strings, and each value is a merge patch over
-     * that entity's component set.
+     * @param record What this instance changes about the prefab. Pass an empty
+     * object for an instance that follows it exactly. Four keys are read, and
+     * every one is optional:
+     * - @ref kOverridesKey, the fields it changed, keyed by entity index
+     *   written as a decimal string, each value a merge patch over that
+     *   entity's component set.
+     * - @ref kRemovedKey, the members it destroyed.
+     * - @ref kAddedKey, the entities it added under itself.
+     * - @ref kReparentedKey, the members it moved.
+     *
      * @param registry The component types to build. A component the registry
      * does not know is a warning, in the same way a scene file treats one.
      * @return The instance root, or `entt::null` when the build failed. On
      * failure nothing is left behind in the world.
      *
      * @code
-     * nlohmann::json patch;
-     * patch["0"]["Transform"]["position"] = { 3.0F, 0.0F, 0.0F };
-     * const entt::entity crate = instantiate(world, *library.find("crate"), patch);
+     * nlohmann::json record;
+     * record["overrides"]["0"]["Transform"]["position"] = { 3.0F, 0.0F, 0.0F };
+     * const entt::entity crate = instantiate(world, *library.find("crate"), record);
      * @endcode
      */
     [[nodiscard]] entt::entity instantiate(World& world, const Prefab& prefab,
-                                           const nlohmann::json& overrides,
+                                           const nlohmann::json& record,
                                            const ComponentRegistry& registry = components());
 
     /**
@@ -213,14 +219,41 @@ namespace engine::scene {
                                                 const nlohmann::json& live);
 
     /**
+     * @brief Works out everything an instance changed, fields and shape both.
+     *
+     * This is what a scene file stores under a prefab instance, and what
+     * instantiate() reads back. It holds the field overrides, the members the
+     * instance destroyed, the entities it added, and the members it moved.
+     * Every one of those keys is left out when there is nothing to say, so an
+     * instance that follows its prefab writes an empty object.
+     *
+     * @param world The world holding the instance.
+     * @param root The instance root. It must carry a PrefabInstance.
+     * @param prefab The template the instance came from.
+     * @param registry The component types to compare and to write.
+     * @return The record, as instantiate() takes it.
+     *
+     * @warning A member dragged out of the instance reads as destroyed, because
+     * from the root there is no longer any way to tell the two apart.
+     */
+    [[nodiscard]] nlohmann::json instance_record(const World& world, entt::entity root,
+                                                 const Prefab& prefab,
+                                                 const ComponentRegistry& registry = components());
+
+    /**
      * @brief Works out every field an instance changed since it was built.
+     *
+     * This is the field half of instance_record(), and it says nothing about
+     * the shape. A caller writing a scene wants the whole record. This one is
+     * for a caller that only wants to know which fields moved.
      *
      * @param world The world holding the instance.
      * @param root The instance root. It must carry a PrefabInstance.
      * @param prefab The template the instance came from.
      * @param registry The component types to compare.
-     * @return An object keyed by entity index, as instantiate() expects. An
-     * empty object means the instance still matches the prefab.
+     * @return An object keyed by entity index, which is what the
+     * @ref kOverridesKey of an instance record holds. An empty object means
+     * the instance still matches the prefab field for field.
      */
     [[nodiscard]] nlohmann::json instance_overrides(
         const World& world, entt::entity root, const Prefab& prefab,

@@ -34,8 +34,15 @@ namespace engine::scene {
      *
      * Version 2 added the prefab link and the override patch on an entity.
      * A version 1 document names no prefab, so it still reads.
+     *
+     * Version 3 added the structural overrides on an instance: the members it
+     * destroyed, the entities added under it, and the members that moved. A
+     * version 2 document carries none of those, so it still reads. The raise
+     * is for the other direction: a reader from before this refuses a version 3
+     * document rather than loading it with every structural change dropped and
+     * nothing said.
      */
-    inline constexpr std::uint32_t kSceneVersion = 2;
+    inline constexpr std::uint32_t kSceneVersion = 3;
 
     /**
      * @brief Writes a world to a JSON document.

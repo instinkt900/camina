@@ -334,11 +334,29 @@ else.
 A merge patch reads a null as "remove this key", so an instance can drop a whole component.
 No described field writes a null, so nothing collides with that meaning.
 
-The gap here is structural, not per-field. An instance cannot record a child you added, a
-member you destroyed, or a member you reparented. Issue #27 tracks that. No content file can
-reach it, because a scene file gives an index only to the records it writes and a prefab
-instance is one record. Only code can build that shape, so the trigger is a tool that edits
-a live world structurally.
+**An instance records shape as well as fields.** A merge patch changes a field and nothing
+else, so on its own it cannot say that you added a child, destroyed a member, or moved one.
+Each of those used to be lost on the next save, and an added child went with a warning as its
+only trace.
+
+The instance record therefore carries three more keys next to the overrides: the members it
+destroyed, the entities it added, and the members it moved. They share one index space with
+the prefab. A prefab of N entities owns 0 to N-1, and the entities the instance added
+continue from N, so a parent index reads the same whichever kind it names.
+
+That shared space is what lets a member move under an entity the instance added. It also
+means an instance builds in two steps rather than one: every entity is created, then every
+entity is attached. The prefab format guarantees a parent comes before its child, and that
+guarantee covers the prefab's own entities and nothing the instance did to them.
+
+Destroying an entity in a world takes its subtree, so a record written from a live world
+lists every one. A record somebody edited may name a parent and leave a child behind, and
+building that child would attach it to an entity that is not there. So the removal closes
+over the tree on the way in, to a fixed point rather than in one pass, because a moved member
+can name a parent with a higher index.
+
+A member dragged out of the instance entirely reads as destroyed. From the root there is no
+longer any way to tell the two apart, and inventing one would need a second link back.
 
 **What the editor needed.** M3.3 closed with a window that edits any component on any
 entity, and it named no component type. `scene::ComponentOps` gained an `inspect` pointer

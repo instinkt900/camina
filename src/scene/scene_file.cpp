@@ -163,9 +163,9 @@ namespace engine::scene {
                 return { .entity = world.create(), .ok = false };
             }
 
-            const entt::entity root =
-                instantiate(world, *prefab,
-                            record.value(kOverridesKey, nlohmann::json::object()), registry);
+            // The whole record, not just the overrides. It carries the shape
+            // the instance changed as well as the fields.
+            const entt::entity root = instantiate(world, *prefab, record, registry);
             if (root == entt::null) {
                 ENGINE_LOG_ERROR("Entity {} could not build an instance of prefab {}.", self,
                                  wanted);
@@ -199,32 +199,40 @@ namespace engine::scene {
             return roots;
         }
 
-        /// Picks the entities that get a record of their own, and numbers them.
+        /**
+         * Picks the entities that get a record of their own, and numbers them.
+         *
+         * Everything inside a collapsed instance is left out, because the
+         * instance record carries it: a member through the field overrides, and
+         * anything else through the added list. So this walks down from each
+         * collapsed root and skips the lot.
+         */
         std::vector<entt::entity> choose_records(
             const entt::registry& entities, const std::vector<entt::entity>& ordered,
             const std::unordered_set<entt::entity>& collapsed,
             std::unordered_map<entt::entity, int>& index) {
+            std::unordered_set<entt::entity> inside;
+            for (const entt::entity root : collapsed) {
+                std::vector<entt::entity> stack{ root };
+                while (!stack.empty()) {
+                    const entt::entity current = stack.back();
+                    stack.pop_back();
+                    if (current != root) {
+                        inside.insert(current);
+                    }
+                    for (entt::entity child = entities.get<Hierarchy>(current).first_child;
+                         child != entt::null;
+                         child = entities.get<Hierarchy>(child).next_sibling) {
+                        stack.push_back(child);
+                    }
+                }
+            }
+
             std::vector<entt::entity> written;
             for (const entt::entity entity : ordered) {
-                const auto* member = entities.try_get<PrefabMember>(entity);
-                if (member != nullptr && member->root != entity &&
-                    collapsed.contains(member->root)) {
-                    // The prefab already holds this entity. The root carries the
-                    // fields it changed.
+                if (inside.contains(entity)) {
                     continue;
                 }
-
-                const Hierarchy& node = entities.get<Hierarchy>(entity);
-                if (node.parent != entt::null && !index.contains(node.parent)) {
-                    // The parent went into a prefab instance, so there is no
-                    // index to point at. Attaching your own entity inside an
-                    // instance is not stored yet. See issue #27.
-                    ENGINE_LOG_WARN("An entity sits under a prefab instance without belonging "
-                                    "to it. A scene file does not store that yet, so the "
-                                    "entity and its children are dropped.");
-                    continue;
-                }
-
                 index[entity] = static_cast<int>(written.size());
                 written.push_back(entity);
             }
@@ -262,10 +270,12 @@ namespace engine::scene {
                 record[kPrefabKey] = link.prefab;
 
                 // collapsible() already found the prefab, so this cannot fail.
-                nlohmann::json patch = instance_overrides(world, entity, *prefab, registry);
-                if (!patch.empty()) {
-                    record[kOverridesKey] = std::move(patch);
-                }
+                // The record carries the fields the instance changed and the
+                // shape it changed, and each key is left out when it is empty.
+                // Named, not a temporary. A range-for over a temporary's
+                // items() reads a document that is already gone.
+                nlohmann::json body = instance_record(world, entity, *prefab, registry);
+                record.update(std::move(body));
             } else {
                 record[kComponentsKey] = save_components(entities, entity, registry);
             }
