@@ -342,7 +342,12 @@ table.
 
 ## Build
 
+Three configurations exist: RelWithDebInfo (development), Debug (crashes), and
+Release (shipping). The profile sets the build type for the first two. Release
+overrides it from the command line.
+
 ```bash
+# RelWithDebInfo: optimized with symbols and assertions.
 conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang -b missing
 cmake --preset conan-relwithdebinfo
 cmake --build --preset conan-relwithdebinfo
@@ -350,11 +355,30 @@ ctest --preset conan-relwithdebinfo --output-on-failure
 ./build/RelWithDebInfo/bin/runtime --frames 300
 ```
 
-Windows uses the same commands with `profiles/windows-msvc`, from a "x64 Native Tools
-Command Prompt for VS 2022". Both profiles ask for the Ninja generator, so the preset
-names match on each platform. Two things differ on Windows. An MSVC build skips
-clang-tidy, because clang-tidy reads a clang command line. The rule 4.1 test needs bash,
-so it does not run without Git Bash. The Linux CI jobs cover both.
+```bash
+# Debug: no optimization, assertions on, clang-tidy runs locally.
+conan install . -pr:h profiles/linux-debug -pr:b profiles/linux-debug -b missing
+cmake --preset conan-debug
+cmake --build --preset conan-debug
+ctest --preset conan-debug --output-on-failure
+```
+
+```bash
+# Release: optimized with assertions off. The profile is still linux-clang, and
+# the build type is overridden here.
+conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
+  -s build_type=Release -b missing
+cmake --preset conan-release
+cmake --build --preset conan-release
+ctest --preset conan-release --output-on-failure
+```
+
+Windows uses `profiles/windows-msvc` and `profiles/windows-debug` from a
+"x64 Native Tools Command Prompt for VS 2022". All profiles ask for the Ninja
+generator, so the preset names match on each platform. Two things differ on
+Windows. An MSVC build skips clang-tidy, because clang-tidy reads a clang
+command line. The rule 4.1 test needs bash, so it does not run without Git Bash.
+The Linux CI jobs cover both.
 
 Conan lives in a virtual environment at `~/.venv/conan`. Add `~/.venv/conan/bin` to
 PATH, or call the binary by its full path.
