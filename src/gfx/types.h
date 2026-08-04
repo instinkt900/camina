@@ -244,6 +244,28 @@ namespace engine::gfx {
          */
         bool depth_test = false;
         /**
+         * @brief Whether a fragment that passes the depth test writes its depth.
+         *
+         * This does nothing while @c depth_test is false, because a pipeline that
+         * does not read depth does not write it either.
+         *
+         * A blended surface leaves this false. Blending reads what is already in
+         * the attachment, so two transparent surfaces must both survive the depth
+         * test. One that wrote its depth would hide the other.
+         */
+        bool depth_write = true;
+        /**
+         * @brief Whether to blend the fragment over the attachment.
+         *
+         * False replaces the attachment, which is what an opaque surface wants.
+         * True blends by source alpha, which is the "over" operator glTF asks for
+         * with `alphaMode` `BLEND`.
+         *
+         * @warning Blending depends on draw order. The caller sorts back to
+         * front, because nothing in the pipeline can do it.
+         */
+        bool blend = false;
+        /**
          * @brief Whether to cull back faces.
          *
          * A front face is counter-clockwise, as glTF supplies it. Vulkan clip

@@ -123,9 +123,9 @@ vec3 shading_normal() {
 void main() {
     vec4 base = texture(base_color_map, in_uv) * material.base_color_factor;
 
-    // Mask draws a texel or it does not, with nothing between. Blend needs the
-    // pipeline to blend and needs the draws sorted, which is the second half of
-    // M5.2.
+    // Mask draws a texel or it does not, with nothing between. Blend needs no
+    // test here, because the blend pipeline does the work and MeshPass sorts
+    // the draws back to front before it sends them.
     if (material.alpha_mode == 1u && base.a < material.alpha_cutoff) {
         discard;
     }

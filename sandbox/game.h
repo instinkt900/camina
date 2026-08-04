@@ -42,6 +42,18 @@ namespace sandbox {
     inline constexpr const char* kHelmetPrefab = "flight helmet";
 
     /**
+     * @brief Two blended panes, which is what the scene has that is transparent.
+     *
+     * A blended surface takes a different path through MeshPass than an opaque
+     * one. Nothing else in the sandbox is transparent, so without this the path
+     * would ship untested.
+     */
+    inline constexpr const char* kGlassSource = "models/glass/glass.gltf";
+
+    /// @brief The name the scene uses for the panes above.
+    inline constexpr const char* kGlassPrefab = "glass";
+
+    /**
      * @brief The game's directory inside the cooked content root.
      *
      * The cooker writes each source tree under its own name, so the engine's

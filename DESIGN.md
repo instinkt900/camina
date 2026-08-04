@@ -738,8 +738,15 @@ reaches the shader. A material binds one descriptor set that names all five text
 binds the fallback white texel, and a bit in that block says which slots were really named, so
 a normal map that is not there does not tilt every normal the same way.
 
-Blend is the one alpha mode still missing. It needs the pipeline to blend and the draws
-sorted, which arrives with the light components.
+Every alpha mode works. Mask discards below the cutoff, which the shader does on its own.
+Blend needs the pipeline as well, so `MeshPass` holds a second one that blends by source alpha
+and does not write depth. A blended submesh does not draw where the view hands it over. It
+waits, and the pass sorts every one of them back to front and draws them after the last opaque
+surface.
+
+Sorting is per object, because a fragment cannot see the one behind it. That is the known
+limit of blending in a forward pass, and a blended mesh that overlaps itself still draws in
+index order. Order-independent transparency is the fix and no milestone asks for it yet.
 
 A material lives on the submesh rather than on `MeshRenderer`. One mesh can use several, and
 a single field on the component could not say which submesh got which. A per-entity override

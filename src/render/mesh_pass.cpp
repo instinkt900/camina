@@ -241,7 +241,8 @@ namespace engine::render {
             return false;
         }
 
-        if (!build_pipeline(content, pipeline_)) {
+        if (!build_pipeline(content, false, pipeline_) ||
+            !build_pipeline(content, true, blend_pipeline_)) {
             return false;
         }
         return build_frame_sets();
@@ -296,7 +297,8 @@ namespace engine::render {
      * because it must be able to fail without touching the pipeline that is
      * already drawing.
      */
-    bool MeshPass::build_pipeline(const assets::Content& content, gfx::PipelineHandle& out) {
+    bool MeshPass::build_pipeline(const assets::Content& content, bool blend,
+                                  gfx::PipelineHandle& out) {
         assets::Shader vertex_shader;
         assets::Shader fragment_shader;
         if (!read_stage(content, kVertexShaderSource, vertex_shader) ||
@@ -354,6 +356,10 @@ namespace engine::render {
             .bindings = bindings.data(),
             .binding_count = bindings.size(),
             .depth_test = true,
+            // A blended surface tests depth and does not write it, so two of
+            // them both survive what the opaque pass left behind.
+            .depth_write = !blend,
+            .blend = blend,
             // A glTF material can ask for both faces, and the cooked material
             // records it. Honoring it needs a second pipeline or a dynamic cull
             // state, so M5 does that with the rest of the material state.
@@ -362,7 +368,8 @@ namespace engine::render {
 
         const gfx::Result result = gfx::create_graphics_pipeline(device_, desc, &out);
         if (!gfx::succeeded(result)) {
-            ENGINE_LOG_ERROR("The mesh pipeline did not build: {}", gfx::result_name(result));
+            ENGINE_LOG_ERROR("The {} mesh pipeline did not build: {}", blend ? "blend" : "opaque",
+                             gfx::result_name(result));
             return false;
         }
         return true;
@@ -377,10 +384,20 @@ namespace engine::render {
         // that is drawing alone. A person editing a shader gets a broken one
         // often, and losing the picture on every typo would make the loop
         // useless.
+        // Both, or neither. Keeping a rebuilt opaque pipeline beside a stale
+        // blend one would draw a scene half from the new shader and half from
+        // the old, which is worse than keeping the old.
         gfx::PipelineHandle rebuilt;
-        if (!build_pipeline(content, rebuilt)) {
+        gfx::PipelineHandle rebuilt_blend;
+        if (!build_pipeline(content, false, rebuilt)) {
             ENGINE_LOG_ERROR("The shaders did not build, so the pass keeps the pipeline it "
                              "has. Fix them and save again.");
+            return false;
+        }
+        if (!build_pipeline(content, true, rebuilt_blend)) {
+            ENGINE_LOG_ERROR("The blend pipeline did not build, so the pass keeps the two it "
+                             "has. Fix the shaders and save again.");
+            gfx::destroy_pipeline(device_, rebuilt);
             return false;
         }
 
@@ -389,7 +406,9 @@ namespace engine::render {
         // what replaces it.
         gfx::device_wait_idle(device_);
         gfx::destroy_pipeline(device_, pipeline_);
+        gfx::destroy_pipeline(device_, blend_pipeline_);
         pipeline_ = rebuilt;
+        blend_pipeline_ = rebuilt_blend;
 
         // Every descriptor set was allocated against the layout of the pipeline
         // that just went. A rebuilt shader may declare a different set, and a
@@ -420,6 +439,8 @@ namespace engine::render {
         meshes_.destroy(device_);
         gfx::destroy_pipeline(device_, pipeline_);
         pipeline_ = gfx::PipelineHandle{};
+        gfx::destroy_pipeline(device_, blend_pipeline_);
+        blend_pipeline_ = gfx::PipelineHandle{};
         device_ = nullptr;
     }
 
@@ -482,6 +503,8 @@ namespace engine::render {
         gfx::cmd_set_cull_mode(commands, true);
         gfx::cmd_bind_descriptor_set(commands, pipeline_, kFrameSet, frame_sets_[frame_slot_]);
 
+        blended_.clear();
+
         const auto view =
             world.registry().view<const scene::WorldTransform, const scene::MeshRenderer>();
         for (const auto [entity, transform, renderer] : view.each()) {
@@ -507,11 +530,64 @@ namespace engine::render {
                 if (!material.set.valid()) {
                     continue;
                 }
+
+                // A blended surface waits. It has to draw after every opaque
+                // one, and after the blended ones behind it, so it cannot go out
+                // in the order the view happens to hand it over.
+                if (material.source.alpha_mode == assets::AlphaMode::Blend) {
+                    // The bounds belong to the whole mesh, so every submesh of
+                    // one mesh sorts together. That is right for a window and
+                    // wrong for two blended parts of one model that overlap.
+                    // Issue #99 holds the per-submesh bounds that would fix it.
+                    const Vec3 center = Vec3{ transform.matrix *
+                                              Vec4{ (mesh->min + mesh->max) * 0.5F, 1.0F } };
+                    blended_.push_back(BlendedDraw{
+                        .model = transform.matrix,
+                        .vertices = mesh->vertices,
+                        .indices = mesh->indices,
+                        .set = material.set,
+                        .index_count = submesh.index_count,
+                        .first_index = submesh.first_index,
+                        .double_sided = material.source.double_sided,
+                        .depth = glm::distance(center, camera_position),
+                    });
+                    continue;
+                }
+
                 gfx::cmd_bind_descriptor_set(commands, pipeline_, kMaterialSet, material.set);
                 gfx::cmd_set_cull_mode(commands, !material.source.double_sided);
                 gfx::cmd_draw_indexed(commands, submesh.index_count, 1, submesh.first_index, 0);
                 ++draw_count_;
             }
+        }
+
+        draw_blended(commands);
+    }
+
+    void MeshPass::draw_blended(gfx::CommandList* commands) {
+        if (blended_.empty() || !blend_pipeline_.valid()) {
+            return;
+        }
+
+        // Back to front. Blending reads what is already in the attachment, so
+        // the far surface has to be there before the near one blends over it.
+        // Nothing in the pipeline can do this, because a fragment sees only
+        // itself.
+        std::sort(blended_.begin(), blended_.end(),
+                  [](const BlendedDraw& a, const BlendedDraw& b) { return a.depth > b.depth; });
+
+        // The frame set stays bound. Both pipelines declare the same
+        // descriptors, so their layouts are compatible and the binding survives
+        // the pipeline change.
+        gfx::cmd_bind_pipeline(commands, blend_pipeline_);
+        for (const BlendedDraw& draw : blended_) {
+            gfx::cmd_push_constants(commands, blend_pipeline_, &draw.model, sizeof(draw.model));
+            gfx::cmd_bind_vertex_buffer(commands, draw.vertices);
+            gfx::cmd_bind_index_buffer(commands, draw.indices);
+            gfx::cmd_bind_descriptor_set(commands, blend_pipeline_, kMaterialSet, draw.set);
+            gfx::cmd_set_cull_mode(commands, !draw.double_sided);
+            gfx::cmd_draw_indexed(commands, draw.index_count, 1, draw.first_index, 0);
+            ++draw_count_;
         }
     }
 

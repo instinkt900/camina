@@ -30,6 +30,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace engine::render {
 
@@ -130,9 +131,25 @@ namespace engine::render {
         [[nodiscard]] std::size_t draw_count() const { return draw_count_; }
 
     private:
+        /// One blended submesh, waiting for the sort.
+        struct BlendedDraw {
+            Mat4 model{ 1.0F };            ///< The model matrix to push.
+            gfx::BufferHandle vertices;    ///< The stream the submesh reads.
+            gfx::BufferHandle indices;     ///< The indices the submesh reads.
+            gfx::DescriptorSetHandle set;  ///< The material set to bind.
+            std::uint32_t index_count = 0; ///< How many indices to draw.
+            std::uint32_t first_index = 0; ///< Where the submesh starts.
+            bool double_sided = false;     ///< Whether the material wants both faces.
+            float depth = 0.0F;            ///< Distance to the camera, for the sort.
+        };
+
         /// Builds a pipeline from the shaders in @p content, into @p out.
-        [[nodiscard]] bool build_pipeline(const assets::Content& content,
+        /// @param blend True for the pipeline that blends and does not write depth.
+        [[nodiscard]] bool build_pipeline(const assets::Content& content, bool blend,
                                           gfx::PipelineHandle& out);
+
+        /// Draws what collect() gathered, back to front.
+        void draw_blended(gfx::CommandList* commands);
 
         /// Builds the per-frame blocks and the sets that bind them.
         [[nodiscard]] bool build_frame_sets();
@@ -142,6 +159,14 @@ namespace engine::render {
 
         gfx::Device* device_ = nullptr;
         gfx::PipelineHandle pipeline_;
+        /**
+         * @brief The same shaders, blending, and not writing depth.
+         *
+         * Both pipelines declare the same descriptors, so their set layouts are
+         * compatible and one material set binds with either. Only the blend and
+         * the depth-write state differ.
+         */
+        gfx::PipelineHandle blend_pipeline_;
         /**
          * @brief One per-frame block for each frame in flight.
          *
@@ -165,6 +190,8 @@ namespace engine::render {
         MeshCache meshes_;
         TextureCache textures_;
         MaterialCache materials_;
+        /// @brief The blended submeshes of the current frame. Kept to reuse its storage.
+        std::vector<BlendedDraw> blended_;
         std::size_t draw_count_ = 0;
     };
 
