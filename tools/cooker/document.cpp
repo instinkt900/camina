@@ -17,6 +17,36 @@ namespace cooker {
         /// How a cooked document is written. It is read by machine, not by hand.
         constexpr int kIndent = 2;
 
+        /**
+         * Whether a reference path stays inside the content tree.
+         *
+         * Resolving a path that leaves it would read a file the content tree
+         * does not own, and meta_for() would write a sidecar next to that file.
+         * A cook is run by a build machine over content that arrives from
+         * somewhere else, so this is a refusal and not a warning.
+         *
+         * A root name catches the Windows drive-relative form, `C:file`, which
+         * is not absolute and does not stay where it looks like it does.
+         */
+        [[nodiscard]] bool inside_content_tree(const std::filesystem::path& path,
+                                               std::string_view text) {
+            if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
+                ENGINE_LOG_ERROR("'{}' names an absolute path. A reference names a file "
+                                 "inside the content tree, written relative to its root.",
+                                 text);
+                return false;
+            }
+            for (const std::filesystem::path& part : path) {
+                if (part == "..") {
+                    ENGINE_LOG_ERROR("'{}' steps outside the content tree with '..'. A "
+                                     "reference names a file inside it.",
+                                     text);
+                    return false;
+                }
+            }
+            return true;
+        }
+
         /// Reads a JSON file, or reports why it could not.
         [[nodiscard]] bool read_json(const std::filesystem::path& path, nlohmann::json& out) {
             std::ifstream file(path, std::ios::binary);
@@ -104,9 +134,8 @@ namespace cooker {
             return true;
         }
 
-        /// Collects every source path a node names, and reports nothing.
-        void gather_references(const nlohmann::json& node,
-                               std::vector<std::filesystem::path>& out) {
+        /// Collects every reference under a node, whole, and reports nothing.
+        void gather_references(const nlohmann::json& node, std::vector<AssetReference>& out) {
             if (node.is_object() || node.is_array()) {
                 for (const auto& child : node) {
                     gather_references(child, out);
@@ -118,8 +147,15 @@ namespace cooker {
             }
             AssetReference reference;
             if (parse_reference(node.get<std::string>(), reference)) {
-                out.push_back(reference.source);
+                out.push_back(std::move(reference));
             }
+        }
+
+        /// Reads a document and gives back every reference in it.
+        [[nodiscard]] std::vector<AssetReference> references_of(const nlohmann::json& document) {
+            std::vector<AssetReference> out;
+            gather_references(document, out);
+            return out;
         }
 
     } // namespace
@@ -136,6 +172,9 @@ namespace cooker {
             ENGINE_LOG_ERROR("'{}' names no file. Write asset:<path> or "
                              "asset:<path>#<kind>:<index>.",
                              text);
+            return false;
+        }
+        if (!inside_content_tree(std::filesystem::path{ path }, text)) {
             return false;
         }
 
@@ -192,7 +231,51 @@ namespace cooker {
         if (document.is_discarded()) {
             return;
         }
-        gather_references(document, out);
+        for (const AssetReference& reference : references_of(document)) {
+            out.push_back(reference.source);
+        }
+    }
+
+    bool validate_references(const std::filesystem::path& source,
+                             const std::filesystem::path& content_root,
+                             const as::Manifest& manifest) {
+        std::ifstream file(source, std::ios::binary);
+        if (!file) {
+            return true;
+        }
+        const nlohmann::json document = nlohmann::json::parse(file, nullptr, false);
+        if (document.is_discarded()) {
+            // The rule reports a document that will not parse. Saying it twice
+            // would put the same failure in the log under two headings.
+            return true;
+        }
+
+        // The references are read again rather than remembered from the cook,
+        // because a document the cooker skipped was never resolved this run and
+        // its references still have to hold.
+        bool sound = true;
+        for (const AssetReference& reference : references_of(document)) {
+            engine::Guid guid;
+            if (!resolve(reference, content_root, source.string(), guid)) {
+                sound = false;
+                continue;
+            }
+            if (as::find_by_guid(manifest, guid) != nullptr) {
+                continue;
+            }
+            if (reference.kind.empty()) {
+                ENGINE_LOG_ERROR("{}: it names {}, and nothing cooked that file.",
+                                 source.string(), reference.source.generic_string());
+            } else {
+                ENGINE_LOG_ERROR("{}: it names {} of {}, and that file has no such part. "
+                                 "Check how many the file holds and count from zero.",
+                                 source.string(),
+                                 reference.kind + " " + std::to_string(reference.index),
+                                 reference.source.generic_string());
+            }
+            sound = false;
+        }
+        return sound;
     }
 
     bool cook_document(const std::filesystem::path& source,

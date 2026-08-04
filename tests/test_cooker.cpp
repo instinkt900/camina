@@ -1019,6 +1019,10 @@ namespace {
     constexpr const char* kMinimalGltf =
         R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"scene":0,"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
 
+    /// The same triangle twice, so a reference to mesh 1 has something to name.
+    constexpr const char* kTwoMeshGltf =
+        R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"scene":0,"nodes":[{"mesh":0},{"mesh":1}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]},{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
+
     // M4 issue #54. A scene and a prefab name an asset by source path, and the
     // cooker turns that into the identity before it writes the file. The
     // cooked document holds only GUIDs, because that is what survives a
@@ -1160,6 +1164,73 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    void test_a_reference_that_leaves_the_content_tree_is_refused() {
+        cooker::AssetReference reference;
+
+        // Resolving one of these would read a file the content tree does not
+        // own, and writing its sidecar would put a file next to it. A cook runs
+        // over content that arrives from somewhere else, so this is a refusal.
+        check(!cooker::parse_reference("asset:/etc/passwd", reference),
+              "an absolute path is refused");
+        check(!cooker::parse_reference("asset:../outside.gltf", reference),
+              "a path that steps out with .. is refused");
+        check(!cooker::parse_reference("asset:models/../../outside.gltf", reference),
+              "and so is one that steps out part way along");
+
+        // The step has to be a whole component. A directory whose name merely
+        // starts with two dots is an ordinary directory.
+        check(cooker::parse_reference("asset:..models/a.gltf", reference),
+              "a name that only begins with dots is allowed");
+    }
+
+    void test_a_part_that_is_not_there_fails_the_cook() {
+        const std::filesystem::path source = scratch("missing_part/src");
+        const std::filesystem::path out = scratch("missing_part/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        // The glTF holds one mesh, so mesh 0 is the only part there is.
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:7"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        // Guid::derive answers for any index, so this used to cook happily and
+        // give the prefab an identity nothing wrote. The scene then drew
+        // nothing, which is the failure naming an asset by path is meant to
+        // remove.
+        check(!cooker::cook_all(options, result),
+              "a reference to a part that is not there fails the cook");
+        check(result.failed == 1, "and it is reported as a failure");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_reference_stops_being_sound_when_the_model_changes() {
+        const std::filesystem::path source = scratch("stale_part/src");
+        const std::filesystem::path out = scratch("stale_part/out");
+        write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:1"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        // Replace the model with one that holds a single mesh. It is a valid
+        // model and it cooks, so nothing fails on its own account. The prefab
+        // still says mesh 1 and nobody edited it, so nothing about the prefab
+        // looks stale either. Only the finished manifest can say the identity
+        // it names is gone.
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        cooker::Result second;
+        check(!cooker::cook_all(options, second),
+              "a model that lost the part fails the cook of the document naming it");
+        check(second.failed == 1, "and the failure is the document, not the model");
+
+        test::remove_tree(source.parent_path());
+    }
+
     void test_a_document_that_will_not_parse_fails_the_cook() {
         const std::filesystem::path source = scratch("bad_document/src");
         const std::filesystem::path out = scratch("bad_document/out");
@@ -1247,6 +1318,9 @@ int main() {
     test_a_document_keeps_a_guid_that_is_already_written();
     test_a_reference_that_names_nothing_fails_the_cook();
     test_a_reference_that_will_not_read_fails_the_cook();
+    test_a_reference_that_leaves_the_content_tree_is_refused();
+    test_a_part_that_is_not_there_fails_the_cook();
+    test_a_reference_stops_being_sound_when_the_model_changes();
     test_a_document_that_will_not_parse_fails_the_cook();
     test_a_new_sidecar_cooks_the_document_that_names_it();
     return test::report();

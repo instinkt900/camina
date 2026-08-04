@@ -453,6 +453,8 @@ namespace cooker {
         scan_documents(options, sources, named);
 
         as::Manifest next;
+        /// The sources that did not cook, so the check below leaves them alone.
+        std::set<std::filesystem::path> unfinished;
         for (const std::filesystem::path& relative : sources) {
             // A glTF buffer is payload, not an asset. scan_gltf found it.
             if (named.buffers.contains(relative)) {
@@ -470,6 +472,7 @@ namespace cooker {
                 ++result.skipped;
                 break;
             case Outcome::Failed:
+                unfinished.insert(relative);
                 ++result.failed;
                 break;
             }
@@ -495,6 +498,24 @@ namespace cooker {
                         return false;
                     }
                 }
+            }
+        }
+
+        // Deriving an identity answers for any index, so a reference to a part
+        // that is not there gives a GUID that looks like every other one and
+        // names nothing. Only the finished manifest can tell the two apart, so
+        // this runs after the whole tree is cooked. It covers a document the
+        // cooker skipped as well, because a model that lost a mesh breaks a
+        // reference that nobody touched.
+        for (const std::filesystem::path& relative : sources) {
+            // A document that did not cook has been reported once already, and
+            // it fails this check for the same reason. Checking it again would
+            // log the same line twice and count one failure as two.
+            if (rule_for(relative) != Rule::Document || unfinished.contains(relative)) {
+                continue;
+            }
+            if (!validate_references(options.content / relative, options.content, next)) {
+                ++result.failed;
             }
         }
 

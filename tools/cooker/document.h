@@ -20,6 +20,8 @@
  * like a mesh that failed to upload.
  */
 
+#include "assets/manifest.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -58,6 +60,11 @@ namespace cooker {
      * @return True when the text is a reference and it parsed. False for text
      * that does not start with the prefix, and for a fragment that will not
      * read, with the reason in the log for the second case.
+     *
+     * @warning A path that leaves the content tree is refused here. Resolving
+     * one would read, and write a sidecar beside, a file the content tree does
+     * not own. So an absolute path is refused, and so is any path holding a
+     * `..` step.
      */
     [[nodiscard]] bool parse_reference(std::string_view text, AssetReference& out);
 
@@ -76,6 +83,28 @@ namespace cooker {
      */
     void document_references(const std::filesystem::path& source,
                              std::vector<std::filesystem::path>& out);
+
+    /**
+     * @brief Checks that every identity a document names was really cooked.
+     *
+     * `Guid::derive` answers for any index, so `#mesh:5` on a file holding one
+     * mesh gives a GUID that looks like every other one and names nothing. The
+     * cook would pass and the runtime would draw nothing, which is the failure
+     * naming an asset by path exists to remove.
+     *
+     * This runs after the whole tree is cooked, because only then does the
+     * manifest hold every identity there is to find. It also catches a
+     * reference that was right and stopped being right, which is what happens
+     * when a model loses a mesh.
+     *
+     * @param source The document to check.
+     * @param content_root The content root the reference paths are relative to.
+     * @param manifest The manifest this cook produced.
+     * @return True when every reference names something the manifest holds.
+     */
+    [[nodiscard]] bool validate_references(const std::filesystem::path& source,
+                                           const std::filesystem::path& content_root,
+                                           const engine::assets::Manifest& manifest);
 
     /**
      * @brief Cooks one scene or prefab, resolving every reference it holds.

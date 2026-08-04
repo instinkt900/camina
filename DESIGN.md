@@ -619,8 +619,15 @@ manifest by hand.
 
 So a scene and a prefab may write `asset:models/crate/crate.gltf#mesh:0` where a GUID goes,
 and the cooker turns that into the identity before it writes the file. The cooked document
-still holds only GUIDs. The path is the authored form and the GUID is the cooked one, so a
-rename inside the content tree still costs nothing at runtime.
+still holds only GUIDs. The path is the authored form and the GUID is the cooked one.
+
+**The rename cost moves rather than disappearing.** A GUID exists because it survives a
+rename, and an authored path does not. Renaming a file inside the content tree breaks every
+authored reference to it, and each one has to be edited. Nothing at runtime is affected,
+because the cooked document holds identities, and the next cook fails and names each
+reference that no longer resolves. That is the trade: a path a person can read and type,
+against an edit when a file moves. A reference resolved once at load time rather than at cook
+time would make the same trade and pay it on every run.
 
 Resolution reads the sidecar of the named file and derives from there, so it needs nothing
 cooked first and the order of the tree does not matter. A file with no sidecar yet gets one,
@@ -629,6 +636,17 @@ because a scene can be reached before the model it names.
 This makes a wrong reference loud. Before it, a wrong GUID drew nothing and reported one line,
 which looks exactly like a mesh that failed to upload. Now the cook fails and names the
 document, the path, and what is wrong with it.
+
+Deriving an identity is what makes that hard to get right. `Guid::derive` answers for any
+index, so `#mesh:7` on a file holding one mesh gives a GUID that looks like every other one
+and names nothing. Only the finished manifest can tell the two apart, so the cooker checks
+every reference against it after the whole tree is cooked. That check also covers a document
+the cooker skipped, because a model that loses a mesh breaks a reference nobody touched.
+
+A reference names a file inside the content tree, so an absolute path and a `..` step are
+both refused. Resolving one would read a file the tree does not own, and writing its sidecar
+would put a file next to it. A cook runs on a build machine over content that arrives from
+somewhere else, so that is a refusal rather than a warning.
 
 A scene and a prefab stopped being copied through to get this, which means the cooker parses
 both. A file that will not parse now fails the cook rather than reaching the runtime and
