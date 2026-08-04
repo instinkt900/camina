@@ -6,6 +6,7 @@
 add_library(cooker_lib STATIC
     cook.cpp
     document.cpp
+    environment.cpp
     material.cpp
     mesh.cpp
     prefab.cpp

@@ -1855,6 +1855,55 @@ void main() { out_color = push.model[0]; }
         test::remove_tree(source.parent_path());
     }
 
+
+    /**
+     * An HDR panorama cooks to a cubemap that the runtime reader accepts.
+     *
+     * The reader checks the payload against what the header describes, so this
+     * proves the projection wrote exactly the bytes six faces of a mip chain
+     * need. A face count or a format the two sides disagreed about would show
+     * up here rather than as a device upload reading past the end.
+     */
+    void test_an_hdr_panorama_cooks_to_a_cubemap() {
+        const std::filesystem::path source = scratch("env/src");
+        const std::filesystem::path out = scratch("env/out");
+
+        // A tiny Radiance file, written by hand. Two by one is the smallest
+        // thing that is still twice as wide as it is tall.
+        std::string hdr = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n";
+        const std::array<unsigned char, 8> texels{ 255, 128, 64, 128, 64, 128, 255, 129 };
+        for (const unsigned char byte : texels) {
+            hdr.push_back(static_cast<char>(byte));
+        }
+        write_file(source / "sky.hdr", hdr);
+
+        write_file(source / "sky.hdr.meta", R"({
+  "__version": 4,
+  "guid": "7c2e5a90-1b33-4f7e-9a01-2d6b8e4f0c11",
+  "environment": { "__version": 1, "face_size": 8 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "an HDR panorama cooks");
+
+        const std::string bytes = read_file(out / "sky.hdr.tex");
+        check(!bytes.empty(), "the cubemap was written");
+
+        engine::assets::TextureView view;
+        check(engine::assets::read_texture(
+                  std::as_bytes(std::span(bytes.data(), bytes.size())), view, "sky"),
+              "and the runtime reader accepts it");
+        check(view.face_count == engine::assets::kCubeFaceCount, "it holds six faces");
+        check(view.format == engine::assets::TextureFormat::RGBA16F, "it is half float");
+        // An HDR file is linear by definition, so the rule must not guess.
+        check(view.color_space == engine::assets::ColorSpace::Linear, "and it is linear");
+        check(view.width == 8 && view.height == 8, "the face is the size the sidecar asked for");
+
+        test::remove_tree(source.parent_path());
+    }
+
 } // namespace
 
 int main() {
@@ -1872,6 +1921,7 @@ int main() {
     test::section("shader reflection");
     test_the_cooker_reflects_what_a_shader_reads();
     test_a_shader_cooks_once_for_each_variant();
+    test_an_hdr_panorama_cooks_to_a_cubemap();
     test_a_variant_list_that_starts_with_defines_is_refused();
     test_a_push_block_that_starts_late_reports_its_real_size();
     test_a_shader_that_does_not_compile_writes_nothing();
