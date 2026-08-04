@@ -430,6 +430,29 @@ namespace cooker {
             }
         }
 
+        // Copying an asset together with its .meta sidecar gives two source
+        // files one identity. A glTF with a copied sidecar also duplicates
+        // every derived sub-asset GUID. This walk catches both, before the
+        // manifest is written, so the person hears about it on the cook rather
+        // than on the first hot reload after.
+        {
+            std::map<engine::Guid, std::string> seen;
+            for (const as::ManifestEntry& entry : next.entries) {
+                for (const as::ManifestOutput& output : entry.outputs) {
+                    const auto [at, added] = seen.emplace(output.guid, entry.source);
+                    if (!added) {
+                        ENGINE_LOG_ERROR(
+                            "{} and {} both carry identity {}. Copying a file "
+                            "copied its .meta sidecar too, and the sidecar holds the identity. "
+                            "Delete the sidecar of one of them, so the cooker gives it a new "
+                            "identity of its own. Then cook again.",
+                            entry.source, at->second, output.guid.to_text());
+                        return false;
+                    }
+                }
+            }
+        }
+
         if (!as::save_manifest(options.out, next)) {
             return false;
         }
