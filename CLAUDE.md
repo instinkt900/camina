@@ -111,8 +111,21 @@ cooked SPIR-V rather than from hand-written C++. The cooker links SPIRV-Reflect 
 `src/assets/shader.h`, which carries the module, the bindings, and the members of every
 uniform block in one file. `gfx::GraphicsPipelineDesc` takes those bindings, and
 `sample_texture` is gone. The cook no longer passes `-O` to glslc, because spirv-opt strips
-the names the parameter block needs. See issue #90. The second half of M5.1 adds permutations,
-keyed by a variant list in the shader sidecar.
+the names the parameter block needs. See issue #90.
+
+The first half of M5.2 followed. `mesh.frag` is Cook-Torrance metallic-roughness now, and it
+reads all five maps and every factor the cooked material carries. That needed a real
+descriptor set in `gfx::`: `create_descriptor_set` takes what a reflected shader declared, and
+`cmd_bind_texture` is gone. A texture no longer carries a set of its own, because a material
+needs several textures and a block of factors bound together. `BufferUsage::Uniform` makes a
+host-visible buffer that `update_buffer` writes. Set 0 is the frame and set 1 is the material,
+and the frame block is one buffer for each frame in flight. The vertex tangent is declared at
+last, which is what normal mapping needed.
+
+Two things over that shading are still constants in the shader. The one directional light
+becomes a scene component in the second half of M5.2, with the alpha modes. The environment is
+two colors until M5.4 cooks one, so a metal reads dark on purpose. The permutation half of
+M5.1 waits for this, because nothing varied until a shader read more than one map.
 
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded

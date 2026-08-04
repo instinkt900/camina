@@ -21,15 +21,31 @@ namespace engine::render {
 
         /// The push constant block, which must match mesh.vert exactly.
         struct Push {
-            Mat4 view_projection;
             Mat4 model;
         };
 
         // 128 bytes is the smallest push constant block Vulkan guarantees, and
-        // this is exactly that. A third matrix would need a uniform buffer.
+        // one matrix is well inside it. The view projection used to travel here
+        // too, and it moved into the frame block below when the shading needed
+        // the camera position and there was no room left.
         constexpr std::size_t kPushLimit = 128;
-        static_assert(sizeof(Push) == kPushLimit,
+        static_assert(sizeof(Push) <= kPushLimit,
                       "The push block must fit the size every Vulkan device promises.");
+
+        /**
+         * The per-frame block, which must match the Frame block in both shaders.
+         *
+         * It is std140, so the vec4 sits on a 16-byte boundary. A Vec3 would pad
+         * to the same 16 bytes, and a written padding word is easier to read
+         * than an implied one.
+         */
+        struct FrameUniforms {
+            Mat4 view_projection{ 1.0F };
+            std::array<float, 4> camera_position{};
+        };
+
+        /// Which descriptor set the frame block binds to. The material is set 1.
+        constexpr std::uint32_t kFrameSet = 0;
 
         /// Reads one cooked shader out of the engine content tree.
         [[nodiscard]] bool read_stage(const assets::Content& content, const char* source,
@@ -151,7 +167,52 @@ namespace engine::render {
             return false;
         }
 
-        return build_pipeline(content, pipeline_);
+        if (!build_pipeline(content, pipeline_)) {
+            return false;
+        }
+        return build_frame_sets();
+    }
+
+    /**
+     * Builds the per-frame blocks and the sets that bind them.
+     *
+     * Separate from create() because a set is allocated against the layout of a
+     * pipeline, so a rebuilt pipeline needs rebuilt sets. The buffers outlive a
+     * rebuild, because nothing about them depends on the layout.
+     */
+    bool MeshPass::build_frame_sets() {
+        const FrameUniforms empty;
+        for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
+            const gfx::BufferDesc desc{ .data = &empty,
+                                        .size = sizeof(empty),
+                                        .usage = gfx::BufferUsage::Uniform };
+            if (!frame_uniforms_[i].valid() &&
+                !gfx::succeeded(gfx::create_buffer(device_, desc, &frame_uniforms_[i]))) {
+                ENGINE_LOG_ERROR("A frame block could not be allocated.");
+                return false;
+            }
+
+            const std::array<gfx::DescriptorWrite, 1> writes{ {
+                { .binding = 0,
+                  .kind = gfx::DescriptorKind::UniformBuffer,
+                  .texture = {},
+                  .buffer = frame_uniforms_[i] },
+            } };
+            if (!gfx::succeeded(gfx::create_descriptor_set(device_, pipeline_, kFrameSet,
+                                                           writes.data(), writes.size(),
+                                                           &frame_sets_[i]))) {
+                ENGINE_LOG_ERROR("A frame descriptor set could not be built.");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void MeshPass::destroy_frame_sets() {
+        for (gfx::DescriptorSetHandle& set : frame_sets_) {
+            gfx::destroy_descriptor_set(device_, set);
+            set = gfx::DescriptorSetHandle{};
+        }
     }
 
     /**
@@ -189,16 +250,19 @@ namespace engine::render {
         // The layout of assets::MeshVertex. The offsets come from the struct
         // rather than from constants, so the two cannot drift apart.
         using assets::MeshVertex;
-        // Three of the four. The tangent is in the vertex and no shader reads
-        // it yet, and an attribute nothing consumes is a validation warning.
-        // M5 declares it when the normal mapping needs it.
-        const std::array<gfx::VertexAttribute, 3> attributes{ {
+        // All four now. The tangent went undeclared until M5.2, because an
+        // attribute nothing consumes is a validation warning, and normal
+        // mapping is the first thing that reads one.
+        const std::array<gfx::VertexAttribute, 4> attributes{ {
             { .location = 0,
               .offset = offsetof(MeshVertex, position),
               .format = gfx::VertexFormat::Float3 },
             { .location = 1,
               .offset = offsetof(MeshVertex, normal),
               .format = gfx::VertexFormat::Float3 },
+            { .location = 2,
+              .offset = offsetof(MeshVertex, tangent),
+              .format = gfx::VertexFormat::Float4 },
             { .location = 3,
               .offset = offsetof(MeshVertex, uv),
               .format = gfx::VertexFormat::Float2 },
@@ -252,6 +316,18 @@ namespace engine::render {
         gfx::device_wait_idle(device_);
         gfx::destroy_pipeline(device_, pipeline_);
         pipeline_ = rebuilt;
+
+        // Every descriptor set was allocated against the layout of the pipeline
+        // that just went. A rebuilt shader may declare a different set, and a
+        // set that no longer matches its layout is undefined to bind. So they
+        // all go, and the next draw builds them again.
+        destroy_frame_sets();
+        materials_.destroy(device_);
+        if (!build_frame_sets()) {
+            ENGINE_LOG_ERROR("The frame sets did not rebuild, so nothing will draw.");
+            return false;
+        }
+
         ENGINE_LOG_INFO("The mesh shaders were built again.");
         return true;
     }
@@ -260,7 +336,12 @@ namespace engine::render {
         if (device_ == nullptr) {
             return;
         }
-        materials_.destroy();
+        materials_.destroy(device_);
+        destroy_frame_sets();
+        for (gfx::BufferHandle& buffer : frame_uniforms_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
         textures_.destroy(device_);
         meshes_.destroy(device_);
         gfx::destroy_pipeline(device_, pipeline_);
@@ -288,19 +369,33 @@ namespace engine::render {
             // it keeps the caller out of the question.
             meshes_.drop(device_, guid);
             textures_.drop(device_, guid);
-            materials_.drop(guid);
+            materials_.drop(device_, guid);
         }
     }
 
     void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,
-                        const assets::Content& content, const Mat4& view_projection) {
+                        const assets::Content& content, const Mat4& view_projection,
+                        const Vec3& camera_position) {
         draw_count_ = 0;
-        if (!pipeline_.valid()) {
+        if (!pipeline_.valid() || !frame_sets_[frame_slot_].valid()) {
             return;
         }
 
+        // Round the ring first, so this frame writes the slot the frame two back
+        // used. That frame has finished, because the fence for it was waited on
+        // before this one began. Writing the slot the last frame used would
+        // change what the GPU is reading right now.
+        frame_slot_ = (frame_slot_ + 1) % gfx::kFramesInFlight;
+
+        const FrameUniforms frame{
+            .view_projection = view_projection,
+            .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
+        };
+        gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
+
         gfx::cmd_bind_pipeline(commands, pipeline_);
         gfx::cmd_set_cull_mode(commands, true);
+        gfx::cmd_bind_descriptor_set(commands, pipeline_, kFrameSet, frame_sets_[frame_slot_]);
 
         const auto view =
             world.registry().view<const scene::WorldTransform, const scene::MeshRenderer>();
@@ -313,7 +408,7 @@ namespace engine::render {
                 continue;
             }
 
-            const Push push{ .view_projection = view_projection, .model = transform.matrix };
+            const Push push{ .model = transform.matrix };
             gfx::cmd_push_constants(commands, pipeline_, &push, sizeof(push));
             gfx::cmd_bind_vertex_buffer(commands, mesh->vertices);
             gfx::cmd_bind_index_buffer(commands, mesh->indices);
@@ -323,10 +418,12 @@ namespace engine::render {
             // material is the reason they are separate calls.
             for (const assets::MeshSubmesh& submesh : mesh->submeshes) {
                 const GpuMaterial& material =
-                    materials_.get(device_, content, textures_, submesh.material);
-                gfx::cmd_bind_texture(commands, pipeline_, material.base_color);
-                gfx::cmd_set_cull_mode(commands,
-                                       !material.source.double_sided);
+                    materials_.get(device_, content, textures_, pipeline_, submesh.material);
+                if (!material.set.valid()) {
+                    continue;
+                }
+                gfx::cmd_bind_descriptor_set(commands, pipeline_, kMaterialSet, material.set);
+                gfx::cmd_set_cull_mode(commands, !material.source.double_sided);
                 gfx::cmd_draw_indexed(commands, submesh.index_count, 1, submesh.first_index, 0);
                 ++draw_count_;
             }

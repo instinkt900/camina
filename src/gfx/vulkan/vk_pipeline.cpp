@@ -458,19 +458,19 @@ namespace engine::gfx {
                          cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE);
     }
 
-    void cmd_bind_texture(CommandList* commands, PipelineHandle pipeline,
-                          TextureHandle texture) {
-        ENGINE_CHECK(commands != nullptr, "cmd_bind_texture needs a command list.");
+    void cmd_bind_descriptor_set(CommandList* commands, PipelineHandle pipeline,
+                                 std::uint32_t set_index, DescriptorSetHandle set) {
+        ENGINE_CHECK(commands != nullptr, "cmd_bind_descriptor_set needs a command list.");
 
         const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
-        const TextureEntry* bound = vk::resolve_texture(*commands->owner, texture);
+        const DescriptorSetEntry* bound = vk::resolve_descriptor_set(*commands->owner, set);
         if (entry == nullptr || bound == nullptr) {
-            ENGINE_LOG_ERROR("cmd_bind_texture received a stale or null handle.");
+            ENGINE_LOG_ERROR("cmd_bind_descriptor_set received a stale or null handle.");
             return;
         }
 
         vkCmdBindDescriptorSets(commands->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, entry->layout,
-                                0, 1, &bound->set, 0, nullptr);
+                                set_index, 1, &bound->set, 0, nullptr);
     }
 
     void cmd_push_constants(CommandList* commands, PipelineHandle pipeline, const void* data,

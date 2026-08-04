@@ -12,8 +12,43 @@ namespace engine::gfx {
     namespace {
 
         constexpr std::uint32_t kMaxTextures = 64;
+        /**
+         * How many descriptor sets the pool serves.
+         *
+         * One for each material, so this is a ceiling on how many distinct
+         * materials a scene draws. The pool is fixed size because a growing pool
+         * needs the old sets kept alive while a frame reads them, and nothing
+         * needs that yet. See rule 4.6.
+         */
+        constexpr std::uint32_t kMaxSets = 128;
         /// Four bytes for each texel, in RGBA order.
         constexpr std::size_t kBytesPerTexel = 4;
+
+        /// What a buffer of this usage is bound as.
+        [[nodiscard]] VkBufferUsageFlags to_vk_buffer_usage(BufferUsage usage) {
+            switch (usage) {
+            case BufferUsage::Index:
+                return VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            case BufferUsage::Uniform:
+                return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            case BufferUsage::Vertex:
+                break;
+            }
+            return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        }
+
+        /// The Vulkan descriptor type for a described kind.
+        [[nodiscard]] VkDescriptorType to_vk_descriptor_type(DescriptorKind kind) {
+            switch (kind) {
+            case DescriptorKind::UniformBuffer:
+                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case DescriptorKind::StorageBuffer:
+                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case DescriptorKind::CombinedImageSampler:
+                break;
+            }
+            return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        }
 
         VkSamplerAddressMode to_address_mode(AddressMode mode) {
             switch (mode) {
@@ -196,6 +231,17 @@ namespace engine::gfx {
             return &entry;
         }
 
+        DescriptorSetEntry* resolve_descriptor_set(Device& device, DescriptorSetHandle handle) {
+            if (!handle.valid() || handle.index() >= device.descriptor_sets.size()) {
+                return nullptr;
+            }
+            DescriptorSetEntry& entry = device.descriptor_sets[handle.index()];
+            if (!entry.alive || entry.generation != handle.generation()) {
+                return nullptr;
+            }
+            return &entry;
+        }
+
         Result immediate_submit(Device& device,
                                 const std::function<void(VkCommandBuffer)>& record) {
             VkCommandBufferAllocateInfo allocate{};
@@ -231,29 +277,22 @@ namespace engine::gfx {
         }
 
         Result create_shared_resources(Device& device) {
-            VkDescriptorSetLayoutBinding binding{};
-            binding.binding = 0;
-            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            binding.descriptorCount = 1;
-            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-            VkDescriptorSetLayoutCreateInfo layout{};
-            layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            layout.bindingCount = 1;
-            layout.pBindings = &binding;
-            ENGINE_VK_TRY(
-                vkCreateDescriptorSetLayout(device.device, &layout, nullptr, &device.texture_layout));
-
-            VkDescriptorPoolSize size{};
-            size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            size.descriptorCount = kMaxTextures;
+            // The pool serves whole sets now, and a set holds several textures
+            // and a block of factors. A material set is the case it exists for.
+            // There is no shared layout any more, because every set matches a
+            // layout the reflected shader described.
+            const std::array<VkDescriptorPoolSize, 2> sizes{ {
+                { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                  .descriptorCount = kMaxTextures },
+                { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = kMaxSets },
+            } };
 
             VkDescriptorPoolCreateInfo pool{};
             pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             pool.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-            pool.maxSets = kMaxTextures;
-            pool.poolSizeCount = 1;
-            pool.pPoolSizes = &size;
+            pool.maxSets = kMaxSets;
+            pool.poolSizeCount = static_cast<std::uint32_t>(sizes.size());
+            pool.pPoolSizes = sizes.data();
             ENGINE_VK_TRY(
                 vkCreateDescriptorPool(device.device, &pool, nullptr, &device.descriptor_pool));
 
@@ -280,12 +319,12 @@ namespace engine::gfx {
                 device.upload_pool = VK_NULL_HANDLE;
             }
             if (device.descriptor_pool != VK_NULL_HANDLE) {
+                // Freeing the pool frees every set it served, so the slots only
+                // need forgetting rather than releasing one at a time.
                 vkDestroyDescriptorPool(device.device, device.descriptor_pool, nullptr);
                 device.descriptor_pool = VK_NULL_HANDLE;
-            }
-            if (device.texture_layout != VK_NULL_HANDLE) {
-                vkDestroyDescriptorSetLayout(device.device, device.texture_layout, nullptr);
-                device.texture_layout = VK_NULL_HANDLE;
+                device.descriptor_sets.clear();
+                device.free_descriptor_sets.clear();
             }
         }
 
@@ -411,14 +450,83 @@ namespace engine::gfx {
 
     } // namespace vk
 
+    namespace {
+
+        /**
+         * Builds a host-visible buffer that stays mapped, for update_buffer().
+         *
+         * @c desc.data may be null, which leaves the contents undefined until the
+         * first update. A caller that binds it before writing gets whatever the
+         * allocator handed back, so update it first.
+         */
+        Result create_mapped_buffer(Device& device, const BufferDesc& desc,
+                                    BufferHandle* out_buffer) {
+            VkBufferCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            info.size = desc.size;
+            info.usage = to_vk_buffer_usage(desc.usage);
+
+            VmaAllocationCreateInfo allocation{};
+            allocation.usage = VMA_MEMORY_USAGE_AUTO;
+            allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                               VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation buffer_allocation = VK_NULL_HANDLE;
+            VmaAllocationInfo mapped{};
+            const VkResult created = vmaCreateBuffer(device.allocator, &info, &allocation, &buffer,
+                                                     &buffer_allocation, &mapped);
+            if (created != VK_SUCCESS) {
+                ENGINE_LOG_ERROR("A uniform buffer could not be allocated: {}",
+                                 vk::vk_result_name(created));
+                return vk::to_result(created);
+            }
+
+            if (desc.data != nullptr) {
+                std::memcpy(mapped.pMappedData, desc.data, desc.size);
+            }
+
+            std::uint32_t index = 0;
+            if (!device.free_buffers.empty()) {
+                index = device.free_buffers.back();
+                device.free_buffers.pop_back();
+            } else {
+                index = static_cast<std::uint32_t>(device.buffers.size());
+                device.buffers.emplace_back();
+            }
+
+            BufferEntry& entry = device.buffers[index];
+            entry.buffer = buffer;
+            entry.allocation = buffer_allocation;
+            entry.mapped = mapped.pMappedData;
+            entry.size = desc.size;
+            entry.alive = true;
+            *out_buffer = BufferHandle::make(index, entry.generation);
+            return Result::Success;
+        }
+
+    } // namespace
+
     Result create_buffer(Device* device, const BufferDesc& desc, BufferHandle* out_buffer) {
         ENGINE_CHECK(device != nullptr, "create_buffer needs a device.");
         ENGINE_CHECK(out_buffer != nullptr, "create_buffer needs somewhere to put the handle.");
         *out_buffer = BufferHandle{};
 
-        if (desc.data == nullptr || desc.size == 0) {
-            ENGINE_LOG_ERROR("create_buffer needs data and a size.");
+        if (desc.size == 0) {
+            ENGINE_LOG_ERROR("create_buffer needs a size.");
             return Result::ErrorInit;
+        }
+        if (desc.data == nullptr && desc.usage != BufferUsage::Uniform) {
+            ENGINE_LOG_ERROR("create_buffer needs data for a vertex or an index buffer.");
+            return Result::ErrorInit;
+        }
+
+        // A uniform buffer is small and it is written again every time something
+        // it holds changes, so it lives in host-visible memory and stays mapped.
+        // Staging it into device-local memory would cost a copy and a queue wait
+        // for the sake of a few dozen bytes.
+        if (desc.usage == BufferUsage::Uniform) {
+            return create_mapped_buffer(*device, desc, out_buffer);
         }
 
         VkBuffer staging = VK_NULL_HANDLE;
@@ -432,9 +540,7 @@ namespace engine::gfx {
         VkBufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         info.size = desc.size;
-        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                     (desc.usage == BufferUsage::Index ? VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-                                                       : VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | to_vk_buffer_usage(desc.usage);
 
         VmaAllocationCreateInfo allocation{};
         allocation.usage = VMA_MEMORY_USAGE_AUTO;
@@ -490,9 +596,13 @@ namespace engine::gfx {
             return;
         }
 
+        // VMA unmaps a mapped allocation as part of destroying it, so the
+        // pointer only needs forgetting.
         vmaDestroyBuffer(device->allocator, entry->buffer, entry->allocation);
         entry->buffer = VK_NULL_HANDLE;
         entry->allocation = VK_NULL_HANDLE;
+        entry->mapped = nullptr;
+        entry->size = 0;
         entry->alive = false;
         ++entry->generation;
         device->free_buffers.push_back(buffer.index());
@@ -604,16 +714,6 @@ namespace engine::gfx {
             result = vk::resolve_sampler(*device, desc.sampler, &built.sampler);
         }
 
-        if (succeeded(result)) {
-            VkDescriptorSetAllocateInfo allocate{};
-            allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocate.descriptorPool = device->descriptor_pool;
-            allocate.descriptorSetCount = 1;
-            allocate.pSetLayouts = &device->texture_layout;
-            result = vk::to_result(
-                vkAllocateDescriptorSets(device->device, &allocate, &built.set));
-        }
-
         if (!succeeded(result)) {
             // built.sampler belongs to the cache. Leave it alone. The next
             // texture with the same state reuses it.
@@ -626,20 +726,6 @@ namespace engine::gfx {
             ENGINE_LOG_ERROR("The texture upload failed: {}", result_name(result));
             return result;
         }
-
-        VkDescriptorImageInfo info{};
-        info.sampler = built.sampler;
-        info.imageView = built.view;
-        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = built.set;
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &info;
-        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
 
         std::uint32_t index = 0;
         if (!device->free_textures.empty()) {
@@ -659,6 +745,145 @@ namespace engine::gfx {
         return Result::Success;
     }
 
+    void update_buffer(Device* device, BufferHandle buffer, const void* data, std::size_t size) {
+        if (device == nullptr || data == nullptr || size == 0) {
+            return;
+        }
+        BufferEntry* entry = vk::resolve_buffer(*device, buffer);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("update_buffer received a stale or null handle.");
+            return;
+        }
+        if (entry->mapped == nullptr) {
+            ENGINE_LOG_ERROR("update_buffer works only on a uniform buffer. A vertex or an "
+                             "index buffer lives in memory the host cannot reach.");
+            return;
+        }
+        if (size > entry->size) {
+            ENGINE_LOG_ERROR("update_buffer was given {} bytes and the buffer holds {}.", size,
+                             entry->size);
+            return;
+        }
+        std::memcpy(entry->mapped, data, size);
+    }
+
+    Result create_descriptor_set(Device* device, PipelineHandle pipeline, std::uint32_t set_index,
+                                 const DescriptorWrite* writes, std::size_t write_count,
+                                 DescriptorSetHandle* out_set) {
+        ENGINE_CHECK(device != nullptr, "create_descriptor_set needs a device.");
+        ENGINE_CHECK(out_set != nullptr, "create_descriptor_set needs somewhere to put the handle.");
+        *out_set = DescriptorSetHandle{};
+
+        const PipelineEntry* owner = vk::resolve_pipeline(*device, pipeline);
+        if (owner == nullptr) {
+            ENGINE_LOG_ERROR("create_descriptor_set received a stale or null pipeline.");
+            return Result::ErrorInit;
+        }
+        if (set_index >= owner->set_layouts.size()) {
+            ENGINE_LOG_ERROR("The pipeline has {} descriptor sets and set {} was asked for.",
+                             owner->set_layouts.size(), set_index);
+            return Result::ErrorInit;
+        }
+
+        VkDescriptorSetAllocateInfo allocate{};
+        allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocate.descriptorPool = device->descriptor_pool;
+        allocate.descriptorSetCount = 1;
+        allocate.pSetLayouts = &owner->set_layouts[set_index];
+
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        const VkResult allocated = vkAllocateDescriptorSets(device->device, &allocate, &set);
+        if (allocated != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("A descriptor set could not be allocated: {}. The pool serves a "
+                             "fixed number, so a scene with many materials runs out.",
+                             vk::vk_result_name(allocated));
+            return vk::to_result(allocated);
+        }
+
+        // The infos must outlive the update call, so both vectors are built in
+        // full before anything is written.
+        std::vector<VkDescriptorImageInfo> images;
+        std::vector<VkDescriptorBufferInfo> buffers;
+        images.reserve(write_count);
+        buffers.reserve(write_count);
+        std::vector<VkWriteDescriptorSet> updates;
+        updates.reserve(write_count);
+
+        for (std::size_t i = 0; i < write_count; ++i) {
+            // Rule 4.2 passes a pointer and a count, so index it directly.
+            const DescriptorWrite& source = writes[i];
+            VkWriteDescriptorSet update{};
+            update.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            update.dstSet = set;
+            update.dstBinding = source.binding;
+            update.descriptorCount = 1;
+            update.descriptorType = to_vk_descriptor_type(source.kind);
+
+            if (source.kind == DescriptorKind::CombinedImageSampler) {
+                const TextureEntry* entry = vk::resolve_texture(*device, source.texture);
+                if (entry == nullptr) {
+                    ENGINE_LOG_ERROR("Binding {} names a stale or null texture.", source.binding);
+                    vkFreeDescriptorSets(device->device, device->descriptor_pool, 1, &set);
+                    return Result::ErrorInit;
+                }
+                images.push_back(VkDescriptorImageInfo{
+                    .sampler = entry->sampler,
+                    .imageView = entry->view,
+                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+                update.pImageInfo = &images.back();
+            } else {
+                const BufferEntry* entry = vk::resolve_buffer(*device, source.buffer);
+                if (entry == nullptr) {
+                    ENGINE_LOG_ERROR("Binding {} names a stale or null buffer.", source.binding);
+                    vkFreeDescriptorSets(device->device, device->descriptor_pool, 1, &set);
+                    return Result::ErrorInit;
+                }
+                buffers.push_back(VkDescriptorBufferInfo{
+                    .buffer = entry->buffer, .offset = 0, .range = VK_WHOLE_SIZE });
+                update.pBufferInfo = &buffers.back();
+            }
+            updates.push_back(update);
+        }
+
+        if (!updates.empty()) {
+            vkUpdateDescriptorSets(device->device, static_cast<std::uint32_t>(updates.size()),
+                                   updates.data(), 0, nullptr);
+        }
+
+        std::uint32_t index = 0;
+        if (!device->free_descriptor_sets.empty()) {
+            index = device->free_descriptor_sets.back();
+            device->free_descriptor_sets.pop_back();
+        } else {
+            index = static_cast<std::uint32_t>(device->descriptor_sets.size());
+            device->descriptor_sets.emplace_back();
+        }
+
+        DescriptorSetEntry& entry = device->descriptor_sets[index];
+        entry.set = set;
+        entry.alive = true;
+        *out_set = DescriptorSetHandle::make(index, entry.generation);
+        return Result::Success;
+    }
+
+    void destroy_descriptor_set(Device* device, DescriptorSetHandle set) {
+        if (device == nullptr) {
+            return;
+        }
+        DescriptorSetEntry* entry = vk::resolve_descriptor_set(*device, set);
+        if (entry == nullptr) {
+            return;
+        }
+
+        vkFreeDescriptorSets(device->device, device->descriptor_pool, 1, &entry->set);
+        entry->set = VK_NULL_HANDLE;
+        entry->alive = false;
+
+        // Bumping the generation makes every existing handle to this slot stale.
+        ++entry->generation;
+        device->free_descriptor_sets.push_back(set.index());
+    }
+
     void destroy_texture(Device* device, TextureHandle texture) {
         if (device == nullptr) {
             return;
@@ -668,13 +893,15 @@ namespace engine::gfx {
             return;
         }
 
-        vkFreeDescriptorSets(device->device, device->descriptor_pool, 1, &entry->set);
         // The sampler is shared, so it stays. destroy_samplers() releases the
         // whole cache when the device goes.
+        //
+        // A descriptor set that names this texture is not freed here, because a
+        // set belongs to whoever built it. The caller drops the set first, which
+        // MaterialCache does when a material reloads.
         vkDestroyImageView(device->device, entry->view, nullptr);
         vmaDestroyImage(device->allocator, entry->image, entry->allocation);
 
-        entry->set = VK_NULL_HANDLE;
         entry->sampler = VK_NULL_HANDLE;
         entry->view = VK_NULL_HANDLE;
         entry->image = VK_NULL_HANDLE;

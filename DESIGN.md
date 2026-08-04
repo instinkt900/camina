@@ -723,16 +723,23 @@ one gets there writes the sidecar. A sidecar the glTF rule wrote with the defaul
 sRGB, and every normal map in that model would read as color from then on. So the guess
 belongs to `image_meta()` in the texture rule, and both callers go through it.
 
-**The format carries more than the renderer reads.** A cooked material holds the whole glTF
-metallic-roughness set: five texture GUIDs, both color factors, the metallic, the roughness,
-the normal scale, the occlusion strength, the alpha mode, the cutoff, and the double sided
-flag. The pass binds the base color and shades it under the same key light and hemisphere
-that M4.4c used.
+**The format carried more than the renderer read, until M5.2.** A cooked material holds the
+whole glTF metallic-roughness set: five texture GUIDs, both color factors, the metallic, the
+roughness, the normal scale, the occlusion strength, the alpha mode, the cutoff, and the
+double sided flag.
 
-That is deliberate. glTF hands the rest over for free, and a field added later would move the
-format version and cook every model again. Rule 4.6 governs systems, and this is a data
-format. M5 is the milestone that shades with the rest, and it is also where the double sided
-flag starts to matter, because honoring it needs a second pipeline or a dynamic cull state.
+M4.4b wrote all of it and the pass bound the base color alone. That was deliberate. glTF hands
+the rest over for free, and a field added later would move the format version and cook every
+model again. Rule 4.6 governs systems, and this is a data format.
+
+M5.2 reads it. The shading is Cook-Torrance metallic-roughness, and every map and every factor
+reaches the shader. A material binds one descriptor set that names all five textures and a
+64-byte block of factors, which is `render::MaterialUniforms`. A slot the material left empty
+binds the fallback white texel, and a bit in that block says which slots were really named, so
+a normal map that is not there does not tilt every normal the same way.
+
+Blend is the one alpha mode still missing. It needs the pipeline to blend and the draws
+sorted, which arrives with the light components.
 
 A material lives on the submesh rather than on `MeshRenderer`. One mesh can use several, and
 a single field on the component could not say which submesh got which. A per-entity override

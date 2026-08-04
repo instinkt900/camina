@@ -230,6 +230,24 @@ namespace engine::gfx {
     void destroy_buffer(Device* device, BufferHandle buffer);
 
     /**
+     * @brief Writes new contents into a uniform buffer.
+     *
+     * The buffer stays mapped, so this is a copy and nothing else. It works only
+     * on a BufferUsage::Uniform buffer, because a vertex or an index buffer
+     * lives in device-local memory that the host cannot reach.
+     *
+     * @param device The device that owns the buffer.
+     * @param buffer The buffer to write. A null or stale handle logs and does nothing.
+     * @param data The bytes to copy in.
+     * @param size How many bytes. It must not be more than the buffer holds.
+     *
+     * @warning This writes straight into memory the GPU may be reading. A buffer
+     * a frame in flight still reads must not be written. Either wait for the
+     * device, or keep one buffer for each frame in flight.
+     */
+    void update_buffer(Device* device, BufferHandle buffer, const void* data, std::size_t size);
+
+    /**
      * @brief Uploads pixels into a sampled texture with its own descriptor set.
      * @param device The device that owns the texture.
      * @param desc The pixels and the size.
@@ -261,15 +279,62 @@ namespace engine::gfx {
     void cmd_bind_index_buffer(CommandList* commands, BufferHandle buffer);
 
     /**
-     * @brief Binds a texture at set 0, binding 0.
+     * @brief Builds a descriptor set that a pipeline can bind.
      *
-     * The pipeline must have asked for it with GraphicsPipelineDesc::sample_texture.
+     * The set matches one of the layouts the pipeline was built with, which came
+     * from the reflected shader. So a caller fills the bindings the shader
+     * declares, and a binding the shader does not have is refused here rather
+     * than by the driver later.
+     *
+     * Every binding the layout declares must appear in @p writes. A descriptor
+     * left unwritten is undefined to read, and the validation layer reports it
+     * far from the call that skipped it.
+     *
+     * @param device The device that owns the pipeline.
+     * @param pipeline The pipeline whose layout the set must match.
+     * @param set_index Which set of that pipeline this fills.
+     * @param writes What to put in each binding. Order does not matter.
+     * @param write_count How many entries @p writes holds.
+     * @param out_set Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the set could not be built.
+     *
+     * @code
+     * const std::array<gfx::DescriptorWrite, 2> writes{ {
+     *     { .binding = 0, .kind = gfx::DescriptorKind::CombinedImageSampler,
+     *       .texture = base_color },
+     *     { .binding = 5, .kind = gfx::DescriptorKind::UniformBuffer,
+     *       .buffer = factors },
+     * } };
+     * gfx::create_descriptor_set(device, pipeline, 0, writes.data(), writes.size(), &set);
+     * @endcode
+     */
+    [[nodiscard]] Result create_descriptor_set(Device* device, PipelineHandle pipeline,
+                                               std::uint32_t set_index,
+                                               const DescriptorWrite* writes,
+                                               std::size_t write_count,
+                                               DescriptorSetHandle* out_set);
+
+    /**
+     * @brief Releases a descriptor set and frees its slot for reuse.
+     *
+     * @param device The device that owns the set.
+     * @param set The handle to release. A null or stale handle does nothing.
+     *
+     * @warning A set a frame in flight still reads must not be freed. Wait for
+     * the device, or free it behind the frames.
+     */
+    void destroy_descriptor_set(Device* device, DescriptorSetHandle set);
+
+    /**
+     * @brief Binds a descriptor set for the draws that follow.
      *
      * @param commands The command list from begin_frame().
      * @param pipeline The bound pipeline, which supplies the layout.
-     * @param texture The texture to bind.
+     * @param set_index Which set this fills, matching create_descriptor_set().
+     * @param set The set to bind. A stale handle logs and does nothing.
      */
-    void cmd_bind_texture(CommandList* commands, PipelineHandle pipeline, TextureHandle texture);
+    void cmd_bind_descriptor_set(CommandList* commands, PipelineHandle pipeline,
+                                 std::uint32_t set_index, DescriptorSetHandle set);
 
     /**
      * @brief Sends push constants to the vertex stage.

@@ -52,10 +52,23 @@ namespace engine::gfx {
     /// @brief Refers to a sampled texture the device owns.
     using TextureHandle = Handle<TextureTag>;
 
+    /// @brief Distinguishes a descriptor set handle from every other kind.
+    struct DescriptorSetTag {};
+
+    /**
+     * @brief Refers to a descriptor set the device owns.
+     *
+     * A set holds the textures and the buffers one draw call reads together. A
+     * material is the case this exists for: five textures and a block of
+     * factors, bound once for every submesh that uses them.
+     */
+    using DescriptorSetHandle = Handle<DescriptorSetTag>;
+
     /// @brief What a buffer is bound as.
     enum class BufferUsage : std::uint32_t {
         Vertex = 0, ///< Bound with cmd_bind_vertex_buffer().
         Index,      ///< Bound with cmd_bind_index_buffer(). Holds 32-bit indices.
+        Uniform,    ///< Read through a descriptor set, as a block of parameters.
     };
 
     /**
@@ -177,6 +190,22 @@ namespace engine::gfx {
         std::uint32_t stages = 0;  ///< Which stages read it, as ::kStageBitVertex and friends.
         /// @brief What the binding holds.
         DescriptorKind kind = DescriptorKind::CombinedImageSampler;
+    };
+
+    /**
+     * @brief One entry to write into a descriptor set.
+     *
+     * The kind decides which handle is read. A CombinedImageSampler reads
+     * @c texture, and a UniformBuffer or a StorageBuffer reads @c buffer. The
+     * other stays null, because rule 4.2 keeps this a POD struct rather than a
+     * variant.
+     */
+    struct DescriptorWrite {
+        std::uint32_t binding = 0; ///< The `layout(binding = N)` this fills.
+        /// @brief What the binding holds, which decides the handle below.
+        DescriptorKind kind = DescriptorKind::CombinedImageSampler;
+        TextureHandle texture; ///< The texture, for a CombinedImageSampler.
+        BufferHandle buffer;   ///< The buffer, for a UniformBuffer or StorageBuffer.
     };
 
     /// @brief Settings for create_graphics_pipeline().
