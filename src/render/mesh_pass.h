@@ -8,13 +8,14 @@
  * in its own source file. This one draws whatever the scene says, which is what
  * makes the asset pipeline visible.
  *
- * A submesh names a material, and the material names its base color texture.
- * Both arrive by GUID, so this pass binds one texture for each submesh and the
- * scene decides what that texture is.
+ * A submesh names a material, and the material names five textures. All of them
+ * arrive by GUID, so this pass binds one descriptor set for each submesh and the
+ * scene decides what is in it.
  *
- * The shading over that color is still a placeholder. The cooked material also
- * names a normal map, a metallic-roughness map, and an occlusion map, and M5 is
- * the milestone that reads them.
+ * The shading is Cook-Torrance metallic-roughness since M5.2, and it reads every
+ * map and every factor the cooked material carries. Two things over it are still
+ * constants in the shader: the one directional light, which becomes a scene
+ * component, and the environment, which M5.4 replaces with a cooked one.
  */
 
 #include "assets/content.h"
@@ -26,6 +27,8 @@
 #include "render/texture_cache.h"
 #include "scene/world.h"
 
+#include <array>
+#include <cstdint>
 #include <span>
 
 namespace engine::render {
@@ -107,9 +110,12 @@ namespace engine::render {
          * @param content The game content tree, which holds the meshes, the
          * materials, and the textures.
          * @param view_projection The camera, without any model matrix.
+         * @param camera_position Where the camera is, in world space. The
+         * shading needs it for the view vector that every specular term uses.
          */
         void draw(gfx::CommandList* commands, const scene::World& world,
-                  const assets::Content& content, const Mat4& view_projection);
+                  const assets::Content& content, const Mat4& view_projection,
+                  const Vec3& camera_position);
 
         /// @brief How many meshes are uploaded.
         /// @return The count.
@@ -128,8 +134,26 @@ namespace engine::render {
         [[nodiscard]] bool build_pipeline(const assets::Content& content,
                                           gfx::PipelineHandle& out);
 
+        /// Builds the per-frame blocks and the sets that bind them.
+        [[nodiscard]] bool build_frame_sets();
+
+        /// Frees the per-frame sets, which belong to a pipeline layout.
+        void destroy_frame_sets();
+
         gfx::Device* device_ = nullptr;
         gfx::PipelineHandle pipeline_;
+        /**
+         * @brief One per-frame block for each frame in flight.
+         *
+         * A single block would be written at the top of a frame while the GPU
+         * may still be reading it for the frame before. One for each slot in the
+         * ring means a write never touches what a live frame reads.
+         */
+        std::array<gfx::BufferHandle, gfx::kFramesInFlight> frame_uniforms_;
+        /// @brief The set that binds each block above.
+        std::array<gfx::DescriptorSetHandle, gfx::kFramesInFlight> frame_sets_;
+        /// @brief Which slot of the ring the next draw uses.
+        std::uint32_t frame_slot_ = 0;
         MeshCache meshes_;
         TextureCache textures_;
         MaterialCache materials_;

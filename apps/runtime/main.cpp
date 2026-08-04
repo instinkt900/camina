@@ -635,7 +635,8 @@ namespace {
         // entity that draws at all. This is the pipeline made visible: the
         // geometry comes from a cooked file that a glTF produced, and nothing
         // here knows which file that was.
-        context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world);
+        context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
+                                settings.camera_position);
 
         engine::gfx::imgui_render(info.commands);
         engine::gfx::cmd_end_rendering(info.commands);

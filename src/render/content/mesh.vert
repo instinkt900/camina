@@ -4,30 +4,40 @@
 // bytes and the order here must match MeshVertex exactly.
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
-// The tangent sits at offset 24 in the vertex and nothing reads it yet. An
-// attribute a shader does not consume is a validation warning, so the pipeline
-// declares three of the four. The cooked material names a normal map already,
-// and M5 declares this again when it reads one. The stride stays 48 either way.
+// The tangent has been in the cooked mesh since M4.4a and nothing read it until
+// now. Normal mapping needs it, and w carries the handedness that says which
+// way the bitangent points.
+layout(location = 2) in vec4 in_tangent;
 layout(location = 3) in vec2 in_uv;
 
-layout(location = 0) out vec3 out_normal;
-layout(location = 1) out vec2 out_uv;
+layout(location = 0) out vec3 out_world;
+layout(location = 1) out vec3 out_normal;
+layout(location = 2) out vec4 out_tangent;
+layout(location = 3) out vec2 out_uv;
 
-// 128 bytes, which is the smallest push constant block Vulkan guarantees.
-// Anything more would need a uniform buffer.
-layout(push_constant) uniform Push {
+// Set 0 changes once for each frame and set 1 changes for each material, so the
+// lower number is the one that changes less often.
+layout(set = 0, binding = 0) uniform Frame {
     mat4 view_projection;
+    vec4 camera_position; // w is unused and keeps the block aligned.
+} frame;
+
+// The model matrix alone. The view projection moved into the frame block above,
+// because the shading needs the camera position and 128 bytes is the smallest
+// push constant block Vulkan guarantees.
+layout(push_constant) uniform Push {
     mat4 model;
 } push;
 
 void main() {
     vec4 world = push.model * vec4(in_position, 1.0);
-    gl_Position = push.view_projection * world;
+    gl_Position = frame.view_projection * world;
+    out_world = world.xyz;
 
-    // The inverse transpose would be correct for a non-uniform scale. Nothing
-    // in the sandbox scales a mesh unevenly, and a mat3 of the model matrix is
-    // right for every uniform scale and rotation. M5 revisits this when the
-    // material system decides what a normal means.
-    out_normal = normalize(mat3(push.model) * in_normal);
+    // mat3 of the model matrix is right for a rotation and a uniform scale, and
+    // wrong for a non-uniform one. Issue #94 holds the inverse transpose.
+    mat3 to_world = mat3(push.model);
+    out_normal = normalize(to_world * in_normal);
+    out_tangent = vec4(normalize(to_world * in_tangent.xyz), in_tangent.w);
     out_uv = in_uv;
 }

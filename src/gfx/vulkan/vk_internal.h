@@ -47,8 +47,14 @@ namespace engine::gfx {
     struct BufferEntry {
         VkBuffer buffer = VK_NULL_HANDLE;          ///< Null while the slot is free.
         VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the buffer.
-        std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
-        bool alive = false;                        ///< Whether the slot holds a live buffer.
+        /// @brief Where the buffer is mapped, or null for a device-local one.
+        ///
+        /// Only a uniform buffer is mapped. A vertex or an index buffer is
+        /// staged once into device-local memory and never written again.
+        void* mapped = nullptr;
+        std::size_t size = 0;         ///< Bytes, so update_buffer() can refuse an overrun.
+        std::uint32_t generation = 1; ///< Starts at 1, so slot 0 is never null.
+        bool alive = false;           ///< Whether the slot holds a live buffer.
     };
 
     /// @brief One slot in the texture pool that TextureHandle indexes.
@@ -57,9 +63,21 @@ namespace engine::gfx {
         VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the image.
         VkImageView view = VK_NULL_HANDLE;         ///< The view the sampler reads.
         VkSampler sampler = VK_NULL_HANDLE;        ///< Shared. The device sampler cache owns it.
-        VkDescriptorSet set = VK_NULL_HANDLE;      ///< Set 0, ready to bind.
         std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
         bool alive = false;                        ///< Whether the slot holds a live texture.
+    };
+
+    /**
+     * @brief One slot in the descriptor set pool that DescriptorSetHandle indexes.
+     *
+     * A texture used to carry a set of its own, which allowed exactly one
+     * texture for each draw. A material needs several textures and a block of
+     * factors together, so a set is its own resource now.
+     */
+    struct DescriptorSetEntry {
+        VkDescriptorSet set = VK_NULL_HANDLE; ///< Null while the slot is free.
+        std::uint32_t generation = 1;         ///< Starts at 1, so slot 0 is never null.
+        bool alive = false;                   ///< Whether the slot holds a live set.
     };
 
     /**
@@ -111,9 +129,7 @@ namespace engine::gfx {
         VkImageView depth_view = VK_NULL_HANDLE;         ///< The depth attachment view.
         VkFormat depth_format = VK_FORMAT_UNDEFINED;     ///< Chosen once at device creation.
 
-        /// @brief Set 0, binding 0, one combined image sampler for the fragment stage.
-        VkDescriptorSetLayout texture_layout = VK_NULL_HANDLE;
-        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE; ///< Serves one set for each texture.
+        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE; ///< Serves every descriptor set.
         VkCommandPool upload_pool = VK_NULL_HANDLE;        ///< Used by immediate_submit().
         std::vector<SamplerEntry> samplers;                ///< The sampler cache. Textures share these.
 
@@ -123,6 +139,10 @@ namespace engine::gfx {
         std::vector<std::uint32_t> free_buffers;   ///< Slots that destroy_buffer() released.
         std::vector<TextureEntry> textures;        ///< Indexed by TextureHandle::index().
         std::vector<std::uint32_t> free_textures;  ///< Slots that destroy_texture() released.
+        /// @brief Indexed by DescriptorSetHandle::index().
+        std::vector<DescriptorSetEntry> descriptor_sets;
+        /// @brief Slots that destroy_descriptor_set() released.
+        std::vector<std::uint32_t> free_descriptor_sets;
 
         std::array<Frame, kFramesInFlight> frames{}; ///< The frames-in-flight ring.
         std::uint32_t frame_index = 0;               ///< Which ring slot the next frame uses.
@@ -191,6 +211,15 @@ namespace engine::gfx {
          * @return The live entry, or nullptr when the handle is null or stale.
          */
         [[nodiscard]] TextureEntry* resolve_texture(Device& device, TextureHandle handle);
+
+        /**
+         * @brief Looks up a descriptor set slot.
+         * @param device The device that owns the pool.
+         * @param handle The handle to resolve.
+         * @return The live entry, or nullptr when the handle is null or stale.
+         */
+        [[nodiscard]] DescriptorSetEntry* resolve_descriptor_set(Device& device,
+                                                                 DescriptorSetHandle handle);
 
         /**
          * @brief Destroys every live pipeline and clears the pool.
