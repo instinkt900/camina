@@ -13,7 +13,7 @@ set_source_files_properties(screenshot.cpp PROPERTIES
 
 # The runtime opens its own ImGui windows around reflect::inspect(), so it needs
 # the ImGui headers as well as the engine.
-# camina::sandbox is the game module. The editor links the same library at M8,
+# camina::sandbox is the game module. The editor links the same library at M9,
 # which is what rule 4.3 asks for: one game, two applications.
 # stb is for the screenshot encoder alone.
 target_link_libraries(runtime PRIVATE

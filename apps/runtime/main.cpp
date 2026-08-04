@@ -61,7 +61,7 @@ namespace {
     /// Where each window opens. The overlay writes no imgui.ini, so a run
     /// always starts from this layout and a move lasts until the program ends.
     /// Without these all three open at the same place, and the last one drawn
-    /// buries the rest. M8 gives the editor a real settings path.
+    /// buries the rest. M9 gives the editor a real settings path.
     constexpr float kPanelMargin = 16.0F;
     constexpr float kPanelWidth = 340.0F;
     constexpr float kViewHeight = 320.0F;

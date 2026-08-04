@@ -5,7 +5,7 @@
  * @brief The sandbox game: what it registers, what it loads, and what it runs.
  *
  * This is the game module. It links into the runtime today, and into the editor
- * at M8. Rule 4.3 says the editor is an application over the same core rather
+ * at M9. Rule 4.3 says the editor is an application over the same core rather
  * than a build mode, so the game has to compile into both. Building it as a
  * library from the start is what makes that true rather than hopeful.
  *
