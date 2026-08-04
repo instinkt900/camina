@@ -76,6 +76,25 @@ namespace engine::render {
         void reload(std::span<const Guid> changed);
 
         /**
+         * @brief Builds the pipeline again from the shaders on disk.
+         *
+         * The other half of hot reload. A mesh and a texture swap in behind a
+         * handle, and a shader cannot: the SPIR-V is built into the pipeline,
+         * so a changed shader means a new pipeline.
+         *
+         * A shader that will not build leaves the pipeline that is drawing
+         * alone. Somebody editing a shader breaks it often, and losing the
+         * picture on every typo would make the loop useless.
+         *
+         * @param content The engine content tree, which holds the shaders.
+         * @return True when a new pipeline was built and swapped in.
+         *
+         * @warning Call this between frames and never while a command list is
+         * open. It waits for the GPU, which cannot happen mid-frame.
+         */
+        [[nodiscard]] bool reload_shaders(const assets::Content& content);
+
+        /**
          * @brief Draws every entity that has a MeshRenderer and a WorldTransform.
          *
          * A mesh, a material, and a texture each load the first time something
@@ -105,6 +124,10 @@ namespace engine::render {
         [[nodiscard]] std::size_t draw_count() const { return draw_count_; }
 
     private:
+        /// Builds a pipeline from the shaders in @p content, into @p out.
+        [[nodiscard]] bool build_pipeline(const assets::Content& content,
+                                          gfx::PipelineHandle& out);
+
         gfx::Device* device_ = nullptr;
         gfx::PipelineHandle pipeline_;
         MeshCache meshes_;

@@ -33,6 +33,7 @@ target_link_libraries(runtime PRIVATE
 # should do. --watch and --glslc override both.
 target_compile_definitions(runtime PRIVATE
     ENGINE_GAME_CONTENT_SOURCE="${CMAKE_SOURCE_DIR}/sandbox/content"
+    ENGINE_ENGINE_CONTENT_SOURCE="${CMAKE_SOURCE_DIR}/src/render/content"
     ENGINE_GLSLC_PATH="${ENGINE_GLSLC_EXE}"
 )
 

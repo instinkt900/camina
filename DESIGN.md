@@ -748,6 +748,28 @@ that tree, which leaves the program with the assets it already had. The next sav
 again, and nothing here ends the process. A broken scene file is the same shape: the world
 goes empty, the log names the file, and saving a working one loads it again.
 
+**A shader cannot swap behind a handle, so it rebuilds the pipeline.** A mesh and a texture
+arrive by GUID and the cache hands out a new one, and nothing above notices. The SPIR-V is
+built into a `gfx::PipelineHandle`, so a changed shader means a new pipeline.
+`MeshPass::reload_shaders` builds one into a fresh handle, and only swaps once it holds. A
+shader that will not build leaves the pipeline that is drawing alone, because somebody
+editing a shader breaks it often and losing the picture on every typo would make the loop
+useless.
+
+This is why the runtime watches two trees. `sandbox/content` holds what an artist edits and
+`src/render/content` holds the shaders, which are the assets a programmer edits. The engine
+tree holds only the two shaders, so any change to it rebuilds the pipeline.
+
+**A cook that fails keeps the asset the tree already had.** The cooker rebuilds its manifest
+from what cooked this run, so an asset that failed used to lose its entry. The cooked file
+stays on disk, because a rule that fails writes no output, and the manifest then no longer
+names it. The running program is unaffected, and the next start fails on an asset that is
+sitting right there.
+
+Nothing met that before shaders reloaded, because a shader that would not compile failed the
+build instead. Editing one live makes the first typo reach it. So a failed source keeps the
+entry the last cook gave it, and the log says so.
+
 **Freeing a resource waits for the frames in flight.** `MeshPass::reload` waits for the
 device before it frees a buffer or a texture. A frame the GPU has not finished may still read
 one, and that use-after-free is a failure the validation layer may or may not report, on a
