@@ -154,6 +154,14 @@ namespace engine::render {
         std::array<gfx::DescriptorSetHandle, gfx::kFramesInFlight> frame_sets_;
         /// @brief Which slot of the ring the next draw uses.
         std::uint32_t frame_slot_ = 0;
+        /**
+         * @brief True while the world holds more lights than one frame carries.
+         *
+         * draw() warns when this turns on and stays quiet after that. Deleting a
+         * light until the world fits again clears it, so a later overflow warns
+         * once more.
+         */
+        bool lights_overflowed_ = false;
         MeshCache meshes_;
         TextureCache textures_;
         MaterialCache materials_;

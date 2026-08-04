@@ -152,6 +152,59 @@
           }
         }
       }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "sun"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "rotation": [
+            0.8365163,
+            -0.4829629,
+            0.2241439,
+            0.1294095
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.97,
+            0.92
+          ],
+          "intensity": 3.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp"
+        },
+        "Transform": {
+          "position": [
+            1.8,
+            1.6,
+            1.4
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.55,
+            0.25
+          ],
+          "intensity": 12.0,
+          "range": 8.0
+        }
+      }
     }
   ]
 }

@@ -92,6 +92,47 @@ namespace engine::scene {
         Guid mesh;
     };
 
+    /**
+     * @brief A light with no position, only a direction. The sun.
+     *
+     * The direction is the entity's forward, which is its local −Z turned into
+     * world space. See DESIGN.md section 3. So a light is aimed by turning it,
+     * the same way a camera is, and it needs no direction field of its own.
+     *
+     * Moving one does nothing, which is correct for a light that is infinitely
+     * far away.
+     */
+    struct DirectionalLight {
+        /// @brief The color it emits. Linear, not sRGB.
+        Vec3 color{ 1.0F, 1.0F, 1.0F };
+        /// @brief How bright it is. The color is multiplied by this.
+        float intensity = 1.0F;
+    };
+
+    /// @brief How far a new PointLight reaches, in meters.
+    inline constexpr float kDefaultLightRange = 10.0F;
+
+    /**
+     * @brief A light at a point, shining in every direction.
+     *
+     * The position is the entity's world position, so a point light is moved by
+     * moving its entity. Turning one does nothing.
+     */
+    struct PointLight {
+        /// @brief The color it emits. Linear, not sRGB.
+        Vec3 color{ 1.0F, 1.0F, 1.0F };
+        /// @brief How bright it is at the source.
+        float intensity = 1.0F;
+        /**
+         * @brief How far it reaches, in meters.
+         *
+         * The falloff is the inverse square, windowed so it reaches zero at this
+         * distance rather than going on forever. Without the window every light
+         * would touch every surface, and a scene could not cull one.
+         */
+        float range = kDefaultLightRange;
+    };
+
 } // namespace engine::scene
 
 /// @brief Describes Name for the inspector and for scene files.
@@ -115,5 +156,41 @@ struct engine::reflect::Describe<engine::scene::MeshRenderer> {
         return std::make_tuple(
             ENGINE_FIELD(engine::scene::MeshRenderer, mesh,
                          engine::reflect::Tooltip{ "The cooked mesh this entity draws." }));
+    }
+};
+
+/// @brief Field descriptors for a directional light.
+template <>
+struct engine::reflect::Describe<engine::scene::DirectionalLight> {
+    static constexpr const char* name = "DirectionalLight"; ///< The name a scene file stores.
+    /// @brief The two fields. The direction comes from the transform.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::scene::DirectionalLight, color,
+                         engine::reflect::Tooltip{ "The color it emits. Linear, not sRGB." }),
+            ENGINE_FIELD(engine::scene::DirectionalLight, intensity,
+                         engine::reflect::Range{ 0.0, 20.0, 0.01 },
+                         engine::reflect::Tooltip{
+                             "Aim it by turning the entity. Its direction is local −Z." }));
+    }
+};
+
+/// @brief Field descriptors for a point light.
+template <>
+struct engine::reflect::Describe<engine::scene::PointLight> {
+    static constexpr const char* name = "PointLight"; ///< The name a scene file stores.
+    /// @brief The three fields. The position comes from the transform.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::scene::PointLight, color,
+                         engine::reflect::Tooltip{ "The color it emits. Linear, not sRGB." }),
+            ENGINE_FIELD(engine::scene::PointLight, intensity,
+                         engine::reflect::Range{ 0.0, 100.0, 0.01 },
+                         engine::reflect::Tooltip{ "How bright it is at the source." }),
+            ENGINE_FIELD(engine::scene::PointLight, range,
+                         engine::reflect::Range{ 0.0, 100.0, 0.05 },
+                         engine::reflect::Tooltip{ "How far it reaches, in meters." }));
     }
 };
