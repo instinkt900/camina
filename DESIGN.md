@@ -556,6 +556,26 @@ file does.
 Each cooked module records the defines it was built with. A consumer picks a variant by what it
 declares, and not by where it sits in the manifest, so reordering the list moves no meaning.
 
+**`mesh.frag` is the first shader with variants, and `render::MeshPass` selects one for each
+submesh.** The shader compiles out two things: the normal map and the occlusion map. That is
+four forms. Every other map is read with no branch, because a slot the material left empty
+binds a white texel that costs the same to sample. `render::mesh_variant_index` turns the maps
+a material named into the form it needs.
+
+Every form declares the same descriptors. A sampler stays declared even in the form that never
+reads it, because a declaration inside an `#ifdef` would give each form a different set layout,
+and one material descriptor set could then not bind against another form. Vulkan calls that
+undefined rather than an error, so it appears as a wrong texture. `MeshPass::build_pipelines`
+compares each form against the base form and refuses the set when they disagree.
+
+The pass builds all eight pipelines at start, four forms for the opaque draws and four for the
+blended ones. A hot reload rebuilds all of them together, or keeps all of the old ones. Half a
+scene from a new shader and half from an old one is worse than a stale picture.
+
+The opaque draws are not yet grouped by the form they need, so a mixed scene rebinds more than
+it has to. `MeshPass::pipeline_switch_count` measures it and issue #105 holds the work, which
+belongs with the render graph in M5.3.
+
 `gfx::GraphicsPipelineDesc` now takes the bindings rather than a `sample_texture` flag, so no
 layout is written by hand anywhere. That closes the gap rule 4.5 names: a hand-written
 pipeline layout beside a reflected parameter block is two descriptor systems.

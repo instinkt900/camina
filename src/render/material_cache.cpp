@@ -74,6 +74,14 @@ namespace engine::render {
         return ok;
     }
 
+    std::uint32_t material_maps(const assets::Material& material) {
+        return map_bit(material.base_color, MaterialMap::BaseColor) |
+               map_bit(material.metallic_roughness, MaterialMap::MetallicRoughness) |
+               map_bit(material.normal, MaterialMap::Normal) |
+               map_bit(material.occlusion, MaterialMap::Occlusion) |
+               map_bit(material.emissive, MaterialMap::Emissive);
+    }
+
     MaterialUniforms pack_material_uniforms(const assets::Material& material) {
         MaterialUniforms out;
         out.base_color_factor = { material.base_color_factor.x, material.base_color_factor.y,
@@ -86,11 +94,7 @@ namespace engine::render {
         out.occlusion_strength = material.occlusion_strength;
         out.alpha_cutoff = material.alpha_cutoff;
         out.alpha_mode = static_cast<std::uint32_t>(material.alpha_mode);
-        out.has_maps = map_bit(material.base_color, MaterialMap::BaseColor) |
-                       map_bit(material.metallic_roughness, MaterialMap::MetallicRoughness) |
-                       map_bit(material.normal, MaterialMap::Normal) |
-                       map_bit(material.occlusion, MaterialMap::Occlusion) |
-                       map_bit(material.emissive, MaterialMap::Emissive);
+        out.has_maps = material_maps(material);
         return out;
     }
 

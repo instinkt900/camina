@@ -9,6 +9,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace engine::render {
@@ -121,15 +124,54 @@ namespace engine::render {
         /// Which descriptor set the frame block binds to. The material is set 1.
         constexpr std::uint32_t kFrameSet = 0;
 
-        /// Reads one cooked shader out of the engine content tree.
+        /**
+         * Reads every cooked form of one shader source.
+         *
+         * A source with no variant list cooks to one form, so this is the read
+         * for both cases. It goes through the manifest entry rather than
+         * Content::read_bytes(source), because that call refuses a source with
+         * more than one output and cannot say which form was wanted.
+         */
         [[nodiscard]] bool read_stage(const assets::Content& content, const char* source,
-                                      assets::Shader& out) {
-            std::vector<std::byte> bytes;
-            if (!content.read_bytes(source, bytes)) {
+                                      std::vector<assets::Shader>& out) {
+            const assets::ManifestEntry* entry = content.find(source);
+            if (entry == nullptr || entry->outputs.empty()) {
                 ENGINE_LOG_ERROR("{} is not in the cooked content tree.", source);
                 return false;
             }
-            return assets::read_shader(bytes, out, source);
+
+            out.clear();
+            out.reserve(entry->outputs.size());
+            for (const assets::ManifestOutput& output : entry->outputs) {
+                std::vector<std::byte> bytes;
+                if (!content.read_bytes(output, bytes)) {
+                    ENGINE_LOG_ERROR("{}: the cooked form {} would not read.", source,
+                                     output.cooked);
+                    return false;
+                }
+                assets::Shader form;
+                if (!assets::read_shader(bytes, form, output.cooked)) {
+                    return false;
+                }
+                out.push_back(std::move(form));
+            }
+            return true;
+        }
+
+        /// Whether two set layouts declare the same thing.
+        [[nodiscard]] bool same_bindings(const std::vector<gfx::DescriptorBinding>& a,
+                                         const std::vector<gfx::DescriptorBinding>& b) {
+            if (a.size() != b.size()) {
+                return false;
+            }
+            for (std::size_t at = 0; at < a.size(); ++at) {
+                if (a[at].set != b[at].set || a[at].binding != b[at].binding ||
+                    a[at].kind != b[at].kind || a[at].count != b[at].count ||
+                    a[at].stages != b[at].stages) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// The gfx name for a kind the cooked shader reports.
@@ -224,6 +266,63 @@ namespace engine::render {
 
     } // namespace
 
+    std::size_t mesh_variant_index(std::uint32_t has_maps) {
+        const auto has = [has_maps](MaterialMap map) {
+            return (has_maps & static_cast<std::uint32_t>(map)) != 0;
+        };
+        std::size_t index = 0;
+        if (has(MaterialMap::Normal)) {
+            index |= 1U;
+        }
+        if (has(MaterialMap::Occlusion)) {
+            index |= 2U;
+        }
+        return index;
+    }
+
+    std::span<const std::string_view> mesh_variant_defines(std::size_t variant) {
+        using namespace std::string_view_literals;
+        // The order inside each row does not matter, because pick_shader_variant
+        // matches on the set and not on the sequence.
+        static constexpr std::array<std::string_view, 1> kNormal{ "HAS_NORMAL_MAP"sv };
+        static constexpr std::array<std::string_view, 1> kOcclusion{ "HAS_OCCLUSION_MAP"sv };
+        static constexpr std::array<std::string_view, 2> kBoth{ "HAS_NORMAL_MAP"sv,
+                                                                "HAS_OCCLUSION_MAP"sv };
+        switch (variant) {
+        case 1:
+            return kNormal;
+        case 2:
+            return kOcclusion;
+        case 3:
+            return kBoth;
+        default:
+            break;
+        }
+        return {};
+    }
+
+    const assets::Shader* pick_shader_variant(std::span<const assets::Shader> forms,
+                                              std::span<const std::string_view> defines) {
+        for (const assets::Shader& form : forms) {
+            if (form.defines.size() != defines.size()) {
+                continue;
+            }
+            // Every define the caller asked for is present. The sizes already
+            // match, so nothing extra can hide, and a module cannot list the
+            // same define twice because the cooker passes the list to glslc as
+            // it stands.
+            const bool all =
+                std::all_of(defines.begin(), defines.end(), [&form](std::string_view want) {
+                    return std::find(form.defines.begin(), form.defines.end(), want) !=
+                           form.defines.end();
+                });
+            if (all) {
+                return &form;
+            }
+        }
+        return nullptr;
+    }
+
     MeshPass::~MeshPass() {
         destroy();
     }
@@ -241,8 +340,7 @@ namespace engine::render {
             return false;
         }
 
-        if (!build_pipeline(content, false, pipeline_) ||
-            !build_pipeline(content, true, blend_pipeline_)) {
+        if (!build_pipelines(content, pipelines_)) {
             return false;
         }
         return build_frame_sets();
@@ -273,7 +371,7 @@ namespace engine::render {
                   .texture = {},
                   .buffer = frame_uniforms_[i] },
             } };
-            if (!gfx::succeeded(gfx::create_descriptor_set(device_, pipeline_, kFrameSet,
+            if (!gfx::succeeded(gfx::create_descriptor_set(device_, layout_pipeline(), kFrameSet,
                                                            writes.data(), writes.size(),
                                                            &frame_sets_[i]))) {
                 ENGINE_LOG_ERROR("A frame descriptor set could not be built.");
@@ -291,49 +389,120 @@ namespace engine::render {
     }
 
     /**
-     * Builds a pipeline from the shaders in the engine content tree.
+     * Builds every pipeline from the shaders in the engine content tree.
      *
      * Separate from create() because reload_shaders() needs the same work, and
-     * because it must be able to fail without touching the pipeline that is
+     * because it must be able to fail without touching the pipelines that are
      * already drawing.
+     *
+     * The shaders are read once here and not once for each pipeline. There are
+     * eight pipelines over four fragment modules, and reading each module twice
+     * would be four wasted reads and four wasted reflections on every reload.
      */
-    bool MeshPass::build_pipeline(const assets::Content& content, bool blend,
-                                  gfx::PipelineHandle& out) {
-        assets::Shader vertex_shader;
-        assets::Shader fragment_shader;
-        if (!read_stage(content, kVertexShaderSource, vertex_shader) ||
-            !read_stage(content, kFragmentShaderSource, fragment_shader)) {
+    bool MeshPass::build_pipelines(const assets::Content& content, PipelineSet& out) {
+        std::vector<assets::Shader> vertex_forms;
+        std::vector<assets::Shader> fragment_forms;
+        if (!read_stage(content, kVertexShaderSource, vertex_forms) ||
+            !read_stage(content, kFragmentShaderSource, fragment_forms)) {
             return false;
         }
 
-        // The layout comes from the two modules rather than from this file. A
-        // hand-written layout beside a shader that declares the same thing used
-        // to drift from it with nothing to catch the difference.
-        std::vector<gfx::DescriptorBinding> bindings;
-        if (!merge_bindings(vertex_shader, fragment_shader, bindings)) {
-            return false;
-        }
-
-        // The bindings say a uniform block sits at set 1, and nothing yet says
-        // what is inside it. MaterialUniforms is written by hand and the GPU
-        // reads raw bytes, so a member the shader renamed or moved would read
-        // the wrong field with no error anywhere.
-        if (!check_material_block(fragment_shader, kFragmentShaderSource)) {
-            ENGINE_LOG_ERROR("{} and render::MaterialUniforms do not agree, so the pass "
-                             "would upload the wrong bytes. Fix one of the two.",
-                             kFragmentShaderSource);
+        // The vertex stage has no variants, so it wants the form built with
+        // nothing defined. Asking by defines rather than taking the first
+        // output means adding a variant to it later changes nothing here.
+        const assets::Shader* vertex_shader = pick_shader_variant(vertex_forms, {});
+        if (vertex_shader == nullptr) {
+            ENGINE_LOG_ERROR("{} has no form built with no defines, and the pass needs one.",
+                             kVertexShaderSource);
             return false;
         }
 
         // The push block is the vertex stage's, and it must still match Push
         // above. Reflection now says how big the shader thinks it is, so the two
         // are checked against each other rather than only asserted here.
-        if (vertex_shader.push_constant_size != sizeof(Push)) {
+        if (vertex_shader->push_constant_size != sizeof(Push)) {
             ENGINE_LOG_ERROR("{} reads {} bytes of push constants and this pass sends {}.",
-                             kVertexShaderSource, vertex_shader.push_constant_size, sizeof(Push));
+                             kVertexShaderSource, vertex_shader->push_constant_size,
+                             sizeof(Push));
             return false;
         }
 
+        out = PipelineSet{};
+        std::vector<gfx::DescriptorBinding> first_bindings;
+        for (std::size_t variant = 0; variant < kMeshVariantCount; ++variant) {
+            const std::span<const std::string_view> defines = mesh_variant_defines(variant);
+            const assets::Shader* fragment = pick_shader_variant(fragment_forms, defines);
+            if (fragment == nullptr) {
+                ENGINE_LOG_ERROR("{} has no form built with {}. Add it to the variant list "
+                                 "in the .meta sidecar beside the shader.",
+                                 kFragmentShaderSource,
+                                 defines.empty() ? "no defines" : defines.front());
+                destroy_pipelines(out);
+                return false;
+            }
+
+            // The layout comes from the two modules rather than from this file.
+            // A hand-written layout beside a shader that declares the same
+            // thing used to drift from it with nothing to catch the difference.
+            std::vector<gfx::DescriptorBinding> bindings;
+            if (!merge_bindings(*vertex_shader, *fragment, bindings)) {
+                destroy_pipelines(out);
+                return false;
+            }
+
+            // Every form has to declare the same descriptors. One material
+            // descriptor set is allocated once and bound against whichever form
+            // a submesh needs, and Vulkan calls that undefined when the two
+            // layouts differ. It shows up as a wrong texture or as nothing at
+            // all, so it is checked here rather than left to the validation
+            // layer.
+            if (variant == 0) {
+                first_bindings = bindings;
+            } else if (!same_bindings(first_bindings, bindings)) {
+                ENGINE_LOG_ERROR("{}: the form built with {} declares different descriptors "
+                                 "than the base form. A declaration must sit outside the "
+                                 "#ifdef, so that every form shares one set layout.",
+                                 kFragmentShaderSource,
+                                 defines.empty() ? "no defines" : defines.front());
+                destroy_pipelines(out);
+                return false;
+            }
+
+            // The bindings say a uniform block sits at set 1, and nothing yet
+            // says what is inside it. MaterialUniforms is written by hand and
+            // the GPU reads raw bytes, so a member the shader renamed or moved
+            // would read the wrong field with no error anywhere.
+            if (!check_material_block(*fragment, kFragmentShaderSource)) {
+                ENGINE_LOG_ERROR("{} and render::MaterialUniforms do not agree, so the pass "
+                                 "would upload the wrong bytes. Fix one of the two.",
+                                 kFragmentShaderSource);
+                destroy_pipelines(out);
+                return false;
+            }
+
+            if (!build_pipeline(*vertex_shader, *fragment, bindings, false,
+                                out.opaque[variant]) ||
+                !build_pipeline(*vertex_shader, *fragment, bindings, true, out.blend[variant])) {
+                destroy_pipelines(out);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void MeshPass::destroy_pipelines(PipelineSet& set) {
+        for (std::size_t at = 0; at < kMeshVariantCount; ++at) {
+            gfx::destroy_pipeline(device_, set.opaque[at]);
+            gfx::destroy_pipeline(device_, set.blend[at]);
+        }
+        set = PipelineSet{};
+    }
+
+    /// Builds one pipeline from two modules that were already read and checked.
+    bool MeshPass::build_pipeline(const assets::Shader& vertex_shader,
+                                  const assets::Shader& fragment_shader,
+                                  const std::vector<gfx::DescriptorBinding>& bindings, bool blend,
+                                  gfx::PipelineHandle& out) {
         // The layout of assets::MeshVertex. The offsets come from the struct
         // rather than from constants, so the two cannot drift apart.
         using assets::MeshVertex;
@@ -391,35 +560,27 @@ namespace engine::render {
             return false;
         }
 
-        // Into a new handle, so a shader that will not build leaves the one
-        // that is drawing alone. A person editing a shader gets a broken one
+        // Into a new set, so a shader that will not build leaves the pipelines
+        // that are drawing alone. A person editing a shader gets a broken one
         // often, and losing the picture on every typo would make the loop
         // useless.
-        // Both, or neither. Keeping a rebuilt opaque pipeline beside a stale
-        // blend one would draw a scene half from the new shader and half from
-        // the old, which is worse than keeping the old.
-        gfx::PipelineHandle rebuilt;
-        gfx::PipelineHandle rebuilt_blend;
-        if (!build_pipeline(content, false, rebuilt)) {
-            ENGINE_LOG_ERROR("The shaders did not build, so the pass keeps the pipeline it "
+        //
+        // All of them, or none. Keeping some rebuilt forms beside stale ones
+        // would draw a scene half from the new shader and half from the old,
+        // which is worse than keeping the old.
+        PipelineSet rebuilt;
+        if (!build_pipelines(content, rebuilt)) {
+            ENGINE_LOG_ERROR("The shaders did not build, so the pass keeps the pipelines it "
                              "has. Fix them and save again.");
             return false;
         }
-        if (!build_pipeline(content, true, rebuilt_blend)) {
-            ENGINE_LOG_ERROR("The blend pipeline did not build, so the pass keeps the two it "
-                             "has. Fix the shaders and save again.");
-            gfx::destroy_pipeline(device_, rebuilt);
-            return false;
-        }
 
-        // The old pipeline may still be bound by a frame the GPU has not
+        // The old pipelines may still be bound by a frame the GPU has not
         // finished. See the note in reload() about what this wait costs and
         // what replaces it.
         gfx::device_wait_idle(device_);
-        gfx::destroy_pipeline(device_, pipeline_);
-        gfx::destroy_pipeline(device_, blend_pipeline_);
-        pipeline_ = rebuilt;
-        blend_pipeline_ = rebuilt_blend;
+        destroy_pipelines(pipelines_);
+        pipelines_ = rebuilt;
 
         // Every descriptor set was allocated against the layout of the pipeline
         // that just went. A rebuilt shader may declare a different set, and a
@@ -448,10 +609,7 @@ namespace engine::render {
         }
         textures_.destroy(device_);
         meshes_.destroy(device_);
-        gfx::destroy_pipeline(device_, pipeline_);
-        pipeline_ = gfx::PipelineHandle{};
-        gfx::destroy_pipeline(device_, blend_pipeline_);
-        blend_pipeline_ = gfx::PipelineHandle{};
+        destroy_pipelines(pipelines_);
         device_ = nullptr;
     }
 
@@ -483,7 +641,8 @@ namespace engine::render {
                         const assets::Content& content, const Mat4& view_projection,
                         const Vec3& camera_position) {
         draw_count_ = 0;
-        if (!pipeline_.valid() || !frame_sets_[frame_slot_].valid()) {
+        pipeline_switches_ = 0;
+        if (!layout_pipeline().valid() || !frame_sets_[frame_slot_].valid()) {
             return;
         }
 
@@ -510,9 +669,15 @@ namespace engine::render {
 
         gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
 
-        gfx::cmd_bind_pipeline(commands, pipeline_);
+        // The frame set and the push constants are bound against this one
+        // layout. Every form declares the same descriptors, so the layout is
+        // compatible with all of them and both survive a pipeline change.
+        // build_pipelines() refuses a set of forms where that is not true.
+        gfx::cmd_bind_pipeline(commands, layout_pipeline());
         gfx::cmd_set_cull_mode(commands, true);
-        gfx::cmd_bind_descriptor_set(commands, pipeline_, kFrameSet, frame_sets_[frame_slot_]);
+        gfx::cmd_bind_descriptor_set(commands, layout_pipeline(), kFrameSet,
+                                     frame_sets_[frame_slot_]);
+        gfx::PipelineHandle bound = layout_pipeline();
 
         blended_.clear();
 
@@ -528,7 +693,7 @@ namespace engine::render {
             }
 
             const Push push{ .model = transform.matrix };
-            gfx::cmd_push_constants(commands, pipeline_, &push, sizeof(push));
+            gfx::cmd_push_constants(commands, layout_pipeline(), &push, sizeof(push));
             gfx::cmd_bind_vertex_buffer(commands, mesh->vertices);
             gfx::cmd_bind_index_buffer(commands, mesh->indices);
 
@@ -536,11 +701,16 @@ namespace engine::render {
             // only the material and the index range change between them. The
             // material is the reason they are separate calls.
             for (const assets::MeshSubmesh& submesh : mesh->submeshes) {
-                const GpuMaterial& material =
-                    materials_.get(device_, content, textures_, pipeline_, submesh.material);
+                const GpuMaterial& material = materials_.get(device_, content, textures_,
+                                                             layout_pipeline(), submesh.material);
                 if (!material.set.valid()) {
                     continue;
                 }
+
+                // The maps the material named decide which compiled form draws
+                // it. A material with no normal map runs the form that has the
+                // tangent frame compiled out of it.
+                const std::size_t variant = mesh_variant_index(material_maps(material.source));
 
                 // A blended surface waits. It has to draw after every opaque
                 // one, and after the blended ones behind it, so it cannot go out
@@ -559,13 +729,25 @@ namespace engine::render {
                         .set = material.set,
                         .index_count = submesh.index_count,
                         .first_index = submesh.first_index,
+                        .variant = variant,
                         .double_sided = material.source.double_sided,
                         .depth = glm::distance(center, camera_position),
                     });
                     continue;
                 }
 
-                gfx::cmd_bind_descriptor_set(commands, pipeline_, kMaterialSet, material.set);
+                // Only when it changes. The view hands entities over in no
+                // useful order, so a scene that alternates between two forms
+                // rebinds on every submesh. Sorting the opaque draws by form
+                // would fix that, and it belongs with the render graph in
+                // M5.3. Issue #105 holds it.
+                if (!(bound == pipelines_.opaque[variant])) {
+                    bound = pipelines_.opaque[variant];
+                    gfx::cmd_bind_pipeline(commands, bound);
+                    ++pipeline_switches_;
+                }
+
+                gfx::cmd_bind_descriptor_set(commands, bound, kMaterialSet, material.set);
                 gfx::cmd_set_cull_mode(commands, !material.source.double_sided);
                 gfx::cmd_draw_indexed(commands, submesh.index_count, 1, submesh.first_index, 0);
                 ++draw_count_;
@@ -576,7 +758,7 @@ namespace engine::render {
     }
 
     void MeshPass::draw_blended(gfx::CommandList* commands) {
-        if (blended_.empty() || !blend_pipeline_.valid()) {
+        if (blended_.empty() || !pipelines_.blend[0].valid()) {
             return;
         }
 
@@ -587,15 +769,25 @@ namespace engine::render {
         std::sort(blended_.begin(), blended_.end(),
                   [](const BlendedDraw& a, const BlendedDraw& b) { return a.depth > b.depth; });
 
-        // The frame set stays bound. Both pipelines declare the same
+        // The frame set stays bound. Every pipeline declares the same
         // descriptors, so their layouts are compatible and the binding survives
         // the pipeline change.
-        gfx::cmd_bind_pipeline(commands, blend_pipeline_);
+        //
+        // The order is the sort's, and the form is whatever each draw needs, so
+        // this can rebind on every draw. Depth order cannot be traded for fewer
+        // binds here, because drawing a blended surface out of order is wrong
+        // rather than slow.
+        gfx::PipelineHandle bound;
         for (const BlendedDraw& draw : blended_) {
-            gfx::cmd_push_constants(commands, blend_pipeline_, &draw.model, sizeof(draw.model));
+            if (!(bound == pipelines_.blend[draw.variant])) {
+                bound = pipelines_.blend[draw.variant];
+                gfx::cmd_bind_pipeline(commands, bound);
+                ++pipeline_switches_;
+            }
+            gfx::cmd_push_constants(commands, bound, &draw.model, sizeof(draw.model));
             gfx::cmd_bind_vertex_buffer(commands, draw.vertices);
             gfx::cmd_bind_index_buffer(commands, draw.indices);
-            gfx::cmd_bind_descriptor_set(commands, blend_pipeline_, kMaterialSet, draw.set);
+            gfx::cmd_bind_descriptor_set(commands, bound, kMaterialSet, draw.set);
             gfx::cmd_set_cull_mode(commands, !draw.double_sided);
             gfx::cmd_draw_indexed(commands, draw.index_count, 1, draw.first_index, 0);
             ++draw_count_;

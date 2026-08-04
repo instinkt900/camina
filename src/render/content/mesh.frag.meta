@@ -1,10 +1,19 @@
 {
-  "__version": 2,
+  "__version": 3,
   "guid": "cf59cb6d-fc71-436e-8b5c-c18a6b105df5",
   "texture": {
     "__version": 1,
     "color_space": "sRGB",
     "compress": true,
     "mips": true
+  },
+  "shader": {
+    "__version": 1,
+    "variants": [
+      { "name": "base", "defines": [] },
+      { "name": "normal", "defines": ["HAS_NORMAL_MAP"] },
+      { "name": "occlusion", "defines": ["HAS_OCCLUSION_MAP"] },
+      { "name": "normal_occlusion", "defines": ["HAS_NORMAL_MAP", "HAS_OCCLUSION_MAP"] }
+    ]
   }
 }

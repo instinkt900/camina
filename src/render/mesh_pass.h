@@ -30,9 +30,61 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace engine::render {
+
+    /**
+     * @brief How many compiled forms of `mesh.frag` the pass builds.
+     *
+     * The shader compiles out two things: the normal map and the occlusion map.
+     * Every other map is read with no branch, because a slot the material left
+     * empty binds a white texel that costs the same to sample. Two toggles give
+     * four forms.
+     *
+     * A cross product of all five maps would be thirty-two, and most of those
+     * combinations no material in the sandbox asks for. See
+     * `src/assets/meta.h` for why the variant list is written and not computed.
+     */
+    inline constexpr std::size_t kMeshVariantCount = 4;
+
+    /**
+     * @brief Which compiled form of `mesh.frag` a material has to draw with.
+     *
+     * Bit 0 of the result is the normal map and bit 1 is the occlusion map, so
+     * the index matches the order the variants appear in `mesh.frag.meta`. That
+     * order is for a person reading the file. The pass matches by what a module
+     * declares, not by where it sits.
+     *
+     * @param has_maps A mask of MaterialMap bits, from material_maps().
+     * @return An index below kMeshVariantCount.
+     */
+    [[nodiscard]] std::size_t mesh_variant_index(std::uint32_t has_maps);
+
+    /**
+     * @brief The defines one compiled form must have been built with.
+     * @param variant An index below kMeshVariantCount.
+     * @return The defines. The storage is static. Empty for the base form.
+     */
+    [[nodiscard]] std::span<const std::string_view> mesh_variant_defines(std::size_t variant);
+
+    /**
+     * @brief Finds the cooked form built with exactly @p defines.
+     *
+     * A cooked module records what it was compiled with, so this matches on
+     * that rather than on the order the manifest lists the outputs in. A
+     * variant added to the sidecar in the middle then moves nothing.
+     *
+     * The match is exact in both directions. A form built with more defines
+     * than asked for would shade differently, so it is not a substitute.
+     *
+     * @param forms Every cooked form of one source.
+     * @param defines What the caller needs, from mesh_variant_defines().
+     * @return The form, or nullptr when no form matches.
+     */
+    [[nodiscard]] const assets::Shader* pick_shader_variant(
+        std::span<const assets::Shader> forms, std::span<const std::string_view> defines);
 
     /**
      * @brief Draws the meshes a world names.
@@ -130,6 +182,10 @@ namespace engine::render {
         /// @return The count, one for each submesh of each entity.
         [[nodiscard]] std::size_t draw_count() const { return draw_count_; }
 
+        /// @brief How many pipeline changes the last draw() made.
+        /// @return The count, over the opaque draws and the blended ones.
+        [[nodiscard]] std::size_t pipeline_switch_count() const { return pipeline_switches_; }
+
     private:
         /// One blended submesh, waiting for the sort.
         struct BlendedDraw {
@@ -139,14 +195,40 @@ namespace engine::render {
             gfx::DescriptorSetHandle set;  ///< The material set to bind.
             std::uint32_t index_count = 0; ///< How many indices to draw.
             std::uint32_t first_index = 0; ///< Where the submesh starts.
+            std::size_t variant = 0;       ///< Which compiled form it needs.
             bool double_sided = false;     ///< Whether the material wants both faces.
             float depth = 0.0F;            ///< Distance to the camera, for the sort.
         };
 
-        /// Builds a pipeline from the shaders in @p content, into @p out.
+        /**
+         * Every pipeline the pass draws with.
+         *
+         * One for each compiled form of the fragment shader, and then the same
+         * set again for the blended draws. They all declare the same
+         * descriptors, so one material set binds with any of them.
+         */
+        struct PipelineSet {
+            std::array<gfx::PipelineHandle, kMeshVariantCount> opaque; ///< Writes depth.
+            std::array<gfx::PipelineHandle, kMeshVariantCount> blend;  ///< Blends, no depth write.
+        };
+
+        /// Builds every pipeline from the shaders in @p content, into @p out.
+        /// Frees whatever it built when any one of them fails.
+        [[nodiscard]] bool build_pipelines(const assets::Content& content, PipelineSet& out);
+
+        /// Builds one pipeline from two already-read modules.
         /// @param blend True for the pipeline that blends and does not write depth.
-        [[nodiscard]] bool build_pipeline(const assets::Content& content, bool blend,
-                                          gfx::PipelineHandle& out);
+        [[nodiscard]] bool build_pipeline(const assets::Shader& vertex,
+                                          const assets::Shader& fragment,
+                                          const std::vector<gfx::DescriptorBinding>& bindings,
+                                          bool blend, gfx::PipelineHandle& out);
+
+        /// Frees every pipeline in @p set and clears the handles.
+        void destroy_pipelines(PipelineSet& set);
+
+        /// The pipeline every descriptor set is allocated against. See the note
+        /// on PipelineSet about why any of them would serve.
+        [[nodiscard]] gfx::PipelineHandle layout_pipeline() const { return pipelines_.opaque[0]; }
 
         /// Draws what collect() gathered, back to front.
         void draw_blended(gfx::CommandList* commands);
@@ -158,15 +240,16 @@ namespace engine::render {
         void destroy_frame_sets();
 
         gfx::Device* device_ = nullptr;
-        gfx::PipelineHandle pipeline_;
         /**
-         * @brief The same shaders, blending, and not writing depth.
+         * @brief Every compiled form, opaque and blended.
          *
-         * Both pipelines declare the same descriptors, so their set layouts are
-         * compatible and one material set binds with either. Only the blend and
-         * the depth-write state differ.
+         * They all declare the same descriptors, so their set layouts are
+         * compatible and one material set binds with any of them. build_pipelines()
+         * checks that rather than trusting it, because a declaration moved inside
+         * an `#ifdef` would break it with no error until a draw read the wrong
+         * texture.
          */
-        gfx::PipelineHandle blend_pipeline_;
+        PipelineSet pipelines_;
         /**
          * @brief One per-frame block for each frame in flight.
          *
@@ -193,6 +276,8 @@ namespace engine::render {
         /// @brief The blended submeshes of the current frame. Kept to reuse its storage.
         std::vector<BlendedDraw> blended_;
         std::size_t draw_count_ = 0;
+        /// @brief How many times the last draw() changed pipeline. See #105.
+        std::size_t pipeline_switches_ = 0;
     };
 
 } // namespace engine::render
