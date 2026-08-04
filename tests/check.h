@@ -5,6 +5,8 @@
 // when something needs one. See rule 4.6 in DESIGN.md.
 
 #include <cstdio>
+#include <filesystem>
+#include <string>
 
 namespace test {
 
@@ -33,6 +35,25 @@ namespace test {
     inline void section(const char* name) {
         std::printf("%s\n", name);
         std::fflush(stdout);
+    }
+
+    /**
+     * Removes a directory tree without throwing.
+     *
+     * Windows refuses to delete a file another handle holds open, and the
+     * throwing remove_all then ends the process with no message. This function
+     * catches that error and reports it through check(), so the test continues
+     * to the end and the log names the path that failed.
+     *
+     * This is for cleanup at the end of a test. A remove that is part of the
+     * test itself should use the throwing overload, because it is an assertion.
+     *
+     * @param path The directory to remove.
+     */
+    inline void remove_tree(const std::filesystem::path& path) {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+        check(!error, ("cleanup: could not remove " + path.string()).c_str());
     }
 
     inline int report() {

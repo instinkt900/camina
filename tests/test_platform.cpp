@@ -36,7 +36,7 @@ namespace {
     std::filesystem::path scratch(std::string_view name) {
         const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "camina_test_platform" / name;
-        std::filesystem::remove_all(path);
+        test::remove_tree(path);
         std::filesystem::create_directories(path);
         return path;
     }
