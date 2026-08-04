@@ -53,7 +53,7 @@ namespace engine::gfx {
         // as an open text field. Navigation still works.
         io.ConfigNavCaptureKeyboard = false;
         // The overlay has no home directory to write to, and a stray imgui.ini
-        // next to the executable surprises people. M8 gives the editor a real
+        // next to the executable surprises people. M9 gives the editor a real
         // settings path.
         io.IniFilename = nullptr;
 

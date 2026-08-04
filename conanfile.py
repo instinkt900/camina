@@ -29,10 +29,10 @@ class CaminaConan(ConanFile):
     # Every optional subsystem starts off. Each one turns on at its milestone.
     # See DESIGN.md section 10.
     default_options = {
-        "with_editor": False,   # M8
-        "with_ui": False,       # M9, and the M5.5 spike
-        "with_lua": False,      # M7
-        "with_audio": False,    # M10
+        "with_editor": False,   # M9
+        "with_ui": False,       # M10, and the M6 spike
+        "with_lua": False,      # M8
+        "with_audio": False,    # M11
     }
 
     def requirements(self):
@@ -53,7 +53,7 @@ class CaminaConan(ConanFile):
         # ImGui is not gated behind with_editor. Hard rule 4.3 says the editor is
         # an application, not a build mode, and the inspector runs as a debug
         # overlay in the runtime long before apps/editor exists. The docking
-        # branch is the one the M8 editor wants, so take it now and do not
+        # branch is the one the M9 editor wants, so take it now and do not
         # change the version later.
         self.requires("imgui/1.92.8-docking")
         self.requires("nlohmann_json/3.12.0")

@@ -157,13 +157,13 @@ its own. A push to `main` that changes `version.txt` starts a release.
 
 `DESIGN.md` §10 defines the milestones. The GitHub tracker holds the state.
 
-- **One GitHub Milestone for each `DESIGN.md` milestone**, M0 through M10, plus M5.5.
+- **One GitHub Milestone for each `DESIGN.md` milestone**, M0 through M11.
 - **Issues are work increments, not milestones.** M1 was one line in `DESIGN.md` and became
   three pull requests. Split a milestone the same way, and name the issues `M<n>.<k> — ...`.
 - **An issue links to its `DESIGN.md` section. It never copies the definition.** Two copies
   drift. The issue body holds the task list and the state.
 - **Create issues for the milestone in progress and the next one.** A detailed ticket for
-  M8 written today will be wrong by the time it starts.
+  M9 written today will be wrong by the time it starts.
 - Labels are `area: build`, `area: gfx`, `area: render`, `area: core`, `area: assets`, and
   `area: editor`. Put `milestone-goal` on the issue that carries the milestone's own
   done-when test. Put `tech debt` on a known shortcut to pay back later.
@@ -398,7 +398,7 @@ cache, because it is not on Conan Center.
 
 ImGui itself is not behind `with_editor`. Hard rule 3 says the editor is an application
 and not a build mode, and the M2 inspector runs as a debug overlay in the runtime. The
-option still gates ImGuizmo and, from M8, the editor application.
+option still gates ImGuizmo and, from M9, the editor application.
 
 Note: the enkiTS package installs its headers under a subdirectory. Include
 `<enkiTS/TaskScheduler.h>`, not `<TaskScheduler.h>`.
@@ -424,6 +424,7 @@ These decisions are made. Do not raise them again unless the user asks.
 | Reflection | Hand-written descriptors. Boost.Hana was considered and rejected |
 | Shader compiler | shaderc with GLSL. No DXC |
 | Mesh import | cgltf and glTF only. No assimp |
+| Material authoring | Code-authored GLSL plus a reflected parameter block. A graph layer can sit on top later |
 | Game UI | moth_ui. ImGui is for the editor and debug overlays only |
 | Networking | Not being built. Keep the three enabling decisions in `DESIGN.md` §9 |
 
@@ -432,4 +433,4 @@ These decisions are made. Do not raise them again unless the user asks.
 - Build M4, the asset pipeline, before M5, the renderer. A renderer with no asset pipeline
   draws only programmer cubes.
 - Start `sandbox/` at M3 and keep it working.
-- Keep the M5.5 moth_ui spike timeboxed. Its value is interface feedback, not pixels.
+- Keep the M6 moth_ui spike timeboxed. Its value is interface feedback, not pixels.

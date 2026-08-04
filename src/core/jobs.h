@@ -5,7 +5,7 @@
  * @brief The engine job system, wrapping enkiTS.
  *
  * This is the only scheduler in the engine. Box3D routes its task callbacks here
- * from M6, so physics and game logic share one worker pool instead of competing
+ * from M7, so physics and game logic share one worker pool instead of competing
  * for cores. See DESIGN.md section 5.1.
  */
 

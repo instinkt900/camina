@@ -153,9 +153,9 @@ Pass these to `conan install` as `-o with_editor=True` and so on.
 
 | Option | Default | Milestone |
 |---|---|---|
-| `with_editor` | False | M8 |
-| `with_ui` | False | M9, and the M5.5 spike |
-| `with_lua` | False | M7 |
-| `with_audio` | False | M10 |
+| `with_editor` | False | M9 |
+| `with_ui` | False | M10, and the M6 spike |
+| `with_lua` | False | M8 |
+| `with_audio` | False | M11 |
 
 `with_ui` needs moth_ui in the local Conan cache. It is not on Conan Center.

@@ -193,7 +193,7 @@ separates what the engine needs from what was interesting to design.
 | `sol2` | latest | Lua binding |
 | `lua` | 5.4.x | Scripting |
 | `nlohmann_json` | latest | Serialization |
-| `miniaudio` | latest | Audio, M10 |
+| `miniaudio` | latest | Audio, M11 |
 | `ozz-animation` | 0.14.x | Skeletal animation, deferred |
 | `moth_ui` | — | Game UI, optional, `with_ui` |
 
@@ -450,7 +450,7 @@ the engine already uses Conan 2.
 
 There is a second gain. moth_ui is a real external consumer of `gfx::`. Nothing else in the
 engine tests whether that interface is truly free of Vulkan and ready for a C ABI, because
-the same person writes both sides. The M5.5 spike in §10 exists to get that signal early,
+the same person writes both sides. The M6 spike in §10 exists to get that signal early,
 while the interface still costs little to change.
 
 ### 8.3 Known costs
@@ -513,9 +513,16 @@ child links, local and world transforms, dirty propagation, correct update order
 reparenting with no visual jump. It is more complex than it looks.
 
 **Materials.** A material is a shader plus a reflected parameter block. So §7 gives you the
-material editor at no extra cost. Choose graph-authored or code-authored before M5. That
-choice changes everything after it. The default assumption is code-authored, with a possible
-graph layer later.
+material editor at no extra cost.
+
+**Materials are code-authored.** A person writes GLSL, and the parameter block comes from
+SPIRV-Reflect rather than from a hand-written descriptor. This was §13 open question 2, and
+M5 needed the answer, because the choice changes everything after it.
+
+Code-authored wins on cost. A graph needs a graph format, a node editor, and a shader
+generator, and the node editor belongs to the editor milestone rather than to the renderer.
+Nothing here blocks a graph layer later. A graph would write GLSL, so it sits on top of this
+rather than replacing it.
 
 **Shader pipeline.** Compile GLSL to SPIR-V offline with shaderc. Derive descriptor set
 layouts with SPIRV-Reflect. Cache permutations. Support hot reload.
@@ -711,7 +718,7 @@ flag starts to matter, because honoring it needs a second pipeline or a dynamic 
 
 A material lives on the submesh rather than on `MeshRenderer`. One mesh can use several, and
 a single field on the component could not say which submesh got which. A per-entity override
-belongs with the editor work in M8.
+belongs with the editor work in M9.
 
 **An image with no file is a sub-asset too.** A glTF names its images three ways: a file
 beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a
@@ -879,7 +886,7 @@ serialization through M2. Prefab instancing with per-instance overrides.
 
 `sandbox/` starts here, as a library rather than an application. Rule 4.3 says the editor
 and the runtime are two applications over one core, and the game links into both. Building
-the game as a library from the start is what keeps that true, five milestones before M8
+the game as a library from the start is what keeps that true, five milestones before M9
 depends on it. The runtime links `camina::sandbox` today.
 
 ### M4 — Asset pipeline
@@ -895,7 +902,7 @@ specular, and a BRDF LUT. Cascaded shadow maps. ACES tonemap. Materials as a sha
 reflected parameter block.
 **Done when:** a Sponza-class scene renders correctly.
 
-### M5.5 — moth_ui spike, 2 to 3 days, timeboxed
+### M6 — moth_ui spike, 2 to 3 days, timeboxed
 Write a minimal `IRenderer`, `IImage`, and `IFont` against `gfx::`. Render one static layout
 with an image and a string. **The purpose is diagnostic, not feature work.** It tells you
 whether an external consumer can use `gfx::`, while the interface still costs little to
@@ -903,19 +910,19 @@ change. Fix what the spike exposes, then stop.
 **Done when:** one moth_ui layout draws in the engine, and you have written down what the
 spike taught you about `gfx::`.
 
-### M6 — Physics
+### M7 — Physics
 Connect Box3D to enkiTS. Add rigid body and collider components. Reflect them, so the
 inspector needs no extra work. Add debug draw. Add a fixed timestep with render
 interpolation.
 **Done when:** you hit a stack of boxes and it falls.
 
-### M7 — Scripting
+### M8 — Scripting
 sol2. A `ScriptComponent` with `on_start`, `on_update`, and `on_destroy`. Reflection-driven
 binding with a **curated** surface. A fully mechanical binding produces an API that nobody
 enjoys. Add hot reload from the start.
 **Done when:** the sandbox game logic runs entirely in Lua.
 
-### M8 — Editor split
+### M9 — Editor split
 `editor` and `runtime` as separate executables over `engine_core`. The game module links
 into both, so the editor holds the project types and can inspect them. A release build
 compiles with `WITH_EDITOR` off and drops the editor code. See rule 4.3.
@@ -924,14 +931,14 @@ Play-in-editor through world snapshot and restore, which M2 and M3 already provi
 ImGuizmo. An asset browser, a hierarchy panel, and an inspector panel.
 **Done when:** you build a level in the editor, press play, and ship it as a runtime build.
 
-### M9 — Game UI
-Complete the moth_ui integration on the M5.5 foundation. Add the batching recorder, the font
+### M10 — Game UI
+Complete the moth_ui integration on the M6 foundation. Add the batching recorder, the font
 atlas and text rendering, layouts as cooked assets with hot reload, the SDL3 input bridge,
 and the Lua bindings. Add widgets when `sandbox/` needs them.
 **Done when:** the sandbox game has a main menu, a pause menu, and a HUD. You author them in
 `moth_editor` and they hot-reload.
 
-### M10 — Audio
+### M11 — Audio
 miniaudio behind `IAudioDevice`. Positional 3D and buses.
 **Done when:** the sandbox game plays sound.
 
@@ -950,7 +957,7 @@ decides whether anyone can make a game with this engine, including you in a year
 **Start `sandbox/` at M3.** Choose something small and specific. A physics puzzle game fits
 well. It exercises Box3D, scripting, and PBR, and it needs no animation and little UI.
 
-**Keep M5.5 timeboxed.** If it starts to become M9, stop. Its value is the interface
+**Keep M6 timeboxed.** If it starts to become M10, stop. Its value is the interface
 feedback, not the pixels.
 
 ---
@@ -960,7 +967,7 @@ feedback, not the pixels.
 | Risk | Mitigation |
 |---|---|
 | You build the renderer and never finish the asset pipeline | The §11 sequencing rule. Start `sandbox/` at M3 |
-| `gfx::` hardens into a Vulkan-shaped interface | Rules 4.1 and 4.2 with CI enforcement. The M5.5 external-consumer spike |
+| `gfx::` hardens into a Vulkan-shaped interface | Rules 4.1 and 4.2 with CI enforcement. The M6 external-consumer spike |
 | Box3D changes under you during alpha | A pinned commit, a vendored submodule, and a thin engine-side wrapper |
 | Text rendering costs more than planned | Called out in §8.3. Audit `moth_graphics` before you write any of it |
 | moth_ui turns into a competing project | Rule 4.6. Add widgets only when the sandbox needs them. See the §8.5 caution |
@@ -973,11 +980,10 @@ feedback, not the pixels.
 
 1. Does Box3D use +Y up? Check its default gravity vector and heightfield orientation in the
    samples. See §3.
-2. Are materials code-authored or graph-authored? Decide before M5. See §9.
-3. What does the `moth_graphics` Vulkan backend already implement for font atlasing and text
+2. What does the `moth_graphics` Vulkan backend already implement for font atlasing and text
    layout, and how much can you reuse? See §8.3.
-4. Does `moth_editor` become a panel in the engine editor, or stay standalone? Not urgent.
-   Revisit after M8. See §8.5.
-5. Should moth_ui drop `fmt` and `range-v3` for `std::format` and `std::ranges`? This matters
+3. Does `moth_editor` become a panel in the engine editor, or stay standalone? Not urgent.
+   Revisit after M9. See §8.5.
+4. Should moth_ui drop `fmt` and `range-v3` for `std::format` and `std::ranges`? This matters
    only if moth_ui moves to C++20. It is cosmetic, and it removes two transitive
    dependencies.

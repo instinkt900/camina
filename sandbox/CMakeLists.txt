@@ -1,4 +1,4 @@
-# The game module. It links into the runtime today and into the editor at M8.
+# The game module. It links into the runtime today and into the editor at M9.
 #
 # Rule 4.3 says the editor is an application over engine_core rather than a
 # build mode, so the game has to compile into both. Building it as a library
