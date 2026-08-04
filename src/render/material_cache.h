@@ -63,6 +63,19 @@ namespace engine::render {
                                              const assets::Content& content,
                                              TextureCache& textures, Guid guid);
 
+        /**
+         * @brief Forgets one identity, so the next get() reads it again.
+         *
+         * This drops two things, and it has to drop both. The first is the
+         * material with that identity. The second is every material that names
+         * that identity as one of its textures, because a material holds the
+         * texture handle it resolved and a reloaded texture is a new handle.
+         * Keeping the old one would bind a texture that was freed.
+         *
+         * @param guid The identity to let go of, of either kind.
+         */
+        void drop(Guid guid);
+
         /// @brief Forgets every material. The textures belong elsewhere.
         void destroy();
 

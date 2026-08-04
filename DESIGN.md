@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M3 complete, M4 in progress
-Last updated: 2026-08-03
+Status: M4 complete, M5 next
+Last updated: 2026-08-04
 
 ---
 
@@ -674,6 +674,48 @@ The field defaults to zero rather than to the current version, because zero is w
 manifest written before the field existed reads back as. Defaulting it to the current version
 would make every old manifest claim to be current, which is the failure the field exists to
 catch. `save_manifest` stamps it, so no caller can forget.
+
+**Hot reload closes the loop.** M4.5 is the milestone goal, because the four parts before it
+give a cooker you have to run by hand. A person edits a source file, and the running program
+shows the result. Three pieces do it, and each one is useful on its own.
+
+`platform::DirectoryWatcher` walks the source tree on a timer and reports what moved. It
+polls rather than asking the operating system, so one implementation serves both platforms
+and a test drives it with no event plumbing. The cost is the walk, which suits a tree of the
+size `sandbox/` carries. Issue #57 puts a native backend behind the same interface when a
+tree grows past it.
+
+A change is never reported on the walk that first sees it. An editor that saves by writing a
+temporary file and renaming it over the original shows up as several changes in a few
+milliseconds, and a large file is readable long before it is complete. Handing either one to
+the cooker gives a parse error that names nothing the person did.
+
+`platform::run_process` starts the cooker and waits. DESIGN.md section 6 keeps the cooker a
+separate executable, so the runtime asks for the work rather than linking the importer, and
+no cgltf or stb reaches a shipping build. The arguments go across as a list and no shell ever
+sees them, which is what makes an asset path holding `$name` or a backtick ordinary rather
+than dangerous.
+
+`assets::HotReload` joins the two and reads the manifest again. `Content::reload` compares
+the new manifest against the old one and names only the identities that moved. The entry hash
+covers every input, so an asset the cooker skipped keeps the hash it had, and a reload after
+one save names one asset rather than the whole tree.
+
+**A failed cook changes nothing.** The cooker writes its manifest even when one asset failed,
+so a half-cooked tree really does reach the disk. `HotReload` reads the exit code and refuses
+that tree, which leaves the program with the assets it already had. The next save tries
+again, and nothing here ends the process. A broken scene file is the same shape: the world
+goes empty, the log names the file, and saving a working one loads it again.
+
+**Freeing a resource waits for the frames in flight.** `MeshPass::reload` waits for the
+device before it frees a buffer or a texture. A frame the GPU has not finished may still read
+one, and that use-after-free is a failure the validation layer may or may not report, on a
+run that may or may not reproduce. A reload follows a person saving a file, so the wait costs
+a stall nobody sees. Streaming cannot pay that, and it brings a queue that frees behind the
+frames instead, and issue #60 holds it.
+
+A material holds the texture handle it resolved, so dropping a texture also drops every
+material that named it. Keeping the material would bind a handle the device already freed.
 
 **Looking at what was drawn.** `gfx::capture_frame` copies the frame that was presented last
 into host memory, and `runtime --screenshot <file>` writes it as a PNG. A run that ends with

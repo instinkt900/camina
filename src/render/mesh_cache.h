@@ -69,6 +69,23 @@ namespace engine::render {
                                          Guid guid);
 
         /**
+         * @brief Frees one mesh, so the next get() reads it again.
+         *
+         * This is what hot reload calls. It also forgets a remembered failure,
+         * because the whole point of a reload is that a mesh which would not
+         * load before may load now.
+         *
+         * @param device The device that owns the buffers.
+         * @param guid The mesh to let go of. One that is not loaded is not an
+         * error and does nothing.
+         *
+         * @warning The buffers go straight back to the device. The caller must
+         * already have waited for the frames in flight, because a frame the GPU
+         * has not finished may still read them.
+         */
+        void drop(gfx::Device* device, Guid guid);
+
+        /**
          * @brief Frees every buffer.
          * @param device The device that owns them.
          */

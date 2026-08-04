@@ -18,12 +18,15 @@
  */
 
 #include "assets/content.h"
+#include "core/guid.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
 #include "render/material_cache.h"
 #include "render/mesh_cache.h"
 #include "render/texture_cache.h"
 #include "scene/world.h"
+
+#include <span>
 
 namespace engine::render {
 
@@ -57,6 +60,20 @@ namespace engine::render {
 
         /// @brief Frees the pipeline and everything the caches uploaded.
         void destroy();
+
+        /**
+         * @brief Lets go of the assets that changed, so the next draw reloads them.
+         *
+         * This is the render half of hot reload. `assets::Content::reload()`
+         * says what moved and this frees it. An identity the caches never
+         * loaded costs nothing, so the caller passes the whole list.
+         *
+         * @param changed The identities that changed, from the content.
+         *
+         * @warning Call this between frames and never while a command list is
+         * open. It waits for the GPU, which cannot happen mid-frame.
+         */
+        void reload(std::span<const Guid> changed);
 
         /**
          * @brief Draws every entity that has a MeshRenderer and a WorldTransform.

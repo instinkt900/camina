@@ -17,6 +17,14 @@ namespace engine::scene {
         return registry_.view<const Hierarchy>().size();
     }
 
+    void World::clear() {
+        registry_.clear();
+        // The walk buffer holds entities that no longer exist, and the count
+        // describes an update that no longer means anything.
+        stack_.clear();
+        rebuilt_ = 0;
+    }
+
     bool World::is_ancestor(entt::entity ancestor, entt::entity entity) const {
         for (entt::entity walk = entity; walk != entt::null;
              walk = registry_.get<Hierarchy>(walk).parent) {

@@ -5,6 +5,7 @@ add_library(engine_core STATIC
     core/guid.cpp
     assets/content.cpp
     assets/database.cpp
+    assets/hot_reload.cpp
     assets/manifest.cpp
     assets/material.cpp
     assets/meta.cpp
@@ -12,6 +13,8 @@ add_library(engine_core STATIC
     assets/texture.cpp
     platform/window.cpp
     platform/paths.cpp
+    platform/process.cpp
+    platform/watch.cpp
     gfx/types.cpp
     reflect/registry.cpp
     reflect/inspector.cpp

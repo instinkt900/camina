@@ -44,6 +44,21 @@ namespace engine::render {
         return loaded_.emplace(guid, std::move(built)).first->second;
     }
 
+    void MaterialCache::drop(Guid guid) {
+        failed_.erase(guid);
+        loaded_.erase(guid);
+
+        // A material holds the texture handle it resolved, and a reloaded
+        // texture is a new handle. Every material that names this identity has
+        // to read it again, or it binds a texture the device already freed.
+        std::erase_if(loaded_, [guid](const auto& entry) {
+            const assets::Material& material = entry.second.source;
+            return material.base_color == guid || material.metallic_roughness == guid ||
+                   material.normal == guid || material.occlusion == guid ||
+                   material.emissive == guid;
+        });
+    }
+
     void MaterialCache::destroy() {
         loaded_.clear();
         failed_.clear();
