@@ -134,8 +134,17 @@ is two tinted panes, because nothing else in the sandbox is transparent and the 
 otherwise ship untested.
 
 The environment is still two colors until M5.4 cooks one, so a metal reads dark on purpose.
-The permutation half of M5.1 comes next, now that a shader reads more than one map and
-something varies.
+
+The cooker half of the permutation work landed. A `.meta` sidecar carries a `shader` block with
+a list of variants, and each names its defines. The shader rule numbers its parts the way the
+glTF rule does, so `mesh.frag` gives `mesh.frag.0.shader`. Part 0 is the base form and it keeps
+the identity of the source. The rest derive one under the kind word `shader`. A cooked module
+records what it was built with, so a consumer picks by declaration rather than by manifest
+order.
+
+The engine shaders still list no variants, so they cook to one module each and nothing on
+screen changed. `mesh.frag` moves to `#ifdef` and `MeshPass` starts selecting in the second
+half. See issue #83.
 
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded

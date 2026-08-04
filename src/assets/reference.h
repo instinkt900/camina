@@ -50,6 +50,8 @@ namespace engine::assets {
     inline constexpr const char* kTexturePartKind = "texture";
     /// @brief The kind word `Guid::derive` uses for a prefab inside a glTF file.
     inline constexpr const char* kPrefabPartKind = "prefab";
+    /// @brief The kind word `Guid::derive` uses for one variant of a shader.
+    inline constexpr const char* kShaderPartKind = "shader";
 
     /**
      * @brief Every kind word a derived identity can carry.
@@ -57,8 +59,9 @@ namespace engine::assets {
      * A kind word is part of an identity, so adding one is safe and changing
      * one moves every identity that used it. Treat that as a format version.
      */
-    inline constexpr std::array<const char*, 4> kPartKinds{ kMeshPartKind, kMaterialPartKind,
-                                                            kTexturePartKind, kPrefabPartKind };
+    inline constexpr std::array<const char*, 5> kPartKinds{ kMeshPartKind, kMaterialPartKind,
+                                                            kTexturePartKind, kPrefabPartKind,
+                                                            kShaderPartKind };
 
     /**
      * @brief One asset reference, taken apart.

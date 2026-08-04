@@ -43,7 +43,9 @@ namespace engine::assets {
     inline constexpr std::uint32_t kShaderMagic = 0x44485343U;
 
     /// @brief The format version this build writes and reads.
-    inline constexpr std::uint32_t kShaderVersion = 1;
+    ///
+    /// Version 2 added the defines a variant was compiled with.
+    inline constexpr std::uint32_t kShaderVersion = 2;
 
     /// @brief Which stage a cooked shader belongs to.
     enum class ShaderStage : std::uint32_t {
@@ -132,9 +134,11 @@ namespace engine::assets {
     /**
      * @brief The fixed part at the front of a cooked shader file.
      *
-     * The counts say how long each block that follows is. The blocks come in the
-     * order the members are declared here: the bindings, the parameters, the
-     * string block, and then the SPIR-V words.
+     * The counts say how long each block that follows is. The blocks come in
+     * this order: the bindings, the parameters, the defines, the string block,
+     * and then the SPIR-V words. That is not the order the members are declared
+     * in, because `define_count` came with version 2 and it went at the end so
+     * that the header kept its layout for every field before it.
      */
     struct ShaderHeader {
         std::uint32_t magic = kShaderMagic;     ///< ::kShaderMagic. Checked first.
@@ -145,13 +149,31 @@ namespace engine::assets {
         std::uint32_t string_bytes = 0;         ///< Bytes of the string block, before padding.
         std::uint32_t spirv_words = 0;          ///< How many 32-bit words the module holds.
         std::uint32_t push_constant_size = 0;   ///< Bytes of push constants this stage reads.
+        std::uint32_t define_count = 0;         ///< How many ShaderDefineRecord entries follow.
     };
 
     /// @brief How many bytes the fixed header holds.
-    inline constexpr std::size_t kShaderHeaderSize = 32;
+    inline constexpr std::size_t kShaderHeaderSize = 36;
     static_assert(sizeof(ShaderHeader) == kShaderHeaderSize,
                   "The header starts the file and it is written and read as raw "
                   "bytes, so its size is part of the file format.");
+
+    /**
+     * @brief One define a variant was compiled with, as the file stores it.
+     *
+     * The text lives in the same string block the names use, so a define costs
+     * two numbers here and its characters once there.
+     */
+    struct ShaderDefineRecord {
+        std::uint32_t name_offset = 0; ///< Where the text starts in the string block.
+        std::uint32_t name_length = 0; ///< How many bytes of text.
+    };
+
+    /// @brief How many bytes one define record holds.
+    inline constexpr std::size_t kShaderDefineRecordSize = 8;
+    static_assert(sizeof(ShaderDefineRecord) == kShaderDefineRecordSize,
+                  "A define record goes to disk as raw bytes, so its size is "
+                  "part of the file format.");
 
     /// @brief How many bytes one binding record holds.
     inline constexpr std::size_t kShaderBindingRecordSize = 32;
@@ -198,6 +220,14 @@ namespace engine::assets {
         std::vector<ShaderParam> params;         ///< Every member of every uniform block.
         std::uint32_t push_constant_size = 0;    ///< Bytes of push constants the stage reads.
         ShaderStage stage = ShaderStage::Vertex; ///< Which stage the module belongs to.
+        /**
+         * @brief The defines this module was compiled with. Empty is the base form.
+         *
+         * A consumer matches a material against these to pick the variant it
+         * wants, so the module carries what it was built with rather than
+         * relying on the order of the manifest.
+         */
+        std::vector<std::string> defines;
     };
 
     /**

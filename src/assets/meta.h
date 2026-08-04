@@ -27,6 +27,8 @@
 #include "reflect/reflect.h"
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace engine::assets {
 
@@ -64,11 +66,45 @@ namespace engine::assets {
     };
 
     /**
+     * @brief One compiled form of a shader source.
+     *
+     * A shader that reads five optional maps would branch on all of them, and a
+     * branch the whole draw takes the same way is work every pixel pays for
+     * nothing. A variant compiles the source with a set of defines instead, so
+     * the branch is gone before the module exists.
+     *
+     * The defines are written here rather than worked out by the cooker. A
+     * cross product of every toggle grows by powers of two, and most of the
+     * combinations no material ever asks for.
+     */
+    struct ShaderVariant {
+        /// @brief A name for this form, for the log and for a person reading the file.
+        std::string name;
+        /// @brief The defines to compile with. An empty list is the base form.
+        std::vector<std::string> defines;
+    };
+
+    /**
+     * @brief How the cooker must compile one GLSL source.
+     *
+     * An empty variant list cooks the source once, with no defines, which is
+     * what every shader did before permutations. A list cooks one module for
+     * each entry.
+     *
+     * @warning The first variant must define nothing. It is the base form, and
+     * it keeps the identity of the source asset itself. The rest derive theirs.
+     */
+    struct ShaderImport {
+        std::vector<ShaderVariant> variants; ///< One for each module to compile.
+    };
+
+    /**
      * @brief What the engine keeps about a source asset, next to the file.
      */
     struct AssetMeta {
         Guid guid;             ///< The identity every reference to this asset stores.
         TextureImport texture; ///< Read by the texture rule. Ignored by every other rule.
+        ShaderImport shader;   ///< Read by the shader rule. Ignored by every other rule.
     };
 
     /**
@@ -141,6 +177,39 @@ struct engine::reflect::Describe<engine::assets::TextureImport> {
     }
 };
 
+/// @brief Field descriptors for one shader variant.
+template <>
+struct engine::reflect::Describe<engine::assets::ShaderVariant> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "ShaderVariant";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::assets::ShaderVariant, name,
+                         engine::reflect::Tooltip{ "A name for the log and for a reader." }),
+            ENGINE_FIELD(engine::assets::ShaderVariant, defines,
+                         engine::reflect::Tooltip{
+                             "The defines to compile with. Empty is the base form." }));
+    }
+};
+
+/// @brief Field descriptors for the shader import settings.
+template <>
+struct engine::reflect::Describe<engine::assets::ShaderImport> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "ShaderImport";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(
+            engine::assets::ShaderImport, variants,
+            engine::reflect::Tooltip{ "One module for each. Empty cooks the source once." }));
+    }
+};
+
 /// @brief Field descriptors for the sidecar, so reflect/ reads and writes it.
 template <>
 struct engine::reflect::Describe<engine::assets::AssetMeta> {
@@ -157,6 +226,10 @@ struct engine::reflect::Describe<engine::assets::AssetMeta> {
             // Version 2, so a sidecar written before M4.3 reads back without a
             // warning about a field it cannot have.
             ENGINE_FIELD(engine::assets::AssetMeta, texture, engine::reflect::Version{ 2 },
-                         engine::reflect::Tooltip{ "Read by the texture rule alone." }));
+                         engine::reflect::Tooltip{ "Read by the texture rule alone." }),
+            // Version 3, so every sidecar written before permutations reads back
+            // with no warning about a field it cannot have.
+            ENGINE_FIELD(engine::assets::AssetMeta, shader, engine::reflect::Version{ 3 },
+                         engine::reflect::Tooltip{ "Read by the shader rule alone." }));
     }
 };

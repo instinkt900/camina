@@ -3,6 +3,7 @@
 #include "assets/manifest.h"
 #include "assets/mesh.h"
 #include "assets/meta.h"
+#include "assets/reference.h"
 #include "assets/shader.h"
 #include "assets/texture.h"
 #include "core/log.h"
@@ -79,7 +80,7 @@ namespace cooker {
         [[nodiscard]] const char* cooked_suffix(Rule rule) {
             switch (rule) {
             case Rule::Shader:
-                // cube.vert becomes cube.vert.shader, so cube.vert and cube.frag
+                // cube.vert becomes cube.vert.0.shader, so cube.vert and cube.frag
                 // stay two files rather than collapsing onto one name.
                 return as::kShaderExtension;
             case Rule::Texture:
@@ -118,11 +119,65 @@ namespace cooker {
         [[nodiscard]] std::filesystem::path cooked_name(const std::filesystem::path& relative,
                                                         Rule rule, std::uint32_t part) {
             std::filesystem::path named = relative;
-            if (rule == Rule::Mesh) {
+            if (rule == Rule::Mesh || rule == Rule::Shader) {
                 named += "." + std::to_string(part);
             }
             named += cooked_suffix(rule);
             return named;
+        }
+
+        /**
+         * Compiles one GLSL source once for each variant its sidecar lists.
+         *
+         * A sidecar with no variant list gives one module with no defines, which
+         * is what every shader got before permutations. The base form keeps the
+         * identity of the source asset, so a reference to the shader itself still
+         * resolves. Every other variant derives one.
+         */
+        [[nodiscard]] bool cook_shader_variants(const Options& options,
+                                                const std::filesystem::path& source,
+                                                const std::filesystem::path& relative,
+                                                const as::AssetMeta& meta,
+                                                std::vector<as::ManifestOutput>& outputs) {
+            // One base form when the sidecar names none, so the list below is
+            // never empty and the loop needs no special case.
+            std::vector<as::ShaderVariant> variants = meta.shader.variants;
+            if (variants.empty()) {
+                variants.push_back(as::ShaderVariant{ .name = "base", .defines = {} });
+            }
+
+            // Part 0 keeps the asset's own identity, so it has to be the form
+            // with nothing defined. A list that starts with a variant carrying
+            // defines would give the plain shader a derived identity that
+            // nothing refers to.
+            if (!variants.front().defines.empty()) {
+                ENGINE_LOG_ERROR("{}: the first variant defines {} and it must define nothing. "
+                                 "It is the base form and it keeps the identity of the source.",
+                                 relative.string(), variants.front().defines.front());
+                return false;
+            }
+
+            for (std::size_t at = 0; at < variants.size(); ++at) {
+                const as::ShaderVariant& variant = variants[at];
+                const std::filesystem::path cooked =
+                    cooked_name(relative, Rule::Shader, static_cast<std::uint32_t>(at));
+                const std::filesystem::path destination = options.out / cooked;
+
+                std::error_code error;
+                std::filesystem::create_directories(destination.parent_path(), error);
+                if (!cook_shader(options.glslc, source, destination, variant.defines)) {
+                    ENGINE_LOG_ERROR("{}: variant {} did not compile.", relative.string(),
+                                     variant.name.empty() ? "with no name" : variant.name);
+                    return false;
+                }
+
+                outputs.push_back(as::ManifestOutput{
+                    .cooked = as::manifest_path(cooked),
+                    .guid = at == 0 ? meta.guid
+                                    : engine::Guid::derive(meta.guid, as::kShaderPartKind,
+                                                           static_cast<std::uint32_t>(at)) });
+            }
+            return true;
         }
 
         /**
@@ -155,9 +210,7 @@ namespace cooker {
 
             switch (rule) {
             case Rule::Shader:
-                return single([&](const std::filesystem::path& to) {
-                    return cook_shader(options.glslc, source, to);
-                });
+                return cook_shader_variants(options, source, relative, meta, outputs);
             case Rule::Texture:
                 return single([&](const std::filesystem::path& to) {
                     return cook_texture(source, to, meta.texture);

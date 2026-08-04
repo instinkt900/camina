@@ -111,6 +111,14 @@ namespace engine::assets {
             params.push_back(record);
         }
 
+        std::vector<ShaderDefineRecord> defines;
+        defines.reserve(shader.defines.size());
+        for (const std::string& source : shader.defines) {
+            ShaderDefineRecord record{};
+            place_name(strings, source, record.name_offset, record.name_length);
+            defines.push_back(record);
+        }
+
         ShaderHeader header;
         header.stage = static_cast<std::uint32_t>(shader.stage);
         header.binding_count = static_cast<std::uint32_t>(bindings.size());
@@ -118,11 +126,13 @@ namespace engine::assets {
         header.string_bytes = static_cast<std::uint32_t>(strings.size());
         header.spirv_words = static_cast<std::uint32_t>(shader.spirv.size());
         header.push_constant_size = shader.push_constant_size;
+        header.define_count = static_cast<std::uint32_t>(defines.size());
 
         const std::size_t padded_strings = round_up_to_word(strings.size());
         std::vector<std::byte> bytes;
         bytes.resize(kShaderHeaderSize + (bindings.size() * kShaderBindingRecordSize) +
-                     (params.size() * kShaderParamRecordSize) + padded_strings +
+                     (params.size() * kShaderParamRecordSize) +
+                     (defines.size() * kShaderDefineRecordSize) + padded_strings +
                      (shader.spirv.size() * sizeof(std::uint32_t)));
 
         std::size_t at = 0;
@@ -136,6 +146,7 @@ namespace engine::assets {
         put(&header, sizeof(header));
         put(bindings.data(), bindings.size() * kShaderBindingRecordSize);
         put(params.data(), params.size() * kShaderParamRecordSize);
+        put(defines.data(), defines.size() * kShaderDefineRecordSize);
         put(strings.data(), strings.size());
         // The padding stays zero, because resize() zeroed the whole buffer.
         at += padded_strings - strings.size();
@@ -185,6 +196,8 @@ namespace engine::assets {
                                       kShaderBindingRecordSize) +
                                      (static_cast<std::size_t>(header.param_count) *
                                       kShaderParamRecordSize) +
+                                     (static_cast<std::size_t>(header.define_count) *
+                                      kShaderDefineRecordSize) +
                                      padded_strings +
                                      (static_cast<std::size_t>(header.spirv_words) *
                                       sizeof(std::uint32_t));
@@ -207,6 +220,9 @@ namespace engine::assets {
 
         std::vector<ShaderParamRecord> param_records(header.param_count);
         take(param_records.data(), param_records.size() * kShaderParamRecordSize);
+
+        std::vector<ShaderDefineRecord> define_records(header.define_count);
+        take(define_records.data(), define_records.size() * kShaderDefineRecordSize);
 
         std::string strings(header.string_bytes, '\0');
         take(strings.data(), strings.size());
@@ -251,6 +267,16 @@ namespace engine::assets {
             param.size = record.size;
             param.type = static_cast<ParamType>(record.type);
             out.params.push_back(std::move(param));
+        }
+
+        out.defines.clear();
+        out.defines.reserve(define_records.size());
+        for (const ShaderDefineRecord& record : define_records) {
+            std::string define;
+            if (!take_name(strings, record.name_offset, record.name_length, define, where)) {
+                return false;
+            }
+            out.defines.push_back(std::move(define));
         }
 
         out.spirv.resize(header.spirv_words);

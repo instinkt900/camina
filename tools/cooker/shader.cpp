@@ -336,7 +336,8 @@ namespace cooker {
     }
 
     bool cook_shader(const std::filesystem::path& glslc, const std::filesystem::path& source,
-                     const std::filesystem::path& destination) {
+                     const std::filesystem::path& destination,
+                     const std::vector<std::string>& defines) {
         as::ShaderStage stage{};
         if (!shader_stage_for(source, stage)) {
             ENGINE_LOG_ERROR("{}: no stage goes with that extension.", source.string());
@@ -359,8 +360,18 @@ namespace cooker {
         // runs its own optimizer over whatever it is given, so the cost of
         // leaving this out is small on the desktop targets. Issue #90 holds the
         // measurement and the two ways to get both.
-        const engine::platform::ProcessResult result = engine::platform::run_process(
-            glslc, { "--target-env=vulkan1.3", "-o", module_path.string(), source.string() });
+        // run_process takes an argument vector and starts the program without a
+        // shell, so a define needs no quoting and nothing can reinterpret one.
+        std::vector<std::string> arguments{ "--target-env=vulkan1.3" };
+        for (const std::string& define : defines) {
+            arguments.push_back("-D" + define);
+        }
+        arguments.push_back("-o");
+        arguments.push_back(module_path.string());
+        arguments.push_back(source.string());
+
+        const engine::platform::ProcessResult result =
+            engine::platform::run_process(glslc, arguments);
 
         const auto clean_up = [&module_path]() {
             std::error_code error;
@@ -391,6 +402,10 @@ namespace cooker {
             return false;
         }
         shader.spirv = std::move(words);
+        // What this module was built with travels with it, so a consumer picks a
+        // variant by what it declares rather than by where it sits in the
+        // manifest.
+        shader.defines = defines;
 
         const std::vector<std::byte> bytes = as::write_shader(shader);
         clean_up();

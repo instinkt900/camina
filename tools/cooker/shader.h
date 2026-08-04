@@ -19,7 +19,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace cooker {
 
@@ -71,11 +73,13 @@ namespace cooker {
      * @param glslc The glslc program to run.
      * @param source The GLSL source to read.
      * @param destination The cooked file to write. The directory must exist.
+     * @param defines The defines to compile with. An empty list is the base form.
      * @return True when the cooked file was written. False reports why in the
      * log, by source path.
      */
     [[nodiscard]] bool cook_shader(const std::filesystem::path& glslc,
                                    const std::filesystem::path& source,
-                                   const std::filesystem::path& destination);
+                                   const std::filesystem::path& destination,
+                                   const std::vector<std::string>& defines);
 
 } // namespace cooker
