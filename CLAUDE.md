@@ -314,6 +314,16 @@ here, consider whether moth_ui wants the same change.
   Without it EnTT falls back to `assert()`, which `NDEBUG` removes from a
   RelWithDebInfo build, so a `get<T>()` for a component that is not there kills the
   process with no message.
+- **CI builds RelWithDebInfo only.** The matrix is Linux with Clang and Windows with
+  MSVC, both RelWithDebInfo. Debug does not join it, because it costs more CI time
+  than it returns. So Debug is a configuration a person builds when they need it, and
+  it can break without anybody hearing. Build it before you trust it.
+- **A Debug build that fails in `pulseaudio` is a poisoned Conan cache, not this
+  repository.** A `libmp3lame` Debug package built elsewhere on the machine with
+  AddressSanitizer records only `build_type=Debug` in its package ID, so Conan reuses
+  it here. `pulseaudio` then links it without `-fsanitize=address` and the ASan
+  symbols are missing. The fix is `conan remove "libmp3lame/*" -c` and then install
+  again. Nothing in `profiles/`, `cmake/`, or `CMakeLists.txt` sets a sanitizer.
 - **A test that must die.** ctest cannot express "this program must abort, and it must
   say why". `PASS_REGULAR_EXPRESSION` does not override a process that a signal
   stopped, and `WILL_FAIL` passes whether the message appeared or not.
@@ -478,6 +488,8 @@ These decisions are made. Do not raise them again unless the user asks.
 | Mesh import | cgltf and glTF only. No assimp |
 | Material authoring | Code-authored GLSL plus a reflected parameter block. A graph layer can sit on top later |
 | Game UI | moth_ui. ImGui is for the editor and debug overlays only |
+| Lighting architecture | Clustered forward. Deferred was considered and rejected. See `DESIGN.md` §9 |
+| Debug in CI | No. RelWithDebInfo and the two platforms only. Debug costs more CI time than it returns |
 | Networking | Not being built. Keep the three enabling decisions in `DESIGN.md` §9 |
 
 ## Sequencing
