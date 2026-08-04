@@ -40,16 +40,15 @@ namespace engine::assets {
                     const auto [at, added] = out.emplace(
                         output.guid, Cooked{ .path = output.cooked, .hash = entry.hash });
                     if (!added) {
-                        // Copying an asset together with its sidecar does
-                        // this, and that is the flow this milestone is about.
-                        // Only the first of the two is ever reloaded, so
-                        // saying nothing here would leave the second one
-                        // stale with nothing to explain it. Issue #64 makes
-                        // the cooker refuse the tree instead.
-                        ENGINE_LOG_ERROR("{} is the identity of {} and of {}. Delete the "
-                                         "sidecar of one of them, so the cooker gives it an "
-                                         "identity of its own. Only the first one reloads.",
-                                         output.guid.to_text(), at->second.path, output.cooked);
+                        // The cooker should have refused the tree before it
+                        // wrote this manifest. Reaching here means either the
+                        // manifest was edited by hand, or the cooker check in
+                        // cook_all did not run. Either way, only the first of
+                        // the two is ever reloaded.
+                        ENGINE_LOG_WARN("{} is the identity of {} and of {}. The cooker "
+                                        "should have refused this. Only the first one "
+                                        "reloads.",
+                                        output.guid.to_text(), at->second.path, output.cooked);
                     }
                 }
             }

@@ -222,6 +222,30 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    void test_duplicate_identity_is_refused() {
+        // Copying an asset together with its .meta sidecar gives both files
+        // the same GUID. The cooker must refuse the tree before it writes a
+        // manifest that loads only one of the two.
+        const std::filesystem::path source = scratch("dup/src");
+        const std::filesystem::path out = scratch("dup/out");
+        write_file(source / "one.scene", "{}");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+        check(first.cooked == 1, "it cooked one asset");
+
+        std::filesystem::copy_file(source / "one.scene", source / "copy.scene");
+        const auto sidecar = as::meta_path(source / "one.scene");
+        const auto copied_sidecar = as::meta_path(source / "copy.scene");
+        std::filesystem::copy_file(sidecar, copied_sidecar);
+
+        cooker::Result second;
+        check(!cooker::cook_all(options, second), "a duplicate identity fails the cook");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
     void test_shell_metacharacters_are_refused() {
 #if defined(ENGINE_GLSLC_PATH)
         // A shader whose name a shell would read as a command. glslc now runs
@@ -988,6 +1012,7 @@ int main() {
     test_cook_and_skip();
     test_missing_output_recooks();
     test_new_identity_recooks();
+    test_duplicate_identity_is_refused();
     test_shell_metacharacters_are_refused();
     test_documentation_is_not_an_asset();
     test_bad_input();
