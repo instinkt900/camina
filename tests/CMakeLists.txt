@@ -57,6 +57,12 @@ target_link_libraries(test_cooker PRIVATE cooker_lib)
 engine_set_warnings(test_cooker)
 engine_enable_clang_tidy(test_cooker)
 
+# The M4.5 tests run the cooker executable, because that is how hot reload
+# cooks. Linking cooker_lib does not build it, and both land in the same
+# output directory, so building this target alone would otherwise leave a test
+# looking for a program that is not there yet.
+add_dependencies(test_cooker cooker)
+
 add_test(NAME cooker COMMAND test_cooker)
 
 # The glTF importer and the cooked mesh format. This links cooker_lib for the
