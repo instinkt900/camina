@@ -1,9 +1,14 @@
 #include "assets/reference.h"
 
+#include "assets/material.h"
+#include "assets/mesh.h"
+#include "assets/texture.h"
 #include "core/log.h"
 
+#include <array>
 #include <charconv>
 #include <system_error>
+#include <utility>
 
 namespace engine::assets {
 
@@ -37,6 +42,45 @@ namespace engine::assets {
                 }
             }
             return true;
+        }
+
+        /**
+         * Reads the kind and the index out of a cooked file name.
+         *
+         * The cooker writes one part of a source as `<source>.<index><suffix>`,
+         * and the suffix says what kind of part it is. The source path itself
+         * is not read here, because the manifest already holds it.
+         */
+        [[nodiscard]] bool part_of_cooked_name(std::string_view cooked, AssetReference& out) {
+            static constexpr std::array<std::pair<std::string_view, const char*>, 4> kSuffixes{
+                { { kMeshExtension, kMeshPartKind },
+                  { kTextureExtension, kTexturePartKind },
+                  { kMaterialExtension, kMaterialPartKind },
+                  { kPrefabExtension, kPrefabPartKind } }
+            };
+
+            for (const auto& [suffix, kind] : kSuffixes) {
+                if (!cooked.ends_with(suffix)) {
+                    continue;
+                }
+                const std::string_view stem = cooked.substr(0, cooked.size() - suffix.size());
+                const std::size_t dot = stem.rfind('.');
+                if (dot == std::string_view::npos) {
+                    return false;
+                }
+
+                const std::string_view digits = stem.substr(dot + 1);
+                std::uint32_t index = 0;
+                const auto* const end = digits.data() + digits.size();
+                const auto read = std::from_chars(digits.data(), end, index);
+                if (digits.empty() || read.ec != std::errc{} || read.ptr != end) {
+                    return false;
+                }
+                out.kind = kind;
+                out.index = index;
+                return true;
+            }
+            return false;
         }
 
     } // namespace
@@ -138,19 +182,26 @@ namespace engine::assets {
                                                         .index = 0 });
             }
 
-            // A part of it. The identity was derived from the source identity,
-            // so it is derived again here until it matches. A part index is
-            // never past the number of outputs, because every part is one.
-            for (const char* kind : kPartKinds) {
-                for (std::size_t at = 0; at < entry.outputs.size(); ++at) {
-                    const auto index = static_cast<std::uint32_t>(at);
-                    if (Guid::derive(entry.guid, kind, index) == guid) {
-                        return format_reference(
-                            AssetReference{ .source = std::filesystem::path{ entry.source },
-                                            .kind = kind,
-                                            .index = index });
-                    }
+            // A part of it. The cooked name says which part, because the
+            // cooker writes `<source>.<index><suffix>` for one. Counting the
+            // outputs instead would miss a sparse index, and those happen: a
+            // glTF where only image 7 of 8 sits inside the file cooks one
+            // texture and derives it at index 7.
+            //
+            // The name only suggests the answer. Deriving from the source
+            // identity is what confirms it, so a naming rule that changes
+            // gives no answer rather than a wrong one.
+            for (const ManifestOutput& output : entry.outputs) {
+                if (output.guid != guid) {
+                    continue;
                 }
+                AssetReference part;
+                if (!part_of_cooked_name(output.cooked, part) ||
+                    Guid::derive(entry.guid, part.kind, part.index) != guid) {
+                    break;
+                }
+                part.source = std::filesystem::path{ entry.source };
+                return format_reference(part);
             }
         }
         return {};

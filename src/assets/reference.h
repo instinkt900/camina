@@ -34,6 +34,14 @@ namespace engine::assets {
     /// @brief What separates the path from the part of it being named.
     inline constexpr char kPartSeparator = '#';
 
+    /**
+     * @brief What a cooked prefab is called.
+     *
+     * The same as the source, because a prefab is still a prefab after its
+     * references resolve, and the runtime opens it by that name.
+     */
+    inline constexpr const char* kPrefabExtension = ".prefab";
+
     /// @brief The kind word `Guid::derive` uses for a mesh inside a glTF file.
     inline constexpr const char* kMeshPartKind = "mesh";
     /// @brief The kind word `Guid::derive` uses for a material inside a glTF file.
@@ -119,8 +127,9 @@ namespace engine::assets {
      * @return How many strings were replaced.
      *
      * @warning This works on the text, so a string field that happens to hold
-     * an identity the manifest knows is replaced as well. No described field
-     * carries one today except the ones that mean it.
+     * an identity the manifest knows is replaced as well. A field says what it
+     * means through its type, and this reads only the text, which is the wrong
+     * granularity. Issue #81 routes it through the descriptors instead.
      */
     std::size_t restore_references(nlohmann::json& document, const Manifest& manifest);
 

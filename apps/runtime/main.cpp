@@ -217,17 +217,42 @@ namespace {
         const std::size_t restored =
             engine::assets::restore_references(document, content.manifest());
 
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
-        if (!file) {
-            ENGINE_LOG_ERROR("Could not open {} for writing.", path.string());
+        // Through a temporary in the same directory, then a rename. Writing
+        // over the scene directly means a disk that fills up, or a close that
+        // fails, leaves a person with half a scene and no copy of the whole
+        // one. The rename is what makes the swap all or nothing, and it is
+        // only reached once the bytes are down.
+        std::filesystem::path staged = path;
+        staged += ".writing";
+
+        {
+            std::ofstream file(staged, std::ios::binary | std::ios::trunc);
+            if (!file) {
+                ENGINE_LOG_ERROR("Could not open {} for writing.", staged.string());
+                return false;
+            }
+            constexpr int kIndent = 2;
+            file << document.dump(kIndent) << '\n';
+            file.close();
+            if (!file) {
+                ENGINE_LOG_ERROR("Could not write {}, so {} is untouched.", staged.string(),
+                                 path.string());
+                std::error_code ignored;
+                std::filesystem::remove(staged, ignored);
+                return false;
+            }
+        }
+
+        std::error_code error;
+        std::filesystem::rename(staged, path, error);
+        if (error) {
+            ENGINE_LOG_ERROR("Could not put {} in place of {}. {}", staged.string(),
+                             path.string(), error.message());
+            std::error_code ignored;
+            std::filesystem::remove(staged, ignored);
             return false;
         }
-        constexpr int kIndent = 2;
-        file << document.dump(kIndent) << '\n';
-        if (!file) {
-            ENGINE_LOG_ERROR("Could not write {}.", path.string());
-            return false;
-        }
+
         ENGINE_LOG_INFO("Wrote {}, with {} asset references put back.", path.string(), restored);
         return true;
     }

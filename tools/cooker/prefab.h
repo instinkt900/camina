@@ -25,9 +25,6 @@ struct cgltf_data;
 
 namespace cooker {
 
-    /// @brief The name a cooked prefab file carries after the source name.
-    inline constexpr const char* kPrefabExtension = ".prefab";
-
     /**
      * @brief Writes one prefab for each scene in a glTF file.
      *

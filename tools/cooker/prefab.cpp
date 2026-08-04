@@ -287,7 +287,7 @@ namespace cooker {
 
             std::filesystem::path cooked = relative;
             cooked += "." + std::to_string(at);
-            cooked += kPrefabExtension;
+            cooked += as::kPrefabExtension;
 
             if (!write_prefab(out_root / cooked, document)) {
                 return false;

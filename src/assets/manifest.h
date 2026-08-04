@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+/// @brief Asset identity, the cooked manifest, and hot reload.
 namespace engine::assets {
 
     /// @brief The file the cooker writes, inside the cooked directory.

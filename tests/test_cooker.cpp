@@ -1352,6 +1352,16 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    /**
+     * Eight images, and only the last sits inside the file.
+     *
+     * That one derives at index 7 while the entry writes four outputs: a mesh,
+     * a material, the texture, and a prefab. A search bounded by the number of
+     * outputs stops at four and walks straight past it.
+     */
+    constexpr const char* kSparseImageGltf =
+        R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"scene":0,"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":7}}}],"textures":[{"source":0},{"source":1},{"source":2},{"source":3},{"source":4},{"source":5},{"source":6},{"source":7}],"images":[{"uri":"f0.png"},{"uri":"f1.png"},{"uri":"f2.png"},{"uri":"f3.png"},{"uri":"f4.png"},{"uri":"f5.png"},{"uri":"f6.png"},{"uri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
+
     // Issue #73. A document a person edits holds references, and a live world
     // holds identities. Saving has to put the references back, or the save
     // replaces every name with the GUID it resolved to and undoes #54.
@@ -1402,6 +1412,42 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    void test_a_part_with_a_sparse_index_reads_back() {
+        const std::filesystem::path source = scratch("sparse/src");
+        const std::filesystem::path out = scratch("sparse/out");
+        write_file(source / "m.gltf", kSparseImageGltf);
+        for (int at = 0; at < 7; ++at) {
+            write_tga(source / ("f" + std::to_string(at) + ".png"), 2, 2,
+                      half_black_half_white());
+        }
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+
+        as::AssetMeta meta;
+        check(as::load_meta(source / "m.gltf", meta), "the glTF has a sidecar");
+
+        // Image 7 is the only one inside the file, so it derives at index 7
+        // while the entry holds four outputs.
+        const engine::Guid inside = engine::Guid::derive(meta.guid, as::kTexturePartKind, 7);
+        const as::ManifestEntry* entry = content.find("m.gltf");
+        check(entry != nullptr, "the glTF is in the manifest");
+        if (entry == nullptr) {
+            return;
+        }
+        check(entry->outputs.size() < 7, "the entry holds fewer outputs than that index");
+        check(as::find_by_guid(content.manifest(), inside) != nullptr,
+              "the inline image really cooked at index 7");
+        check(as::reference_for(content.manifest(), inside) == "asset:m.gltf#texture:7",
+              "and it reads back at index 7, past the count of outputs");
+
+        test::remove_tree(source.parent_path());
+    }
+
     void test_a_saved_document_keeps_its_references() {
         const std::filesystem::path source = scratch("round/src");
         const std::filesystem::path out = scratch("round/out");
@@ -1422,6 +1468,9 @@ namespace {
         // identity. Putting it back has to give the reference again.
         nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.prefab"), nullptr, false);
         check(!cooked.is_discarded(), "the cooked prefab parses");
+        if (cooked.is_discarded()) {
+            return;
+        }
         check(cooked["entities"][0]["components"]["MeshRenderer"]["mesh"] != "asset:models/crate.gltf#mesh:0",
               "the cooked document holds the identity, not the reference");
 
@@ -1482,6 +1531,7 @@ int main() {
     test_a_part_that_is_not_there_fails_the_cook();
     test_a_reference_stops_being_sound_when_the_model_changes();
     test_an_identity_reads_back_as_the_reference_that_named_it();
+    test_a_part_with_a_sparse_index_reads_back();
     test_a_saved_document_keeps_its_references();
     test_a_document_that_will_not_parse_fails_the_cook();
     test_a_new_sidecar_cooks_the_document_that_names_it();
