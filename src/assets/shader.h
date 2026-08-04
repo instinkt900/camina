@@ -134,9 +134,11 @@ namespace engine::assets {
     /**
      * @brief The fixed part at the front of a cooked shader file.
      *
-     * The counts say how long each block that follows is. The blocks come in the
-     * order the members are declared here: the bindings, the parameters, the
-     * string block, and then the SPIR-V words.
+     * The counts say how long each block that follows is. The blocks come in
+     * this order: the bindings, the parameters, the defines, the string block,
+     * and then the SPIR-V words. That is not the order the members are declared
+     * in, because `define_count` came with version 2 and it went at the end so
+     * that the header kept its layout for every field before it.
      */
     struct ShaderHeader {
         std::uint32_t magic = kShaderMagic;     ///< ::kShaderMagic. Checked first.

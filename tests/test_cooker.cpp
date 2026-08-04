@@ -374,15 +374,29 @@ void main() {
 
         // Part 0 keeps the asset's own identity, so a reference to the shader
         // itself still resolves. The rest derive one.
+        //
+        // The identity comes from the sidecar written above and not from the
+        // manifest entry. Comparing the entry against itself would pass even if
+        // the cook gave the whole asset a new identity, which is the one thing
+        // that breaks every reference to it.
+        engine::Guid sidecar_guid;
+        check(engine::Guid::parse("3f1b1f42-9a1e-4c8e-9b2b-7c5a0d6e1f01", sidecar_guid),
+              "the identity written into the sidecar above parses");
+
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
         const as::ManifestEntry* entry = as::find_by_source(manifest, "many.frag");
         check(entry != nullptr && entry->outputs.size() == 2, "one source, two outputs");
         if (entry != nullptr && entry->outputs.size() == 2) {
-            check(entry->outputs[0].guid == entry->guid,
+            check(entry->guid == sidecar_guid, "the cook kept the identity the sidecar gave");
+            check(entry->outputs[0].cooked == shader_part("many.frag", 0),
+                  "the base form is part 0");
+            check(entry->outputs[0].guid == sidecar_guid,
                   "the base form keeps the identity of the source");
+            check(entry->outputs[1].cooked == shader_part("many.frag", 1),
+                  "the second variant is part 1");
             check(entry->outputs[1].guid ==
-                      engine::Guid::derive(entry->guid, as::kShaderPartKind, 1),
+                      engine::Guid::derive(sidecar_guid, as::kShaderPartKind, 1),
                   "the second variant derives its own");
             check(entry->outputs[0].guid != entry->outputs[1].guid,
                   "and the two are not the same identity");
@@ -403,7 +417,7 @@ void main() { out_color = vec4(1.0); }
 )");
         write_file(source / "first.frag.meta", R"({
   "__version": 3,
-  "guid": "3f1b1f42-9a1e-4c8e-9b2b-7c5a0d6e1f02",
+  "guid": "3f1b1f42-9a1e-4c8e-9b2b-7c5a0d6e1f01",
   "shader": {
     "__version": 1,
     "variants": [
