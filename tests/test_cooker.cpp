@@ -14,6 +14,7 @@
 #include "assets/hot_reload.h"
 #include "assets/manifest.h"
 #include "assets/meta.h"
+#include "assets/reference.h"
 #include "assets/texture.h"
 #include "check.h"
 #include "cook.h"
@@ -1113,14 +1114,14 @@ namespace {
     }
 
     void test_a_reference_reads_into_its_parts() {
-        cooker::AssetReference reference;
-        check(cooker::parse_reference("asset:models/crate.gltf#mesh:2", reference),
+        as::AssetReference reference;
+        check(as::parse_reference("asset:models/crate.gltf#mesh:2", reference),
               "a part reference parses");
         check(reference.source == std::filesystem::path{ "models/crate.gltf" } &&
                   reference.kind == "mesh" && reference.index == 2,
               "and it gives the path, the kind, and the index");
 
-        check(cooker::parse_reference("asset:cube.png", reference),
+        check(as::parse_reference("asset:cube.png", reference),
               "a whole-file reference parses");
         check(reference.source == std::filesystem::path{ "cube.png" } &&
                   reference.kind.empty() && reference.index == 0,
@@ -1128,20 +1129,20 @@ namespace {
 
         // A GUID is not a reference. This is what keeps a document written
         // before any of this still readable.
-        check(!cooker::parse_reference("508dcd18-9d17-8eb2-b877-acfa91632504", reference),
+        check(!as::parse_reference("508dcd18-9d17-8eb2-b877-acfa91632504", reference),
               "a GUID is left alone");
-        check(!cooker::parse_reference("crate", reference), "and so is an ordinary name");
+        check(!as::parse_reference("crate", reference), "and so is an ordinary name");
 
         // Each of these means to be a reference and cannot be one, so each has
         // to be refused rather than passed through as a name.
-        check(!cooker::parse_reference("asset:", reference), "a reference to nothing fails");
-        check(!cooker::parse_reference("asset:a.gltf#mesh", reference),
+        check(!as::parse_reference("asset:", reference), "a reference to nothing fails");
+        check(!as::parse_reference("asset:a.gltf#mesh", reference),
               "a kind with no index fails");
-        check(!cooker::parse_reference("asset:a.gltf#:0", reference),
+        check(!as::parse_reference("asset:a.gltf#:0", reference),
               "an index with no kind fails");
-        check(!cooker::parse_reference("asset:a.gltf#mesh:x", reference),
+        check(!as::parse_reference("asset:a.gltf#mesh:x", reference),
               "an index that is not a number fails");
-        check(!cooker::parse_reference("asset:a.gltf#mesh:0x", reference),
+        check(!as::parse_reference("asset:a.gltf#mesh:0x", reference),
               "and so does one with something after the number");
     }
 
@@ -1235,21 +1236,21 @@ namespace {
     }
 
     void test_a_reference_that_leaves_the_content_tree_is_refused() {
-        cooker::AssetReference reference;
+        as::AssetReference reference;
 
         // Resolving one of these would read a file the content tree does not
         // own, and writing its sidecar would put a file next to it. A cook runs
         // over content that arrives from somewhere else, so this is a refusal.
-        check(!cooker::parse_reference("asset:/etc/passwd", reference),
+        check(!as::parse_reference("asset:/etc/passwd", reference),
               "an absolute path is refused");
-        check(!cooker::parse_reference("asset:../outside.gltf", reference),
+        check(!as::parse_reference("asset:../outside.gltf", reference),
               "a path that steps out with .. is refused");
-        check(!cooker::parse_reference("asset:models/../../outside.gltf", reference),
+        check(!as::parse_reference("asset:models/../../outside.gltf", reference),
               "and so is one that steps out part way along");
 
         // The step has to be a whole component. A directory whose name merely
         // starts with two dots is an ordinary directory.
-        check(cooker::parse_reference("asset:..models/a.gltf", reference),
+        check(as::parse_reference("asset:..models/a.gltf", reference),
               "a name that only begins with dots is allowed");
     }
 
@@ -1351,6 +1352,93 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    // Issue #73. A document a person edits holds references, and a live world
+    // holds identities. Saving has to put the references back, or the save
+    // replaces every name with the GUID it resolved to and undoes #54.
+
+    void test_an_identity_reads_back_as_the_reference_that_named_it() {
+        const std::filesystem::path source = scratch("back/src");
+        const std::filesystem::path out = scratch("back/out");
+        // Two meshes, so the part index has to survive. With one, an index
+        // that was always written as zero would read back correctly by luck.
+        write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+        write_tga(source / "wall.tga", 2, 2, half_black_half_white());
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+
+        // A part of a file. This is the case that has to be worked out again
+        // rather than looked up, because only the source identity is stored.
+        as::AssetMeta meta;
+        check(as::load_meta(source / "models" / "crate.gltf", meta), "the glTF has a sidecar");
+        const engine::Guid first = engine::Guid::derive(meta.guid, as::kMeshPartKind, 0);
+        check(as::reference_for(content.manifest(), first) ==
+                  "asset:models/crate.gltf#mesh:0",
+              "a derived identity reads back as the part that named it");
+
+        const engine::Guid second = engine::Guid::derive(meta.guid, as::kMeshPartKind, 1);
+        check(as::reference_for(content.manifest(), second) ==
+                  "asset:models/crate.gltf#mesh:1",
+              "and the second part reads back as the second, not the first");
+
+        // A whole file. Its one output goes by the source's own identity.
+        const as::ManifestEntry* wall = content.find("wall.tga");
+        check(wall != nullptr, "the texture is in the manifest");
+        if (wall == nullptr) {
+            return;
+        }
+        check(as::reference_for(content.manifest(), wall->guid) == "asset:wall.tga",
+              "a whole file reads back as its path");
+
+        check(as::reference_for(content.manifest(), engine::Guid::generate()).empty(),
+              "an identity nothing cooked names nothing");
+        check(as::reference_for(content.manifest(), engine::Guid{}).empty(),
+              "and neither does the null identity");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    void test_a_saved_document_keeps_its_references() {
+        const std::filesystem::path source = scratch("round/src");
+        const std::filesystem::path out = scratch("round/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        const std::string authored =
+            R"({"entities":[{"components":{"MeshRenderer":)"
+            R"({"mesh":"asset:models/crate.gltf#mesh:0"},"Name":{"value":"crate"}}}]})";
+        write_file(source / "a.prefab", authored);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+
+        // The cooked document is what a live world reads, so it holds the
+        // identity. Putting it back has to give the reference again.
+        nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.prefab"), nullptr, false);
+        check(!cooked.is_discarded(), "the cooked prefab parses");
+        check(cooked["entities"][0]["components"]["MeshRenderer"]["mesh"] != "asset:models/crate.gltf#mesh:0",
+              "the cooked document holds the identity, not the reference");
+
+        const std::size_t restored = as::restore_references(cooked, content.manifest());
+        check(restored == 1, "one reference goes back");
+        check(cooked["entities"][0]["components"]["MeshRenderer"]["mesh"] ==
+                  "asset:models/crate.gltf#mesh:0",
+              "and it is the reference the source held");
+
+        // A name is left alone, so putting references back does not eat text
+        // that only looks like it might be one.
+        check(cooked["entities"][0]["components"]["Name"]["value"] == "crate",
+              "an ordinary string is untouched");
+
+        test::remove_tree(source.parent_path());
+    }
+
 } // namespace
 
 int main() {
@@ -1393,6 +1481,8 @@ int main() {
     test_a_reference_that_leaves_the_content_tree_is_refused();
     test_a_part_that_is_not_there_fails_the_cook();
     test_a_reference_stops_being_sound_when_the_model_changes();
+    test_an_identity_reads_back_as_the_reference_that_named_it();
+    test_a_saved_document_keeps_its_references();
     test_a_document_that_will_not_parse_fails_the_cook();
     test_a_new_sidecar_cooks_the_document_that_names_it();
     return test::report();

@@ -541,7 +541,7 @@ namespace cooker {
                 return false;
             }
             const engine::Guid mesh_guid =
-                engine::Guid::derive(parent, kMeshPartKind, static_cast<std::uint32_t>(at));
+                engine::Guid::derive(parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
             mesh_guids.push_back(mesh_guid);
             outputs.push_back(as::ManifestOutput{
                 .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });

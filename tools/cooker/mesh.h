@@ -14,6 +14,7 @@
  */
 
 #include "assets/manifest.h"
+#include "assets/reference.h"
 #include "core/guid.h"
 
 #include <filesystem>
@@ -21,15 +22,6 @@
 #include <vector>
 
 namespace cooker {
-
-    /**
-     * @brief The kind word Guid::derive uses for a mesh inside a glTF file.
-     *
-     * The word is part of the identity, so changing it changes every GUID
-     * derived with it, and every reference to those breaks. Treat it the same
-     * as a file format version.
-     */
-    inline constexpr const char* kMeshPartKind = "mesh";
 
     /**
      * @brief Whether this rule handles a file with this extension.

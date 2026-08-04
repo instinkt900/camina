@@ -295,7 +295,7 @@ namespace cooker {
 
             outputs.push_back(as::ManifestOutput{
                 .cooked = as::manifest_path(cooked),
-                .guid = engine::Guid::derive(parent, kPrefabPartKind,
+                .guid = engine::Guid::derive(parent, as::kPrefabPartKind,
                                              static_cast<std::uint32_t>(at)) });
         }
         return true;

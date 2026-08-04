@@ -21,52 +21,12 @@
  */
 
 #include "assets/manifest.h"
+#include "assets/reference.h"
 
-#include <cstdint>
 #include <filesystem>
-#include <string>
-#include <string_view>
 #include <vector>
 
 namespace cooker {
-
-    /// @brief What marks a string as an asset reference rather than a GUID.
-    inline constexpr std::string_view kAssetPrefix = "asset:";
-
-    /// @brief What separates the path from the part of it being named.
-    inline constexpr char kPartSeparator = '#';
-
-    /**
-     * @brief One asset reference, taken apart.
-     *
-     * `asset:models/crate/crate.gltf#mesh:0` names part 0 of kind `mesh` inside
-     * that file. `asset:models/crate/crate.png` names the file itself, and
-     * leaves @ref kind empty.
-     */
-    struct AssetReference {
-        /// @brief The source path, relative to the content root.
-        std::filesystem::path source;
-        /// @brief The kind word `Guid::derive` takes, or empty for the file itself.
-        std::string kind;
-        /// @brief The index `Guid::derive` takes. Zero when there is no kind.
-        std::uint32_t index = 0;
-    };
-
-    /**
-     * @brief Reads a reference string, without touching the file system.
-     *
-     * @param text The whole string, the `asset:` prefix included.
-     * @param out The parts. It is not written when the text is rejected.
-     * @return True when the text is a reference and it parsed. False for text
-     * that does not start with the prefix, and for a fragment that will not
-     * read, with the reason in the log for the second case.
-     *
-     * @warning A path that leaves the content tree is refused here. Resolving
-     * one would read, and write a sidecar beside, a file the content tree does
-     * not own. So an absolute path is refused, and so is any path holding a
-     * `..` step.
-     */
-    [[nodiscard]] bool parse_reference(std::string_view text, AssetReference& out);
 
     /**
      * @brief Reads every source path a document names, before anything cooks.

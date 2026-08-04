@@ -639,6 +639,19 @@ So a scene and a prefab may write `asset:models/crate/crate.gltf#mesh:0` where a
 and the cooker turns that into the identity before it writes the file. The cooked document
 still holds only GUIDs. The path is the authored form and the GUID is the cooked one.
 
+**A save writes the authored form, not the resolved one.** A live world holds identities,
+because that is what the engine reads. A document a person edits again holds references. So
+saving walks the document and puts each reference back, which is the mirror of what the cooker
+does on the way in. `assets::reference_for` finds the reference that names an identity, by
+deriving from the source identity until it matches.
+
+That is why the syntax lives in `src/assets/reference.h` rather than in the cooker. Both ends
+need it, and a second copy would drift.
+
+The scene a person edits is in the source tree, so that is where a save goes. Writing to the
+cooked tree looks like it worked, and the next cook throws it away. A build with no source
+tree beside it cannot save at all, and says so rather than writing somewhere useless.
+
 **The rename cost moves rather than disappearing.** A GUID exists because it survives a
 rename, and an authored path does not. Renaming a file inside the content tree breaks every
 authored reference to it, and each one has to be edited. Nothing at runtime is affected,

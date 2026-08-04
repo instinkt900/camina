@@ -8,6 +8,7 @@ add_library(engine_core STATIC
     assets/manifest.cpp
     assets/material.cpp
     assets/meta.cpp
+    assets/reference.cpp
     assets/mesh.cpp
     assets/texture.cpp
     platform/window.cpp

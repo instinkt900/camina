@@ -14,6 +14,7 @@
  */
 
 #include "assets/manifest.h"
+#include "assets/reference.h"
 #include "core/guid.h"
 
 #include <cstddef>
@@ -24,24 +25,6 @@
 struct cgltf_data;
 
 namespace cooker {
-
-    /**
-     * @brief The kind word Guid::derive uses for a material inside a glTF file.
-     *
-     * The word is part of the identity, so changing it changes every GUID
-     * derived with it, and every reference to those breaks. Treat it the same
-     * as a file format version.
-     */
-    inline constexpr const char* kMaterialPartKind = "material";
-
-    /**
-     * @brief The kind word Guid::derive uses for an image inside a glTF file.
-     *
-     * The word is part of the identity, so changing it changes every GUID
-     * derived with it, and every reference to those breaks. Treat it the same
-     * as a file format version.
-     */
-    inline constexpr const char* kTexturePartKind = "texture";
 
     /// @brief What cook_inline_images() made from one glTF file.
     struct InlineImages {
