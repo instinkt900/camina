@@ -138,7 +138,17 @@ namespace {
 
         // Editing one character of a scene file does this, and a watcher that
         // compared only the size would never see it.
-        write_file(root / "a.txt", "two");
+        //
+        // The write time is set rather than left to the file system. Two
+        // writes inside one write-time tick are the case watch.h warns about,
+        // and the tick on Windows is coarse enough for two writes this close
+        // together to land in the same one. Issue #57 is what removes the
+        // limitation. This test is about the write time being compared at all,
+        // so it makes sure there is a difference to compare.
+        const std::filesystem::path file = root / "a.txt";
+        write_file(file, "two");
+        std::filesystem::last_write_time(file, std::filesystem::last_write_time(file) +
+                                                   std::chrono::seconds{ 2 });
         check(quiet(watcher), "the walk that first sees it reports nothing");
 
         std::vector<pf::WatchEvent> changes;

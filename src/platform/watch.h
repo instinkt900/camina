@@ -57,7 +57,10 @@ namespace engine::platform {
      * @warning The walk reads the write time and the size. Two writes inside
      * one write-time tick that leave the size the same look like no change.
      * The next real change reports both, so this delays a reload and never
-     * loses one.
+     * loses one. Windows updates the write time coarsely enough for this to
+     * be reachable, and a tool that rewrites many files at once, such as a
+     * branch checkout, is what reaches it. Issue #57 removes the limitation
+     * by asking the operating system for the change instead.
      *
      * @code
      * engine::platform::DirectoryWatcher watcher;
