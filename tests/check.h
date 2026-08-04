@@ -53,7 +53,11 @@ namespace test {
     inline void remove_tree(const std::filesystem::path& path) {
         std::error_code error;
         std::filesystem::remove_all(path, error);
-        check(!error, ("cleanup: could not remove " + path.string()).c_str());
+        // The name says what is true when the check passes, the way every
+        // other check in the suite reads. Naming the failure instead printed
+        // "pass  cleanup: could not remove ..." on every cleanup, and a log
+        // full of lines that read as contradictions is a log nobody scans.
+        check(!error, ("cleanup removed " + path.string()).c_str());
     }
 
     inline int report() {
