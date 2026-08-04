@@ -33,13 +33,6 @@ namespace engine::render {
                       "The push block must fit the size every Vulkan device promises.");
 
         /**
-         * The per-frame block, which must match the Frame block in both shaders.
-         *
-         * It is std140, so the vec4 sits on a 16-byte boundary. A Vec3 would pad
-         * to the same 16 bytes, and a written padding word is easier to read
-         * than an implied one.
-         */
-        /**
          * How many lights one frame can carry.
          *
          * The block is a fixed-size array rather than a buffer that grows,
@@ -59,6 +52,13 @@ namespace engine::render {
             std::array<float, 4> color{};
         };
 
+        /**
+         * The per-frame block, which must match the Frame block in both shaders.
+         *
+         * It is std140, so the vec4 sits on a 16-byte boundary. A Vec3 would pad
+         * to the same 16 bytes, and a written padding word is easier to read
+         * than an implied one.
+         */
         struct FrameUniforms {
             Mat4 view_projection{ 1.0F };
             std::array<float, 4> camera_position{};
@@ -69,7 +69,8 @@ namespace engine::render {
         };
 
         /// Collects every light in the world into the frame block.
-        void gather_lights(const scene::World& world, FrameUniforms& frame) {
+        /// @return True when the world held more lights than the block can carry.
+        bool gather_lights(const scene::World& world, FrameUniforms& frame) {
             std::uint32_t count = 0;
             const auto add = [&frame, &count](const std::array<float, 4>& position,
                                               const Vec3& color, float intensity, float range) {
@@ -113,12 +114,8 @@ namespace engine::render {
                 }
             }
 
-            if (!room) {
-                ENGINE_LOG_WARN("The scene has more than {} lights, and the rest are not lit. "
-                                "See kMaxLights in mesh_pass.cpp.",
-                                kMaxLights);
-            }
             frame.light_count[0] = count;
+            return !room;
         }
 
         /// Which descriptor set the frame block binds to. The material is set 1.
@@ -468,7 +465,17 @@ namespace engine::render {
             .view_projection = view_projection,
             .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
         };
-        gather_lights(world, frame);
+        // Report the overflow when it starts and not on every frame after it.
+        // draw() runs sixty times a second, so a scene with nine lights would
+        // otherwise write sixty lines a second and hide everything else.
+        const bool overflowed = gather_lights(world, frame);
+        if (overflowed && !lights_overflowed_) {
+            ENGINE_LOG_WARN("The scene has more than {} lights, and the rest are not lit. "
+                            "See kMaxLights in mesh_pass.cpp.",
+                            kMaxLights);
+        }
+        lights_overflowed_ = overflowed;
+
         gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
 
         gfx::cmd_bind_pipeline(commands, pipeline_);
