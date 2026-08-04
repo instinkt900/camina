@@ -5,10 +5,10 @@
 // that skips too much ships a stale asset. Both failures are quiet, so the
 // tests here drive the second run and check the counts rather than the output.
 //
-// These tests cook no shader. glslc is a separate program, and a test that
-// needs it would not run on a machine without the Conan environment. The copy
-// rule exercises the same manifest path, and the build itself cooks the real
-// shaders.
+// test_shell_metacharacters_are_refused is the one test that cooks a shader.
+// It needs glslc, which the CMake test target passes through a compile
+// definition. The copy rule exercises the same manifest path for the rest of
+// the tests.
 
 #include "assets/content.h"
 #include "assets/hot_reload.h"
@@ -223,30 +223,30 @@ namespace {
     }
 
     void test_shell_metacharacters_are_refused() {
-        // A shader whose name a shell would read as a command. Double quotes
-        // do not stop a POSIX shell expanding $(...), so the cooker refuses
-        // the name rather than handing it to the shell. Without this, cooking
-        // a content tree from anywhere but your own machine runs whatever the
-        // file name says.
-        //
-        // The file is a .vert, because only the shader rule builds a command.
-        // Nothing here runs glslc: the name is refused before that.
+#if defined(ENGINE_GLSLC_PATH)
+        // A shader whose name a shell would read as a command. glslc now runs
+        // through run_process, so no shell ever sees the name, and the cooker
+        // no longer refuses it. Without shell_safe, a content tree holding a
+        // file named `a$(id).vert` cooks the same way any other .vert does.
         const std::filesystem::path source = scratch("inject/src");
         const std::filesystem::path out = scratch("inject/out");
 #if defined(_WIN32)
-        const char* dangerous = "a%PATH%.vert";
+        const char* name = "a%PATH%.vert";
 #else
-        const char* dangerous = "a$(id).vert";
+        const char* name = "a$(id).vert";
 #endif
-        write_file(source / dangerous, "#version 450\nvoid main() {}\n");
+        write_file(source / name, "#version 450\nvoid main() {}\n");
 
-        const cooker::Options options{ .content = source, .out = out };
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
-        check(!cooker::cook_all(options, result), "a name a shell would expand fails the cook");
-        check(result.failed == 1, "and it counts as a failure rather than a skip");
-        check(!std::filesystem::exists(out / dangerous), "nothing was written for it");
+        check(cooker::cook_all(options, result), "a name a shell would expand now cooks");
+        check(result.cooked == 1, "it counted the cook");
+        check(std::filesystem::exists(out / (std::string(name) + ".spv")),
+              "the SPIR-V was written");
 
         std::filesystem::remove_all(source.parent_path());
+#endif
     }
 
     /**
