@@ -8,7 +8,7 @@
  * turns that GUID into a pair of GPU buffers, and it uploads each mesh once
  * however many entities draw it.
  *
- * The cache owns the buffers rather than `assets::AssetDatabase`, because a GPU
+ * The cache owns the buffers rather than a central database, because a GPU
  * buffer needs the device to free it and the database frees a value by running
  * its destructor. M4.5 brings the two together, when hot reload needs to
  * replace a mesh while the program runs.

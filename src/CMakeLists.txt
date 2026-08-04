@@ -4,7 +4,6 @@ add_library(engine_core STATIC
     core/arena.cpp
     core/guid.cpp
     assets/content.cpp
-    assets/database.cpp
     assets/hot_reload.cpp
     assets/manifest.cpp
     assets/material.cpp

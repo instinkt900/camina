@@ -580,10 +580,13 @@ milestone that may split this.
 **Drawing what the scene names.** M4.4c added `scene::MeshRenderer`, which names a mesh by
 GUID, and `render::MeshPass`, which draws every entity that carries one. `render::MeshCache`
 turns a GUID into a pair of GPU buffers and uploads each mesh once however many entities
-name it. The cache owns the buffers rather than `assets::AssetDatabase`, because a GPU
-buffer needs the device to free it and the database frees a value by running its destructor.
-M4.5 brings the two together, when hot reload has to replace a mesh while the program runs.
-
+name it. The render caches own the GPU buffers rather than a central asset database,
+because a GPU buffer needs the device to free it and a central database would need to
+reach into the device from the wrong layer. Each cache therefore holds its own GUID map
+and its own fallback, and each cache grows a `drop()` for hot reload. M4.1 built an
+`AssetPool` and an `AssetDatabase` with generational handles, but no production code
+ever called it. The caches do the same job with fewer layers, so the database was
+removed in #61 rather than kept as a second implementation of the same contract.
 **The node tree becomes a prefab.** A glTF node tree is a scene fragment with one root and
 parents that come first, which is the shape M3.3 already reads. So the importer writes a
 prefab and a scene instances it, and there is no second hierarchy format. Every node becomes

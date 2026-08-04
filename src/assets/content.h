@@ -13,7 +13,6 @@
  * only a GUID, so a rename inside the content tree changes nothing.
  */
 
-#include "assets/database.h"
 #include "assets/manifest.h"
 
 #include <cstddef>
@@ -127,17 +126,12 @@ namespace engine::assets {
         /// @return The manifest.
         [[nodiscard]] const Manifest& manifest() const { return manifest_; }
 
-        /// @brief The database that holds what this content loaded.
-        /// @return The database.
-        [[nodiscard]] AssetDatabase& database() { return database_; }
-
     private:
         /// The one output of a source, or nullptr with a reason in the log.
         [[nodiscard]] const ManifestOutput* sole_output(std::string_view source) const;
 
         std::filesystem::path root_;
         Manifest manifest_;
-        AssetDatabase database_;
     };
 
 } // namespace engine::assets
