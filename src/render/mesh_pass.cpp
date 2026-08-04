@@ -314,6 +314,17 @@ namespace engine::render {
             return false;
         }
 
+        // The bindings say a uniform block sits at set 1, and nothing yet says
+        // what is inside it. MaterialUniforms is written by hand and the GPU
+        // reads raw bytes, so a member the shader renamed or moved would read
+        // the wrong field with no error anywhere.
+        if (!check_material_block(fragment_shader, kFragmentShaderSource)) {
+            ENGINE_LOG_ERROR("{} and render::MaterialUniforms do not agree, so the pass "
+                             "would upload the wrong bytes. Fix one of the two.",
+                             kFragmentShaderSource);
+            return false;
+        }
+
         // The push block is the vertex stage's, and it must still match Push
         // above. Reflection now says how big the shader thinks it is, so the two
         // are checked against each other rather than only asserted here.

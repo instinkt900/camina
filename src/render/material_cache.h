@@ -18,6 +18,7 @@
 
 #include "assets/content.h"
 #include "assets/material.h"
+#include "assets/shader.h"
 #include "core/guid.h"
 #include "gfx/device.h"
 #include "render/texture_cache.h"
@@ -26,6 +27,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <span>
+#include <string_view>
 
 namespace engine::render {
 
@@ -71,6 +74,45 @@ namespace engine::render {
     static_assert(sizeof(MaterialUniforms) == kMaterialUniformsSize,
                   "The block goes to the GPU as raw bytes, so its size and its "
                   "layout are part of the contract with mesh.frag.");
+
+    /**
+     * @brief One member of MaterialUniforms, as `mesh.frag` must declare it.
+     *
+     * The offset comes from `offsetof` on the struct above, so this table cannot
+     * drift from the C++ side. The shader side comes from what the cooker
+     * reflected. Comparing the two is the whole point.
+     */
+    struct MaterialUniformMember {
+        const char* name = "";    ///< The member name, which must match the GLSL one.
+        std::uint32_t offset = 0; ///< Bytes from the start of the block.
+        assets::ParamType type{}; ///< What the shader must declare it as.
+    };
+
+    /**
+     * @brief What the `Material` block in `mesh.frag` has to declare.
+     *
+     * @return The members, in offset order. The storage is static.
+     */
+    [[nodiscard]] std::span<const MaterialUniformMember> material_uniform_layout();
+
+    /**
+     * @brief Checks a reflected shader against material_uniform_layout().
+     *
+     * The block is written once in GLSL and once as MaterialUniforms, and the
+     * GPU reads raw bytes, so a disagreement between the two is invisible. A
+     * renamed member reads the neighbouring field, and a member the shader moved
+     * reads whatever now sits at that offset. Neither one fails, and neither one
+     * looks obviously wrong on screen.
+     *
+     * The cooker already reflects every member of every uniform block. This is
+     * what reads them.
+     *
+     * @param fragment The cooked fragment shader, with its reflected params.
+     * @param where The source path, for the message.
+     * @return True when every member matches by name, offset, and type.
+     */
+    [[nodiscard]] bool check_material_block(const assets::Shader& fragment,
+                                            std::string_view where);
 
     /**
      * @brief Packs a cooked material into the block the shader reads.
