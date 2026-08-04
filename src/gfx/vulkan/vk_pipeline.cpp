@@ -63,13 +63,26 @@ namespace engine::gfx {
             // nearer fragment has the greater value. See DESIGN.md section 3.
             state.depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             state.depth.depthTestEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
-            state.depth.depthWriteEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
+            state.depth.depthWriteEnable =
+                (desc.depth_test && desc.depth_write) ? VK_TRUE : VK_FALSE;
             state.depth.depthCompareOp = VK_COMPARE_OP_GREATER;
             state.depth.maxDepthBounds = 1.0F;
 
             state.blend_attachment.colorWriteMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+            // The "over" operator. The color arrives multiplied by nothing, so
+            // the source factor is its own alpha. The alpha channel takes what
+            // is left rather than the same pair, so blending twice into the same
+            // attachment builds up the coverage instead of scaling it down.
+            state.blend_attachment.blendEnable = desc.blend ? VK_TRUE : VK_FALSE;
+            state.blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            state.blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            state.blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+            state.blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            state.blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            state.blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
             state.blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
             state.blend.attachmentCount = 1;

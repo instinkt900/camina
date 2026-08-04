@@ -122,15 +122,26 @@ host-visible buffer that `update_buffer` writes. Set 0 is the frame and set 1 is
 and the frame block is one buffer for each frame in flight. The vertex tangent is declared at
 last, which is what normal mapping needed.
 
-Two things over that shading are still constants in the shader. The one directional light
-becomes a scene component in the second half of M5.2, with the alpha modes. The environment is
-two colors until M5.4 cooks one, so a metal reads dark on purpose. The permutation half of
-M5.1 waits for this, because nothing varied until a shader read more than one map.
+M5.2 is complete. `scene::DirectionalLight` and `scene::PointLight` are reflected components,
+so a person aims the sun by turning its entity and moves a lamp by moving one. The frame block
+carries up to eight of them, and issue #98 holds the plan for carrying more.
+
+The alpha modes close it. Mask discards in the shader. Blend needs more than a shader, so
+`MeshPass` holds a second pipeline that blends and does not write depth, and it gathers every
+blended submesh, sorts it back to front, and draws it after the opaque ones.
+`GraphicsPipelineDesc` gained `blend` and `depth_write` for that. `sandbox/content/models/glass/`
+is two tinted panes, because nothing else in the sandbox is transparent and the path would
+otherwise ship untested.
+
+The environment is still two colors until M5.4 cooks one, so a metal reads dark on purpose.
+The permutation half of M5.1 comes next, now that a shader reads more than one map and
+something varies.
 
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
-together in a running program, with no validation message. The build produces no warnings
-under the full warning set.
+together in a running program, with no validation message. Two blended panes drew over the
+opaque scene with no validation message either. The build produces no warnings under the full
+warning set.
 
 ## Development flow
 
