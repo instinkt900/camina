@@ -43,7 +43,7 @@ namespace {
     std::filesystem::path scratch(std::string_view name) {
         const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "camina_test_mesh" / name;
-        std::filesystem::remove_all(path);
+        test::remove_tree(path);
         std::filesystem::create_directories(path);
         return path;
     }
@@ -449,7 +449,7 @@ namespace {
         check(mesh.min == engine::Vec3(0.0F, 0.0F, 0.0F), "the bounds start at the low corner");
         check(mesh.max == engine::Vec3(2.0F, 4.0F, 0.0F), "and reach the high one");
 
-        std::filesystem::remove_all(dir.parent_path());
+        test::remove_tree(dir.parent_path());
     }
 
     void test_gltf_with_a_separate_buffer_cooks() {
@@ -469,7 +469,7 @@ namespace {
                   std::filesystem::exists(out / cooked.at(1).cooked),
               "and both landed");
 
-        std::filesystem::remove_all(dir.parent_path());
+        test::remove_tree(dir.parent_path());
     }
 
     void test_tangents_are_built_when_the_source_has_none() {
@@ -503,7 +503,7 @@ namespace {
         }
         check(every_sign_valid, "and the bitangent sign in w is plus or minus one");
 
-        std::filesystem::remove_all(dir.parent_path());
+        test::remove_tree(dir.parent_path());
     }
 
     /**
@@ -619,7 +619,7 @@ namespace {
         }
         check(got == wanted, "and every triangle is the one the source had");
 
-        std::filesystem::remove_all(dir.parent_path());
+        test::remove_tree(dir.parent_path());
     }
 
     void test_a_broken_gltf_fails() {
@@ -656,7 +656,7 @@ namespace {
         check(!cook_gltf(dir / "nan.glb", out, "nan.glb", cooked),
               "a vertex position that is not a number fails the cook");
 
-        std::filesystem::remove_all(dir.parent_path());
+        test::remove_tree(dir.parent_path());
     }
 
     /// Builds a cooked mesh file in memory, so a test can then break it.
@@ -794,7 +794,7 @@ namespace {
         check(cooker::cook_all(options, again), "a second cook works");
         check(again.skipped == 1, "and it skips the glTF");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_the_separate_buffer_is_an_input() {
@@ -846,7 +846,7 @@ namespace {
               "the new mesh reads");
         check(mesh.max.x == 9.0F, "and it holds the geometry the .bin now has");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_missing_part_cooks_again() {
@@ -867,7 +867,7 @@ namespace {
         check(second.cooked == 1, "one missing part cooks the source again");
         check(std::filesystem::exists(out / "pair.glb.1.mesh"), "and the part came back");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     /**
@@ -976,7 +976,7 @@ namespace {
                   mesh.submeshes.at(0).material == entry->outputs.at(1).guid,
               "and its submesh names the material");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_the_image_sidecar_is_an_input() {
@@ -1010,7 +1010,7 @@ namespace {
         check(material.base_color == replaced.guid,
               "and the material now names the new identity");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_the_gltf_rule_guesses_the_color_space() {
@@ -1034,7 +1034,7 @@ namespace {
         check(image.texture.color_space == as::ColorSpace::Linear,
               "a normal map reads as linear even when the glTF rule wrote the sidecar");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_an_escaped_uri_names_the_file_it_means() {
@@ -1083,7 +1083,7 @@ namespace {
         check(material.base_color == image.guid,
               "and the material names the image the escaped URI meant");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_an_image_in_a_data_uri_gets_an_identity() {
@@ -1137,7 +1137,7 @@ namespace {
         check(cooker::cook_all(options, second), "a second cook works");
         check(second.skipped == 1, "and it skips the glTF");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_an_image_in_a_glb_buffer_gets_an_identity() {
@@ -1175,7 +1175,7 @@ namespace {
         check(view.color_space == as::ColorSpace::Srgb,
               "and a base color slot makes it read as sRGB");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_an_inline_normal_map_reads_as_linear() {
@@ -1197,7 +1197,7 @@ namespace {
         check(view.color_space == as::ColorSpace::Linear,
               "an image used only as a normal map reads as linear");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_an_inline_image_in_both_kinds_of_slot_reads_as_color() {
@@ -1224,7 +1224,7 @@ namespace {
         check(view.color_space == as::ColorSpace::Srgb,
               "an image used as both color and data reads as sRGB");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_material_naming_a_missing_image_fails() {
@@ -1240,7 +1240,7 @@ namespace {
         check(!cooker::cook_all(options, result), "a material naming a missing image fails");
         check(result.failed == 1, "and the glTF is the source that failed");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     /// Reads a cooked prefab back as JSON.
@@ -1314,7 +1314,7 @@ namespace {
         check(entities.at(1).at("components").at("Name").at("value") == "part0",
               "and the node name came across");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_single_root_needs_no_added_root() {
@@ -1343,7 +1343,7 @@ namespace {
         check(entities.at(0).at("components").contains("MeshRenderer"),
               "and that entity is the one that draws");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_child_comes_after_its_parent() {
@@ -1379,7 +1379,7 @@ namespace {
         check(parents_come_first, "and every parent comes before its children");
         check(entities.at(0).at("parent") == -1, "with the group as the only root");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_grandchild_names_its_own_parent() {
@@ -1417,7 +1417,7 @@ namespace {
         check(!entities.at(2).at("components").contains("MeshRenderer"),
               "a node with no mesh becomes an entity that draws nothing");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_mirrored_matrix_keeps_its_mirror() {
@@ -1451,7 +1451,7 @@ namespace {
         const float position = transform.at("position").at(0);
         check(std::abs(position - 3.0F) < 1.0e-4F, "the translation came across as well");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_sheared_matrix_fails_the_cook() {
@@ -1470,7 +1470,7 @@ namespace {
         check(!std::filesystem::exists(out / "skew.glb.0.prefab"),
               "and no prefab was left behind");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_scene_with_no_nodes_writes_no_prefab() {
@@ -1492,7 +1492,7 @@ namespace {
         check(!std::filesystem::exists(out / "bare.glb.0.prefab"),
               "but there is no prefab, because there is nothing to instance");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
 } // namespace

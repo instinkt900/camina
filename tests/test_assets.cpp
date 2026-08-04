@@ -27,7 +27,7 @@ namespace {
     std::filesystem::path scratch_directory() {
         const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "camina_test_assets";
-        std::filesystem::remove_all(path);
+        test::remove_tree(path);
         std::filesystem::create_directories(path);
         return path;
     }
@@ -70,7 +70,7 @@ namespace {
         check(as::meta_for(renamed, after_rename), "the renamed pair still reads");
         check(after_rename.guid == first.guid, "a rename does not change the identity");
 
-        std::filesystem::remove_all(directory);
+        test::remove_tree(directory);
     }
 
     void test_meta_refuses_and_repairs() {
@@ -96,7 +96,7 @@ namespace {
         check(as::meta_for(source, reread) && reread.guid == repaired.guid,
               "the replacement sticks");
 
-        std::filesystem::remove_all(directory);
+        test::remove_tree(directory);
     }
 
     void test_meta_reports_who_wrote_it() {
@@ -114,7 +114,7 @@ namespace {
         created = true;
         check(as::meta_for(source, meta, &created) && !created, "the second call reads it");
 
-        std::filesystem::remove_all(directory);
+        test::remove_tree(directory);
     }
 
     void test_meta_carries_import_settings() {
@@ -152,7 +152,7 @@ namespace {
         check(text.find("\"Linear\"") != std::string::npos,
               "and the file names the color space in words");
 
-        std::filesystem::remove_all(directory);
+        test::remove_tree(directory);
     }
 
     void test_mip_arithmetic() {

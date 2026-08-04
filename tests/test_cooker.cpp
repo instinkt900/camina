@@ -37,7 +37,7 @@ namespace {
     std::filesystem::path scratch(std::string_view name) {
         const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "camina_test_cooker" / name;
-        std::filesystem::remove_all(path);
+        test::remove_tree(path);
         std::filesystem::create_directories(path);
         return path;
     }
@@ -78,7 +78,7 @@ namespace {
         std::uint64_t missing = 0;
         check(!as::hash_file(dir / "not_there.txt", missing), "a missing file reports");
 
-        std::filesystem::remove_all(dir);
+        test::remove_tree(dir);
     }
 
     void test_input_order_matters() {
@@ -119,7 +119,7 @@ namespace {
         check(!as::hash_inputs(dir, { "a.txt", "gone.txt" }, broken),
               "a missing input reports rather than hashing what is left");
 
-        std::filesystem::remove_all(dir);
+        test::remove_tree(dir);
     }
 
     void test_cook_and_skip() {
@@ -166,7 +166,7 @@ namespace {
         check(cooker::cook_all(forced, all), "a forced cook works");
         check(all.cooked == 2 && all.skipped == 0, "and it cooks everything again");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_missing_output_recooks() {
@@ -186,7 +186,7 @@ namespace {
         check(second.cooked == 1, "a missing output cooks again");
         check(std::filesystem::exists(out / "one.scene"), "and the file came back");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_new_identity_recooks() {
@@ -219,7 +219,7 @@ namespace {
         check(entry != nullptr && fresh != nullptr && fresh->guid != entry->guid,
               "and the identity did change");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_duplicate_identity_is_refused() {
@@ -243,7 +243,7 @@ namespace {
         cooker::Result second;
         check(!cooker::cook_all(options, second), "a duplicate identity fails the cook");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_shell_metacharacters_are_refused() {
@@ -269,7 +269,7 @@ namespace {
         check(std::filesystem::exists(out / (std::string(name) + ".spv")),
               "the SPIR-V was written");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
 #endif
     }
 
@@ -409,7 +409,7 @@ namespace {
         check(red(color_view) != red(normal_view),
               "so the color space really does change the cooked bytes");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_editing_the_sidecar_cooks_again() {
@@ -444,7 +444,7 @@ namespace {
         check(read_cooked(out / "plate.tga.tex", bytes, view), "the cooked file reads");
         check(view.color_space == as::ColorSpace::Linear, "and it carries the new color space");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_an_older_manifest_cooks_again() {
@@ -480,7 +480,7 @@ namespace {
         check(now.entries.size() == 1 && now.entries.front().inputs.size() == 2,
               "and the entry names both inputs again");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     /**
@@ -544,7 +544,7 @@ namespace {
         check(cooker::cook_all(options, fourth), "the fourth cook works");
         check(fourth.cooked == 1, "and a manifest with no cooker field cooks again too");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_compression_and_mip_switches() {
@@ -599,7 +599,7 @@ namespace {
         check(!view.payload.empty() && static_cast<int>(view.payload[0]) == 0,
               "and the texels came through unchanged");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     /**
@@ -667,7 +667,7 @@ namespace {
                   ("and its payload is exactly the chain for " + name).c_str());
         }
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_a_broken_image_fails_the_cook() {
@@ -682,7 +682,7 @@ namespace {
         check(!std::filesystem::exists(out / "not_an_image.tga.tex"),
               "and no cooked file was left behind");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_documentation_is_not_an_asset() {
@@ -707,7 +707,7 @@ namespace {
         check(!std::filesystem::exists(as::meta_path(source / "README.md")),
               "and no sidecar was written beside it");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_bad_input() {
@@ -717,7 +717,7 @@ namespace {
         const cooker::Options missing{ .content = out / "not_there", .out = out };
         check(!cooker::cook_all(missing, result), "a content directory that is not there fails");
 
-        std::filesystem::remove_all(out.parent_path());
+        test::remove_tree(out.parent_path());
     }
 
     void test_content_reads_what_the_cooker_wrote() {
@@ -766,7 +766,7 @@ namespace {
         as::Content empty;
         check(!empty.open(out / "not_there"), "a directory with no manifest is refused");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     // M4.5. The reload half of the pipeline.
@@ -830,7 +830,7 @@ namespace {
         check(content.reload(changed) && changed.empty(),
               "reloading again names nothing, because nothing moved");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_reload_names_an_asset_that_went_away() {
@@ -862,7 +862,7 @@ namespace {
         }
         check(changed.front() == prefab, "which is the one that went away");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_reload_keeps_what_it_has_when_the_manifest_will_not_read() {
@@ -888,7 +888,7 @@ namespace {
         check(identity_of(content, "a.scene") == scene,
               "and the content keeps the manifest it already had");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_hot_reload_cooks_what_changed() {
@@ -927,7 +927,7 @@ namespace {
         check(read_file(out / "a.scene") == "{\"changed\":true}",
               "and the new bytes reached the cooked tree");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_hot_reload_lives_through_a_cook_that_fails() {
@@ -977,7 +977,7 @@ namespace {
         check(content.reload(refused) && refused.size() == 1,
               "the failed cook did change the tree, so refusing it was a decision");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
     void test_hot_reload_is_off_when_it_cannot_cook() {
@@ -999,7 +999,7 @@ namespace {
                                       .glslc = {} }),
               "and it will not start without a source tree");
 
-        std::filesystem::remove_all(source.parent_path());
+        test::remove_tree(source.parent_path());
     }
 
 } // namespace
