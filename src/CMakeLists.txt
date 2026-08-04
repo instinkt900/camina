@@ -10,6 +10,7 @@ add_library(engine_core STATIC
     assets/meta.cpp
     assets/reference.cpp
     assets/mesh.cpp
+    assets/shader.cpp
     assets/texture.cpp
     platform/window.cpp
     platform/paths.cpp

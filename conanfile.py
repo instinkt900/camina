@@ -73,6 +73,14 @@ class CaminaConan(ConanFile):
         self.requires("cgltf/1.15")
         self.requires("meshoptimizer/0.25")
 
+        # M5.1. tools/cooker reflects the SPIR-V that glslc wrote, and stores the
+        # descriptor layout in the cooked shader. The runtime reads that layout
+        # and never links this, so the shipping binary carries no reflection.
+        # See DESIGN.md section 9 "Shader pipeline".
+        #
+        # The version tracks volk above, because both follow the Vulkan SDK.
+        self.requires("spirv-reflect/1.4.350.0")
+
         if self.options.with_editor:
             self.requires("imguizmo/1.83")
 

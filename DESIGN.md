@@ -530,6 +530,24 @@ layouts with SPIRV-Reflect. Cache permutations. Support hot reload.
 M4.2 moved this out of CMake and into the cooker. A shader is an asset now, with a `.meta`
 sidecar and a manifest entry, and `assets::Content` reads it at startup.
 
+M5.1 added the reflection, and it runs at cook time. The cooker links SPIRV-Reflect, reads
+the module glslc wrote, and stores the descriptor layout and the members of every uniform
+block beside it. `src/assets/shader.h` holds that format. The runtime reads it and never
+links SPIRV-Reflect, so the shipping binary carries no reflection.
+
+The module and its description travel in one file, `name.frag.shader`, rather than two. Two
+files would need two manifest entries and a derived GUID for the second, and they could drift
+apart. One file cannot describe a module it does not carry.
+
+`gfx::GraphicsPipelineDesc` now takes the bindings rather than a `sample_texture` flag, so no
+layout is written by hand anywhere. That closes the gap rule 4.5 names: a hand-written
+pipeline layout beside a reflected parameter block is two descriptor systems.
+
+The cooker no longer passes `-O` to glslc. glslc hands `-O` to spirv-opt, which strips every
+`OpName`. The set and the binding survive, because they are decorations the module needs to
+be correct, and every name does not. A parameter block with no names gives §7 nothing to
+label a field with. Issue #90 holds the measurement and the two ways to keep both.
+
 The cooker invokes `glslc` as a separate program rather than linking `libshaderc`. Conan 2
 has no per-target requirement. Linking it would therefore put shaderc in the graph of every
 consumer of the package, for the sake of one tool. Issue #43 holds the reasons to change

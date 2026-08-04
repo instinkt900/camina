@@ -5,7 +5,7 @@
 // that skips too much ships a stale asset. Both failures are quiet, so the
 // tests here drive the second run and check the counts rather than the output.
 //
-// test_shell_metacharacters_are_refused is the one test that cooks a shader.
+// test_a_shell_metacharacter_name_still_cooks is the one test that cooks a shader.
 // It needs glslc, which the CMake test target passes through a compile
 // definition. The copy rule exercises the same manifest path for the rest of
 // the tests.
@@ -15,6 +15,7 @@
 #include "assets/manifest.h"
 #include "assets/meta.h"
 #include "assets/reference.h"
+#include "assets/shader.h"
 #include "assets/texture.h"
 #include "check.h"
 #include "cook.h"
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -251,7 +253,7 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
-    void test_shell_metacharacters_are_refused() {
+    void test_a_shell_metacharacter_name_still_cooks() {
 #if defined(ENGINE_GLSLC_PATH)
         // A shader whose name a shell would read as a command. glslc now runs
         // through run_process, so no shell ever sees the name, and the cooker
@@ -271,8 +273,159 @@ namespace {
         cooker::Result result;
         check(cooker::cook_all(options, result), "a name a shell would expand now cooks");
         check(result.cooked == 1, "it counted the cook");
-        check(std::filesystem::exists(out / (std::string(name) + ".spv")),
-              "the SPIR-V was written");
+        check(std::filesystem::exists(out / (std::string(name) +
+                                             engine::assets::kShaderExtension)),
+              "the cooked shader was written");
+
+        test::remove_tree(source.parent_path());
+#endif
+    }
+
+    /**
+     * The reflection that M5.1 added, over a shader that declares real bindings.
+     *
+     * This is the test that would catch a layout drifting from its module. The
+     * shader below declares a sampler, a uniform block, and a push block, and
+     * every one of them has to come back out of the cooked file.
+     */
+    void test_the_cooker_reflects_what_a_shader_reads() {
+#if defined(ENGINE_GLSLC_PATH)
+        const std::filesystem::path source = scratch("reflect/src");
+        const std::filesystem::path out = scratch("reflect/out");
+        write_file(source / "look.frag", R"(#version 450
+layout(set = 0, binding = 0) uniform sampler2D base_color;
+layout(set = 0, binding = 1) uniform Material {
+    vec4 base_color_factor;
+    float roughness_factor;
+} material;
+layout(push_constant) uniform Push { mat4 model; } push;
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 out_color;
+void main() {
+    out_color = texture(base_color, uv) * material.base_color_factor *
+                push.model[0][0] * material.roughness_factor;
+}
+)");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a shader with real bindings cooks");
+
+        const std::string cooked =
+            read_file(out / ("look.frag" + std::string(engine::assets::kShaderExtension)));
+        check(!cooked.empty(), "the cooked shader is there");
+
+        engine::assets::Shader shader;
+        check(engine::assets::read_shader(
+                  std::as_bytes(std::span(cooked.data(), cooked.size())), shader, "look.frag"),
+              "and it reads back");
+        check(shader.stage == engine::assets::ShaderStage::Fragment,
+              "the extension decided the stage");
+        check(!shader.spirv.empty(), "it carries the module");
+
+        // A mat4 is 64 bytes, and the push block holds one.
+        check(shader.push_constant_size == 64, "the push block size came from the module");
+
+        check(shader.bindings.size() == 2, "both bindings were found");
+        if (shader.bindings.size() == 2) {
+            // Sorted by set and then by binding, which is what the pipeline
+            // layout needs and what the cooker promises.
+            check(shader.bindings[0].binding == 0 &&
+                      shader.bindings[0].kind ==
+                          engine::assets::DescriptorKind::CombinedImageSampler,
+                  "the sampler is binding 0");
+            check(shader.bindings[0].name == "base_color", "and it kept its name");
+            check(shader.bindings[1].binding == 1 &&
+                      shader.bindings[1].kind == engine::assets::DescriptorKind::UniformBuffer,
+                  "the uniform block is binding 1");
+            check(shader.bindings[1].stages == engine::assets::kStageBitFragment,
+                  "the stage bit says the fragment stage reads it");
+            check(shader.bindings[1].block_size >= 20, "the block reports its size");
+        }
+
+        check(shader.params.size() == 2, "both members of the block were found");
+        if (shader.params.size() == 2) {
+            check(shader.params[0].name == "base_color_factor" &&
+                      shader.params[0].type == engine::assets::ParamType::Vec4 &&
+                      shader.params[0].offset == 0,
+                  "the vec4 member reflected");
+            check(shader.params[1].name == "roughness_factor" &&
+                      shader.params[1].type == engine::assets::ParamType::Float &&
+                      shader.params[1].offset == 16,
+                  "the float member reflected, after the vec4");
+        }
+
+        test::remove_tree(source.parent_path());
+#endif
+    }
+
+    /**
+     * A push constant block that does not start at zero.
+     *
+     * SPIRV-Reflect reports the lowest member offset in `offset`, and `size`
+     * already counts from the start of the range. Adding the two counts a late
+     * member twice, and the size that comes out can pass the 128 bytes every
+     * Vulkan device promises. The pipeline then fails to build, on a shader that
+     * is correct.
+     */
+    void test_a_push_block_that_starts_late_reports_its_real_size() {
+#if defined(ENGINE_GLSLC_PATH)
+        const std::filesystem::path source = scratch("push_offset/src");
+        const std::filesystem::path out = scratch("push_offset/out");
+        // One mat4 at offset 64, so the range runs to 128 and not to 192.
+        write_file(source / "late.frag", R"(#version 450
+layout(push_constant) uniform Push {
+    layout(offset = 64) mat4 model;
+} push;
+layout(location = 0) out vec4 out_color;
+void main() { out_color = push.model[0]; }
+)");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a shader with a late push block cooks");
+
+        const std::string cooked =
+            read_file(out / ("late.frag" + std::string(engine::assets::kShaderExtension)));
+        engine::assets::Shader shader;
+        check(engine::assets::read_shader(
+                  std::as_bytes(std::span(cooked.data(), cooked.size())), shader, "late.frag"),
+              "the cooked shader reads back");
+        check(shader.push_constant_size == 128,
+              "the push range ends at 128, not at the offset plus the size");
+
+        test::remove_tree(source.parent_path());
+#endif
+    }
+
+    /**
+     * A shader glslc will not compile must fail the cook, not write a file.
+     *
+     * The reflection runs after glslc, so a broken shader has to stop before it
+     * and leave nothing behind. A cooked file with no module in it would fail
+     * later, at pipeline build, with a message that names no source line.
+     */
+    void test_a_shader_that_does_not_compile_writes_nothing() {
+#if defined(ENGINE_GLSLC_PATH)
+        const std::filesystem::path source = scratch("broken_shader/src");
+        const std::filesystem::path out = scratch("broken_shader/out");
+        write_file(source / "bad.frag", "#version 450\nthis is not GLSL\n");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a shader that will not compile fails the cook");
+        check(result.failed == 1, "and it counts one failure");
+        check(!std::filesystem::exists(
+                  out / ("bad.frag" + std::string(engine::assets::kShaderExtension))),
+              "no cooked shader was written");
+        // glslc writes its module beside the cooked file, and the rule removes
+        // it on every path. One left behind would grow the cooked tree forever.
+        check(!std::filesystem::exists(
+                  out / ("bad.frag" + std::string(engine::assets::kShaderExtension) + ".spv")),
+              "and the compiler output did not stay behind");
 
         test::remove_tree(source.parent_path());
 #endif
@@ -1563,9 +1716,13 @@ int main() {
     test_missing_output_recooks();
     test_new_identity_recooks();
     test_duplicate_identity_is_refused();
-    test_shell_metacharacters_are_refused();
+    test_a_shell_metacharacter_name_still_cooks();
     test_documentation_is_not_an_asset();
     test_bad_input();
+    test::section("shader reflection");
+    test_the_cooker_reflects_what_a_shader_reads();
+    test_a_push_block_that_starts_late_reports_its_real_size();
+    test_a_shader_that_does_not_compile_writes_nothing();
     test::section("textures");
     test_color_space_decides_the_mip_chain();
     test_editing_the_sidecar_cooks_again();

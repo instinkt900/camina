@@ -79,6 +79,17 @@ engine_enable_clang_tidy(test_mesh)
 
 add_test(NAME mesh COMMAND test_mesh)
 
+# The cooked shader format. It links engine::core rather than cooker_lib,
+# because the format is what the two sides agree on and the runtime is one of
+# them. The reflection that fills it needs glslc, so it is tested in
+# test_cooker.cpp instead.
+add_executable(test_shader test_shader.cpp)
+target_link_libraries(test_shader PRIVATE engine::core)
+engine_set_warnings(test_shader)
+engine_enable_clang_tidy(test_shader)
+
+add_test(NAME shader COMMAND test_shader)
+
 # The file watcher and the process runner. This program is also its own child,
 # so the process tests have something to run on both platforms.
 add_executable(test_platform test_platform.cpp)

@@ -1,10 +1,13 @@
 #include "render/mesh_pass.h"
 
 #include "assets/mesh.h"
+#include "assets/shader.h"
 #include "core/log.h"
 #include "scene/components.h"
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -27,6 +30,107 @@ namespace engine::render {
         constexpr std::size_t kPushLimit = 128;
         static_assert(sizeof(Push) == kPushLimit,
                       "The push block must fit the size every Vulkan device promises.");
+
+        /// Reads one cooked shader out of the engine content tree.
+        [[nodiscard]] bool read_stage(const assets::Content& content, const char* source,
+                                      assets::Shader& out) {
+            std::vector<std::byte> bytes;
+            if (!content.read_bytes(source, bytes)) {
+                ENGINE_LOG_ERROR("{} is not in the cooked content tree.", source);
+                return false;
+            }
+            return assets::read_shader(bytes, out, source);
+        }
+
+        /// The gfx name for a kind the cooked shader reports.
+        [[nodiscard]] gfx::DescriptorKind to_gfx_kind(assets::DescriptorKind kind) {
+            switch (kind) {
+            case assets::DescriptorKind::UniformBuffer:
+                return gfx::DescriptorKind::UniformBuffer;
+            case assets::DescriptorKind::StorageBuffer:
+                return gfx::DescriptorKind::StorageBuffer;
+            case assets::DescriptorKind::CombinedImageSampler:
+                break;
+            }
+            return gfx::DescriptorKind::CombinedImageSampler;
+        }
+
+        /// The gfx stage bits for the ones the cooked shader reports.
+        [[nodiscard]] std::uint32_t to_gfx_stages(std::uint32_t stages) {
+            std::uint32_t out = 0;
+            if ((stages & assets::kStageBitVertex) != 0) {
+                out |= gfx::kStageBitVertex;
+            }
+            if ((stages & assets::kStageBitFragment) != 0) {
+                out |= gfx::kStageBitFragment;
+            }
+            if ((stages & assets::kStageBitCompute) != 0) {
+                out |= gfx::kStageBitCompute;
+            }
+            return out;
+        }
+
+        /**
+         * Joins the descriptors of the two stages into one layout.
+         *
+         * A binding both stages read appears once with both stage bits set.
+         * Vulkan takes one set layout for the whole pipeline, so declaring it
+         * twice would be two layouts for one set.
+         *
+         * The two stages have to agree about a slot they share. The cooker
+         * cannot check that, because it reflects one module at a time and never
+         * sees the pair. So this is the only place the disagreement can be
+         * caught, and catching it here beats a validation error or a wrong read
+         * later.
+         *
+         * The result comes out sorted by set and then by binding, which is what
+         * GraphicsPipelineDesc::bindings asks for.
+         */
+        [[nodiscard]] bool merge_bindings(const assets::Shader& vertex,
+                                          const assets::Shader& fragment,
+                                          std::vector<gfx::DescriptorBinding>& merged) {
+            bool ok = true;
+            const auto add = [&merged, &ok](const assets::Shader& shader) {
+                for (const assets::ShaderBinding& source : shader.bindings) {
+                    const auto found = std::find_if(
+                        merged.begin(), merged.end(),
+                        [&source](const gfx::DescriptorBinding& entry) {
+                            return entry.set == source.set && entry.binding == source.binding;
+                        });
+                    if (found != merged.end()) {
+                        const gfx::DescriptorKind kind = to_gfx_kind(source.kind);
+                        if (found->kind != kind || found->count != source.count) {
+                            ENGINE_LOG_ERROR(
+                                "The two stages declare set {} binding {} differently, so one "
+                                "layout cannot serve both. One says {} of kind {}, the other "
+                                "says {} of kind {}.",
+                                source.set, source.binding, found->count,
+                                static_cast<std::uint32_t>(found->kind), source.count,
+                                static_cast<std::uint32_t>(kind));
+                            ok = false;
+                            continue;
+                        }
+                        found->stages |= to_gfx_stages(source.stages);
+                        continue;
+                    }
+                    merged.push_back(gfx::DescriptorBinding{
+                        .set = source.set,
+                        .binding = source.binding,
+                        .count = source.count,
+                        .stages = to_gfx_stages(source.stages),
+                        .kind = to_gfx_kind(source.kind),
+                    });
+                }
+            };
+            add(vertex);
+            add(fragment);
+
+            std::sort(merged.begin(), merged.end(),
+                      [](const gfx::DescriptorBinding& a, const gfx::DescriptorBinding& b) {
+                          return a.set != b.set ? a.set < b.set : a.binding < b.binding;
+                      });
+            return ok;
+        }
 
     } // namespace
 
@@ -58,10 +162,27 @@ namespace engine::render {
      * already drawing.
      */
     bool MeshPass::build_pipeline(const assets::Content& content, gfx::PipelineHandle& out) {
-        std::vector<std::uint32_t> vertex_words;
-        std::vector<std::uint32_t> fragment_words;
-        if (!content.read_words(kVertexShaderSource, vertex_words) ||
-            !content.read_words(kFragmentShaderSource, fragment_words)) {
+        assets::Shader vertex_shader;
+        assets::Shader fragment_shader;
+        if (!read_stage(content, kVertexShaderSource, vertex_shader) ||
+            !read_stage(content, kFragmentShaderSource, fragment_shader)) {
+            return false;
+        }
+
+        // The layout comes from the two modules rather than from this file. A
+        // hand-written layout beside a shader that declares the same thing used
+        // to drift from it with nothing to catch the difference.
+        std::vector<gfx::DescriptorBinding> bindings;
+        if (!merge_bindings(vertex_shader, fragment_shader, bindings)) {
+            return false;
+        }
+
+        // The push block is the vertex stage's, and it must still match Push
+        // above. Reflection now says how big the shader thinks it is, so the two
+        // are checked against each other rather than only asserted here.
+        if (vertex_shader.push_constant_size != sizeof(Push)) {
+            ENGINE_LOG_ERROR("{} reads {} bytes of push constants and this pass sends {}.",
+                             kVertexShaderSource, vertex_shader.push_constant_size, sizeof(Push));
             return false;
         }
 
@@ -84,14 +205,16 @@ namespace engine::render {
         } };
 
         const gfx::GraphicsPipelineDesc desc{
-            .vertex = { .spirv = vertex_words.data(), .word_count = vertex_words.size() },
-            .fragment = { .spirv = fragment_words.data(), .word_count = fragment_words.size() },
+            .vertex = { .spirv = vertex_shader.spirv.data(),
+                        .word_count = vertex_shader.spirv.size() },
+            .fragment = { .spirv = fragment_shader.spirv.data(),
+                          .word_count = fragment_shader.spirv.size() },
             .attributes = attributes.data(),
             .attribute_count = attributes.size(),
             .vertex_stride = sizeof(MeshVertex),
             .push_constant_size = sizeof(Push),
-            // One sampler, for the base color of the submesh being drawn.
-            .sample_texture = true,
+            .bindings = bindings.data(),
+            .binding_count = bindings.size(),
             .depth_test = true,
             // A glTF material can ask for both faces, and the cooked material
             // records it. Honoring it needs a second pipeline or a dynamic cull

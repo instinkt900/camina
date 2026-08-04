@@ -3,11 +3,12 @@
 #include "assets/manifest.h"
 #include "assets/mesh.h"
 #include "assets/meta.h"
+#include "assets/shader.h"
 #include "assets/texture.h"
 #include "core/log.h"
 #include "document.h"
 #include "mesh.h"
-#include "platform/process.h"
+#include "shader.h"
 #include "texture.h"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ namespace cooker {
 
         /// What rule turns one source file into one cooked file.
         enum class Rule : std::uint8_t {
-            Shader,   ///< GLSL through glslc, out as SPIR-V.
+            Shader,   ///< GLSL through glslc, out as SPIR-V and its reflected layout.
             Texture,  ///< An image through stb, out as mip levels and BC7 blocks.
             Mesh,     ///< glTF through cgltf, out as one cooked mesh for each mesh.
             Document, ///< A scene or a prefab, with its asset references resolved.
@@ -38,7 +39,7 @@ namespace cooker {
 
         [[nodiscard]] Rule rule_for(const std::filesystem::path& source) {
             const std::string extension = source.extension().string();
-            if (extension == ".vert" || extension == ".frag" || extension == ".comp") {
+            if (is_shader_extension(extension)) {
                 return Rule::Shader;
             }
             if (is_image_extension(extension)) {
@@ -78,9 +79,9 @@ namespace cooker {
         [[nodiscard]] const char* cooked_suffix(Rule rule) {
             switch (rule) {
             case Rule::Shader:
-                // cube.vert becomes cube.vert.spv, so cube.vert and cube.frag
+                // cube.vert becomes cube.vert.shader, so cube.vert and cube.frag
                 // stay two files rather than collapsing onto one name.
-                return ".spv";
+                return as::kShaderExtension;
             case Rule::Texture:
                 return as::kTextureExtension;
             case Rule::Mesh:
@@ -92,37 +93,6 @@ namespace cooker {
                 break;
             }
             return "";
-        }
-
-        /**
-         * Runs glslc over one shader.
-         *
-         * This calls run_process rather than std::system, so no shell ever sees
-         * the arguments. An asset named `a$(id).vert` therefore works, and the
-         * two platforms have no escaping rules to disagree about.
-         *
-         * This spawns a process rather than linking libshaderc, because the
-         * build already finds glslc and Conan 2 has no per-target requirement.
-         * Issue #43 holds the reasons to change that and the trade it makes.
-         */
-        [[nodiscard]] bool cook_shader(const Options& options,
-                                       const std::filesystem::path& source,
-                                       const std::filesystem::path& destination) {
-            const engine::platform::ProcessResult result = engine::platform::run_process(
-                options.glslc,
-                { "--target-env=vulkan1.3", "-O", "-o", destination.string(),
-                  source.string() });
-
-            if (!result.ran) {
-                ENGINE_LOG_ERROR("{}: glslc could not start.", source.string());
-                return false;
-            }
-            if (result.exit_code != 0) {
-                ENGINE_LOG_ERROR("{}: glslc returned {}. Its messages are above.",
-                                 source.string(), result.exit_code);
-                return false;
-            }
-            return true;
         }
 
         [[nodiscard]] bool copy_through(const std::filesystem::path& source,
@@ -186,7 +156,7 @@ namespace cooker {
             switch (rule) {
             case Rule::Shader:
                 return single([&](const std::filesystem::path& to) {
-                    return cook_shader(options, source, to);
+                    return cook_shader(options.glslc, source, to);
                 });
             case Rule::Texture:
                 return single([&](const std::filesystem::path& to) {

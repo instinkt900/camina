@@ -29,7 +29,14 @@ namespace engine::gfx {
     /// @brief One slot in the pipeline pool that PipelineHandle indexes.
     struct PipelineEntry {
         VkPipeline pipeline = VK_NULL_HANDLE;     ///< Null while the slot is free.
-        VkPipelineLayout layout = VK_NULL_HANDLE; ///< Carries the push range and the set layout.
+        VkPipelineLayout layout = VK_NULL_HANDLE; ///< Carries the push range and the set layouts.
+        /**
+         * @brief One layout for each set the reflected shader declares.
+         *
+         * The pipeline owns these, because they come from the shader it was
+         * built with. They go away with it.
+         */
+        std::vector<VkDescriptorSetLayout> set_layouts;
         /// @brief Starts at 1, so slot 0 never produces the null handle value.
         std::uint32_t generation = 1;
         std::uint32_t push_constant_size = 0; ///< Checked by cmd_push_constants().

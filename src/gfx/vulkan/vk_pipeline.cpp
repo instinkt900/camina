@@ -125,20 +125,106 @@ namespace engine::gfx {
             state.vertex_input.pVertexAttributeDescriptions = input.attributes.data();
         }
 
-        /// The camera matrix travels as a push constant, and the texture is the one
-        /// descriptor set. Both stay optional.
+        /// Turns a described kind into the Vulkan one.
+        [[nodiscard]] VkDescriptorType to_vk_descriptor_type(DescriptorKind kind) {
+            switch (kind) {
+            case DescriptorKind::UniformBuffer:
+                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case DescriptorKind::StorageBuffer:
+                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case DescriptorKind::CombinedImageSampler:
+                break;
+            }
+            return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        }
+
+        /// Turns the described stage bits into the Vulkan ones.
+        [[nodiscard]] VkShaderStageFlags to_vk_stage_flags(std::uint32_t stages) {
+            VkShaderStageFlags flags = 0;
+            if ((stages & kStageBitVertex) != 0) {
+                flags |= VK_SHADER_STAGE_VERTEX_BIT;
+            }
+            if ((stages & kStageBitFragment) != 0) {
+                flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+            }
+            if ((stages & kStageBitCompute) != 0) {
+                flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            return flags;
+        }
+
+        /**
+         * Builds one descriptor set layout for each set the shader declares.
+         *
+         * The bindings arrive sorted by set, so a run of equal sets is one
+         * layout. A set the shader skips would shift every later set, so this
+         * reports rather than building a layout the module does not match.
+         */
+        Result create_set_layouts(Device& device, const GraphicsPipelineDesc& desc,
+                                  std::vector<VkDescriptorSetLayout>& out) {
+            std::size_t at = 0;
+            while (at < desc.binding_count) {
+                const std::uint32_t set = desc.bindings[at].set;
+                if (set != out.size()) {
+                    ENGINE_LOG_ERROR("The shader declares set {} with set {} missing. Vulkan "
+                                     "numbers set layouts by position, so no set may be skipped.",
+                                     set, out.size());
+                    return Result::ErrorInit;
+                }
+
+                std::vector<VkDescriptorSetLayoutBinding> bindings;
+                while (at < desc.binding_count && desc.bindings[at].set == set) {
+                    // Rule 4.2 passes a pointer and a count, so index it directly.
+                    const DescriptorBinding& source = desc.bindings[at];
+                    VkDescriptorSetLayoutBinding binding{};
+                    binding.binding = source.binding;
+                    binding.descriptorType = to_vk_descriptor_type(source.kind);
+                    binding.descriptorCount = source.count;
+                    binding.stageFlags = to_vk_stage_flags(source.stages);
+                    bindings.push_back(binding);
+                    ++at;
+                }
+
+                VkDescriptorSetLayoutCreateInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                info.bindingCount = static_cast<std::uint32_t>(bindings.size());
+                info.pBindings = bindings.data();
+
+                VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+                ENGINE_VK_TRY(
+                    vkCreateDescriptorSetLayout(device.device, &info, nullptr, &layout));
+                out.push_back(layout);
+            }
+            return Result::Success;
+        }
+
+        /**
+         * The camera matrix travels as a push constant, and the descriptor sets
+         * come from the shader. Both stay optional.
+         *
+         * A texture descriptor set is allocated against device.texture_layout
+         * rather than against the layout built here. Vulkan calls two set
+         * layouts compatible when their bindings match, and a shader that reads
+         * one combined image sampler at set 0 binding 0 reflects to exactly that
+         * shape, so the set binds correctly. M5.2 gives a material its own set
+         * and this stops mattering.
+         */
         Result create_layout(Device& device, const GraphicsPipelineDesc& desc,
+                             std::vector<VkDescriptorSetLayout>& set_layouts,
                              VkPipelineLayout* out) {
+            const Result made = create_set_layouts(device, desc, set_layouts);
+            if (!succeeded(made)) {
+                return made;
+            }
+
             VkPushConstantRange push{};
             push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
             push.size = desc.push_constant_size;
 
             VkPipelineLayoutCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            if (desc.sample_texture) {
-                info.setLayoutCount = 1;
-                info.pSetLayouts = &device.texture_layout;
-            }
+            info.setLayoutCount = static_cast<std::uint32_t>(set_layouts.size());
+            info.pSetLayouts = set_layouts.data();
             if (desc.push_constant_size > 0) {
                 info.pushConstantRangeCount = 1;
                 info.pPushConstantRanges = &push;
@@ -150,6 +236,7 @@ namespace engine::gfx {
 
         /// Claims a free slot, or grows the pool. Returns the handle for the slot.
         PipelineHandle claim_slot(Device& device, VkPipeline pipeline, VkPipelineLayout layout,
+                                  std::vector<VkDescriptorSetLayout>&& set_layouts,
                                   std::uint32_t push_constant_size) {
             std::uint32_t index = 0;
             if (!device.free_pipelines.empty()) {
@@ -163,9 +250,20 @@ namespace engine::gfx {
             PipelineEntry& entry = device.pipelines[index];
             entry.pipeline = pipeline;
             entry.layout = layout;
+            entry.set_layouts = std::move(set_layouts);
             entry.push_constant_size = push_constant_size;
             entry.alive = true;
             return PipelineHandle::make(index, entry.generation);
+        }
+
+        /// Frees the set layouts a pipeline owns, and empties the list.
+        void destroy_set_layouts(Device& device, std::vector<VkDescriptorSetLayout>& layouts) {
+            for (const VkDescriptorSetLayout layout : layouts) {
+                if (layout != VK_NULL_HANDLE) {
+                    vkDestroyDescriptorSetLayout(device.device, layout, nullptr);
+                }
+            }
+            layouts.clear();
         }
 
     } // namespace
@@ -191,6 +289,7 @@ namespace engine::gfx {
                 if (entry.layout != VK_NULL_HANDLE) {
                     vkDestroyPipelineLayout(device.device, entry.layout, nullptr);
                 }
+                destroy_set_layouts(device, entry.set_layouts);
             }
             device.pipelines.clear();
             device.free_pipelines.clear();
@@ -219,8 +318,9 @@ namespace engine::gfx {
         }
 
         VkPipelineLayout layout = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSetLayout> set_layouts;
         if (succeeded(result)) {
-            result = create_layout(*device, desc, &layout);
+            result = create_layout(*device, desc, set_layouts, &layout);
         }
 
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -307,10 +407,14 @@ namespace engine::gfx {
             if (layout != VK_NULL_HANDLE) {
                 vkDestroyPipelineLayout(device->device, layout, nullptr);
             }
+            // create_set_layouts() may have built some before it failed, and a
+            // pipeline that never existed cannot free them later.
+            destroy_set_layouts(*device, set_layouts);
             return result;
         }
 
-        *out_pipeline = claim_slot(*device, pipeline, layout, desc.push_constant_size);
+        *out_pipeline = claim_slot(*device, pipeline, layout, std::move(set_layouts),
+                                   desc.push_constant_size);
         return Result::Success;
     }
 
@@ -325,6 +429,7 @@ namespace engine::gfx {
 
         vkDestroyPipeline(device->device, entry->pipeline, nullptr);
         vkDestroyPipelineLayout(device->device, entry->layout, nullptr);
+        destroy_set_layouts(*device, entry->set_layouts);
         entry->pipeline = VK_NULL_HANDLE;
         entry->layout = VK_NULL_HANDLE;
         entry->alive = false;

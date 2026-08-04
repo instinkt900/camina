@@ -148,6 +148,37 @@ namespace engine::gfx {
         VertexFormat format = VertexFormat::Float3; ///< The element type.
     };
 
+    /// @brief What kind of resource one descriptor binding holds.
+    enum class DescriptorKind : std::uint32_t {
+        CombinedImageSampler = 0, ///< A texture and its sampler together.
+        UniformBuffer,            ///< A read-only block of parameters.
+        StorageBuffer,            ///< A read-write block.
+    };
+
+    /// @brief The stage bit for the vertex stage, used in DescriptorBinding::stages.
+    inline constexpr std::uint32_t kStageBitVertex = 1U << 0U;
+    /// @brief The stage bit for the fragment stage, used in DescriptorBinding::stages.
+    inline constexpr std::uint32_t kStageBitFragment = 1U << 1U;
+    /// @brief The stage bit for the compute stage, used in DescriptorBinding::stages.
+    inline constexpr std::uint32_t kStageBitCompute = 1U << 2U;
+
+    /**
+     * @brief One descriptor a pipeline reads.
+     *
+     * The caller builds these from a cooked shader, which got them by reflecting
+     * the SPIR-V. Nothing here is written by hand, which is the point: a layout
+     * a person maintained beside the shader used to drift from it silently. See
+     * DESIGN.md section 9 "Shader pipeline".
+     */
+    struct DescriptorBinding {
+        std::uint32_t set = 0;     ///< The `layout(set = N)` in the shader.
+        std::uint32_t binding = 0; ///< The `layout(binding = N)` in the shader.
+        std::uint32_t count = 1;   ///< Array length, or 1 for a plain declaration.
+        std::uint32_t stages = 0;  ///< Which stages read it, as ::kStageBitVertex and friends.
+        /// @brief What the binding holds.
+        DescriptorKind kind = DescriptorKind::CombinedImageSampler;
+    };
+
     /// @brief Settings for create_graphics_pipeline().
     struct GraphicsPipelineDesc {
         ShaderCode vertex;   ///< The vertex stage. Required.
@@ -160,8 +191,20 @@ namespace engine::gfx {
 
         /// @brief How many bytes of push constants the vertex stage reads. 0 for none.
         std::uint32_t push_constant_size = 0;
-        /// @brief Whether the fragment stage samples the texture at set 0, binding 0.
-        bool sample_texture = false;
+
+        /**
+         * @brief The descriptors the pipeline reads, or null for none.
+         *
+         * These come from the cooked shaders, which carry what SPIRV-Reflect
+         * found. The two stages are merged by the caller, so a binding both
+         * stages read appears once with both stage bits set.
+         *
+         * @warning The entries must be sorted by set and then by binding, and no
+         * set may be skipped. Vulkan numbers set layouts by position, so a gap
+         * would silently shift every set after it.
+         */
+        const DescriptorBinding* bindings = nullptr;
+        std::size_t binding_count = 0; ///< How many entries @c bindings holds.
         /**
          * @brief Whether to test and write depth. Reverse-Z keeps nearer fragments.
          *
