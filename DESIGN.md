@@ -788,6 +788,19 @@ Nothing met that before shaders reloaded, because a shader that would not compil
 build instead. Editing one live makes the first typo reach it. So a failed source keeps the
 entry the last cook gave it, and the log says so.
 
+**A reload says what each asset was, not only that it moved.** An identity that went away is
+not in the new manifest, so nothing can be looked up about it afterwards. Without the kind
+recorded at the moment it went, a deleted prefab and a deleted texture read the same, and the
+world built from that prefab stood until a restart. `assets::AssetChange` therefore carries
+the cooked path and whether the asset is gone, taken from the manifest being replaced.
+
+The rebuild that follows is the whole world and not the part that changed. Doing less means
+knowing which entities came from which prefab, building only those, and holding a selection
+across it. That is the editor's job and it arrives with the editor. Rebuilding everything
+costs one scene load, which is what a person just asked for by saving. A mesh or a texture
+still swaps in behind the entities that name it, so the common change touches no entity at
+all and whatever was selected stays selected.
+
 **Freeing a resource waits for the frames in flight.** `MeshPass::reload` waits for the
 device before it frees a buffer or a texture. A frame the GPU has not finished may still read
 one, and that use-after-free is a failure the validation layer may or may not report, on a
