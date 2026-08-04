@@ -47,15 +47,19 @@ layout(set = 1, binding = 2) uniform sampler2D normal_map;
 layout(set = 1, binding = 3) uniform sampler2D occlusion_map;
 layout(set = 1, binding = 4) uniform sampler2D emissive_map;
 
-// Which slots the material really named. A slot it did not name reads the white
-// texel above, which is right for a base color and wrong for a normal map, so
-// the ones that need a different default test their bit.
+// A slot the material did not name reads the white texel above, which is right
+// for a base color and wrong for a normal map. The two that need a different
+// default are compiled in or out instead of tested at run time.
 //
-// This is a branch on a uniform, which every lane takes the same way and which
-// costs almost nothing. The second half of M5.1 turns these into defines and
-// compiles a variant for each set of them.
-const uint kHasNormalMap = 1u << 2;
-const uint kHasOcclusionMap = 1u << 3;
+// HAS_NORMAL_MAP and HAS_OCCLUSION_MAP come from the variant list in
+// `mesh.frag.meta`, and `render::MeshPass` picks the form that matches what a
+// material named. `material.has_maps` still carries every bit, because the
+// block is one shape for all four forms.
+//
+// The five samplers above stay declared in every form on purpose. A declaration
+// inside an `#ifdef` would give each form a different descriptor set, and then
+// one material set could not bind against another form. MeshPass checks that
+// the forms agree rather than trusting this comment.
 
 layout(set = 1, binding = 5) uniform Material {
     vec4 base_color_factor;
@@ -106,10 +110,9 @@ vec3 fresnel_schlick(float cos_theta, vec3 f0) {
 // Builds the shading normal from the vertex frame and the normal map.
 vec3 shading_normal() {
     vec3 n = normalize(in_normal);
-    if ((material.has_maps & kHasNormalMap) == 0u) {
-        return n;
-    }
-
+#ifndef HAS_NORMAL_MAP
+    return n;
+#else
     vec3 t = normalize(in_tangent.xyz - (n * dot(n, in_tangent.xyz)));
     // w is +1 or -1 and it says which way the bitangent points. Getting this
     // wrong mirrors the lighting on half the model.
@@ -118,6 +121,7 @@ vec3 shading_normal() {
     vec3 sampled = (texture(normal_map, in_uv).xyz * 2.0) - 1.0;
     sampled.xy *= material.normal_scale;
     return normalize(mat3(t, b, n) * sampled);
+#endif
 }
 
 void main() {
@@ -194,12 +198,11 @@ void main() {
     vec3 ambient = environment * mix(albedo, albedo * f0, metallic);
 
     float occlusion = 1.0;
-    if ((material.has_maps & kHasOcclusionMap) != 0u) {
-        // Occlusion is in red, and the strength blends back towards no
-        // occlusion rather than scaling it.
-        float sampled = texture(occlusion_map, in_uv).r;
-        occlusion = mix(1.0, sampled, material.occlusion_strength);
-    }
+#ifdef HAS_OCCLUSION_MAP
+    // Occlusion is in red, and the strength blends back towards no occlusion
+    // rather than scaling it.
+    occlusion = mix(1.0, texture(occlusion_map, in_uv).r, material.occlusion_strength);
+#endif
 
     vec3 emissive = texture(emissive_map, in_uv).rgb * material.emissive_factor.rgb;
 

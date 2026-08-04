@@ -7,10 +7,13 @@
 
 #include "check.h"
 #include "render/material_cache.h"
+#include "render/mesh_pass.h"
 
 #include <cstdlib>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -217,6 +220,91 @@ namespace {
               "a member in the frame set does not satisfy the material block");
     }
 
+    // ---- Which compiled form of mesh.frag a material needs ----
+
+    using engine::render::kMeshVariantCount;
+    using engine::render::mesh_variant_defines;
+    using engine::render::mesh_variant_index;
+    using engine::render::pick_shader_variant;
+
+    /// A cooked form that was compiled with @p defines.
+    [[nodiscard]] engine::assets::Shader form_with(std::vector<std::string> defines) {
+        engine::assets::Shader shader;
+        shader.defines = std::move(defines);
+        return shader;
+    }
+
+    void test_the_variant_index_reads_only_the_two_maps_it_compiles_out() {
+        const auto bit = [](MaterialMap map) { return static_cast<std::uint32_t>(map); };
+        check(mesh_variant_index(0) == 0, "a material with no maps takes the base form");
+        check(mesh_variant_index(bit(MaterialMap::Normal)) == 1, "a normal map takes form 1");
+        check(mesh_variant_index(bit(MaterialMap::Occlusion)) == 2, "an occlusion map takes form 2");
+        check(mesh_variant_index(bit(MaterialMap::Normal) | bit(MaterialMap::Occlusion)) == 3,
+              "both take form 3");
+
+        // The other three maps are read with no branch, so they must not move
+        // the index. A material with all of them and neither of the two the
+        // shader compiles out still wants the base form.
+        const std::uint32_t others = bit(MaterialMap::BaseColor) |
+                                     bit(MaterialMap::MetallicRoughness) |
+                                     bit(MaterialMap::Emissive);
+        check(mesh_variant_index(others) == 0, "the maps that never branch do not pick a form");
+        check(mesh_variant_index(others | bit(MaterialMap::Normal)) == 1,
+              "and they do not disturb the ones that do");
+    }
+
+    void test_every_index_names_defines_that_match_it() {
+        for (std::size_t at = 0; at < kMeshVariantCount; ++at) {
+            const auto defines = mesh_variant_defines(at);
+            // The count of defines is the count of set bits in the index, so
+            // the table and the index cannot drift apart.
+            const std::size_t bits = ((at & 1U) != 0 ? 1U : 0U) + ((at & 2U) != 0 ? 1U : 0U);
+            check(defines.size() == bits, "the form names one define for each bit of its index");
+        }
+        check(mesh_variant_defines(0).empty(), "the base form defines nothing");
+    }
+
+    void test_a_form_is_picked_by_what_it_declares() {
+        std::vector<engine::assets::Shader> forms;
+        forms.push_back(form_with({}));
+        forms.push_back(form_with({ "HAS_NORMAL_MAP" }));
+        forms.push_back(form_with({ "HAS_OCCLUSION_MAP" }));
+        forms.push_back(form_with({ "HAS_NORMAL_MAP", "HAS_OCCLUSION_MAP" }));
+
+        for (std::size_t at = 0; at < kMeshVariantCount; ++at) {
+            const engine::assets::Shader* found =
+                pick_shader_variant(forms, mesh_variant_defines(at));
+            check(found == &forms[at], "each index finds the form built for it");
+        }
+    }
+
+    void test_a_form_is_found_whatever_order_it_lists_its_defines() {
+        // The cooker passes the sidecar list to glslc as it stands, so a person
+        // may write the two defines either way round. Matching on the sequence
+        // would then miss the form and the pass would refuse to build.
+        std::vector<engine::assets::Shader> forms;
+        forms.push_back(form_with({ "HAS_OCCLUSION_MAP", "HAS_NORMAL_MAP" }));
+        check(pick_shader_variant(forms, mesh_variant_defines(3)) == forms.data(),
+              "the order the module lists its defines in does not matter");
+    }
+
+    void test_a_form_with_more_defines_is_not_a_substitute() {
+        // A form built with the normal map compiled in shades differently, so
+        // it cannot stand in for the base form. Matching on "contains all of
+        // what was asked" rather than on the exact set would return it.
+        std::vector<engine::assets::Shader> forms;
+        forms.push_back(form_with({ "HAS_NORMAL_MAP" }));
+        check(pick_shader_variant(forms, mesh_variant_defines(0)) == nullptr,
+              "a form that defines more than was asked for is refused");
+    }
+
+    void test_a_missing_form_reports_rather_than_guesses() {
+        std::vector<engine::assets::Shader> forms;
+        forms.push_back(form_with({}));
+        check(pick_shader_variant(forms, mesh_variant_defines(3)) == nullptr,
+              "a sidecar that lists no such variant gives no form");
+    }
+
 } // namespace
 
 int main() {
@@ -232,5 +320,12 @@ int main() {
     test_a_retyped_member_is_refused();
     test_a_missing_member_is_refused();
     test_a_member_in_another_set_does_not_count();
+    test::section("picking a compiled form of mesh.frag");
+    test_the_variant_index_reads_only_the_two_maps_it_compiles_out();
+    test_every_index_names_defines_that_match_it();
+    test_a_form_is_picked_by_what_it_declares();
+    test_a_form_is_found_whatever_order_it_lists_its_defines();
+    test_a_form_with_more_defines_is_not_a_substitute();
+    test_a_missing_form_reports_rather_than_guesses();
     return test::report();
 }

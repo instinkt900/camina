@@ -115,6 +115,19 @@ namespace engine::render {
                                             std::string_view where);
 
     /**
+     * @brief Which optional maps a cooked material really named.
+     *
+     * This is the value MaterialUniforms::has_maps carries, and it is also what
+     * decides which compiled form of `mesh.frag` a submesh draws with. The two
+     * read the same function so that a shader variant cannot disagree with the
+     * block it binds beside.
+     *
+     * @param material The cooked material.
+     * @return A mask of MaterialMap bits.
+     */
+    [[nodiscard]] std::uint32_t material_maps(const assets::Material& material);
+
+    /**
      * @brief Packs a cooked material into the block the shader reads.
      *
      * This is where a material stops being a file and starts being 64 bytes the

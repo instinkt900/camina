@@ -142,9 +142,20 @@ the identity of the source. The rest derive one under the kind word `shader`. A 
 records what it was built with, so a consumer picks by declaration rather than by manifest
 order.
 
-The engine shaders still list no variants, so they cook to one module each and nothing on
-screen changed. `mesh.frag` moves to `#ifdef` and `MeshPass` starts selecting in the second
-half. See issue #83.
+M5.1 is complete. `mesh.frag` is `#ifdef` now, `mesh.frag.meta` lists four variants, and
+`MeshPass` picks one for each submesh from the maps the material named. The two toggles are the
+normal map and the occlusion map, because every other map reads a white texel when the material
+named none and needs no branch.
+
+A sampler stays declared in the form that never reads it. A declaration inside an `#ifdef`
+would give each form its own set layout, and then one material set could not bind against
+another form. `build_pipelines` compares every form against the base form and refuses the set
+when they disagree, because Vulkan calls that undefined rather than an error. The pass holds
+eight pipelines, four forms times opaque and blended, and a reload rebuilds all of them or
+keeps all of the old ones.
+
+The opaque draws are not grouped by form yet, so a mixed scene rebinds more than it has to.
+`pipeline_switch_count()` measures it and issue #105 holds the work for M5.3.
 
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
