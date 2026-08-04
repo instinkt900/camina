@@ -47,6 +47,17 @@ namespace engine::render {
             return false;
         }
 
+        return build_pipeline(content, pipeline_);
+    }
+
+    /**
+     * Builds a pipeline from the shaders in the engine content tree.
+     *
+     * Separate from create() because reload_shaders() needs the same work, and
+     * because it must be able to fail without touching the pipeline that is
+     * already drawing.
+     */
+    bool MeshPass::build_pipeline(const assets::Content& content, gfx::PipelineHandle& out) {
         std::vector<std::uint32_t> vertex_words;
         std::vector<std::uint32_t> fragment_words;
         if (!content.read_words(kVertexShaderSource, vertex_words) ||
@@ -88,11 +99,37 @@ namespace engine::render {
             .cull_back = true,
         };
 
-        const gfx::Result result = gfx::create_graphics_pipeline(device, desc, &pipeline_);
+        const gfx::Result result = gfx::create_graphics_pipeline(device_, desc, &out);
         if (!gfx::succeeded(result)) {
             ENGINE_LOG_ERROR("The mesh pipeline did not build: {}", gfx::result_name(result));
             return false;
         }
+        return true;
+    }
+
+    bool MeshPass::reload_shaders(const assets::Content& content) {
+        if (device_ == nullptr) {
+            return false;
+        }
+
+        // Into a new handle, so a shader that will not build leaves the one
+        // that is drawing alone. A person editing a shader gets a broken one
+        // often, and losing the picture on every typo would make the loop
+        // useless.
+        gfx::PipelineHandle rebuilt;
+        if (!build_pipeline(content, rebuilt)) {
+            ENGINE_LOG_ERROR("The shaders did not build, so the pass keeps the pipeline it "
+                             "has. Fix them and save again.");
+            return false;
+        }
+
+        // The old pipeline may still be bound by a frame the GPU has not
+        // finished. See the note in reload() about what this wait costs and
+        // what replaces it.
+        gfx::device_wait_idle(device_);
+        gfx::destroy_pipeline(device_, pipeline_);
+        pipeline_ = rebuilt;
+        ENGINE_LOG_INFO("The mesh shaders were built again.");
         return true;
     }
 

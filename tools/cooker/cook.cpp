@@ -370,6 +370,71 @@ namespace cooker {
                    as::is_fresh(*old, options.content, options.out);
         }
 
+        /**
+         * Puts back what the last cook wrote for a source that failed.
+         *
+         * A rule that fails writes no output, so the cooked file from before is
+         * still there and still good. Dropping the entry would hide it, and the
+         * next start of the program would then fail on an asset that is sitting
+         * right there. A person editing a shader meets this on the first typo.
+         */
+        void carry_forward(const Options& options, const as::Manifest& previous,
+                           const std::filesystem::path& relative, as::Manifest& next) {
+            const as::ManifestEntry* kept =
+                as::find_by_source(previous, as::manifest_path(relative));
+            if (kept == nullptr) {
+                return;
+            }
+
+            // Only when every file it names is still there. An entry pointing
+            // at a file somebody deleted is worse than no entry at all: the
+            // manifest then says the asset is available, and the read fails
+            // later and further from the cause.
+            for (const as::ManifestOutput& output : kept->outputs) {
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(options.out / output.cooked, error)) {
+                    ENGINE_LOG_WARN("{}: it did not cook, and {} is gone as well, so the "
+                                    "cooked tree no longer holds it.",
+                                    relative.generic_string(), output.cooked);
+                    return;
+                }
+            }
+
+            ENGINE_LOG_WARN("{}: it did not cook, so the cooked tree keeps the one from "
+                            "before.",
+                            relative.generic_string());
+            next.entries.push_back(*kept);
+        }
+
+        /**
+         * Checks that every identity a document names was really cooked.
+         *
+         * Deriving an identity answers for any index, so a reference to a part
+         * that is not there gives a GUID that looks like every other one and
+         * names nothing. Only the finished manifest can tell the two apart, so
+         * this runs after the whole tree is cooked. It covers a document the
+         * cooker skipped as well, because a model that lost a mesh breaks a
+         * reference that nobody touched.
+         *
+         * A document that did not cook is left alone. It has been reported once
+         * already, and it fails this check for the same reason, so checking it
+         * again would log the same line twice and count one failure as two.
+         */
+        [[nodiscard]] std::size_t check_documents(
+            const Options& options, const std::vector<std::filesystem::path>& sources,
+            const std::set<std::filesystem::path>& unfinished, const as::Manifest& manifest) {
+            std::size_t failed = 0;
+            for (const std::filesystem::path& relative : sources) {
+                if (rule_for(relative) != Rule::Document || unfinished.contains(relative)) {
+                    continue;
+                }
+                if (!validate_references(options.content / relative, options.content, manifest)) {
+                    ++failed;
+                }
+            }
+            return failed;
+        }
+
         /// Cooks one source file, or says why it did not.
         [[nodiscard]] Outcome cook_source(const Options& options,
                                           const std::filesystem::path& relative,
@@ -473,6 +538,10 @@ namespace cooker {
                 break;
             case Outcome::Failed:
                 unfinished.insert(relative);
+                // The entry goes back with the outputs it had, so the check
+                // below still finds every identity a kept document names. That
+                // document is in `unfinished`, so it is not checked again.
+                carry_forward(options, previous, relative, next);
                 ++result.failed;
                 break;
             }
@@ -501,23 +570,7 @@ namespace cooker {
             }
         }
 
-        // Deriving an identity answers for any index, so a reference to a part
-        // that is not there gives a GUID that looks like every other one and
-        // names nothing. Only the finished manifest can tell the two apart, so
-        // this runs after the whole tree is cooked. It covers a document the
-        // cooker skipped as well, because a model that lost a mesh breaks a
-        // reference that nobody touched.
-        for (const std::filesystem::path& relative : sources) {
-            // A document that did not cook has been reported once already, and
-            // it fails this check for the same reason. Checking it again would
-            // log the same line twice and count one failure as two.
-            if (rule_for(relative) != Rule::Document || unfinished.contains(relative)) {
-                continue;
-            }
-            if (!validate_references(options.content / relative, options.content, next)) {
-                ++result.failed;
-            }
-        }
+        result.failed += check_documents(options, sources, unfinished, next);
 
         if (!as::save_manifest(options.out, next)) {
             return false;

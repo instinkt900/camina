@@ -97,6 +97,11 @@ the frames in flight before it frees anything. The runtime watches `sandbox/cont
 scene or a prefab that changes builds the world again. `--watch`, `--glslc`, and `--no-watch`
 override it.
 
+The runtime watches `src/render/content` as well, so a shader edit shows up live.
+`MeshPass::reload_shaders` builds a new pipeline and keeps the old one when the new one will
+not build. A cook that fails now keeps the manifest entry the last cook gave that asset,
+because losing it hides a cooked file that is still on disk and stops the next start.
+
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. The build produces no warnings

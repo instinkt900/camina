@@ -587,6 +587,8 @@ namespace {
         engine::assets::Content game_content;
         /// M4.5. Watches the game source tree and cooks what a person edits.
         engine::assets::HotReload reload;
+        /// M4.5. The same for the engine tree, which holds the two shaders.
+        engine::assets::HotReload engine_reload;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
 
@@ -613,13 +615,27 @@ namespace {
             return;
         }
 
+        const std::string glslc =
+            options.glslc.empty() ? std::string{ ENGINE_GLSLC_PATH } : options.glslc;
+
         const engine::assets::HotReloadDesc desc{
             .source = options.watch.empty() ? std::filesystem::path{ ENGINE_GAME_CONTENT_SOURCE }
                                             : std::filesystem::path{ options.watch },
             .cooker = cooker_path(),
-            .glslc = options.glslc.empty() ? std::string{ ENGINE_GLSLC_PATH } : options.glslc,
+            .glslc = glslc,
         };
         (void)runtime.reload.start(desc);
+
+        // The engine tree is watched as well, because it holds the shaders and
+        // a shader is the asset most worth editing live. --watch names the game
+        // tree only, so this one has no override: a person who moved the game
+        // content still has the engine content where the build put it.
+        const engine::assets::HotReloadDesc engine_desc{
+            .source = std::filesystem::path{ ENGINE_ENGINE_CONTENT_SOURCE },
+            .cooker = cooker_path(),
+            .glslc = glslc,
+        };
+        (void)runtime.engine_reload.start(engine_desc);
     }
 
     /**
@@ -658,6 +674,15 @@ namespace {
     void apply_hot_reload(Runtime& runtime, const FrameContext& context,
                           engine::scene::World& world) {
         std::vector<engine::Guid> changed;
+
+        // The engine tree holds the two shaders and nothing else, so any change
+        // to it means the pipeline. Adding a third asset to that tree would
+        // make this rebuild on a change that does not need it, which costs a
+        // stall and nothing else.
+        if (runtime.engine_reload.poll(runtime.engine_content, changed)) {
+            (void)runtime.mesh.reload_shaders(runtime.engine_content);
+        }
+
         if (!runtime.reload.poll(runtime.game_content, changed)) {
             return;
         }
