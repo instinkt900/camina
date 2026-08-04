@@ -535,9 +535,26 @@ the module glslc wrote, and stores the descriptor layout and the members of ever
 block beside it. `src/assets/shader.h` holds that format. The runtime reads it and never
 links SPIRV-Reflect, so the shipping binary carries no reflection.
 
-The module and its description travel in one file, `name.frag.shader`, rather than two. Two
-files would need two manifest entries and a derived GUID for the second, and they could drift
-apart. One file cannot describe a module it does not carry.
+The module and its description travel in one file rather than two. Two files would need two
+manifest entries and a derived GUID for the second, and they could drift apart. One file
+cannot describe a module it does not carry.
+
+**A shader cooks once for each variant its sidecar lists.** The name carries the part number,
+so `mesh.frag` gives `mesh.frag.0.shader`. The sidecar holds a `shader` block with a list of
+variants, and each names its defines. An empty list, which is what every sidecar written
+before this holds, cooks one module with no defines.
+
+The variants are written rather than worked out. A cross product of every toggle grows by
+powers of two, and most of those combinations no material ever asks for. `assets::ShaderImport`
+in `src/assets/meta.h` holds the list.
+
+The first variant is the base form and it must define nothing, because it keeps the identity of
+the source asset. A reference to the shader itself therefore still resolves. Every other
+variant derives an identity under the kind word `shader`, the same way a mesh inside a glTF
+file does.
+
+Each cooked module records the defines it was built with. A consumer picks a variant by what it
+declares, and not by where it sits in the manifest, so reordering the list moves no meaning.
 
 `gfx::GraphicsPipelineDesc` now takes the bindings rather than a `sample_texture` flag, so no
 layout is written by hand anywhere. That closes the gap rule 4.5 names: a hand-written
@@ -551,8 +568,10 @@ label a field with. Issue #90 holds the measurement and the two ways to keep bot
 The cooker invokes `glslc` as a separate program rather than linking `libshaderc`. Conan 2
 has no per-target requirement. Linking it would therefore put shaderc in the graph of every
 consumer of the package, for the sake of one tool. Issue #43 holds the reasons to change
-that. The first one to arrive is M5, where permutations turn one process for each shader
-into many.
+that, and it was re-read when permutations arrived. One of the four triggers it names expired
+when `platform::run_process` replaced `std::system`, because a define is a vector entry now and
+there is nothing left to quote. The permutation trigger is real and it needs the cook measured
+rather than guessed, which belongs with #90.
 
 The trade is the error text. glslc writes it to stderr and the cooker passes it through, so
 nothing can read a file and a line out of it yet.

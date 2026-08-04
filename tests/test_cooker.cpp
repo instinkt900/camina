@@ -36,6 +36,18 @@
 namespace {
 
     using test::check;
+
+    /**
+     * The cooked name of one variant of a shader source.
+     *
+     * The shader rule numbers its parts the way the glTF rule does, so
+     * `look.frag` gives `look.frag.0.shader` for the base form. Part 0 is the
+     * form compiled with no defines.
+     */
+    [[nodiscard]] std::string shader_part(std::string_view source, int part = 0) {
+        return std::string(source) + "." + std::to_string(part) +
+               engine::assets::kShaderExtension;
+    }
     namespace as = engine::assets;
 
     std::filesystem::path scratch(std::string_view name) {
@@ -273,8 +285,7 @@ namespace {
         cooker::Result result;
         check(cooker::cook_all(options, result), "a name a shell would expand now cooks");
         check(result.cooked == 1, "it counted the cook");
-        check(std::filesystem::exists(out / (std::string(name) +
-                                             engine::assets::kShaderExtension)),
+        check(std::filesystem::exists(out / shader_part(name)),
               "the cooked shader was written");
 
         test::remove_tree(source.parent_path());
@@ -288,6 +299,133 @@ namespace {
      * shader below declares a sampler, a uniform block, and a push block, and
      * every one of them has to come back out of the cooked file.
      */
+    /**
+     * A sidecar that lists variants cooks one module for each.
+     *
+     * The point of a permutation is that the define changes the module, so this
+     * checks the two forms really differ rather than only that two files
+     * appeared. A cook that ignored the defines would write two identical
+     * modules and pass a weaker test.
+     */
+    void test_a_shader_cooks_once_for_each_variant() {
+#if defined(ENGINE_GLSLC_PATH)
+        const std::filesystem::path source = scratch("variants/src");
+        const std::filesystem::path out = scratch("variants/out");
+        write_file(source / "many.frag", R"(#version 450
+layout(set = 0, binding = 0) uniform sampler2D base_color;
+#ifdef HAS_NORMAL_MAP
+layout(set = 0, binding = 1) uniform sampler2D normal_map;
+#endif
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 out_color;
+void main() {
+    out_color = texture(base_color, uv);
+#ifdef HAS_NORMAL_MAP
+    out_color += texture(normal_map, uv);
+#endif
+}
+)");
+
+        // The cooker writes the sidecar on the first cook, so this one is
+        // written by hand to carry the variant list before that happens.
+        write_file(source / "many.frag.meta", R"({
+  "__version": 3,
+  "guid": "3f1b1f42-9a1e-4c8e-9b2b-7c5a0d6e1f01",
+  "shader": {
+    "__version": 1,
+    "variants": [
+      { "name": "base", "defines": [] },
+      { "name": "normal", "defines": ["HAS_NORMAL_MAP"] }
+    ]
+  }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a shader with two variants cooks");
+
+        const std::string base_bytes = read_file(out / shader_part("many.frag", 0));
+        const std::string variant_bytes = read_file(out / shader_part("many.frag", 1));
+        check(!base_bytes.empty(), "the base form was written");
+        check(!variant_bytes.empty(), "the second variant was written");
+
+        engine::assets::Shader base;
+        engine::assets::Shader variant;
+        check(engine::assets::read_shader(
+                  std::as_bytes(std::span(base_bytes.data(), base_bytes.size())), base, "base"),
+              "the base form reads back");
+        check(engine::assets::read_shader(
+                  std::as_bytes(std::span(variant_bytes.data(), variant_bytes.size())), variant,
+                  "variant"),
+              "the second variant reads back");
+
+        // Each module says what it was built with, so a consumer picks by what
+        // a variant declares rather than by its place in the manifest.
+        check(base.defines.empty(), "the base form declares no defines");
+        check(variant.defines.size() == 1 && variant.defines[0] == "HAS_NORMAL_MAP",
+              "the second variant carries the define it was built with");
+
+        // The define really reached glslc. Without it both modules would
+        // declare one binding and the two files would be the same.
+        check(base.bindings.size() == 1, "the base form reads one texture");
+        check(variant.bindings.size() == 2, "the variant reads two");
+        check(base.spirv != variant.spirv, "and the two modules are not the same");
+
+        // Part 0 keeps the asset's own identity, so a reference to the shader
+        // itself still resolves. The rest derive one.
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads back");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "many.frag");
+        check(entry != nullptr && entry->outputs.size() == 2, "one source, two outputs");
+        if (entry != nullptr && entry->outputs.size() == 2) {
+            check(entry->outputs[0].guid == entry->guid,
+                  "the base form keeps the identity of the source");
+            check(entry->outputs[1].guid ==
+                      engine::Guid::derive(entry->guid, as::kShaderPartKind, 1),
+                  "the second variant derives its own");
+            check(entry->outputs[0].guid != entry->outputs[1].guid,
+                  "and the two are not the same identity");
+        }
+
+        test::remove_tree(source.parent_path());
+#endif
+    }
+
+    /// The base form has to be first, because it keeps the source's identity.
+    void test_a_variant_list_that_starts_with_defines_is_refused() {
+#if defined(ENGINE_GLSLC_PATH)
+        const std::filesystem::path source = scratch("badvariants/src");
+        const std::filesystem::path out = scratch("badvariants/out");
+        write_file(source / "first.frag", R"(#version 450
+layout(location = 0) out vec4 out_color;
+void main() { out_color = vec4(1.0); }
+)");
+        write_file(source / "first.frag.meta", R"({
+  "__version": 3,
+  "guid": "3f1b1f42-9a1e-4c8e-9b2b-7c5a0d6e1f02",
+  "shader": {
+    "__version": 1,
+    "variants": [
+      { "name": "normal", "defines": ["HAS_NORMAL_MAP"] },
+      { "name": "base", "defines": [] }
+    ]
+  }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        options.glslc = ENGINE_GLSLC_PATH;
+        cooker::Result result;
+        check(!cooker::cook_all(options, result),
+              "a list whose first variant defines something fails the cook");
+        check(result.failed == 1, "and it counts one failure");
+        check(!std::filesystem::exists(out / shader_part("first.frag", 0)),
+              "and it wrote no module");
+
+        test::remove_tree(source.parent_path());
+#endif
+    }
+
     void test_the_cooker_reflects_what_a_shader_reads() {
 #if defined(ENGINE_GLSLC_PATH)
         const std::filesystem::path source = scratch("reflect/src");
@@ -313,7 +451,7 @@ void main() {
         check(cooker::cook_all(options, result), "a shader with real bindings cooks");
 
         const std::string cooked =
-            read_file(out / ("look.frag" + std::string(engine::assets::kShaderExtension)));
+            read_file(out / shader_part("look.frag"));
         check(!cooked.empty(), "the cooked shader is there");
 
         engine::assets::Shader shader;
@@ -388,7 +526,7 @@ void main() { out_color = push.model[0]; }
         check(cooker::cook_all(options, result), "a shader with a late push block cooks");
 
         const std::string cooked =
-            read_file(out / ("late.frag" + std::string(engine::assets::kShaderExtension)));
+            read_file(out / shader_part("late.frag"));
         engine::assets::Shader shader;
         check(engine::assets::read_shader(
                   std::as_bytes(std::span(cooked.data(), cooked.size())), shader, "late.frag"),
@@ -418,13 +556,11 @@ void main() { out_color = push.model[0]; }
         cooker::Result result;
         check(!cooker::cook_all(options, result), "a shader that will not compile fails the cook");
         check(result.failed == 1, "and it counts one failure");
-        check(!std::filesystem::exists(
-                  out / ("bad.frag" + std::string(engine::assets::kShaderExtension))),
+        check(!std::filesystem::exists(out / shader_part("bad.frag")),
               "no cooked shader was written");
         // glslc writes its module beside the cooked file, and the rule removes
         // it on every path. One left behind would grow the cooked tree forever.
-        check(!std::filesystem::exists(
-                  out / ("bad.frag" + std::string(engine::assets::kShaderExtension) + ".spv")),
+        check(!std::filesystem::exists(out / (shader_part("bad.frag") + ".spv")),
               "and the compiler output did not stay behind");
 
         test::remove_tree(source.parent_path());
@@ -1721,6 +1857,8 @@ int main() {
     test_bad_input();
     test::section("shader reflection");
     test_the_cooker_reflects_what_a_shader_reads();
+    test_a_shader_cooks_once_for_each_variant();
+    test_a_variant_list_that_starts_with_defines_is_refused();
     test_a_push_block_that_starts_late_reports_its_real_size();
     test_a_shader_that_does_not_compile_writes_nothing();
     test::section("textures");
