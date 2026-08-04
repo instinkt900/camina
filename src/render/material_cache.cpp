@@ -4,6 +4,8 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,6 +19,60 @@ namespace engine::render {
         }
 
     } // namespace
+
+    std::span<const MaterialUniformMember> material_uniform_layout() {
+        // The offsets come from the struct itself, so this side of the
+        // comparison cannot drift from the bytes that go to the GPU.
+        using Type = assets::ParamType;
+        static constexpr std::array<MaterialUniformMember, 10> kMembers{ {
+            { "base_color_factor", offsetof(MaterialUniforms, base_color_factor), Type::Vec4 },
+            { "emissive_factor", offsetof(MaterialUniforms, emissive_factor), Type::Vec4 },
+            { "metallic_factor", offsetof(MaterialUniforms, metallic_factor), Type::Float },
+            { "roughness_factor", offsetof(MaterialUniforms, roughness_factor), Type::Float },
+            { "normal_scale", offsetof(MaterialUniforms, normal_scale), Type::Float },
+            { "occlusion_strength", offsetof(MaterialUniforms, occlusion_strength), Type::Float },
+            { "alpha_cutoff", offsetof(MaterialUniforms, alpha_cutoff), Type::Float },
+            { "alpha_mode", offsetof(MaterialUniforms, alpha_mode), Type::UInt },
+            { "has_maps", offsetof(MaterialUniforms, has_maps), Type::UInt },
+            { "padding", offsetof(MaterialUniforms, padding), Type::UInt },
+        } };
+        return kMembers;
+    }
+
+    bool check_material_block(const assets::Shader& fragment, std::string_view where) {
+        bool ok = true;
+        for (const MaterialUniformMember& expected : material_uniform_layout()) {
+            const assets::ShaderParam* found = nullptr;
+            for (const assets::ShaderParam& param : fragment.params) {
+                if (param.set == kMaterialSet && param.name == expected.name) {
+                    found = &param;
+                    break;
+                }
+            }
+
+            if (found == nullptr) {
+                ENGINE_LOG_ERROR("{}: the Material block declares no {}, which "
+                                 "render::MaterialUniforms expects at offset {}.",
+                                 where, expected.name, expected.offset);
+                ok = false;
+                continue;
+            }
+            if (found->offset != expected.offset) {
+                ENGINE_LOG_ERROR("{}: the Material block puts {} at offset {}, and "
+                                 "render::MaterialUniforms puts it at {}.",
+                                 where, expected.name, found->offset, expected.offset);
+                ok = false;
+            }
+            if (found->type != expected.type) {
+                ENGINE_LOG_ERROR("{}: the Material block declares {} as {}, and "
+                                 "render::MaterialUniforms declares it as {}.",
+                                 where, expected.name, assets::param_type_name(found->type),
+                                 assets::param_type_name(expected.type));
+                ok = false;
+            }
+        }
+        return ok;
+    }
 
     MaterialUniforms pack_material_uniforms(const assets::Material& material) {
         MaterialUniforms out;

@@ -8,6 +8,8 @@
 #include "check.h"
 #include "render/material_cache.h"
 
+#include <cstdlib>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -16,7 +18,36 @@ namespace {
     using engine::render::MaterialCache;
     using engine::render::GpuMaterial;
     using engine::render::MaterialMap;
+    using engine::render::check_material_block;
+    using engine::render::material_uniform_layout;
     using engine::render::pack_material_uniforms;
+
+    /// A shader that declares exactly what MaterialUniforms expects.
+    [[nodiscard]] engine::assets::Shader matching_shader() {
+        engine::assets::Shader shader;
+        shader.stage = engine::assets::ShaderStage::Fragment;
+        for (const auto& member : material_uniform_layout()) {
+            engine::assets::ShaderParam param;
+            param.name = member.name;
+            param.set = engine::render::kMaterialSet;
+            param.binding = 5;
+            param.offset = member.offset;
+            param.type = member.type;
+            shader.params.push_back(std::move(param));
+        }
+        return shader;
+    }
+
+    /// Finds one param of a shader by name, so a test can spoil just that one.
+    [[nodiscard]] engine::assets::ShaderParam& param_named(engine::assets::Shader& shader,
+                                                           std::string_view name) {
+        for (engine::assets::ShaderParam& param : shader.params) {
+            if (param.name == name) {
+                return param;
+            }
+        }
+        std::abort();
+    }
 
     void test_material_cache_drop() {
         MaterialCache cache;
@@ -137,6 +168,55 @@ namespace {
               "the alpha mode survives as its number");
     }
 
+    void test_a_shader_that_agrees_passes() {
+        check(check_material_block(matching_shader(), "test"),
+              "a shader that declares the block passes");
+
+        // The real check has to say yes to the real shader, and a table with no
+        // entries would say yes to anything. This is what makes the refusals
+        // below mean something.
+        check(!material_uniform_layout().empty(), "the expected layout is not empty");
+        check(material_uniform_layout().size() == 10,
+              "every member of the block is expected");
+    }
+
+    void test_a_renamed_member_is_refused() {
+        engine::assets::Shader shader = matching_shader();
+        param_named(shader, "normal_scale").name = "normal_scale_typo";
+        check(!check_material_block(shader, "test"), "a renamed member is refused");
+    }
+
+    void test_a_moved_member_is_refused() {
+        // Two members of the same type that traded places. Nothing about the
+        // block size changes, and the shader still compiles, so this is the case
+        // that no other check can catch.
+        engine::assets::Shader shader = matching_shader();
+        std::swap(param_named(shader, "metallic_factor").offset,
+                  param_named(shader, "roughness_factor").offset);
+        check(!check_material_block(shader, "test"), "two members that swapped are refused");
+    }
+
+    void test_a_retyped_member_is_refused() {
+        engine::assets::Shader shader = matching_shader();
+        param_named(shader, "alpha_mode").type = engine::assets::ParamType::Float;
+        check(!check_material_block(shader, "test"), "a member of the wrong type is refused");
+    }
+
+    void test_a_missing_member_is_refused() {
+        engine::assets::Shader shader = matching_shader();
+        shader.params.clear();
+        check(!check_material_block(shader, "test"), "a shader that declares nothing is refused");
+    }
+
+    void test_a_member_in_another_set_does_not_count() {
+        // The frame block declares its own members, and one of them could share
+        // a name with a material one. Matching on the name alone would find it.
+        engine::assets::Shader shader = matching_shader();
+        param_named(shader, "has_maps").set = 0;
+        check(!check_material_block(shader, "test"),
+              "a member in the frame set does not satisfy the material block");
+    }
+
 } // namespace
 
 int main() {
@@ -145,5 +225,12 @@ int main() {
     test::section("the material parameter block");
     test_the_map_mask_names_only_the_maps_that_are_there();
     test_every_factor_reaches_the_block();
+    test::section("the block and the shader agree");
+    test_a_shader_that_agrees_passes();
+    test_a_renamed_member_is_refused();
+    test_a_moved_member_is_refused();
+    test_a_retyped_member_is_refused();
+    test_a_missing_member_is_refused();
+    test_a_member_in_another_set_does_not_count();
     return test::report();
 }
