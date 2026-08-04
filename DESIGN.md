@@ -791,6 +791,26 @@ A material lives on the submesh rather than on `MeshRenderer`. One mesh can use 
 a single field on the component could not say which submesh got which. A per-entity override
 belongs with the editor work in M9.
 
+**Lighting scales by clustered forward, not by deferred shading.** The frame block carries a
+fixed array of eight lights today. That follows rule 4.6, because the sandbox lights a scene
+with two. The M5 done-when test is a Sponza-class scene, which carries far more, so the
+milestone needs an answer rather than a larger array.
+
+A compute pass divides the frustum into a grid of tiles across depth slices, and writes a short
+list of lights for each cell. The forward pass reads the list for the cell a pixel is in. The
+cost then follows the lights near a pixel rather than the lights in the scene.
+
+Deferred shading answers the same question and it was rejected. It was the answer when no
+compute shader could cull lights up front, and it carries four costs that clustered forward
+does not. It writes a G-buffer, which is a large bandwidth bill at high resolution. It gives up
+hardware MSAA. It needs a second forward path for the transparent surfaces, so the engine keeps
+two shading paths that must agree. And it holds every material to the fields the G-buffer
+carries, which fights the reflected parameter block above.
+
+The order matters. The cull pass is a compute pass that writes a resource the mesh pass reads,
+which is exactly what the frame graph in M5.3 exists to schedule. So the light grid lands after
+the graph and not before it. Issue #98 holds the decision and the work.
+
 **An image with no file is a sub-asset too.** A glTF names its images three ways: a file
 beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a
 file can carry a `.meta` sidecar. The other two get a derived GUID under the kind word
@@ -964,7 +984,14 @@ depends on it. The runtime links `camina::sandbox` today.
 **This milestone decides whether the engine is usable.** Asset GUIDs. The `cooker`
 executable. glTF import with cgltf. Textures through stb and bc7enc_rdo with mip chains.
 meshoptimizer. A manifest with dependency tracking. File-watch hot reload.
-**Done when:** you copy a `.gltf` file into `content/` and it appears in the running editor.
+**Done when:** you copy a `.gltf` file into `content/` and it appears in the running program,
+with no restart.
+
+The test said "the running editor" while it was written, and M4 closed five milestones before
+the editor exists. What M4 really built is the loop: the watcher sees the file, the cooker
+runs, and the world builds again. The runtime is what runs that loop today, and the editor
+will run the same one in M9. Naming the program rather than the application keeps the test
+honest about what it measures.
 
 ### M5 — PBR and render graph
 A frame graph that handles barriers and transient resource aliasing. Cook-Torrance
