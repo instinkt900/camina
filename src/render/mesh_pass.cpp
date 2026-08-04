@@ -108,6 +108,30 @@ namespace engine::render {
         device_ = nullptr;
     }
 
+    void MeshPass::reload(std::span<const Guid> changed) {
+        if (device_ == nullptr || changed.empty()) {
+            return;
+        }
+
+        // A frame that has not finished may still read the buffer or the
+        // texture about to be freed. That is a use-after-free the validation
+        // layer may or may not report, and it does not happen on every run.
+        //
+        // A reload follows a person saving a file, so a wait here costs a
+        // stall nobody can see. Streaming cannot pay that. Issue #60 holds the
+        // queue that frees behind the frames instead.
+        gfx::device_wait_idle(device_);
+
+        for (const Guid guid : changed) {
+            // An identity is a mesh, a texture, or a material, and the caller
+            // does not know which. Asking all three costs one lookup each and
+            // it keeps the caller out of the question.
+            meshes_.drop(device_, guid);
+            textures_.drop(device_, guid);
+            materials_.drop(guid);
+        }
+    }
+
     void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,
                         const assets::Content& content, const Mat4& view_projection) {
         draw_count_ = 0;

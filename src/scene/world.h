@@ -137,6 +137,18 @@ namespace engine::scene {
         [[nodiscard]] std::size_t size() const;
 
         /**
+         * @brief Destroys every entity and leaves an empty world.
+         *
+         * M4.5 uses this to read a scene again while the program runs. It is
+         * the whole world and not one subtree, so no entity is left pointing
+         * at a parent that went away.
+         *
+         * @warning Every entity handle taken before this is stale afterward.
+         * The caller has to drop what it held, a selected entity included.
+         */
+        void clear();
+
+        /**
          * @brief Whether one entity is the same as, or an ancestor of, another.
          * @param ancestor The entity to look for.
          * @param entity The entity to walk up from.

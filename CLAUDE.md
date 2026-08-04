@@ -41,7 +41,7 @@ library that the runtime links, and it loads a scene of prefab instances and tur
 them. The runtime flies through that scene and edits any component on any entity, which
 closes M3. See `DESIGN.md` §10.
 
-M4 is in progress. M4.1 gives an asset its identity. It adds `engine::Guid` in
+M4 is complete. M4.1 gives an asset its identity. It adds `engine::Guid` in
 `src/core/guid.h`, a `.meta` sidecar next to each source file, and `assets::AssetDatabase`.
 The database turns a GUID into a handle that stays valid when the asset loads or reloads.
 
@@ -89,8 +89,17 @@ stb_image and builds the mip chain in linear light. It then compresses to BC7 wi
 space. The cooker guesses it from the file name, and only on the cook that writes a new
 sidecar. The cube reads `cube.png` from the cooked tree, and `build_texture()` is gone.
 
-Verified on 2026-08-02 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
-GeForce MX250 with the Khronos validation layer active. The build produces no warnings
+M4.5 closes the milestone. `platform::DirectoryWatcher` polls the source tree and holds a
+change back until the file stops moving. `platform::run_process` starts the cooker without a
+shell. `assets::HotReload` joins them, and `Content::reload` compares the new manifest against
+the old one so a save names one asset rather than the whole tree. `MeshPass::reload` waits for
+the frames in flight before it frees anything. The runtime watches `sandbox/content`, and a
+scene or a prefab that changes builds the world again. `--watch`, `--glslc`, and `--no-watch`
+override it.
+
+Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
+together in a running program, with no validation message. The build produces no warnings
 under the full warning set.
 
 ## Development flow

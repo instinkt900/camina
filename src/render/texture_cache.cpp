@@ -101,6 +101,19 @@ namespace engine::render {
         return texture;
     }
 
+    void TextureCache::drop(gfx::Device* device, Guid guid) {
+        failed_.erase(guid);
+
+        const auto found = loaded_.find(guid);
+        if (found == loaded_.end()) {
+            return;
+        }
+        if (device != nullptr) {
+            gfx::destroy_texture(device, found->second);
+        }
+        loaded_.erase(found);
+    }
+
     void TextureCache::destroy(gfx::Device* device) {
         if (device != nullptr) {
             for (const auto& [guid, texture] : loaded_) {

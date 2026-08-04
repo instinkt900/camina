@@ -75,6 +75,26 @@ namespace engine::render {
         [[nodiscard]] gfx::TextureHandle fallback() const { return fallback_; }
 
         /**
+         * @brief Frees one texture, so the next get() uploads it again.
+         *
+         * This is what hot reload calls. It also forgets a remembered failure,
+         * because the whole point of a reload is that a texture which would not
+         * load before may load now.
+         *
+         * The fallback is never dropped. It belongs to no source file, so
+         * nothing can change it.
+         *
+         * @param device The device that owns the textures.
+         * @param guid The texture to let go of. One that is not loaded is not
+         * an error and does nothing.
+         *
+         * @warning The texture goes straight back to the device. The caller
+         * must already have waited for the frames in flight, because a frame
+         * the GPU has not finished may still read it.
+         */
+        void drop(gfx::Device* device, Guid guid);
+
+        /**
          * @brief Frees every texture, the fallback included.
          * @param device The device that owns them.
          */

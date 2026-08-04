@@ -11,13 +11,16 @@
 // shaders.
 
 #include "assets/content.h"
+#include "assets/hot_reload.h"
 #include "assets/manifest.h"
 #include "assets/meta.h"
 #include "assets/texture.h"
 #include "check.h"
 #include "cook.h"
+#include "platform/paths.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -742,6 +745,239 @@ namespace {
         std::filesystem::remove_all(source.parent_path());
     }
 
+    // M4.5. The reload half of the pipeline.
+    //
+    // These tests run the real cooker executable, which sits beside the test
+    // program because both go to the same output directory. That makes them
+    // end to end: a file changes, the cooker runs in its own process, and the
+    // manifest says what moved.
+
+    /// The cooker that the build put beside this program.
+    [[nodiscard]] std::filesystem::path cooker_program() {
+#if defined(_WIN32)
+        constexpr const char* kName = "cooker.exe";
+#else
+        constexpr const char* kName = "cooker";
+#endif
+        return engine::platform::executable_directory() / kName;
+    }
+
+    /// The identity of the one output of a source path.
+    [[nodiscard]] engine::Guid identity_of(const as::Content& content, const char* source) {
+        const as::ManifestEntry* entry = content.find(source);
+        if (entry == nullptr || entry->outputs.empty()) {
+            return {};
+        }
+        return entry->outputs.front().guid;
+    }
+
+    void test_reload_names_only_what_changed() {
+        const std::filesystem::path source = scratch("reload/src");
+        const std::filesystem::path out = scratch("reload/out");
+        write_file(source / "a.scene", "{}");
+        write_file(source / "b.prefab", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+        const engine::Guid scene = identity_of(content, "a.scene");
+        const engine::Guid prefab = identity_of(content, "b.prefab");
+        check(scene.valid() && prefab.valid(), "both identities are there");
+
+        std::vector<engine::Guid> changed;
+        check(content.reload(changed) && changed.empty(),
+              "a reload over an unchanged tree names nothing");
+
+        // The property the whole feature rests on. A reload that named every
+        // asset would re-upload the entire tree every time one file is saved.
+        write_file(source / "a.scene", "{\"changed\":true}");
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+        check(content.reload(changed), "the reload reads the new manifest");
+        check(changed.size() == 1, "and it names one asset");
+        if (changed.size() != 1) {
+            return;
+        }
+        check(changed.front() == scene, "which is the one that changed");
+
+        check(content.reload(changed) && changed.empty(),
+              "reloading again names nothing, because nothing moved");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_reload_names_an_asset_that_went_away() {
+        const std::filesystem::path source = scratch("gone_reload/src");
+        const std::filesystem::path out = scratch("gone_reload/out");
+        write_file(source / "a.scene", "{}");
+        write_file(source / "b.prefab", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+        const engine::Guid prefab = identity_of(content, "b.prefab");
+
+        // A cache holding an asset the content no longer has would keep
+        // drawing it, so the reload has to report it.
+        std::filesystem::remove(source / "b.prefab");
+        std::filesystem::remove(as::meta_path(source / "b.prefab"));
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the cook after the delete works");
+
+        std::vector<engine::Guid> changed;
+        check(content.reload(changed), "the reload reads the new manifest");
+        check(changed.size() == 1, "and it names one asset");
+        if (changed.size() != 1) {
+            return;
+        }
+        check(changed.front() == prefab, "which is the one that went away");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_reload_keeps_what_it_has_when_the_manifest_will_not_read() {
+        const std::filesystem::path source = scratch("bad_manifest/src");
+        const std::filesystem::path out = scratch("bad_manifest/out");
+        write_file(source / "a.scene", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+        const engine::Guid scene = identity_of(content, "a.scene");
+
+        write_file(out / as::kManifestFile, "not json");
+
+        std::vector<engine::Guid> changed;
+        check(!content.reload(changed), "a manifest that will not read fails the reload");
+        check(changed.empty(), "and it names nothing");
+        // The point of the test. Dropping the manifest here would leave the
+        // program unable to find any asset at all, over one bad write.
+        check(identity_of(content, "a.scene") == scene,
+              "and the content keeps the manifest it already had");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_hot_reload_cooks_what_changed() {
+        const std::filesystem::path source = scratch("hot/src");
+        const std::filesystem::path out = scratch("hot/out");
+        write_file(source / "a.scene", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+        const engine::Guid scene = identity_of(content, "a.scene");
+
+        as::HotReload reload;
+        check(reload.start({ .source = source, .cooker = cooker_program(), .glslc = {} }),
+              "hot reload starts when the source tree and the cooker are both there");
+        check(reload.active(), "and it reports itself active");
+
+        // The timers off, so the test drives it by polling rather than by
+        // sleeping. A change still needs the walk after the one that saw it.
+        reload.watcher().set_interval(std::chrono::milliseconds{ 0 });
+        reload.watcher().set_settle(std::chrono::milliseconds{ 0 });
+
+        std::vector<engine::Guid> changed;
+        check(!reload.poll(content, changed), "an unchanged tree reloads nothing");
+        check(reload.cooks() == 0, "and it does not run the cooker at all");
+
+        write_file(source / "a.scene", "{\"changed\":true}");
+        check(!reload.poll(content, changed), "the walk that first sees the change waits");
+
+        check(reload.poll(content, changed), "the next poll cooks and reloads");
+        check(reload.cooks() == 1, "and it ran the cooker once");
+        check(changed.size() == 1 && changed.front() == scene, "it names the changed asset");
+        check(read_file(out / "a.scene") == "{\"changed\":true}",
+              "and the new bytes reached the cooked tree");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_hot_reload_lives_through_a_cook_that_fails() {
+        const std::filesystem::path source = scratch("hot_bad/src");
+        const std::filesystem::path out = scratch("hot_bad/out");
+        write_file(source / "a.scene", "{}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "the first cook works");
+
+        as::Content content;
+        check(content.open(out), "the content opens");
+        const engine::Guid scene = identity_of(content, "a.scene");
+
+        as::HotReload reload;
+        check(reload.start({ .source = source, .cooker = cooker_program(), .glslc = {} }),
+              "hot reload starts");
+        reload.watcher().set_interval(std::chrono::milliseconds{ 0 });
+        reload.watcher().set_settle(std::chrono::milliseconds{ 0 });
+
+        // One good change and one bad file in the same batch. The cooker cooks
+        // the good one, fails the bad one, and returns non-zero with the
+        // cooked tree part way through. A file with a texture name and bytes
+        // that are not an image is what fails it.
+        //
+        // The good change matters. A broken file on its own produces no output
+        // at all, so a reload that ignored the exit code would find nothing to
+        // do and would look correct while checking nothing.
+        write_file(source / "a.scene", "{\"changed\":true}");
+        write_file(source / "broken.png", "this is not a PNG");
+
+        std::vector<engine::Guid> changed;
+        check(!reload.poll(content, changed), "the walk that first sees them waits");
+        check(!reload.poll(content, changed), "a cook that fails reloads nothing");
+        check(reload.cooks() == 1, "and it did run the cooker");
+        check(changed.empty(), "and it names no asset to load again");
+
+        // The point of the test. A failed cook must leave the program with
+        // what it already had, and it must never end the process.
+        check(identity_of(content, "a.scene") == scene, "the content keeps what it had");
+
+        // The cooker writes its manifest even when one asset failed, so the
+        // half-cooked tree really is on disk. Reading it here proves that the
+        // check above refused something rather than finding nothing.
+        std::vector<engine::Guid> refused;
+        check(content.reload(refused) && refused.size() == 1,
+              "the failed cook did change the tree, so refusing it was a decision");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
+    void test_hot_reload_is_off_when_it_cannot_cook() {
+        const std::filesystem::path source = scratch("hot_off/src");
+        write_file(source / "a.scene", "{}");
+
+        as::Content content;
+        std::vector<engine::Guid> changed;
+
+        as::HotReload missing_cooker;
+        check(!missing_cooker.start({ .source = source, .cooker = source / "no_cooker", .glslc = {} }),
+              "hot reload will not start without a cooker");
+        check(!missing_cooker.active(), "and it reports itself off");
+        check(!missing_cooker.poll(content, changed), "polling it does nothing");
+
+        as::HotReload missing_source;
+        check(!missing_source.start({ .source = source / "not_here",
+                                      .cooker = cooker_program(),
+                                      .glslc = {} }),
+              "and it will not start without a source tree");
+
+        std::filesystem::remove_all(source.parent_path());
+    }
+
 } // namespace
 
 int main() {
@@ -765,5 +1001,12 @@ int main() {
     test_a_broken_image_fails_the_cook();
     test::section("reading it back");
     test_content_reads_what_the_cooker_wrote();
+    test::section("hot reload");
+    test_reload_names_only_what_changed();
+    test_reload_names_an_asset_that_went_away();
+    test_reload_keeps_what_it_has_when_the_manifest_will_not_read();
+    test_hot_reload_cooks_what_changed();
+    test_hot_reload_lives_through_a_cook_that_fails();
+    test_hot_reload_is_off_when_it_cannot_cook();
     return test::report();
 }

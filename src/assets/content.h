@@ -45,6 +45,23 @@ namespace engine::assets {
         [[nodiscard]] bool open(const std::filesystem::path& cooked_root);
 
         /**
+         * @brief Reads the manifest again and reports what moved.
+         *
+         * M4.5 calls this after a cook. Everything the cooker skipped keeps the
+         * identity and the hash it had, so the answer names only the assets a
+         * caller has to load again.
+         *
+         * An asset that went away is reported as well, because a cache holding
+         * it has to let it go.
+         *
+         * @param changed Receives every identity that appeared, changed, or
+         * went away. It is cleared first.
+         * @return True when the manifest was read. On false the content keeps
+         * the manifest it already had, and @p changed is empty.
+         */
+        [[nodiscard]] bool reload(std::vector<Guid>& changed);
+
+        /**
          * @brief Finds what the cooker made from a source path.
          * @param source The source path, relative to the content root, with
          * forward slashes. For a shader, name the GLSL file and not the `.spv`.

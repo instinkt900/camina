@@ -4,6 +4,8 @@
 
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <utility>
 
 namespace engine::assets {
 
@@ -17,6 +19,79 @@ namespace engine::assets {
         }
         ENGINE_LOG_INFO("Opened {} with {} cooked assets.", root_.string(),
                         manifest_.entries.size());
+        return true;
+    }
+
+    namespace {
+
+        /// What a manifest says about one identity, flattened out of the entries.
+        struct Cooked {
+            std::string path;       ///< The cooked file, relative to the root.
+            std::uint64_t hash = 0; ///< The hash of every input the entry was built from.
+
+            [[nodiscard]] bool operator==(const Cooked& other) const = default;
+        };
+
+        /// Turns a manifest into one record for each identity it names.
+        [[nodiscard]] std::map<Guid, Cooked> by_identity(const Manifest& manifest) {
+            std::map<Guid, Cooked> out;
+            for (const ManifestEntry& entry : manifest.entries) {
+                for (const ManifestOutput& output : entry.outputs) {
+                    const auto [at, added] = out.emplace(
+                        output.guid, Cooked{ .path = output.cooked, .hash = entry.hash });
+                    if (!added) {
+                        // Copying an asset together with its sidecar does
+                        // this, and that is the flow this milestone is about.
+                        // Only the first of the two is ever reloaded, so
+                        // saying nothing here would leave the second one
+                        // stale with nothing to explain it. Issue #64 makes
+                        // the cooker refuse the tree instead.
+                        ENGINE_LOG_ERROR("{} is the identity of {} and of {}. Delete the "
+                                         "sidecar of one of them, so the cooker gives it an "
+                                         "identity of its own. Only the first one reloads.",
+                                         output.guid.to_text(), at->second.path, output.cooked);
+                    }
+                }
+            }
+            return out;
+        }
+
+    } // namespace
+
+    bool Content::reload(std::vector<Guid>& changed) {
+        changed.clear();
+
+        Manifest fresh;
+        if (!load_manifest(root_, fresh)) {
+            ENGINE_LOG_ERROR("{}: the manifest will not read, so nothing is reloaded. The "
+                             "assets already loaded stay as they are.",
+                             root_.string());
+            return false;
+        }
+
+        const std::map<Guid, Cooked> before = by_identity(manifest_);
+        const std::map<Guid, Cooked> after = by_identity(fresh);
+
+        // The hash covers every input of the entry, so an asset the cooker
+        // skipped keeps the hash it had. Comparing it therefore names the
+        // assets that were rebuilt, and nothing else. The cooked path is
+        // compared as well, because a rule that starts writing somewhere else
+        // leaves the hash alone.
+        for (const auto& [guid, cooked] : after) {
+            const auto was = before.find(guid);
+            if (was == before.end() || was->second != cooked) {
+                changed.push_back(guid);
+            }
+        }
+        // An identity that is gone has to be reported too. A cache holding it
+        // would otherwise keep drawing an asset the content no longer has.
+        for (const auto& [guid, cooked] : before) {
+            if (!after.contains(guid)) {
+                changed.push_back(guid);
+            }
+        }
+
+        manifest_ = std::move(fresh);
         return true;
     }
 

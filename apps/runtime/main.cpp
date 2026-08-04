@@ -1,3 +1,5 @@
+#include "assets/hot_reload.h"
+#include "assets/manifest.h"
 #include "core/arena.h"
 #include "core/jobs.h"
 #include "core/log.h"
@@ -15,6 +17,7 @@
 #include "screenshot.h"
 #include "sandbox/game.h"
 #include "scene/component_registry.h"
+#include "scene/prefab.h"
 #include "scene/scene_file.h"
 #include "scene/components.h"
 #include "scene/world.h"
@@ -31,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -73,6 +77,11 @@ namespace {
         bool validation = true;
         /// Where the game reads its content. Empty means the compiled-in default.
         std::string content;
+        /// The source content tree to watch. Empty means the compiled-in default.
+        std::string watch;
+        /// The shader compiler to cook with. Empty means the compiled-in default.
+        std::string glslc;
+        bool hot_reload = true; ///< False turns the watcher and the cooker off.
     };
 
     /**
@@ -139,19 +148,36 @@ struct engine::reflect::Describe<ViewSettings> {
 
 namespace {
 
+    /**
+     * Reads the command line.
+     *
+     * Every option that takes a value moves the index once, and the loop moves
+     * it again. An option that moves it twice swallows whatever follows the
+     * value, which is a hard failure to see because the swallowed option simply
+     * does nothing.
+     */
     Options parse_options(int argc, char** argv) {
         Options options;
         for (int i = 1; i < argc; ++i) {
             const std::string_view arg{ argv[i] };
-            if (arg == "--frames" && i + 1 < argc) {
+            const bool has_value = i + 1 < argc;
+            if (arg == "--frames" && has_value) {
                 options.max_frames = std::strtoull(argv[i + 1], nullptr, kDecimalBase);
                 ++i;
-            } else if (arg == "--content" && i + 1 < argc) {
+            } else if (arg == "--content" && has_value) {
                 options.content = argv[i + 1];
-            } else if (arg == "--screenshot" && i + 1 < argc) {
+                ++i;
+            } else if (arg == "--screenshot" && has_value) {
                 options.screenshot = argv[i + 1];
                 ++i;
+            } else if (arg == "--watch" && has_value) {
+                options.watch = argv[i + 1];
                 ++i;
+            } else if (arg == "--glslc" && has_value) {
+                options.glslc = argv[i + 1];
+                ++i;
+            } else if (arg == "--no-watch") {
+                options.hot_reload = false;
             } else if (arg == "--no-validation") {
                 options.validation = false;
             }
@@ -480,8 +506,8 @@ namespace {
         engine::scene::World* world = nullptr;
         /// The entity the inspector edits, or entt::null for none.
         entt::entity* selected = nullptr;
-        /// Where the Save button writes.
-        std::filesystem::path scene_path;
+        /// The cooked game content directory, which holds the scene and the prefabs.
+        std::filesystem::path content;
     };
 
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
@@ -506,7 +532,7 @@ namespace {
         // leaves an ImGui frame half open.
         engine::gfx::imgui_new_frame();
         draw_view_window(settings);
-        draw_world_window(world, *context.selected, context.scene_path);
+        draw_world_window(world, *context.selected, context.content / sandbox::kSceneFile);
         draw_inspector_window(world, *context.selected);
 
         // An edit in the inspector went around set_local(), so the matrices are
@@ -559,8 +585,103 @@ namespace {
         engine::render::MeshPass mesh;
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
+        /// M4.5. Watches the game source tree and cooks what a person edits.
+        engine::assets::HotReload reload;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
+
+    /// The cooker that ships beside this executable.
+    std::filesystem::path cooker_path() {
+#if defined(_WIN32)
+        constexpr const char* kCookerName = "cooker.exe";
+#else
+        constexpr const char* kCookerName = "cooker";
+#endif
+        return engine::platform::executable_directory() / kCookerName;
+    }
+
+    /**
+     * Starts hot reload, or says why it is off.
+     *
+     * A machine with no source tree beside the executable cannot cook, and
+     * that is not an error. The program runs on with the assets it already
+     * has, which is what a shipped build does.
+     */
+    void start_hot_reload(Runtime& runtime, const Options& options) {
+        if (!options.hot_reload) {
+            ENGINE_LOG_INFO("Hot reload is off, because --no-watch was given.");
+            return;
+        }
+
+        const engine::assets::HotReloadDesc desc{
+            .source = options.watch.empty() ? std::filesystem::path{ ENGINE_GAME_CONTENT_SOURCE }
+                                            : std::filesystem::path{ options.watch },
+            .cooker = cooker_path(),
+            .glslc = options.glslc.empty() ? std::string{ ENGINE_GLSLC_PATH } : options.glslc,
+        };
+        (void)runtime.reload.start(desc);
+    }
+
+    /**
+     * Whether a reloaded identity is one the world was built out of.
+     *
+     * A mesh or a texture swaps in behind the entities that already name it,
+     * and the world does not change. A scene or a prefab describes the
+     * entities themselves, so the world has to be built again.
+     *
+     * An identity that went away is not in the manifest any more, and nothing
+     * here can tell what it used to be. Deleting a prefab therefore needs a
+     * restart, and issue #59 covers that.
+     */
+    bool world_was_built_from(const engine::assets::Content& content,
+                              const std::vector<engine::Guid>& changed) {
+        for (const engine::Guid guid : changed) {
+            const engine::assets::ManifestOutput* output =
+                engine::assets::find_by_guid(content.manifest(), guid);
+            if (output == nullptr) {
+                continue;
+            }
+            const std::filesystem::path cooked{ output->cooked };
+            if (cooked.extension() == ".scene" || cooked.extension() == ".prefab") {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Cooks whatever changed and swaps it in.
+     *
+     * Call this between frames. MeshPass::reload() waits for the frames in
+     * flight before it frees anything, which cannot happen inside one.
+     */
+    void apply_hot_reload(Runtime& runtime, const FrameContext& context,
+                          engine::scene::World& world) {
+        std::vector<engine::Guid> changed;
+        if (!runtime.reload.poll(runtime.game_content, changed)) {
+            return;
+        }
+
+        runtime.mesh.reload(changed);
+        if (!world_was_built_from(runtime.game_content, changed)) {
+            return;
+        }
+
+        // Every entity goes, so anything holding one lets go first.
+        *context.selected = entt::null;
+        world.clear();
+        engine::scene::prefabs().clear();
+
+        if (!sandbox::load(context.content, &runtime.game_content, world)) {
+            // An empty world is what a broken scene looks like, and the log
+            // above says which file. Saving a working one loads it again, so
+            // this never ends the process.
+            ENGINE_LOG_ERROR("The scene did not load, so the world is empty. Fix the file "
+                             "and save it again.");
+            return;
+        }
+        ENGINE_LOG_INFO("The scene was read again. The world holds {} entities.", world.size());
+    }
 
     /// @return True when everything started. The caller calls stop() either way.
     bool start(Runtime& runtime, const Options& options) {
@@ -649,6 +770,10 @@ namespace {
                 last_frame = std::chrono::steady_clock::now();
                 continue;
             }
+
+            // Between frames, because freeing a resource waits for the frames
+            // in flight and a frame cannot wait for itself.
+            apply_hot_reload(runtime, context, world);
 
             // The window reports its new size before the swapchain knows about it.
             const engine::gfx::Extent2D extent = window_extent(runtime.window);
@@ -766,6 +891,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // After the first load, so the watcher takes its snapshot of a tree that
+    // is already cooked and nothing arrives as a change on the first frame.
+    start_hot_reload(runtime, options);
+
     entt::entity selected = entt::null;
     const FrameContext context{
         .device = runtime.device,
@@ -774,7 +903,7 @@ int main(int argc, char** argv) {
         .settings = &settings,
         .world = &world,
         .selected = &selected,
-        .scene_path = content / sandbox::kSceneFile,
+        .content = content,
     };
 
     const bool ok = run_frames(runtime, context, options, frame_arena, settings, world);

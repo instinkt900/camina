@@ -80,6 +80,20 @@ namespace engine::render {
         return &loaded_.emplace(guid, std::move(built)).first->second;
     }
 
+    void MeshCache::drop(gfx::Device* device, Guid guid) {
+        failed_.erase(guid);
+
+        const auto found = loaded_.find(guid);
+        if (found == loaded_.end()) {
+            return;
+        }
+        if (device != nullptr) {
+            gfx::destroy_buffer(device, found->second.vertices);
+            gfx::destroy_buffer(device, found->second.indices);
+        }
+        loaded_.erase(found);
+    }
+
     void MeshCache::destroy(gfx::Device* device) {
         if (device == nullptr) {
             loaded_.clear();
