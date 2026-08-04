@@ -1883,8 +1883,10 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 8 }
 })");
 
+        // No glslc here. This test cooks no shader, and ENGINE_GLSLC_PATH is
+        // only defined when CMake found the compiler, so naming it would make
+        // this test fail to build on a machine that has none.
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(cooker::cook_all(options, result), "an HDR panorama cooks");
 
@@ -1900,6 +1902,35 @@ void main() { out_color = push.model[0]; }
         // An HDR file is linear by definition, so the rule must not guess.
         check(view.color_space == engine::assets::ColorSpace::Linear, "and it is linear");
         check(view.width == 8 && view.height == 8, "the face is the size the sidecar asked for");
+
+        test::remove_tree(source.parent_path());
+    }
+
+
+    /// A face size the payload size field cannot hold is refused at the cook.
+    void test_an_oversized_environment_face_is_refused() {
+        const std::filesystem::path source = scratch("bigenv/src");
+        const std::filesystem::path out = scratch("bigenv/out");
+
+        std::string hdr = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n";
+        const std::array<unsigned char, 8> texels{ 255, 128, 64, 128, 64, 128, 255, 129 };
+        for (const unsigned char byte : texels) {
+            hdr.push_back(static_cast<char>(byte));
+        }
+        write_file(source / "huge.hdr", hdr);
+
+        // One past the bound. Six faces of a mip chain at half float run past
+        // what the cooked header records in 32 bits well before this.
+        write_file(source / "huge.hdr.meta", R"({
+  "__version": 4,
+  "guid": "b1d7e6a2-4c55-4a1e-8f30-9e2c7a5d3b44",
+  "environment": { "__version": 1, "face_size": 8192 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a face size past the bound fails the cook");
+        check(result.failed == 1, "and it counts one failure");
 
         test::remove_tree(source.parent_path());
     }
@@ -1922,6 +1953,7 @@ int main() {
     test_the_cooker_reflects_what_a_shader_reads();
     test_a_shader_cooks_once_for_each_variant();
     test_an_hdr_panorama_cooks_to_a_cubemap();
+    test_an_oversized_environment_face_is_refused();
     test_a_variant_list_that_starts_with_defines_is_refused();
     test_a_push_block_that_starts_late_reports_its_real_size();
     test_a_shader_that_does_not_compile_writes_nothing();

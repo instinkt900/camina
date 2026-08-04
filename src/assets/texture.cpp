@@ -118,6 +118,18 @@ namespace engine::assets {
             return false;
         }
 
+        // Before the arithmetic below, not after. chain_bytes multiplies the
+        // two extents by the bytes of a texel, and the face count adds three
+        // more bits on top. Extents near the top of a uint32 wrap that product,
+        // and a wrapped `wanted` can come out small enough that a short file
+        // matches it. The check would then pass on a file it exists to refuse.
+        constexpr std::uint32_t kMaxExtent = 65536;
+        if (header.width > kMaxExtent || header.height > kMaxExtent) {
+            ENGINE_LOG_ERROR("{}: {} by {} texels is larger than any device samples.", where,
+                             header.width, header.height);
+            return false;
+        }
+
         const auto format = static_cast<TextureFormat>(header.format);
         // Every face carries the whole chain, so six faces cost six chains.
         const std::size_t wanted =

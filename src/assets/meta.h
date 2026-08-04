@@ -102,6 +102,17 @@ namespace engine::assets {
     inline constexpr std::uint32_t kDefaultFaceSize = 256;
 
     /**
+     * @brief The largest face an environment sidecar may ask for.
+     *
+     * Six faces of a mip chain at half float cost about 64 times the square of
+     * this, so 4096 is close to 1 GB and 8192 would pass the size a cooked
+     * texture records in a 32-bit field. A cooker that took the larger number
+     * would write a header whose payload size wrapped, and the reader would
+     * then refuse a file that is on disk and correct.
+     */
+    inline constexpr std::uint32_t kMaxFaceSize = 4096;
+
+    /**
      * @brief How the cooker must turn an HDR image into an environment cubemap.
      *
      * There is no color space here, and that is deliberate. An `.hdr` file is

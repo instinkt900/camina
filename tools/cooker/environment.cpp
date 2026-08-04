@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <fstream>
 #include <numbers>
 #include <vector>
@@ -313,8 +314,13 @@ namespace cooker {
     bool cook_environment(const std::filesystem::path& source,
                           const std::filesystem::path& destination,
                           const as::EnvironmentImport& settings) {
-        if (settings.face_size == 0) {
-            ENGINE_LOG_ERROR("{}: the sidecar asks for a face of 0 texels.", source.string());
+        // Both ends. A face of nothing writes an empty cubemap, and a face too
+        // large overruns the 32-bit payload size a cooked texture records, which
+        // would write a header the reader then refuses.
+        if (settings.face_size == 0 || settings.face_size > as::kMaxFaceSize) {
+            ENGINE_LOG_ERROR("{}: the sidecar asks for a face of {} texels, and a face is "
+                             "from 1 to {}.",
+                             source.string(), settings.face_size, as::kMaxFaceSize);
             return false;
         }
 
@@ -363,6 +369,16 @@ namespace cooker {
                 }
                 append_level(level, payload);
             }
+        }
+
+        // kMaxFaceSize keeps this inside a uint32, so this cannot fire today.
+        // It is here because the bound and this field are two separate facts,
+        // and a later change to one of them must not silently truncate.
+        if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+            ENGINE_LOG_ERROR("{}: the cubemap is {} bytes, and a cooked texture records its "
+                             "size in 32 bits.",
+                             source.string(), payload.size());
+            return false;
         }
 
         as::TextureHeader header;
