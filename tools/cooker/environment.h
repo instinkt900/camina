@@ -9,15 +9,19 @@
  * the projection between the two, and it is a cook step because the projection
  * costs the same every run and the answer never changes.
  *
- * `src/assets/texture.h` holds the file format. A cubemap is a texture with six
- * faces, so this writes the same format the image rule does, with a face count
- * of six and a half float payload.
+ * `src/assets/texture.h` holds the cubemap format. A cubemap is a texture with
+ * six faces, so this writes the same format the image rule does, with a face
+ * count of six and a half float payload. `src/assets/irradiance.h` holds the
+ * second output, which is the diffuse half of image based lighting.
  */
 
+#include "assets/manifest.h"
 #include "assets/meta.h"
+#include "core/guid.h"
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace cooker {
 
@@ -34,19 +38,36 @@ namespace cooker {
     [[nodiscard]] bool is_environment_extension(const std::string& extension);
 
     /**
-     * @brief Projects an equirectangular HDR image onto a cubemap and writes it.
+     * @brief Turns an equirectangular HDR image into the two parts of an environment.
      *
-     * The mip chain is built in linear light, which needs no decode step here
-     * because an HDR file is already linear. See DESIGN.md section 3 for why
-     * that matters for an 8-bit image and not for this one.
+     * The rule writes both halves of image based lighting from one read of the
+     * panorama.
+     *
+     * Part one is the cubemap, and it keeps the identity of the source file, so
+     * a scene that names an environment needs no change. Its mip chain is the
+     * prefiltered specular chain: level 0 is the environment as it is, and each
+     * level below it holds the GGX lobe for a rougher surface. That is why the
+     * chain is not a box filter.
+     *
+     * Part two is the irradiance, as nine coefficients of a spherical harmonic,
+     * under a GUID `Guid::derive` works out from @p parent under the kind word
+     * `irradiance`. A caller finds it from the environment identity alone.
+     *
+     * Everything happens in linear light, which needs no decode step here
+     * because an HDR file is already linear. See DESIGN.md section 3.
      *
      * @param source The `.hdr` file to read.
-     * @param destination Where to write the cooked cubemap.
-     * @param settings The face size, from the sidecar.
-     * @return True when the file was read, projected, and written.
+     * @param out_root The cooked root every output is written under.
+     * @param relative The source path, relative to the content root.
+     * @param parent The identity from the sidecar. The cubemap keeps it.
+     * @param settings The face size and the ray budget, from the sidecar.
+     * @param outputs Receives one entry for each file written.
+     * @return True when the file was read, projected, and both parts written.
      */
-    [[nodiscard]] bool cook_environment(const std::filesystem::path& source,
-                                        const std::filesystem::path& destination,
-                                        const engine::assets::EnvironmentImport& settings);
+    [[nodiscard]] bool cook_environment(
+        const std::filesystem::path& source, const std::filesystem::path& out_root,
+        const std::filesystem::path& relative, engine::Guid parent,
+        const engine::assets::EnvironmentImport& settings,
+        std::vector<engine::assets::ManifestOutput>& outputs);
 
 } // namespace cooker
