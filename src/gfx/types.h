@@ -338,6 +338,22 @@ namespace engine::gfx {
      */
     [[nodiscard]] const char* resource_state_name(ResourceState state);
 
+    /**
+     * @brief Which image of the frame a barrier means.
+     *
+     * A frame owns its color target and its depth target, and neither is a
+     * TextureHandle: the swapchain hands the color image over on every
+     * acquire, and the depth image belongs to the swapchain beside it. So a
+     * barrier on one of them names it this way rather than by handle.
+     *
+     * A pass that owns a transient of its own will need handles here. Nothing
+     * does yet, and rule 4.6 says to add that when a pass asks for it.
+     */
+    enum class FrameTarget : std::uint32_t {
+        Color = 0, ///< The image that gets presented.
+        Depth,     ///< The depth buffer beside it.
+    };
+
     /// @brief The outcome of a gfx call.
     enum class Result : std::uint32_t {
         Success = 0,      ///< The call did what it says.
@@ -401,6 +417,18 @@ namespace engine::gfx {
         const char* app_name = "camina";
         /// @brief Whether to turn on the Vulkan validation layer and the debug messenger.
         bool enable_validation = false;
+        /**
+         * @brief Whether to also turn on synchronization validation.
+         *
+         * This is the check that reads the barriers rather than the calls. It
+         * reports a read that races a write, which is the failure a wrong
+         * barrier produces and the one that shows on one vendor and not
+         * another. It costs real time on every frame, so it is off by default
+         * and a person turns it on while they work on a pass.
+         *
+         * It does nothing unless ::enable_validation is also true.
+         */
+        bool enable_sync_validation = false;
         /// @brief Whether to wait for vertical blank. False selects the lowest latency mode.
         bool vsync = true;
     };

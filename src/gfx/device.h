@@ -98,6 +98,11 @@ namespace engine::gfx {
      * the caller must call device_resize() and try again.
      *
      * @warning Every successful call must be paired with end_frame().
+     *
+     * @warning The color target and the depth target are both left in
+     * ResourceState::Undefined. The render graph is what moves them, because it
+     * is what knows which pass needs them first. So a caller issues the
+     * barriers it derived before it opens a rendering scope.
      */
     [[nodiscard]] Result begin_frame(Device* device, FrameInfo* out_frame);
 
@@ -137,10 +142,41 @@ namespace engine::gfx {
                                        Extent2D* out_extent);
 
     /**
+     * @brief Moves one of the frame's images from one state to another.
+     *
+     * This is what the render graph issues. `render::derive_barriers` works out
+     * which of these a frame needs, and this puts one into the command list.
+     *
+     * The two states decide the stage mask, the access mask, and the image
+     * layout on each side. Nothing here is a catch-all, so a barrier costs only
+     * the stages the two states name.
+     *
+     * A barrier whose two states match is not a mistake and is not skipped. Two
+     * writes to one image have to be ordered against each other even when the
+     * layout does not change, and such a barrier is what carries that.
+     *
+     * @param commands The command list from begin_frame().
+     * @param target Which image to move.
+     * @param before The state the image is in now.
+     * @param after The state the next pass needs it in.
+     *
+     * @warning Call this outside a cmd_begin_rendering() scope. A barrier
+     * inside a rendering scope is invalid unless it is a self-dependency, and
+     * nothing here declares one.
+     */
+    void cmd_frame_barrier(CommandList* commands, FrameTarget target, ResourceState before,
+                           ResourceState after);
+
+    /**
      * @brief Opens dynamic rendering into the current swapchain image.
      *
      * The image loads with a clear to @p clear_color and stores at the end. There
      * is no render pass object and no framebuffer, per DESIGN.md section 2.
+     *
+     * @warning Both images must already be in the state this needs, which is
+     * ResourceState::ColorTarget and ResourceState::DepthTarget. begin_frame()
+     * leaves them in ResourceState::Undefined, so the caller issues the
+     * barriers the render graph derived before it calls this.
      *
      * @param commands The command list from begin_frame().
      * @param clear_color The linear color to clear to.

@@ -77,6 +77,8 @@ namespace {
         /// Where to write a PNG of the last frame. Empty writes nothing.
         std::string screenshot;
         bool validation = true;
+        /// Whether to also check the barriers. Slow, so a person asks for it.
+        bool sync_validation = false;
         /// Where the game reads its content. Empty means the compiled-in default.
         std::string content;
         /// The source content tree to watch. Empty means the compiled-in default.
@@ -85,6 +87,46 @@ namespace {
         std::string glslc;
         bool hot_reload = true; ///< False turns the watcher and the cooker off.
     };
+
+    /**
+     * Derives this frame's barriers and puts them into the command list.
+     *
+     * The pass list is built fresh each frame rather than kept, because a
+     * declaration is a handful of spans over static storage and building it
+     * costs nothing. Keeping it would mean invalidating it whenever a pass
+     * changed what it touches.
+     *
+     * Both images start the frame in Undefined. A swapchain image is a
+     * different image on almost every acquire and its contents are never read,
+     * so there is nothing to carry over from the frame before.
+     *
+     * @param commands The command list from begin_frame().
+     * @return False when a declaration was refused, which is a programming
+     * error rather than a run-time condition.
+     */
+    [[nodiscard]] bool issue_frame_barriers(engine::gfx::CommandList* commands) {
+        const std::array passes{ engine::render::MeshPass::declare() };
+        const std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> initial{
+            engine::gfx::ResourceState::Undefined, engine::gfx::ResourceState::Undefined
+        };
+
+        engine::render::GraphSchedule schedule;
+        if (!engine::render::derive_barriers(passes, initial, schedule)) {
+            ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
+            return false;
+        }
+
+        for (const engine::render::PassBarriers& pass : schedule.passes) {
+            for (const engine::render::GraphBarrier& barrier : pass.before) {
+                const engine::gfx::FrameTarget target =
+                    barrier.resource == engine::render::kFrameDepth
+                        ? engine::gfx::FrameTarget::Depth
+                        : engine::gfx::FrameTarget::Color;
+                engine::gfx::cmd_frame_barrier(commands, target, barrier.before, barrier.after);
+            }
+        }
+        return true;
+    }
 
     /**
      * How the runtime looks at the world, and nothing about the world itself.
@@ -182,6 +224,8 @@ namespace {
                 options.hot_reload = false;
             } else if (arg == "--no-validation") {
                 options.validation = false;
+            } else if (arg == "--sync-validation") {
+                options.sync_validation = true;
             }
         }
         return options;
@@ -625,6 +669,17 @@ namespace {
         // what keeps the frame the user sees current with the frame they edited.
         world.update();
 
+        // The render graph, before anything opens a rendering scope. begin_frame
+        // leaves both images in Undefined and this is what moves them, because
+        // the graph is what knows which pass needs them and in what state.
+        //
+        // One pass today, so this derives the two barriers that begin_frame used
+        // to issue by hand. The point is that a second pass costs nothing here:
+        // it declares what it touches and the barriers between the two fall out.
+        if (!issue_frame_barriers(info.commands)) {
+            return FrameOutcome::Failed;
+        }
+
         const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
                                             settings.clear_color.b, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, clear);
@@ -825,6 +880,7 @@ namespace {
             .window = runtime.window.native(),
             .app_name = "camina",
             .enable_validation = options.validation,
+            .enable_sync_validation = options.sync_validation,
             .vsync = true,
         };
         engine::gfx::Result result = engine::gfx::create_device(device_desc, &runtime.device);

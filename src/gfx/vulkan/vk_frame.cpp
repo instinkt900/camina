@@ -22,19 +22,13 @@ namespace engine::gfx {
             frame.commands.extent =
                 Extent2D{ device.swapchain_extent.width, device.swapchain_extent.height };
 
-            // The previous contents are never read, so UNDEFINED is the correct
-            // source layout and lets the driver skip a decompress.
-            vk::transition_image(frame.commands.buffer, frame.commands.target_image,
-                                 VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                 VK_IMAGE_ASPECT_COLOR_BIT);
-
-            if (device.depth_image != VK_NULL_HANDLE) {
-                vk::transition_image(frame.commands.buffer, device.depth_image,
-                                     VK_IMAGE_LAYOUT_UNDEFINED,
-                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                                     VK_IMAGE_ASPECT_DEPTH_BIT);
-            }
+            // Both images are left in ResourceState::Undefined. The render graph
+            // moves them, because it is what knows which pass needs them first
+            // and in what state. A caller therefore has to issue the barriers
+            // the graph derived before it opens a rendering scope.
+            //
+            // The previous contents are never read, so Undefined is the right
+            // state to start from and it lets the driver skip a decompress.
             return Result::Success;
         }
 
@@ -114,9 +108,13 @@ namespace engine::gfx {
         Frame& frame = device->frames[device->frame_index];
         device->frame_open = false;
 
+        // Presentation stays here rather than in the graph. The wait belongs to
+        // the present semaphore below, and a caller that forgot this barrier
+        // would present an image in the wrong layout. So the graph owns every
+        // barrier inside the frame and this one owns the way out of it.
         vk::transition_image(frame.commands.buffer, frame.commands.target_image,
-                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
+                             ResourceState::ColorTarget, ResourceState::Present,
+                             VK_IMAGE_ASPECT_COLOR_BIT);
 
         ENGINE_VK_TRY(vkEndCommandBuffer(frame.commands.buffer));
 
@@ -165,6 +163,23 @@ namespace engine::gfx {
             return vk::to_result(presented);
         }
         return Result::Success;
+    }
+
+    void cmd_frame_barrier(CommandList* commands, FrameTarget target, ResourceState before,
+                           ResourceState after) {
+        ENGINE_CHECK(commands != nullptr, "cmd_frame_barrier needs a command list.");
+        Device& device = *commands->owner;
+
+        const bool depth = target == FrameTarget::Depth;
+        VkImage image = depth ? device.depth_image : commands->target_image;
+        if (image == VK_NULL_HANDLE) {
+            // A minimized window has no depth image. There is nothing to move
+            // and nothing to report, because the frame draws nothing either.
+            return;
+        }
+
+        vk::transition_image(commands->buffer, image, before, after,
+                             depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
     void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color) {
@@ -279,9 +294,8 @@ namespace engine::gfx {
         VkImage image = device->images[device->image_index];
         Result result = vk::immediate_submit(*device, [&](VkCommandBuffer commands) {
             // The image is in PRESENT_SRC because end_frame left it there.
-            vk::transition_image(commands, image, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                 VK_IMAGE_ASPECT_COLOR_BIT);
+            vk::transition_image(commands, image, ResourceState::Present,
+                                 ResourceState::CopySource, VK_IMAGE_ASPECT_COLOR_BIT);
 
             VkBufferImageCopy region{};
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -292,8 +306,8 @@ namespace engine::gfx {
 
             // Put it back, because the presentation engine still owns it and the
             // next acquire expects to find it as it was.
-            vk::transition_image(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
+            vk::transition_image(commands, image, ResourceState::CopySource,
+                                 ResourceState::Present, VK_IMAGE_ASPECT_COLOR_BIT);
         });
 
         if (succeeded(result)) {

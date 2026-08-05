@@ -173,20 +173,45 @@ namespace engine::gfx {
         void destroy_swapchain(Device& device);
 
         /**
-         * @brief Records a layout change for one whole color image.
+         * @brief What one ResourceState means to Vulkan.
+         *
+         * A state names one usage, so it maps to exactly one stage mask, one
+         * access mask, and one layout. That is the whole reason the vocabulary
+         * carries no catch-all value: `ALL_COMMANDS` on both sides of a barrier
+         * is what a catch-all would have to become.
+         */
+        struct StateMapping {
+            VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_NONE; ///< When it happens.
+            VkAccessFlags2 access = VK_ACCESS_2_NONE;               ///< What it does.
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;       ///< How it is stored.
+        };
+
+        /**
+         * @brief Turns a state into the stage, the access, and the layout it means.
+         * @param state The state to map.
+         * @return The mapping. Every state has one.
+         */
+        [[nodiscard]] StateMapping map_state(ResourceState state);
+
+        /**
+         * @brief Records a layout change for one whole image.
          *
          * Dynamic rendering has no render pass to move layouts, so each frame
-         * moves its image itself. This uses synchronization2, per DESIGN.md
+         * moves its images itself. This uses synchronization2, per DESIGN.md
          * section 2.
+         *
+         * The two states decide both sides of the barrier, so it waits on the
+         * stages that were actually used and blocks the stages that will
+         * actually run. See map_state().
          *
          * @param buffer The command buffer that is open for recording.
          * @param image The image to move.
-         * @param from The layout the image is in now.
-         * @param to The layout the image must reach.
+         * @param from The state the image is in now.
+         * @param to The state the image must reach.
          * @param aspect Which aspect to move, colour or depth.
          */
-        void transition_image(VkCommandBuffer buffer, VkImage image, VkImageLayout from,
-                              VkImageLayout to, VkImageAspectFlags aspect);
+        void transition_image(VkCommandBuffer buffer, VkImage image, ResourceState from,
+                              ResourceState to, VkImageAspectFlags aspect);
 
         /**
          * @brief Looks up a pipeline slot.

@@ -48,6 +48,23 @@ namespace engine::render {
     };
 
     /**
+     * @brief The color target of a frame. Resource 0.
+     *
+     * A frame has exactly two resources today, and this file names them so a
+     * pass and the runtime agree without passing a table around. A pass that
+     * owns a transient of its own will need an id the caller hands it, and
+     * rule 4.6 says to build that when a pass asks for it.
+     */
+    inline constexpr ResourceId kFrameColor{ 0 };
+
+    /// @brief The depth target of a frame. Resource 1.
+    inline constexpr ResourceId kFrameDepth{ 1 };
+
+    /// @brief How many resources a frame declares, which is the length of the
+    /// state list derive_barriers() takes.
+    inline constexpr std::uint32_t kFrameResourceCount = 2;
+
+    /**
      * @brief One resource a pass reads.
      *
      * A read never changes what a resource holds, so several passes in a row

@@ -25,6 +25,7 @@
 #include "math/conventions.h"
 #include "render/material_cache.h"
 #include "render/mesh_cache.h"
+#include "render/render_graph.h"
 #include "render/texture_cache.h"
 #include "scene/world.h"
 
@@ -150,6 +151,21 @@ namespace engine::render {
          * open. It waits for the GPU, which cannot happen mid-frame.
          */
         [[nodiscard]] bool reload_shaders(const assets::Content& content);
+
+        /**
+         * @brief What this pass reads and writes, for the render graph.
+         *
+         * It writes the color target and the depth target and reads nothing
+         * that the graph tracks. The textures a material names are uploaded
+         * once and never written by a pass, so they are not frame resources
+         * and the graph does not order them.
+         *
+         * The spans point at storage with static lifetime, so the result can
+         * be held for as long as the caller likes.
+         *
+         * @return The declaration.
+         */
+        [[nodiscard]] static PassDesc declare();
 
         /**
          * @brief Draws every entity that has a MeshRenderer and a WorldTransform.
