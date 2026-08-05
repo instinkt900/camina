@@ -138,11 +138,11 @@ namespace {
      * names a field by hand.
      */
     struct ViewSettings {
-        std::string name = "M3 sandbox view";
+        std::string name = "sandbox view";
         engine::Vec3 clear_color{ 0.25F, 0.25F, 0.3F };
 
         /// Where the camera stands. Saved, so a run opens where the last one stopped.
-        engine::Vec3 camera_position{ 0.0F, 2.5F, 8.0F };
+        engine::Vec3 camera_position{ 0.0F, 2.8F, 6.0F };
         /// Degrees around +Y. Zero looks down -Z, which is forward per DESIGN.md section 3.
         float camera_yaw = 0.0F;
         /// Degrees up from the horizon. Clamped, so the camera never rolls over the top.

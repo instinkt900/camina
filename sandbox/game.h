@@ -26,7 +26,23 @@ namespace sandbox {
     inline constexpr const char* kSceneFile = "main.scene";
 
     /// @brief The hand-authored prefab the game ships, inside the content directory.
+    ///
+    /// The only prefab that is not cooked from a glTF node tree, so it is the
+    /// only thing that exercises PrefabLibrary::add_file at run time.
     inline constexpr const char* kCratePrefab = "crate";
+
+    /**
+     * @brief The room every other model stands in.
+     *
+     * Five coloured walls, generated rather than modelled. Open space cannot
+     * test a shadow, because nothing occludes anything, and it cannot justify
+     * several lights in a small volume either. See issue #126, and #130 for the
+     * large scene this stands in for.
+     */
+    inline constexpr const char* kRoomSource = "models/room/room.gltf";
+
+    /// @brief The name the scene uses for the room above.
+    inline constexpr const char* kRoomPrefab = "room";
 
     /**
      * @brief The model whose node tree the cooker turned into a prefab.

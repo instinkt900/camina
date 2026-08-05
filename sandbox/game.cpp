@@ -91,10 +91,13 @@ namespace sandbox {
             return false;
         }
 
-        // The model prefab comes out of the cooker rather than out of the
-        // source tree, so it is found by source path and read by identity. The
-        // path is what a person edits, and the identity is what the manifest
-        // says that path became.
+        // The rest come out of the cooker rather than out of the source tree,
+        // so they are found by source path and read by identity. The path is
+        // what a person edits, and the identity is what the manifest says that
+        // path became.
+        if (cooked != nullptr && !add_model_prefab(*cooked, kRoomSource, kRoomPrefab, library)) {
+            return false;
+        }
         if (cooked != nullptr && !add_model_prefab(*cooked, kHelmetSource, kHelmetPrefab,
                                                    library)) {
             return false;

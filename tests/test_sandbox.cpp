@@ -112,11 +112,11 @@ namespace {
             }
         }
 
-        // Eight from the four crate instances, which carry a mesh on the box
-        // and on the lid, six from the flight helmet, the beacon, the two
-        // glass panes, and the seven roughness spheres. A prefab root the
+        // The room, six from the three crate instances, which carry a mesh on
+        // the box and on the lid, six from the flight helmet, the beacon, the
+        // two glass panes, and the seven roughness spheres. A prefab root the
         // cooker added draws nothing, so it names no mesh.
-        check(named == 24, "every entity that draws names a mesh");
+        check(named == 23, "every entity that draws names a mesh");
         check(resolved == named, "and the cooker wrote every one of them");
     }
 
@@ -174,16 +174,17 @@ namespace {
         sc::World world;
         check(load_shipped(world, registry, library),
               "the shipped content loads");
-        // The hand-authored crate, and the flight helmet, the glass panes, and
-        // the roughness spheres the cooker wrote from their glTF node trees.
-        check(library.size() == 4, "all four prefabs went into the library");
+        // The hand-authored crate, and the room, the flight helmet, the glass
+        // panes, and the roughness spheres the cooker wrote from their glTF
+        // node trees.
+        check(library.size() == 5, "all five prefabs went into the library");
 
-        // Four crate instances of two entities each, one beacon, seven for the
-        // flight helmet (the root the cooker added, and one for each of the six
-        // nodes the model holds), the two lights M5.2 added, three for the
-        // glass (a cooker-added root and the two panes), eight for the spheres
-        // (a cooker-added root and one for each roughness step), and the one
-        // that carries the environment.
+        // The room, three crate instances of two entities each, one beacon,
+        // seven for the flight helmet (the root the cooker added, and one for
+        // each of the six nodes the model holds), the three lights, three for
+        // the glass (a cooker-added root and the two panes), eight for the
+        // spheres (a cooker-added root and one for each roughness step), and
+        // the one that carries the environment.
         check(world.size() == 30, "the scene holds thirty entities");
 
         const std::vector<std::string> found = names(world);
@@ -198,9 +199,9 @@ namespace {
             (void)entity;
             ++instances;
         }
-        // The four crates, the flight helmet, the glass, and the spheres. The
-        // helmet is one instance now rather than six hand-written entities,
-        // which is what the node tree becoming a prefab bought.
+        // The room, the three crates, the flight helmet, the glass, and the
+        // spheres. The helmet is one instance rather than six hand-written
+        // entities, which is what the node tree becoming a prefab bought.
         check(instances == 7, "seven entities are prefab instances");
     }
 
@@ -299,15 +300,31 @@ namespace {
 
         // The stacked crate is a child of another instance, so its world
         // position has to include the parent it hangs off.
+        //
+        // The parent is found rather than written down. The property under test
+        // is that the child inherited an x it does not carry itself, and a
+        // number copied from the scene file would only say where the crate
+        // happened to stand on the day this was written.
+        bool checked_stack = false;
         for (const auto [entity, name] : world.registry().view<const sc::Name>().each()) {
             if (name.value != "stacked crate") {
                 continue;
             }
+            const auto* node = world.registry().try_get<sc::Hierarchy>(entity);
+            const bool hangs = node != nullptr && node->parent != entt::null;
+            check(hangs, "the stacked crate hangs off another entity");
+            if (!hangs) {
+                continue;
+            }
+
             const engine::Mat4& matrix = world.world_matrix(entity);
-            check(matrix[3][0] == -2.5F,
+            const engine::Mat4& above = world.world_matrix(node->parent);
+            check(matrix[3][0] == above[3][0],
                   "the stacked crate took its x from the crate it sits on");
-            check(matrix[3][1] > 1.0F, "and it sits above that crate");
+            check(matrix[3][1] > above[3][1], "and it sits above that crate");
+            checked_stack = true;
         }
+        check(checked_stack, "and the stacked crate was there to check");
     }
 
     void test_update_turns_what_it_should() {
