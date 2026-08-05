@@ -88,6 +88,29 @@ CI does not run the runtime. It builds both platforms and runs the tests, so not
 does is checked there. The renderer needs a window, and a window needs a desktop. Issue #139
 holds the headless mode that would let CI draw.
 
+## Render without a window
+
+```bash
+./build/RelWithDebInfo/bin/runtime --offscreen --resolution 1280x720 --frames 120 \
+    --no-watch --screenshot out.png
+```
+
+No window opens, and the capture is exactly the size asked for. Two runs of the same command
+produce **the same image, texel for texel**, because an offscreen run advances the world by a
+fixed step for each frame rather than by the clock. That is what makes a screenshot comparison
+worth anything: there is no noise floor to subtract.
+
+There is no overlay offscreen, because the ImGui backend needs the window. A capture with no
+panels over it is the more useful one to compare anyway, so an offscreen capture and a windowed
+one are not comparable to each other. Pick one and stay on it.
+
+`--resolution` is exact only offscreen. Windowed it is a request, and a window manager is free
+to hand back another size. That is why a run that has to be reproducible needs `--offscreen`.
+
+Everything else is the same code either way. The passes, the barriers, and the color format do
+not change, because a check that rendered differently from the program would be checking
+something that does not ship.
+
 ## Measure a change
 
 A run reports its frame time when it stops. Vsync is on by default, so those numbers are the

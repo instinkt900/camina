@@ -125,14 +125,19 @@ namespace engine::gfx {
                 return loader;
             }
 
-            std::uint32_t sdl_count = 0;
-            char const* const* sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_count);
-            if (sdl_extensions == nullptr) {
-                ENGINE_LOG_CRITICAL("SDL could not report the Vulkan instance extensions.");
-                return Result::ErrorInit;
+            // An offscreen device presents to nothing, so it needs no surface
+            // extension. Asking SDL for one also needs its video subsystem, which
+            // a machine with no desktop does not have.
+            std::vector<const char*> extensions;
+            if (desc.window != nullptr) {
+                std::uint32_t sdl_count = 0;
+                char const* const* sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_count);
+                if (sdl_extensions == nullptr) {
+                    ENGINE_LOG_CRITICAL("SDL could not report the Vulkan instance extensions.");
+                    return Result::ErrorInit;
+                }
+                extensions.assign(sdl_extensions, sdl_extensions + sdl_count);
             }
-
-            std::vector<const char*> extensions(sdl_extensions, sdl_extensions + sdl_count);
 
             const bool want_validation = desc.enable_validation && validation_layer_present();
             if (desc.enable_validation && !want_validation) {
@@ -209,7 +214,9 @@ namespace engine::gfx {
             return Result::Success;
         }
 
-        /// Finds a queue family that both draws and presents to our surface.
+        /// Finds a queue family that draws, and that presents to our surface
+        /// when there is one. A null surface means offscreen, and then drawing
+        /// is the whole requirement.
         bool find_graphics_family(VkPhysicalDevice physical, VkSurfaceKHR surface,
                                   std::uint32_t& out_family) {
             std::uint32_t count = 0;
@@ -220,6 +227,10 @@ namespace engine::gfx {
             for (std::uint32_t i = 0; i < count; ++i) {
                 if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0U) {
                     continue;
+                }
+                if (surface == VK_NULL_HANDLE) {
+                    out_family = i;
+                    return true;
                 }
                 VkBool32 present = VK_FALSE;
                 if (vkGetPhysicalDeviceSurfaceSupportKHR(physical, i, surface, &present) !=
@@ -291,7 +302,11 @@ namespace engine::gfx {
                                      properties.deviceName);
                     continue;
                 }
-                if (!supports_swapchain(candidate) || !supports_required_features(candidate)) {
+                // A GPU that cannot present is still a candidate offscreen. That
+                // is the case on a machine with no desktop, which is the whole
+                // reason the offscreen path exists.
+                if ((!device.headless && !supports_swapchain(candidate)) ||
+                    !supports_required_features(candidate)) {
                     ENGINE_LOG_DEBUG("Skipping {}: a required extension or feature is missing.",
                                      properties.deviceName);
                     continue;
@@ -299,8 +314,8 @@ namespace engine::gfx {
 
                 std::uint32_t family = 0;
                 if (!find_graphics_family(candidate, device.surface, family)) {
-                    ENGINE_LOG_DEBUG("Skipping {}: no queue both draws and presents.",
-                                     properties.deviceName);
+                    ENGINE_LOG_DEBUG("Skipping {}: no queue draws{}.", properties.deviceName,
+                                     device.headless ? "" : " and presents");
                     continue;
                 }
 
@@ -353,8 +368,10 @@ namespace engine::gfx {
             info.pNext = &features;
             info.queueCreateInfoCount = 1;
             info.pQueueCreateInfos = &queue;
-            info.enabledExtensionCount = 1;
-            info.ppEnabledExtensionNames = &swapchain_extension;
+            // An offscreen device never builds a swapchain, and asking for the
+            // extension would refuse a GPU that can draw but cannot present.
+            info.enabledExtensionCount = device.headless ? 0U : 1U;
+            info.ppEnabledExtensionNames = device.headless ? nullptr : &swapchain_extension;
 
             ENGINE_VK_TRY(vkCreateDevice(device.physical, &info, nullptr, &device.device));
             volkLoadDevice(device.device);
@@ -507,11 +524,9 @@ namespace engine::gfx {
         ENGINE_CHECK(out_device != nullptr, "create_device needs somewhere to put the device.");
         *out_device = nullptr;
 
-        if (desc.window == nullptr) {
-            ENGINE_LOG_CRITICAL("create_device needs a window.");
-            return Result::ErrorInit;
-        }
-
+        // A null window is not an error. It renders offscreen, which is what
+        // makes a run reproducible and lets a machine with no desktop draw. See
+        // gfx::DeviceDesc::window.
         if (volkInitialize() != VK_SUCCESS) {
             ENGINE_LOG_CRITICAL("No Vulkan loader is present on this system.");
             return Result::ErrorInit;
@@ -519,6 +534,7 @@ namespace engine::gfx {
 
         auto* device = new Device();
         device->vsync = desc.vsync;
+        device->headless = desc.window == nullptr;
 
         Result result = create_instance(*device, desc);
         if (!succeeded(result)) {
@@ -527,7 +543,8 @@ namespace engine::gfx {
         }
 
         auto* window = static_cast<SDL_Window*>(desc.window);
-        if (!SDL_Vulkan_CreateSurface(window, device->instance, nullptr, &device->surface)) {
+        if (!device->headless &&
+            !SDL_Vulkan_CreateSurface(window, device->instance, nullptr, &device->surface)) {
             ENGINE_LOG_CRITICAL("SDL could not create a Vulkan surface for the window.");
             destroy_device(device);
             return Result::ErrorSurface;
@@ -563,18 +580,25 @@ namespace engine::gfx {
             return result;
         }
 
-        int width = 0;
-        int height = 0;
-        SDL_GetWindowSizeInPixels(window, &width, &height);
-        result = vk::create_swapchain(*device, { static_cast<std::uint32_t>(width),
-                                                 static_cast<std::uint32_t>(height) });
+        if (device->headless) {
+            result = vk::create_offscreen_targets(*device, desc.offscreen_extent);
+        } else {
+            int width = 0;
+            int height = 0;
+            SDL_GetWindowSizeInPixels(window, &width, &height);
+            result = vk::create_swapchain(*device, { static_cast<std::uint32_t>(width),
+                                                     static_cast<std::uint32_t>(height) });
+        }
         if (!succeeded(result)) {
             destroy_device(device);
             return result;
         }
 
-        ENGINE_LOG_INFO("Vulkan ready on {}. {} swapchain images, {} frames in flight.",
-                        device->properties.deviceName, device->images.size(), kFramesInFlight);
+        ENGINE_LOG_INFO("Vulkan ready on {}. {} {} images at {}x{}, {} frames in flight.",
+                        device->properties.deviceName, device->images.size(),
+                        device->headless ? "offscreen" : "swapchain",
+                        device->swapchain_extent.width, device->swapchain_extent.height,
+                        kFramesInFlight);
 
         *out_device = device;
         return Result::Success;

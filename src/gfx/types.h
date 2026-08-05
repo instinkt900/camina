@@ -476,9 +476,24 @@ namespace engine::gfx {
      */
     inline constexpr std::uint32_t kFramesInFlight = 2;
 
+    /// @brief The offscreen size a device renders at when it has no window.
+    inline constexpr std::uint32_t kDefaultOffscreenWidth = 1280;
+    /// @brief The offscreen height that goes with kDefaultOffscreenWidth.
+    inline constexpr std::uint32_t kDefaultOffscreenHeight = 720;
+
     /// @brief Settings for create_device().
     struct DeviceDesc {
-        /// @brief The `SDL_Window` to draw into, as an opaque pointer. Required.
+        /**
+         * @brief The `SDL_Window` to draw into, as an opaque pointer.
+         *
+         * Null renders offscreen: no surface, no swapchain, and no window ever
+         * appears. The device then draws into images it owns, at
+         * ::offscreen_extent, and capture_frame() reads the last one.
+         *
+         * Nothing else changes. The passes, the barriers, and the color format
+         * are the same either way, because a test that rendered differently
+         * from the program would be testing something that does not ship.
+         */
         void* window = nullptr;
         /// @brief The application name reported to the driver.
         const char* app_name = "camina";
@@ -498,6 +513,14 @@ namespace engine::gfx {
         bool enable_sync_validation = false;
         /// @brief Whether to wait for vertical blank. False selects the lowest latency mode.
         bool vsync = true;
+        /**
+         * @brief The size to render at when there is no window.
+         *
+         * Ignored when @c window is set, because the window decides the size
+         * then. With no window this is the whole answer, so two runs at the same
+         * value produce images that can be compared texel for texel.
+         */
+        Extent2D offscreen_extent{ kDefaultOffscreenWidth, kDefaultOffscreenHeight };
     };
 
 } // namespace engine::gfx

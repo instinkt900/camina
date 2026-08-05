@@ -184,6 +184,54 @@ namespace engine::gfx {
             return create_depth_image(device);
         }
 
+        Result create_offscreen_targets(Device& device, Extent2D size) {
+            if (size.width == 0 || size.height == 0) {
+                ENGINE_LOG_CRITICAL("An offscreen device needs a size, and this one is {}x{}.",
+                                    size.width, size.height);
+                return Result::ErrorInit;
+            }
+
+            // The same format a swapchain would have picked. That format is what
+            // converts linear to sRGB on write, so a different one here would
+            // silently change every color. See DESIGN.md section 3.
+            device.swapchain_format = VK_FORMAT_B8G8R8A8_SRGB;
+            device.swapchain_extent = VkExtent2D{ size.width, size.height };
+
+            device.images.resize(kFramesInFlight, VK_NULL_HANDLE);
+            device.offscreen_allocations.resize(kFramesInFlight, VK_NULL_HANDLE);
+            for (std::uint32_t i = 0; i < kFramesInFlight; ++i) {
+                VkImageCreateInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                info.imageType = VK_IMAGE_TYPE_2D;
+                info.format = device.swapchain_format;
+                info.extent = VkExtent3D{ size.width, size.height, 1 };
+                info.mipLevels = 1;
+                info.arrayLayers = 1;
+                info.samples = VK_SAMPLE_COUNT_1_BIT;
+                info.tiling = VK_IMAGE_TILING_OPTIMAL;
+                // Drawn into, then copied out by capture_frame().
+                info.usage =
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+                VmaAllocationCreateInfo allocation{};
+                allocation.usage = VMA_MEMORY_USAGE_AUTO;
+                allocation.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+                ENGINE_VK_TRY(vmaCreateImage(device.allocator, &info, &allocation,
+                                             &device.images[i],
+                                             &device.offscreen_allocations[i], nullptr));
+            }
+
+            const Result views = create_image_views(device);
+            if (!succeeded(views)) {
+                return views;
+            }
+
+            // One for each image, exactly as the swapchain path builds them.
+            // Nothing waits on them offscreen, because there is no present, but
+            // keeping the shape identical is what keeps the two paths one path.
+            return create_depth_image(device);
+        }
+
         void destroy_swapchain(Device& device) {
             destroy_depth_image(device);
 
@@ -200,6 +248,16 @@ namespace engine::gfx {
                 }
             }
             device.views.clear();
+
+            // A swapchain owns its images and we do not. An offscreen device
+            // owns them, so it frees them here.
+            for (std::size_t i = 0; i < device.offscreen_allocations.size(); ++i) {
+                if (i < device.images.size() && device.images[i] != VK_NULL_HANDLE) {
+                    vmaDestroyImage(device.allocator, device.images[i],
+                                    device.offscreen_allocations[i]);
+                }
+            }
+            device.offscreen_allocations.clear();
             device.images.clear();
 
             if (device.swapchain != VK_NULL_HANDLE) {
