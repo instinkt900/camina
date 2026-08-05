@@ -33,6 +33,24 @@
 namespace engine::render {
 
     /**
+     * @brief What every channel of the cube fallback texels holds.
+     *
+     * About a quarter in linear light. Dim enough to read as a room with no
+     * lamp in it, and bright enough that a metal shows its shape rather than
+     * reading black.
+     *
+     * It is here rather than beside the texture it fills, because a scene with
+     * no environment needs its irradiance as well as its radiance. The two are
+     * the diffuse and the specular halves of one picture, so they have to come
+     * from one number. See `render::MeshPass`.
+     */
+    inline constexpr std::uint8_t kFallbackCubeTexel = 64;
+
+    /// @brief The radiance engine::render::kFallbackCubeTexel stands for, in linear light.
+    inline constexpr float kFallbackCubeRadiance =
+        static_cast<float>(kFallbackCubeTexel) / 255.0F;
+
+    /**
      * @brief Holds every texture the materials asked for.
      *
      * @code

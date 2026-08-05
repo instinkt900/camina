@@ -113,10 +113,10 @@ namespace {
         }
 
         // Eight from the four crate instances, which carry a mesh on the box
-        // and on the lid, six from the flight helmet, the beacon, and the two
-        // glass panes. A prefab root the cooker added draws nothing, so it
-        // names no mesh.
-        check(named == 17, "every entity that draws names a mesh");
+        // and on the lid, six from the flight helmet, the beacon, the two
+        // glass panes, and the seven roughness spheres. A prefab root the
+        // cooker added draws nothing, so it names no mesh.
+        check(named == 24, "every entity that draws names a mesh");
         check(resolved == named, "and the cooker wrote every one of them");
     }
 
@@ -174,16 +174,17 @@ namespace {
         sc::World world;
         check(load_shipped(world, registry, library),
               "the shipped content loads");
-        // The hand-authored crate, and the flight helmet and the glass panes
-        // the cooker wrote from their glTF node trees.
-        check(library.size() == 3, "all three prefabs went into the library");
+        // The hand-authored crate, and the flight helmet, the glass panes, and
+        // the roughness spheres the cooker wrote from their glTF node trees.
+        check(library.size() == 4, "all four prefabs went into the library");
 
         // Four crate instances of two entities each, one beacon, seven for the
         // flight helmet (the root the cooker added, and one for each of the six
         // nodes the model holds), the two lights M5.2 added, three for the
-        // glass (a cooker-added root and the two panes), and the one that
-        // carries the environment.
-        check(world.size() == 22, "the scene holds twenty-two entities");
+        // glass (a cooker-added root and the two panes), eight for the spheres
+        // (a cooker-added root and one for each roughness step), and the one
+        // that carries the environment.
+        check(world.size() == 30, "the scene holds thirty entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
@@ -197,10 +198,10 @@ namespace {
             (void)entity;
             ++instances;
         }
-        // The four crates, the flight helmet, and the glass. The helmet is one
-        // instance now rather than six hand-written entities, which is what the
-        // node tree becoming a prefab bought.
-        check(instances == 6, "six entities are prefab instances");
+        // The four crates, the flight helmet, the glass, and the spheres. The
+        // helmet is one instance now rather than six hand-written entities,
+        // which is what the node tree becoming a prefab bought.
+        check(instances == 7, "seven entities are prefab instances");
     }
 
     void test_scene_round_trips() {

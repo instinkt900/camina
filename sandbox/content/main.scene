@@ -179,6 +179,18 @@
     },
     {
       "parent": -1,
+      "prefab": "spheres",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "roughness spheres"
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
       "components": {
         "Name": {
           "value": "sun"

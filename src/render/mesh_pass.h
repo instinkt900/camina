@@ -13,12 +13,13 @@
  * scene decides what is in it.
  *
  * The shading is Cook-Torrance metallic-roughness since M5.2, and it reads every
- * map and every factor the cooked material carries. Two things over it are still
- * constants in the shader: the one directional light, which becomes a scene
- * component, and the environment, which M5.4 replaces with a cooked one.
+ * map and every factor the cooked material carries. The environment lights it by
+ * the split sum approximation since M5.4b, over three cooked parts: the
+ * irradiance coefficients, the prefiltered cubemap, and the shared lookup table.
  */
 
 #include "assets/content.h"
+#include "assets/irradiance.h"
 #include "core/guid.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
@@ -239,9 +240,17 @@ namespace engine::render {
         /// Frees the per-frame sets, which belong to a pipeline layout.
         void destroy_frame_sets();
 
-        /// Resolves the cubemap the world names, and rebuilds the frame sets
-        /// when it is not the one they already bind.
+        /// Resolves the cubemap and the irradiance the world names, and rebuilds
+        /// the frame sets when the cubemap is not the one they already bind.
         void update_environment(const scene::World& world, const assets::Content& content);
+
+        /// Reads the irradiance sub-asset of @p environment into the member.
+        /// Falls back to the constant that matches whatever cubemap is bound.
+        void update_irradiance(const assets::Content& content, Guid environment, bool fallback);
+
+        /// Finds the split sum lookup table in the engine content tree and
+        /// uploads it. It is one table for every environment and every scene.
+        [[nodiscard]] bool resolve_brdf_lut(const assets::Content& content);
 
         gfx::Device* device_ = nullptr;
         /**
@@ -285,6 +294,17 @@ namespace engine::render {
         gfx::TextureHandle environment_;
         /// @brief Which cubemap ::environment_ came from, so a change is visible.
         Guid environment_guid_;
+        /**
+         * @brief The diffuse half of the environment, as the frame block sends it.
+         *
+         * A sub-asset of the same source the cubemap came from, so a scene names
+         * one environment and this pass finds both halves of it.
+         */
+        assets::IrradianceSH irradiance_;
+        /// @brief The split sum lookup table, which every material shares.
+        gfx::TextureHandle brdf_lut_;
+        /// @brief Which asset ::brdf_lut_ came from, so hot reload can drop it.
+        Guid brdf_guid_;
         MeshCache meshes_;
         TextureCache textures_;
         MaterialCache materials_;

@@ -63,10 +63,10 @@ namespace engine::render {
         }
 
         // One grey texel for each of the six faces, in a linear format because
-        // an environment is radiance and not a color to convert. A quarter is
-        // dim enough to read as a room with no lamp in it, and bright enough
-        // that a metal shows its shape rather than reading black.
-        constexpr std::uint8_t kGrey = 64;    // 64 / 255 is about 0.25 linear.
+        // an environment is radiance and not a color to convert. The value is
+        // in the header, because MeshPass needs the same number for the
+        // irradiance of this same environment.
+        constexpr std::uint8_t kGrey = kFallbackCubeTexel;
         constexpr std::uint8_t kOpaque = 255; // The alpha of every face texel.
         constexpr std::size_t kFaceTexels = 4;
         constexpr std::size_t kAlphaOffset = 3;

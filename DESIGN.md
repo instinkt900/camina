@@ -824,7 +824,7 @@ M5.4a binds it and samples it directly, which is deliberately not image based li
 split sum approximation wants an irradiance term and a prefiltered term with a lookup beside
 them, and one texture read stands in for each. A rough metal therefore reads too sharp. That
 seam is the point: the transport is provable on its own, and the filtering that follows is a
-change to the shader rather than to the format. Issue #109 holds it.
+change to the shader rather than to the format. M5.4b made that change, and it moved no format.
 
 Two texture shapes now reach one shader, and they are not interchangeable. A `sampler2D` and a
 `samplerCube` need different fallbacks, because a descriptor a scene left unfilled still has to
@@ -877,6 +877,29 @@ a grazing angle. The table reached eight at its worst entry while the mirror che
 The Smith remapping differs between direct light and this. Direct takes `(roughness + 1) squared
 over eight` and image based lighting takes `alpha over two`, where alpha is roughness squared.
 The two look alike enough that using one for the other survives a reading.
+
+**The shader reads the three parts and the pass binds them once for the frame.** The
+coefficients ride in the frame block, because they are nine numbers that change when the scene
+names another environment and on no other frame. The cubemap and the table are set 0 beside it.
+A material set therefore carries only what a material owns, and a draw call binds no part of the
+environment.
+
+The diffuse term divides by pi, and that is the only place the divide happens. The cooked
+coefficients carry the cosine convolution and nothing else, so a constant sky of radiance L
+gives irradiance pi times L, and the Lambert term takes it back to L. Splitting the divide
+between the cooker and the shader would leave two files that must agree about half a constant.
+
+**A scene with no environment gets the irradiance of the one it is actually given.** The grey
+cubemap fallback is a constant environment, so its irradiance is pi times that grey in every
+direction, and the first coefficient carries all of it. That is a computed answer rather than a
+chosen one, and it keeps the diffuse and the specular of such a scene coming from one number.
+`render::kFallbackCubeTexel` holds the number so the two cannot drift.
+
+**The sandbox ships a row of metal spheres across the roughness range.** Every other model in it
+is one material at one roughness, and image based lighting is exactly the difference between a
+smooth metal and a rough one. Without the row a prefiltered chain filtered the wrong way reads
+as a picture that is a little dull, with nothing pointing at the cause. With it, the failure is
+a row that does not soften from left to right.
 
 **An image with no file is a sub-asset too.** A glTF names its images three ways: a file
 beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a

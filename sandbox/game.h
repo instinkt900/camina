@@ -54,6 +54,19 @@ namespace sandbox {
     inline constexpr const char* kGlassPrefab = "glass";
 
     /**
+     * @brief A row of metal spheres, one for each step of roughness.
+     *
+     * Image based lighting is the difference between a smooth metal and a rough
+     * one. Every other model in the sandbox is one material at one roughness, so
+     * without this row a wrong prefiltered chain would look like a picture that
+     * is merely a bit dull, and nothing would show the error.
+     */
+    inline constexpr const char* kSpheresSource = "models/spheres/spheres.gltf";
+
+    /// @brief The name the scene uses for the row above.
+    inline constexpr const char* kSpheresPrefab = "spheres";
+
+    /**
      * @brief The game's directory inside the cooked content root.
      *
      * The cooker writes each source tree under its own name, so the engine's

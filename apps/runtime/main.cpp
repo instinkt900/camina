@@ -773,10 +773,10 @@ namespace {
                           engine::scene::World& world) {
         std::vector<engine::assets::AssetChange> changed;
 
-        // The engine tree holds the two shaders and nothing else, so any change
-        // to it means the pipeline. Adding a third asset to that tree would
-        // make this rebuild on a change that does not need it, which costs a
-        // stall and nothing else.
+        // The engine tree holds the two shaders and the split sum lookup table,
+        // and MeshPass::reload_shaders rebuilds for either. A change to one of
+        // them therefore also rebuilds for the other, which costs a stall and
+        // nothing else, because both follow a person saving a file.
         if (runtime.engine_reload.poll(runtime.engine_content, changed)) {
             (void)runtime.mesh.reload_shaders(runtime.engine_content);
         }

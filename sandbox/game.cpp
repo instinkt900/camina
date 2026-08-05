@@ -103,6 +103,10 @@ namespace sandbox {
             !add_model_prefab(*cooked, kGlassSource, kGlassPrefab, library)) {
             return false;
         }
+        if (cooked != nullptr &&
+            !add_model_prefab(*cooked, kSpheresSource, kSpheresPrefab, library)) {
+            return false;
+        }
 
         const std::filesystem::path scene = content / kSceneFile;
         if (!engine::scene::load_scene_file(scene, world, registry, library)) {
