@@ -823,6 +823,20 @@ already, because it knows the reads and the writes, so the allocator is an addit
 rewrite. Rule 4.6 says to build it when a shadow atlas and a tonemap target are both live and
 neither needs the other.
 
+**begin_frame hands over an image in no state at all, and the graph moves it.** The frame used
+to transition its color target and its depth target itself, which meant the barriers lived in
+the one place that could not know what the first pass wanted. Now both images start in
+`ResourceState::Undefined` and the graph issues what it derived. Presentation stays in
+`end_frame`, because the wait belongs to the present semaphore and a caller that forgot that
+barrier would present an image in the wrong layout.
+
+**Undefined says the contents are worthless, not that the image is idle.** Those are different
+claims and taking the first for the second is a real race. A source stage of `TOP_OF_PIPE` with
+no access orders a transition against nothing, and two hazards follow: a swapchain image still
+being read by the acquire, and the one depth image shared by every frame in flight. So a
+transition out of `Undefined` waits on the stage the new state uses. Synchronization validation
+reports both of these, and it is off by default because it costs real time on every frame.
+
 **A pass declares its reads and writes as data, not through calls into a builder.** A pass
 returns a descriptor naming what it reads, what it writes, and in what format. The graph is then
 a pure function of that data.

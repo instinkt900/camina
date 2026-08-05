@@ -130,10 +130,30 @@ namespace engine::gfx {
             // The messenger must outlive the create call to catch failures inside
             // it, so it lives here and hangs off pNext.
             const VkDebugUtilsMessengerCreateInfoEXT debug = messenger_info();
+
+            // Synchronization validation reads the barriers rather than the
+            // calls. It is what reports a read that races a write, which is the
+            // failure a wrong barrier gives and the one that shows on a single
+            // vendor. It costs real time on every frame, so it is off unless
+            // somebody asks. Both structures must outlive vkCreateInstance.
+            constexpr VkValidationFeatureEnableEXT kSyncFeature =
+                VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+            VkValidationFeaturesEXT features{};
+            features.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+            features.enabledValidationFeatureCount = 1;
+            features.pEnabledValidationFeatures = &kSyncFeature;
+
+            const bool want_sync = want_validation && desc.enable_sync_validation;
             if (want_validation) {
                 info.enabledLayerCount = 1;
                 info.ppEnabledLayerNames = &kValidationLayer;
                 info.pNext = &debug;
+            }
+            if (want_sync) {
+                // The messenger chains behind the features, so both are read.
+                features.pNext = &debug;
+                info.pNext = &features;
+                ENGINE_LOG_INFO("Synchronization validation is on. Frames will be slower.");
             }
 
             ENGINE_VK_TRY(vkCreateInstance(&info, nullptr, &device.instance));

@@ -183,6 +183,19 @@ terms of the barrier condition were each checked by deleting them: dropping the 
 was caught by nothing until a test for a read that follows a read in a different state was
 added. Nothing runs through the graph yet, which is issue #121.
 
+M5.3b puts the frame through it. `begin_frame` no longer transitions anything, so both images
+start in `ResourceState::Undefined` and the runtime issues what `derive_barriers` worked out.
+`gfx::cmd_frame_barrier` is the one entry point, and `ALL_COMMANDS` is gone from every barrier
+the engine issues. Presentation stays in `end_frame`, because that wait belongs to the present
+semaphore.
+
+`--sync-validation` turns on the check that reads barriers rather than calls. It found two real
+races on the first run, both older than the graph: a transition out of `Undefined` used
+`TOP_OF_PIPE`, which ordered it against neither the swapchain acquire nor the previous frame's
+use of the one shared depth image. A transition out of `Undefined` now waits on the stage the
+new state uses. A 300-frame run reports nothing. The screenshot path still does, and issue #124
+holds it: `capture_frame` waits for the device, and presentation is not device work.
+
 The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
 `mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left
 the table reaching eight at a grazing angle, and only the energy test caught it: the mirror test

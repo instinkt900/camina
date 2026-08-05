@@ -248,9 +248,8 @@ namespace engine::gfx {
 
         void record_texture_upload(VkCommandBuffer buffer, VkImage image, VkBuffer staging,
                                    const TextureDesc& desc) {
-            vk::transition_image(buffer, image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                 VK_IMAGE_ASPECT_COLOR_BIT);
+            vk::transition_image(buffer, image, ResourceState::Undefined,
+                                 ResourceState::CopyDestination, VK_IMAGE_ASPECT_COLOR_BIT);
 
             // One copy for each level. The levels sit end to end in the staging
             // buffer, largest first, which is the order the cooked file holds
@@ -288,9 +287,8 @@ namespace engine::gfx {
             vkCmdCopyBufferToImage(buffer, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    static_cast<std::uint32_t>(regions.size()), regions.data());
 
-            vk::transition_image(buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                 VK_IMAGE_ASPECT_COLOR_BIT);
+            vk::transition_image(buffer, image, ResourceState::CopyDestination,
+                                 ResourceState::ShaderRead, VK_IMAGE_ASPECT_COLOR_BIT);
         }
 
     } // namespace

@@ -364,6 +364,17 @@ namespace engine::render {
         return nullptr;
     }
 
+    PassDesc MeshPass::declare() {
+        // Static, because a PassDesc holds spans and the caller may keep it.
+        // Both are writes: the color target is drawn into and the depth target
+        // is both tested and updated, which is one access and not two.
+        static constexpr std::array<ResourceWrite, 2> kWrites{ {
+            { kFrameColor, gfx::ResourceState::ColorTarget },
+            { kFrameDepth, gfx::ResourceState::DepthTarget },
+        } };
+        return PassDesc{ .name = "mesh", .reads = {}, .writes = kWrites };
+    }
+
     MeshPass::~MeshPass() {
         destroy();
     }

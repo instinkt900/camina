@@ -208,18 +208,97 @@ namespace engine::gfx {
             }
         }
 
-        void transition_image(VkCommandBuffer buffer, VkImage image, VkImageLayout from,
-                              VkImageLayout to, VkImageAspectFlags aspect) {
+        StateMapping map_state(ResourceState state) {
+            switch (state) {
+            case ResourceState::Undefined:
+                // Nothing to wait for and nothing to keep. TOP_OF_PIPE with no
+                // access is the cheapest source a barrier can have, and it is
+                // correct only because the contents are not worth keeping.
+                return { VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
+                         VK_IMAGE_LAYOUT_UNDEFINED };
+            case ResourceState::ColorTarget:
+                return { VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+            case ResourceState::DepthTarget:
+                // Both test stages, because a depth write can happen in either
+                // depending on whether the fragment shader discards.
+                return { VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL };
+            case ResourceState::DepthRead:
+                return { VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                         VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL };
+            case ResourceState::ShaderRead:
+                // Every stage that can sample, because the state does not say
+                // which one will. Naming the three is still far short of
+                // ALL_COMMANDS, and a pass that knows better can gain a state.
+                return { VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            case ResourceState::ComputeWrite:
+                return { VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                         VK_IMAGE_LAYOUT_GENERAL };
+            case ResourceState::CopySource:
+                return { VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL };
+            case ResourceState::CopyDestination:
+                return { VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL };
+            case ResourceState::Present:
+                break;
+            }
+            // Presentation is not a pipeline stage the barrier can name, and the
+            // wait belongs to the present semaphore rather than here. So this
+            // side carries the layout and no access at all.
+            return { VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_ACCESS_2_NONE,
+                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR };
+        }
+
+        void transition_image(VkCommandBuffer buffer, VkImage image, ResourceState from,
+                              ResourceState to, VkImageAspectFlags aspect) {
+            StateMapping source = map_state(from);
+            const StateMapping destination = map_state(to);
+
+            // Undefined means the contents are not worth keeping. It does not
+            // mean nothing was using the image, and those are different claims.
+            //
+            // Taking the first at face value gives TOP_OF_PIPE with no access,
+            // which orders this barrier against nothing at all. Two real races
+            // follow, and synchronization validation reports both:
+            //
+            // - A swapchain image is still being read by vkAcquireNextImageKHR.
+            //   The acquire semaphore is waited on at COLOR_ATTACHMENT_OUTPUT,
+            //   so a transition at TOP_OF_PIPE runs before the image is ours.
+            //
+            // - The depth image is one image shared by every frame in flight, so
+            //   the frame before may still be writing it.
+            //
+            // Waiting on the stage the new state uses fixes both, and it is the
+            // narrowest thing that can: whatever touched this image last did so
+            // in the same way this pass is about to.
+            if (from == ResourceState::Undefined) {
+                source.stage = destination.stage;
+                source.access = destination.access;
+            }
+
             VkImageMemoryBarrier2 barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            // ALL_COMMANDS is heavier than this milestone needs. M5 replaces it
-            // with the stages the render graph knows about.
-            barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-            barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-            barrier.oldLayout = from;
-            barrier.newLayout = to;
+            barrier.srcStageMask = source.stage;
+            barrier.srcAccessMask = source.access;
+            barrier.dstStageMask = destination.stage;
+            barrier.dstAccessMask = destination.access;
+            barrier.oldLayout = source.layout;
+            barrier.newLayout = destination.layout;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.image = image;
