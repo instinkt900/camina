@@ -73,8 +73,12 @@ signal handlers.
 
 On Windows the binary is `build\RelWithDebInfo\apps\runtime\runtime.exe`.
 
-Press Escape or close the window to quit. Pass `--frames N` to exit after N frames, which
-is what CI uses.
+Press Escape or close the window to quit. Pass `--frames N` to exit after N frames, which is
+what a scripted run and a screenshot use.
+
+CI does not run the runtime. It builds both platforms and runs the tests, so nothing a frame
+does is checked there. The renderer needs a window, and a window needs a desktop. Issue #139
+holds the headless mode that would let CI draw.
 
 ## Measure a change
 
