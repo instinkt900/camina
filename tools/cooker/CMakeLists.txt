@@ -14,6 +14,7 @@ add_library(cooker_lib STATIC
     shader.cpp
     texture.cpp
     stb_image_impl.cpp
+    to_half.h
 )
 
 # stb_image carries its own implementation, and this file asks for it. It holds

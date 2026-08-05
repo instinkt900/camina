@@ -90,6 +90,15 @@ engine_enable_clang_tidy(test_shader)
 
 add_test(NAME shader COMMAND test_shader)
 
+# The half-float converter the cooker uses for environments and the BRDF table.
+# This links cooker_lib for the include path to to_half.h.
+add_executable(test_half test_half.cpp)
+target_link_libraries(test_half PRIVATE cooker_lib)
+engine_set_warnings(test_half)
+engine_enable_clang_tidy(test_half)
+
+add_test(NAME half COMMAND test_half)
+
 # The file watcher and the process runner. This program is also its own child,
 # so the process tests have something to run on both platforms.
 add_executable(test_platform test_platform.cpp)
