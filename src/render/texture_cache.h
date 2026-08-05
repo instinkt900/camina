@@ -8,10 +8,17 @@
  * This turns that GUID into a device texture, and it uploads each one once
  * however many materials use it.
  *
- * It also holds the fallback, which is a single white texel. Every draw call
- * has to bind something, because the pipeline declares a sampler and a
- * descriptor set that is never written is undefined. So a material with no base
- * color, and a material whose texture will not load, both bind this.
+ * It also holds the fallbacks. Every draw call has to bind something, because
+ * the pipeline declares a sampler and a descriptor set that is never written is
+ * undefined. So a material with no base color, and a material whose texture
+ * will not load, both bind one of these.
+ *
+ * There are two of them, because a `sampler2D` and a `samplerCube` are not the
+ * same binding. A flat texture falls back to a single white texel, which is the
+ * identity for a color a factor then multiplies. A cubemap falls back to six
+ * grey texels. Grey is not an identity, and there is none to be had, so it is a
+ * choice: a scene that names no environment reads as a plain room rather than
+ * as a black void.
  */
 
 #include "assets/content.h"
@@ -19,6 +26,7 @@
 #include "gfx/device.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 
 namespace engine::render {
@@ -45,18 +53,18 @@ namespace engine::render {
         TextureCache& operator=(TextureCache&&) = delete;
 
         /**
-         * @brief Builds the fallback texture.
+         * @brief Builds the two fallback textures.
          *
          * Call this once, before the first get(). It is separate from the
          * constructor because it needs a device and it can fail.
          *
          * @param device The device that owns the textures.
-         * @return True when the fallback was made.
+         * @return True when both fallbacks were made.
          */
         [[nodiscard]] bool create(gfx::Device* device);
 
         /**
-         * @brief Finds a texture, and uploads it the first time it is asked for.
+         * @brief Finds a flat texture, and uploads it the first time it is asked for.
          *
          * A GUID that will not load is remembered as a failure, so a material
          * that names a missing texture reports once rather than on every frame.
@@ -70,9 +78,31 @@ namespace engine::render {
         [[nodiscard]] gfx::TextureHandle get(gfx::Device* device,
                                              const assets::Content& content, Guid guid);
 
-        /// @brief The single white texel every unresolved reference binds.
+        /**
+         * @brief Finds a cubemap, and uploads it the first time it is asked for.
+         *
+         * This is get() for the other shape. A cooked texture that carries six
+         * faces is a cubemap and a shader reads it as a `samplerCube`, and one
+         * that carries a single face is not. Asking for the wrong one is a
+         * failure rather than a handle the driver would refuse later, because
+         * binding a flat texture where the layout declares a cube is undefined.
+         *
+         * @param device The device that owns the textures.
+         * @param content The cooked content to read from.
+         * @param guid The cubemap identity. A null GUID is not an error and
+         * gives the cube fallback.
+         * @return The cubemap, or the cube fallback when there is nothing to load.
+         */
+        [[nodiscard]] gfx::TextureHandle get_cube(gfx::Device* device,
+                                                  const assets::Content& content, Guid guid);
+
+        /// @brief The single white texel every unresolved flat reference binds.
         /// @return The fallback, which is null until create() has run.
         [[nodiscard]] gfx::TextureHandle fallback() const { return fallback_; }
+
+        /// @brief The six grey texels every unresolved cubemap reference binds.
+        /// @return The cube fallback, which is null until create() has run.
+        [[nodiscard]] gfx::TextureHandle fallback_cube() const { return fallback_cube_; }
 
         /**
          * @brief Frees one texture, so the next get() uploads it again.
@@ -81,8 +111,8 @@ namespace engine::render {
          * because the whole point of a reload is that a texture which would not
          * load before may load now.
          *
-         * The fallback is never dropped. It belongs to no source file, so
-         * nothing can change it.
+         * Neither fallback is ever dropped. They belong to no source file, so
+         * nothing can change them.
          *
          * @param device The device that owns the textures.
          * @param guid The texture to let go of. One that is not loaded is not
@@ -95,20 +125,26 @@ namespace engine::render {
         void drop(gfx::Device* device, Guid guid);
 
         /**
-         * @brief Frees every texture, the fallback included.
+         * @brief Frees every texture, both fallbacks included.
          * @param device The device that owns them.
          */
         void destroy(gfx::Device* device);
 
         /// @brief How many textures are loaded.
-        /// @return The count, the fallback and the failures not included.
+        /// @return The count, the fallbacks and the failures not included.
         [[nodiscard]] std::size_t size() const { return loaded_.size(); }
 
     private:
+        /// The shared body of get() and get_cube(). @p faces is 1 or 6.
+        [[nodiscard]] gfx::TextureHandle load(gfx::Device* device,
+                                              const assets::Content& content, Guid guid,
+                                              std::uint32_t faces);
+
         std::map<Guid, gfx::TextureHandle> loaded_;
         /// The GUIDs that failed, so one bad reference reports once.
         std::map<Guid, bool> failed_;
         gfx::TextureHandle fallback_;
+        gfx::TextureHandle fallback_cube_;
     };
 
 } // namespace engine::render
