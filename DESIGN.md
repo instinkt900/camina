@@ -832,6 +832,30 @@ bind something valid. So `render::TextureCache` holds a white texel and six grey
 refuses a cooked file whose face count does not match the binding that asked for it. Vulkan
 calls the mismatch undefined rather than an error.
 
+**Image based lighting is split in two, and the cooker writes both halves.** The split sum
+approximation separates what a surface receives into a diffuse term and a specular term, and
+the two want different things from the same panorama.
+
+The diffuse term is irradiance, and it is nine coefficients of a second order spherical
+harmonic. Irradiance over a hemisphere is a very smooth function of the normal, so nine numbers
+carry it to within a percent or two, and the whole diffuse environment then costs no texture
+read at all. `src/assets/irradiance.h` holds the format, and it stores the coefficients with the
+per band convolution already folded in, so a shader evaluates plain polynomials and keeps no
+table of constants that could drift from the cooker's.
+
+The specular term is the mip chain of the environment cubemap, filtered by roughness rather than
+by a box. Level 0 is the environment as it is, which a mirror reflects, and each level below it
+holds the GGX lobe for a rougher surface. So the chain is not a resampling of the level above
+it: every level is importance sampled from the panorama, because filtering an already filtered
+level would blur twice.
+
+**The irradiance is a sub-asset and the cubemap keeps the source identity.** A scene names one
+environment, and the second part derives its GUID from the first under the kind word
+`irradiance`, which is the mechanism a glTF already uses for its meshes and materials. Putting
+the coefficients inside the cooked texture file was rejected, because `src/assets/texture.h` is
+the format every 2D texture shares and environment-only data there would move its version for
+assets that gained nothing.
+
 **An image with no file is a sub-asset too.** A glTF names its images three ways: a file
 beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a
 file can carry a `.meta` sidecar. The other two get a derived GUID under the kind word

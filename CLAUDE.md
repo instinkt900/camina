@@ -143,6 +143,17 @@ A `sampler2D` and a `samplerCube` need separate fallbacks, so `TextureCache` hol
 texels beside its white one and refuses a file whose face count does not match the binding.
 Binding the wrong shape is undefined rather than an error, and the check is what keeps it out.
 
+The cooker half of M5.4b followed. The `.hdr` rule writes two outputs now. The cubemap keeps the
+source identity and its mip chain is GGX filtered by roughness rather than box filtered, so a
+level is the environment blurred for one roughness. The second output is the irradiance, nine
+RGB coefficients in `src/assets/irradiance.h`, under a GUID derived from the source under the
+kind word `irradiance`. `specular_samples` in the sidecar sets the ray budget.
+
+A constant sky only pins the first coefficient, because a uniform source has no higher band to
+get wrong. So the tests also drive a band-limited source and check the coefficients against a
+direct cosine-weighted integral. Corrupting any band constant fails that one, and corrupting
+band 1 or 2 fails nothing without it.
+
 The cooker half of the permutation work landed. A `.meta` sidecar carries a `shader` block with
 a list of variants, and each names its defines. The shader rule numbers its parts the way the
 glTF rule does, so `mesh.frag` gives `mesh.frag.0.shader`. Part 0 is the base form and it keeps

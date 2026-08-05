@@ -16,7 +16,7 @@
  *
  * @warning The coefficients carry the convolution already. Evaluating the
  * standard basis against a normal gives irradiance, not radiance. See
- * ::IrradianceSH for the exact sum a shader must write.
+ * engine::assets::IrradianceSH for the exact sum a shader must write.
  */
 
 #include <array>
