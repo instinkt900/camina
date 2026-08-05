@@ -76,6 +76,26 @@ On Windows the binary is `build\RelWithDebInfo\apps\runtime\runtime.exe`.
 Press Escape or close the window to quit. Pass `--frames N` to exit after N frames, which
 is what CI uses.
 
+## Measure a change
+
+A run reports its frame time when it stops. Vsync is on by default, so those numbers are the
+refresh rate. Turn it off to measure:
+
+```bash
+./build/RelWithDebInfo/bin/runtime --frames 600 --no-watch --no-vsync
+```
+
+Compare two runs with the **median**. The mean moves with a single hitch, and the low is the
+best case. On the reference machine the median repeats to about 4 percent over five runs, so
+a change under that is noise. The p99 and the high are far noisier, and they are there to
+show a hitch rather than to bury it in an average.
+
+The report drops the first 60 frames. Those build the pipelines and fill the caches, and they
+run several times longer than a settled frame.
+
+A period is wall time between the start of one drawn frame and the start of the next. It is
+not GPU time, and it names no pass. See issue #133.
+
 ## Test
 
 ```bash

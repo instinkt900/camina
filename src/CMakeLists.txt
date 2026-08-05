@@ -2,6 +2,7 @@ add_library(engine_core STATIC
     core/log.cpp
     core/jobs.cpp
     core/arena.cpp
+    core/frame_stats.cpp
     core/guid.cpp
     assets/content.cpp
     assets/hot_reload.cpp

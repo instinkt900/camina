@@ -4,6 +4,7 @@
 #include "check.h"
 
 #include "core/arena.h"
+#include "core/frame_stats.h"
 #include "core/handle.h"
 #include "core/jobs.h"
 #include "math/conventions.h"
@@ -152,6 +153,71 @@ namespace {
         check(area < 0.0F, "a camera-facing outward face is front facing under CCW");
     }
 
+    void test_frame_stats() {
+        engine::FrameStats empty(0);
+        check(empty.counted() == 0, "a new collector holds no samples");
+        check(empty.summarize().count == 0, "an empty run summarizes to zeros");
+
+        // The warm-up drops leading samples rather than weighting them. A run
+        // whose first frames build pipelines would otherwise report the startup.
+        engine::FrameStats warm(3);
+        for (const double sample : { 100.0, 100.0, 100.0, 10.0, 20.0 }) {
+            warm.add(sample);
+        }
+        check(warm.dropped() == 3, "the warm-up drops the count it was given");
+        check(warm.counted() == 2, "the samples after the warm-up are kept");
+        check(warm.summarize().high_ms == 20.0, "a dropped sample stays out of the summary");
+
+        // Fewer samples than the warm-up leaves nothing, and that must report
+        // zeros rather than read off the end of an empty array.
+        engine::FrameStats short_run(10);
+        short_run.add(1.0);
+        check(short_run.counted() == 0, "a run shorter than the warm-up keeps nothing");
+        check(short_run.summarize().count == 0, "a run shorter than the warm-up summarizes to zeros");
+
+        // Ten samples, added out of order, so the summary has to sort them.
+        engine::FrameStats run(0);
+        for (const double sample : { 7.0, 3.0, 10.0, 1.0, 5.0, 9.0, 2.0, 8.0, 4.0, 6.0 }) {
+            run.add(sample);
+        }
+        const engine::FrameSummary summary = run.summarize();
+        check(summary.count == 10, "the summary counts every sample");
+        check(summary.low_ms == 1.0, "the low is the fastest frame");
+        check(summary.high_ms == 10.0, "the high is the slowest frame");
+        check(std::abs(summary.mean_ms - 5.5) < 1e-9, "the mean averages every sample");
+        // Nearest rank, so the median of an even count is the lower middle
+        // sample. Averaging the two would report 5.5, which no frame took.
+        check(summary.median_ms == 5.0, "the median is a sample rather than an average");
+        check(summary.p95_ms == 10.0, "p95 of ten samples is the slowest");
+        check(summary.p99_ms == 10.0, "p99 of ten samples is the slowest");
+
+        // One sample must be reachable at every percentile. Rounding the rank
+        // down instead would ask for index zero minus one.
+        engine::FrameStats single(0);
+        single.add(4.0);
+        const engine::FrameSummary one = single.summarize();
+        check(one.median_ms == 4.0 && one.p99_ms == 4.0 && one.high_ms == 4.0,
+              "every percentile of one sample is that sample");
+
+        // A hundred samples put a percentile away from the ends, where an
+        // off-by-one in the rank shows up as a neighbouring value.
+        engine::FrameStats hundred(0);
+        for (int i = 1; i <= 100; ++i) {
+            hundred.add(static_cast<double>(i));
+        }
+        const engine::FrameSummary many = hundred.summarize();
+        check(many.median_ms == 50.0, "the median of a hundred samples is the fiftieth");
+        check(many.p95_ms == 95.0, "p95 of a hundred samples is the ninety-fifth");
+        check(many.p99_ms == 99.0, "p99 of a hundred samples is the ninety-ninth");
+
+        // A clock that goes backwards would otherwise drag the mean down, and
+        // nothing in the reported numbers would say why.
+        engine::FrameStats negative(0);
+        negative.add(5.0);
+        negative.add(-1.0);
+        check(negative.counted() == 1, "a period below zero is dropped");
+    }
+
 } // namespace
 
 int main() {
@@ -165,6 +231,8 @@ int main() {
     test_winding();
     std::printf("jobs\n");
     test_jobs();
+    std::printf("frame stats\n");
+    test_frame_stats();
 
     return test::report();
 }
