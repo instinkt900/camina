@@ -2,6 +2,7 @@
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/arena.h"
+#include "core/frame_stats.h"
 #include "core/jobs.h"
 #include "core/log.h"
 #include "core/profile.h"
@@ -58,6 +59,11 @@ namespace {
     /// The largest step one frame may apply. A stall must not teleport the camera.
     constexpr float kLongestFrame = 0.1F;
 
+    /// How many frames the frame time report ignores at the start of a run.
+    /// The first frames build pipelines and fill the caches, so they measure
+    /// the startup rather than the renderer.
+    constexpr std::size_t kFrameStatsWarmup = 60;
+
     /// Where each window opens. The overlay writes no imgui.ini, so a run
     /// always starts from this layout and a move lasts until the program ends.
     /// Without these all three open at the same place, and the last one drawn
@@ -86,6 +92,9 @@ namespace {
         /// The shader compiler to cook with. Empty means the compiled-in default.
         std::string glslc;
         bool hot_reload = true; ///< False turns the watcher and the cooker off.
+        /// Whether to wait for the refresh. On by default, because a person
+        /// flying around the sandbox wants it. Turn it off to measure a change.
+        bool vsync = true;
     };
 
     /**
@@ -226,6 +235,8 @@ namespace {
                 options.validation = false;
             } else if (arg == "--sync-validation") {
                 options.sync_validation = true;
+            } else if (arg == "--no-vsync") {
+                options.vsync = false;
             }
         }
         return options;
@@ -911,7 +922,7 @@ namespace {
             .app_name = "camina",
             .enable_validation = options.validation,
             .enable_sync_validation = options.sync_validation,
-            .vsync = true,
+            .vsync = options.vsync,
         };
         engine::gfx::Result result = engine::gfx::create_device(device_desc, &runtime.device);
         if (!engine::gfx::succeeded(result)) {
@@ -959,6 +970,37 @@ namespace {
         runtime.window.destroy();
     }
 
+    /**
+     * Reports what the run cost, or says why the numbers mean nothing.
+     *
+     * The median is the number to compare two runs with. The mean moves with a
+     * single hitch and the low is the best case, so neither says much about a
+     * change. The high and p99 are there to show a hitch rather than hide it
+     * inside an average.
+     *
+     * Vsync makes every one of them the refresh rate, so the report says so
+     * rather than printing 16.67 and letting a reader draw a conclusion from it.
+     */
+    void report_frame_time(const engine::FrameStats& stats, const Options& options) {
+        if (stats.counted() == 0) {
+            ENGINE_LOG_INFO("No frame time to report. A run needs more than {} frames.",
+                            kFrameStatsWarmup);
+            return;
+        }
+
+        const engine::FrameSummary run = stats.summarize();
+        ENGINE_LOG_INFO(
+            "frame time over {} frames | median {:.3f} ms | mean {:.3f} ms | "
+            "p95 {:.3f} ms | p99 {:.3f} ms | low {:.3f} ms | high {:.3f} ms",
+            run.count, run.median_ms, run.mean_ms, run.p95_ms, run.p99_ms, run.low_ms,
+            run.high_ms);
+
+        if (options.vsync) {
+            ENGINE_LOG_INFO("Vsync is on, so that is the refresh rate. Use --no-vsync to measure "
+                            "a change.");
+        }
+    }
+
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
@@ -968,6 +1010,15 @@ namespace {
         auto last_report = started;
         auto last_frame = started;
         engine::gfx::Extent2D last_extent = window_extent(runtime.window);
+
+        engine::FrameStats stats(kFrameStatsWarmup);
+        // A period runs from the start of one drawn frame to the start of the
+        // next. A frame the loop did not draw leaves no period to close, so the
+        // paths that skip one clear this and the next frame starts a new
+        // interval. Measuring across the gap would report the skip as a hitch.
+        auto drawn_at = started;
+        bool have_drawn = false;
+        double period_ms = 0.0;
 
         while (runtime.window.poll()) {
             ENGINE_PROFILE_ZONE_N("frame");
@@ -979,6 +1030,7 @@ namespace {
                 std::this_thread::sleep_for(std::chrono::milliseconds(kMinimizedSleepMs));
                 // No frame ran, so the next delta must not count the idle time.
                 last_frame = std::chrono::steady_clock::now();
+                have_drawn = false;
                 continue;
             }
 
@@ -1016,15 +1068,23 @@ namespace {
                 return false;
             }
             if (outcome == FrameOutcome::Skipped) {
+                have_drawn = false;
                 continue;
             }
 
             ++frame;
             settings.frames_drawn = frame;
 
+            if (have_drawn) {
+                period_ms = std::chrono::duration<double, std::milli>(now - drawn_at).count();
+                stats.add(period_ms);
+            }
+            drawn_at = now;
+            have_drawn = true;
+
             if (now - last_report >= std::chrono::seconds(1)) {
-                ENGINE_LOG_INFO("frame {} | {}x{} | arena high water {} bytes | workers {}",
-                                frame, drawn_extent.width, drawn_extent.height,
+                ENGINE_LOG_INFO("frame {} | {}x{} | {:.2f} ms | arena high water {} bytes | workers {}",
+                                frame, drawn_extent.width, drawn_extent.height, period_ms,
                                 frame_arena.high_water(), engine::jobs::worker_count());
                 last_report = now;
             }
@@ -1044,6 +1104,7 @@ namespace {
         }
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
+        report_frame_time(stats, options);
         return true;
     }
 
