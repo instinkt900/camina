@@ -63,6 +63,8 @@ namespace engine::gfx {
         VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the image.
         VkImageView view = VK_NULL_HANDLE;         ///< The view the sampler reads.
         VkSampler sampler = VK_NULL_HANDLE;        ///< Shared. The device sampler cache owns it.
+        std::uint32_t width = 0;                   ///< Texels across mip level 0.
+        std::uint32_t height = 0;                  ///< Texels down mip level 0.
         std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
         bool alive = false;                        ///< Whether the slot holds a live texture.
     };

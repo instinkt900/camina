@@ -66,9 +66,13 @@ namespace engine::render {
          */
         struct FrameUniforms {
             Mat4 view_projection{ 1.0F };
+            /// Takes a world position into the shadow map's clip space, from
+            /// `render::ShadowPass`. Identity when nothing casts.
+            Mat4 light_view_projection{ 1.0F };
             std::array<float, 4> camera_position{};
-            /// x is how many entries of `lights` are real. The rest is padding,
-            /// because std140 puts the array on a 16-byte boundary anyway.
+            /// x is how many entries of `lights` are real. y is 1 when a
+            /// directional light casts a shadow. The rest is padding, because
+            /// std140 puts the array on a 16-byte boundary anyway.
             std::array<std::uint32_t, 4> light_count{};
             /// The irradiance of the environment. Each entry is one coefficient
             /// in rgb, and the fourth word is padding std140 would add anyway.
@@ -372,19 +376,39 @@ namespace engine::render {
             { kFrameColor, gfx::ResourceState::ColorTarget },
             { kFrameDepth, gfx::ResourceState::DepthTarget },
         } };
-        return PassDesc{ .name = "mesh", .reads = {}, .writes = kWrites };
+        // The shadow map, which the shadow pass wrote. This is the read that
+        // makes the graph derive a real producer-consumer barrier rather than
+        // only the two transitions a lone pass needs.
+        static constexpr std::array<ResourceRead, 1> kReads{ {
+            { kShadowMap, gfx::ResourceState::ShaderRead },
+        } };
+        return PassDesc{ .name = "mesh", .reads = kReads, .writes = kWrites };
+    }
+
+    void MeshPass::set_shadow_view(const Mat4& light_view_projection, bool casts) {
+        shadow_view_ = light_view_projection;
+        shadow_casts_ = casts;
     }
 
     MeshPass::~MeshPass() {
         destroy();
     }
 
-    bool MeshPass::create(gfx::Device* device, const assets::Content& content) {
+    bool MeshPass::create(gfx::Device* device, const assets::Content& content,
+                          gfx::TextureHandle shadow_map) {
         if (device == nullptr) {
             ENGINE_LOG_ERROR("MeshPass::create needs a device.");
             return false;
         }
+        if (!shadow_map.valid()) {
+            // The shader declares a sampler2DShadow and there is nothing else to
+            // put there. Carrying on would bind a plain texture to a comparison
+            // sampler, which Vulkan calls undefined rather than an error.
+            ENGINE_LOG_ERROR("MeshPass::create needs the shadow map from the shadow pass.");
+            return false;
+        }
         device_ = device;
+        shadow_map_ = shadow_map;
 
         // Before the pipeline, because every draw call binds a texture and a
         // submesh with no material has to bind this one.
@@ -466,7 +490,7 @@ namespace engine::render {
             // it, because a descriptor set is filled once and a cubemap changes
             // only when the scene names another one. update_environment() calls
             // this again when that happens.
-            const std::array<gfx::DescriptorWrite, 3> writes{ {
+            const std::array<gfx::DescriptorWrite, 4> writes{ {
                 { .binding = 0,
                   .kind = gfx::DescriptorKind::UniformBuffer,
                   .texture = {},
@@ -478,6 +502,15 @@ namespace engine::render {
                 { .binding = 2,
                   .kind = gfx::DescriptorKind::CombinedImageSampler,
                   .texture = brdf_lut_.valid() ? brdf_lut_ : textures_.fallback(),
+                  .buffer = {} },
+                // The shadow map. There is no fallback for this one, because the
+                // shader reads it as a sampler2DShadow and the flat white texel
+                // carries no comparison sampler. Binding one where the other is
+                // declared is undefined rather than an error, so create()
+                // refuses to run without a real map instead.
+                { .binding = 3,
+                  .kind = gfx::DescriptorKind::CombinedImageSampler,
+                  .texture = shadow_map_,
                   .buffer = {} },
             } };
             if (!gfx::succeeded(gfx::create_descriptor_set(device_, layout_pipeline(), kFrameSet,
@@ -921,6 +954,7 @@ namespace engine::render {
 
         FrameUniforms frame{
             .view_projection = view_projection,
+            .light_view_projection = shadow_view_,
             .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
         };
 
@@ -935,6 +969,9 @@ namespace engine::render {
         // draw() runs sixty times a second, so a scene with nine lights would
         // otherwise write sixty lines a second and hide everything else.
         const bool overflowed = gather_lights(world, frame);
+        // gather_lights() fills x, and this is the only other word the shader
+        // reads. Set it after, because the call writes the whole element.
+        frame.light_count[1] = shadow_casts_ ? 1U : 0U;
         if (overflowed && !lights_overflowed_) {
             ENGINE_LOG_WARN("The scene has more than {} lights, and the rest are not lit. "
                             "See kMaxLights in mesh_pass.cpp.",
