@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <utility>
 
 namespace engine::render {
 
@@ -140,9 +141,20 @@ namespace engine::render {
                                               const assets::Content& content, Guid guid,
                                               std::uint32_t faces);
 
-        std::map<Guid, gfx::TextureHandle> loaded_;
-        /// The GUIDs that failed, so one bad reference reports once.
-        std::map<Guid, bool> failed_;
+        /**
+         * @brief What a caller asked for: an identity and a shape.
+         *
+         * The shape belongs in the key. A GUID alone would let a texture loaded
+         * as flat come back for a cubemap binding, because a cache hit answers
+         * before the face count is read. It would also let one shape's failure
+         * answer for the other, and a scene that names a flat texture as its
+         * environment would then hide the material that names the same one.
+         */
+        using Request = std::pair<Guid, std::uint32_t>;
+
+        std::map<Request, gfx::TextureHandle> loaded_;
+        /// The requests that failed, so one bad reference reports once.
+        std::map<Request, bool> failed_;
         gfx::TextureHandle fallback_;
         gfx::TextureHandle fallback_cube_;
     };

@@ -6,6 +6,7 @@
 
 #include "assets/content.h"
 #include "assets/reference.h"
+#include "assets/texture.h"
 #include "check.h"
 #include "math/transform.h"
 #include "sandbox/components.h"
@@ -17,6 +18,7 @@
 #include "scene/world.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -116,6 +118,44 @@ namespace {
         // names no mesh.
         check(named == 17, "every entity that draws names a mesh");
         check(resolved == named, "and the cooker wrote every one of them");
+    }
+
+    /**
+     * The shipped scene names an environment, and that GUID is a real cubemap.
+     *
+     * Counting entities does not say this. The count stays right when somebody
+     * drops the component and leaves the entity, and it stays right when the
+     * GUID goes stale. Both failures end the same way: the picture falls back
+     * to six grey texels and nothing reports it.
+     *
+     * The face count is read from the cooked file rather than assumed, because
+     * a flat texture named here binds nothing a `samplerCube` can read.
+     */
+    void test_shipped_environment_is_a_cubemap() {
+        const sc::ComponentRegistry registry = make_registry();
+        sc::PrefabLibrary library;
+        sc::World world;
+        check(load_shipped(world, registry, library), "the shipped content loads");
+
+        engine::assets::Content content;
+        check(content.open(sandbox::default_content_directory()), "the cooked content opens");
+
+        std::size_t found = 0;
+        std::size_t cubemaps = 0;
+        for (const auto [entity, environment] :
+             world.registry().view<const sc::Environment>().each()) {
+            ++found;
+            std::vector<std::byte> bytes;
+            engine::assets::TextureView view;
+            if (environment.cubemap.valid() && content.read_bytes(environment.cubemap, bytes) &&
+                engine::assets::read_texture(bytes, view, "the shipped environment") &&
+                view.face_count == engine::assets::kCubeFaceCount) {
+                ++cubemaps;
+            }
+        }
+
+        check(found == 1, "the scene names exactly one environment");
+        check(cubemaps == 1, "and the cooker wrote it as a six-face cubemap");
     }
 
     void test_content_is_there() {
@@ -347,6 +387,7 @@ int main() {
     test_content_is_there();
     test_shipped_scene_loads();
     test_every_named_mesh_is_cooked();
+    test_shipped_environment_is_a_cubemap();
     test_scene_round_trips();
     test_saving_puts_the_references_back();
     test_overrides_reach_the_world();

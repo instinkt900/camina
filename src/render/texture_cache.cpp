@@ -114,12 +114,18 @@ namespace engine::render {
         if (!guid.valid()) {
             return fallback;
         }
-        if (const auto found = loaded_.find(guid); found != loaded_.end()) {
+
+        // The shape is part of what was asked for, so it is part of the key.
+        // Answering a cubemap request from a flat entry would hand back a
+        // texture the binding cannot read.
+        const Request request{ guid, faces };
+
+        if (const auto found = loaded_.find(request); found != loaded_.end()) {
             return found->second;
         }
         // A material that names a texture it does not have would otherwise
         // report on every frame, and the log would say nothing else.
-        if (failed_.contains(guid)) {
+        if (failed_.contains(request)) {
             return fallback;
         }
 
@@ -127,7 +133,7 @@ namespace engine::render {
         assets::TextureView view;
         if (!content.read_bytes(guid, bytes) ||
             !assets::read_texture(bytes, view, guid.to_text())) {
-            failed_.emplace(guid, true);
+            failed_.emplace(request, true);
             return fallback;
         }
 
@@ -140,7 +146,7 @@ namespace engine::render {
                              "from an environment rule and a flat texture from the texture "
                              "rule, so check which one the scene named.",
                              guid.to_text(), view.face_count, faces);
-            failed_.emplace(guid, true);
+            failed_.emplace(request, true);
             return fallback;
         }
 
@@ -164,33 +170,39 @@ namespace engine::render {
         if (!gfx::succeeded(result)) {
             ENGINE_LOG_ERROR("{} would not upload: {}", guid.to_text(),
                              gfx::result_name(result));
-            failed_.emplace(guid, true);
+            failed_.emplace(request, true);
             return fallback;
         }
 
         ENGINE_LOG_INFO("Uploaded {} {}, {} by {} with {} levels.",
                         cube ? "cubemap" : "texture", guid.to_text(), view.width, view.height,
                         view.mip_count);
-        loaded_.emplace(guid, texture);
+        loaded_.emplace(request, texture);
         return texture;
     }
 
     void TextureCache::drop(gfx::Device* device, Guid guid) {
-        failed_.erase(guid);
+        // Both shapes. The caller has one identity and does not know which way
+        // it was asked for, and a reload that freed only one of them would
+        // leave the other pointing at a texture the device no longer has.
+        for (const std::uint32_t faces : { 1U, assets::kCubeFaceCount }) {
+            const Request request{ guid, faces };
+            failed_.erase(request);
 
-        const auto found = loaded_.find(guid);
-        if (found == loaded_.end()) {
-            return;
+            const auto found = loaded_.find(request);
+            if (found == loaded_.end()) {
+                continue;
+            }
+            if (device != nullptr) {
+                gfx::destroy_texture(device, found->second);
+            }
+            loaded_.erase(found);
         }
-        if (device != nullptr) {
-            gfx::destroy_texture(device, found->second);
-        }
-        loaded_.erase(found);
     }
 
     void TextureCache::destroy(gfx::Device* device) {
         if (device != nullptr) {
-            for (const auto& [guid, texture] : loaded_) {
+            for (const auto& [request, texture] : loaded_) {
                 gfx::destroy_texture(device, texture);
             }
             gfx::destroy_texture(device, fallback_);
