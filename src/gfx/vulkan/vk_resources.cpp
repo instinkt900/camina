@@ -58,6 +58,8 @@ namespace engine::gfx {
                 return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             case AddressMode::MirroredRepeat:
                 return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            case AddressMode::ClampToZeroBorder:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             }
             return VK_SAMPLER_ADDRESS_MODE_REPEAT;
         }
@@ -492,7 +494,12 @@ namespace engine::gfx {
             *out_sampler = VK_NULL_HANDLE;
 
             for (const SamplerEntry& entry : device.samplers) {
-                if (entry.desc.filter == desc.filter && entry.desc.address == desc.address) {
+                // Every field is part of the key. Leaving one out would hand a
+                // caller a sampler built for a different request, and a shadow
+                // sampler that came back without its comparison would read a raw
+                // depth as a coverage value and shadow nothing.
+                if (entry.desc.filter == desc.filter && entry.desc.address == desc.address &&
+                    entry.desc.compare == desc.compare) {
                     *out_sampler = entry.sampler;
                     return Result::Success;
                 }
@@ -512,6 +519,15 @@ namespace engine::gfx {
             info.addressModeV = address;
             info.addressModeW = address;
             info.maxLod = VK_LOD_CLAMP_NONE;
+            // Opaque black is depth zero, which is the far plane under reverse-Z.
+            // See AddressMode::ClampToZeroBorder.
+            info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            if (desc.compare) {
+                info.compareEnable = VK_TRUE;
+                // Reverse-Z: a surface is lit when its own depth is at or in
+                // front of the depth the light recorded.
+                info.compareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+            }
 
             SamplerEntry built;
             built.desc = desc;
@@ -739,6 +755,8 @@ namespace engine::gfx {
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
         image.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        built.width = desc.width;
+        built.height = desc.height;
 
         VmaAllocationCreateInfo allocation{};
         allocation.usage = VMA_MEMORY_USAGE_AUTO;
@@ -803,6 +821,93 @@ namespace engine::gfx {
         entry.generation = generation;
         entry.alive = true;
         *out_texture = TextureHandle::make(index, generation);
+        return Result::Success;
+    }
+
+    Result create_depth_target(Device* device, const DepthTargetDesc& desc,
+                               TextureHandle* out_texture) {
+        ENGINE_CHECK(device != nullptr, "create_depth_target needs a device.");
+        ENGINE_CHECK(out_texture != nullptr,
+                     "create_depth_target needs somewhere to put the handle.");
+        *out_texture = TextureHandle{};
+
+        if (desc.width == 0 || desc.height == 0) {
+            ENGINE_LOG_ERROR("A depth target needs a size, and this one is {}x{}.", desc.width,
+                             desc.height);
+            return Result::ErrorInit;
+        }
+
+        // The frame already chose a depth format this GPU can attach. Sampling
+        // it is the new requirement, so check that separately rather than assume
+        // the two features arrive together.
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(device->physical, device->depth_format, &properties);
+        if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0U) {
+            ENGINE_LOG_ERROR("This GPU cannot sample its own depth format, so a shadow map "
+                             "cannot be read.");
+            return Result::ErrorInit;
+        }
+
+        TextureEntry built;
+
+        VkImageCreateInfo image{};
+        image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image.imageType = VK_IMAGE_TYPE_2D;
+        image.format = device->depth_format;
+        image.extent = VkExtent3D{ desc.width, desc.height, 1 };
+        image.mipLevels = 1;
+        image.arrayLayers = 1;
+        image.samples = VK_SAMPLE_COUNT_1_BIT;
+        image.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // Both, because one pass renders into it and another reads it. That
+        // pair is the whole reason this function exists.
+        image.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        built.width = desc.width;
+        built.height = desc.height;
+
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO;
+        allocation.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        ENGINE_VK_TRY(vmaCreateImage(device->allocator, &image, &allocation, &built.image,
+                                     &built.allocation, nullptr));
+
+        VkImageViewCreateInfo view{};
+        view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view.image = built.image;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = device->depth_format;
+        view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        view.subresourceRange.levelCount = 1;
+        view.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(device->device, &view, nullptr, &built.view) != VK_SUCCESS) {
+            vmaDestroyImage(device->allocator, built.image, built.allocation);
+            ENGINE_LOG_ERROR("The depth target view did not build.");
+            return Result::ErrorInit;
+        }
+
+        const Result sampled = vk::resolve_sampler(*device, desc.sampler, &built.sampler);
+        if (!succeeded(sampled)) {
+            vkDestroyImageView(device->device, built.view, nullptr);
+            vmaDestroyImage(device->allocator, built.image, built.allocation);
+            return sampled;
+        }
+
+        std::uint32_t index = 0;
+        if (!device->free_textures.empty()) {
+            index = device->free_textures.back();
+            device->free_textures.pop_back();
+        } else {
+            index = static_cast<std::uint32_t>(device->textures.size());
+            device->textures.emplace_back();
+        }
+
+        TextureEntry& entry = device->textures[index];
+        const std::uint32_t generation = entry.generation;
+        entry = built;
+        entry.generation = generation;
+        entry.alive = true;
+        *out_texture = TextureHandle::make(index, generation);
+        ENGINE_LOG_DEBUG("Created a {}x{} depth target.", desc.width, desc.height);
         return Result::Success;
     }
 

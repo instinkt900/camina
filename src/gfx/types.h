@@ -94,6 +94,20 @@ namespace engine::gfx {
         Repeat = 0,     ///< Tile the texture.
         ClampToEdge,    ///< Hold the edge texel.
         MirroredRepeat, ///< Tile, and flip every other copy.
+        /**
+         * @brief Hold a border of zero, which reads as "nothing in the way".
+         *
+         * A shadow map needs this. A fragment outside the light's view has no
+         * depth recorded for it, and repeating or clamping would carry an edge
+         * texel across the whole scene as a smear of shadow.
+         *
+         * Zero is the far plane under reverse-Z, and a surface is lit when its
+         * own depth is at or in front of the stored one. So every fragment
+         * passes against this border. Under a conventional depth range the same
+         * argument asks for one instead, which is why this names the value
+         * rather than a color.
+         */
+        ClampToZeroBorder,
     };
 
     /**
@@ -106,6 +120,32 @@ namespace engine::gfx {
     struct SamplerDesc {
         Filter filter = Filter::Linear;            ///< Applies to both magnify and minify.
         AddressMode address = AddressMode::Repeat; ///< Applies to all three axes.
+        /**
+         * @brief Whether the sampler compares rather than returns the texel.
+         *
+         * A shadow map is read this way. The sampler compares the stored depth
+         * against a value the shader supplies and returns how much of the
+         * neighbourhood passed, so a linear filter gives four taps of percentage
+         * closer filtering for the cost of one read.
+         *
+         * The comparison is "greater or equal", which is what reverse-Z needs: a
+         * surface is lit when its own depth is at or in front of the depth the
+         * light recorded. A shader reads such a texture as a `sampler2DShadow`.
+         */
+        bool compare = false;
+    };
+
+    /**
+     * @brief Settings for create_depth_target().
+     *
+     * A depth target carries no pixels. The device allocates it empty, a pass
+     * renders into it, and a later pass samples it. That is the difference from
+     * TextureDesc, which uploads bytes the caller already has.
+     */
+    struct DepthTargetDesc {
+        std::uint32_t width = 0;  ///< Width in texels. Required.
+        std::uint32_t height = 0; ///< Height in texels. Required.
+        SamplerDesc sampler;      ///< How a later pass reads it. Shared, not owned.
     };
 
     /**
@@ -227,8 +267,9 @@ namespace engine::gfx {
 
     /// @brief Settings for create_graphics_pipeline().
     struct GraphicsPipelineDesc {
-        ShaderCode vertex;   ///< The vertex stage. Required.
-        ShaderCode fragment; ///< The fragment stage. Required.
+        ShaderCode vertex; ///< The vertex stage. Required.
+        /// @brief The fragment stage. Required unless @c depth_only is true.
+        ShaderCode fragment;
 
         /// @brief The vertex attributes, or null to build positions from the vertex index.
         const VertexAttribute* attributes = nullptr;
@@ -290,6 +331,20 @@ namespace engine::gfx {
          * the Y row, so the two cancel and no winding change is needed.
          */
         bool cull_back = false;
+        /**
+         * @brief Whether the pipeline renders depth alone, with no color target.
+         *
+         * A shadow pass wants this. It attaches no color image, so the pipeline
+         * must declare none, and it needs no fragment stage at all because
+         * nothing consumes a color. Leaving the fragment stage out is what makes
+         * the pass cheap, since the fixed-function depth write is the whole job.
+         *
+         * @warning A pipeline built with this draws only inside a
+         * cmd_begin_depth_rendering() scope. The attachments a pipeline declares
+         * must match the ones the scope binds, and Vulkan calls a mismatch
+         * undefined rather than an error.
+         */
+        bool depth_only = false;
     };
 
     /**

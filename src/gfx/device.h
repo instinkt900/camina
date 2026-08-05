@@ -168,6 +168,31 @@ namespace engine::gfx {
                            ResourceState after);
 
     /**
+     * @brief Moves any texture from one state to another.
+     *
+     * The same thing cmd_frame_barrier() does, for an image the frame does not
+     * own. A shadow map is the first: the shadow pass writes it as a depth
+     * target and the mesh pass reads it as a shader resource, and that
+     * transition is the barrier between them.
+     *
+     * The two entry points stay separate because a frame target is named by an
+     * enum and reaches a different image on each acquire, while this one names a
+     * handle that stays put. Folding them together would need a union or a
+     * handle for the swapchain image, and neither pays for itself with two
+     * callers.
+     *
+     * @param commands The command list from begin_frame().
+     * @param texture The image to move. A null or stale handle logs and does nothing.
+     * @param before The state the image is in now.
+     * @param after The state the next pass needs it in.
+     *
+     * @warning Call this outside a rendering scope, for the reason
+     * cmd_frame_barrier() gives.
+     */
+    void cmd_texture_barrier(CommandList* commands, TextureHandle texture, ResourceState before,
+                             ResourceState after);
+
+    /**
      * @brief Opens dynamic rendering into the current swapchain image.
      *
      * The image loads with a clear to @p clear_color and stores at the end. There
@@ -184,7 +209,27 @@ namespace engine::gfx {
     void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color);
 
     /**
-     * @brief Closes the rendering scope that cmd_begin_rendering() opened.
+     * @brief Opens dynamic rendering into a depth image and no color image.
+     *
+     * This is what a shadow pass records into. The image clears to zero, which
+     * is the far plane under reverse-Z, and stores at the end so a later pass
+     * can sample it.
+     *
+     * The viewport and the scissor are set to the whole image. A shadow map is
+     * rarely the size of the window, and a scope that left the frame's viewport
+     * in place would render the scene into one corner of the map.
+     *
+     * @param commands The command list from begin_frame().
+     * @param depth The image to render into. A null or stale handle logs and
+     * opens no scope, and the draws that follow are then discarded.
+     *
+     * @warning The image must already be in ResourceState::DepthTarget. Close
+     * the scope with cmd_end_rendering().
+     */
+    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth);
+
+    /**
+     * @brief Closes the rendering scope that either begin function opened.
      * @param commands The command list from begin_frame().
      */
     void cmd_end_rendering(CommandList* commands);
@@ -292,6 +337,29 @@ namespace engine::gfx {
      */
     [[nodiscard]] Result create_texture(Device* device, const TextureDesc& desc,
                                         TextureHandle* out_texture);
+
+    /**
+     * @brief Creates an empty depth image that a pass renders into and samples.
+     *
+     * The image carries no pixels. One pass renders depth into it and a later
+     * pass reads it, which is what a shadow map is. It uses the same depth
+     * format the frame does, so a pipeline needs no second format to declare.
+     *
+     * The result is a TextureHandle and destroy_texture() releases it, because
+     * it is a texture in every way that matters to a caller. Only the way it
+     * gets its contents differs.
+     *
+     * @param device The device that owns the image.
+     * @param desc The size and the sampler state.
+     * @param out_texture Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the image was not created.
+     *
+     * @warning The image starts in ResourceState::Undefined, and it holds
+     * nothing until a pass has rendered into it. Sampling it before that reads
+     * whatever the allocation held.
+     */
+    [[nodiscard]] Result create_depth_target(Device* device, const DepthTargetDesc& desc,
+                                             TextureHandle* out_texture);
 
     /**
      * @brief Releases a texture and frees its slot for reuse.

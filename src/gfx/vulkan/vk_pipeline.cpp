@@ -10,6 +10,30 @@ namespace engine::gfx {
 
     namespace {
 
+        /// Whether a stage carries a module at all.
+        bool has_module(const ShaderCode& code) {
+            return code.spirv != nullptr && code.word_count != 0;
+        }
+
+        /**
+         * Reports whether the stages a caller supplied can build a pipeline.
+         *
+         * A vertex stage is always required. A fragment stage is required only
+         * when the pipeline writes color, because a depth-only pass consumes
+         * nothing a fragment shader would produce.
+         */
+        bool stages_are_valid(const GraphicsPipelineDesc& desc, bool has_fragment) {
+            if (!has_module(desc.vertex)) {
+                ENGINE_LOG_ERROR("A graphics pipeline needs a vertex module.");
+                return false;
+            }
+            if (!has_fragment && !desc.depth_only) {
+                ENGINE_LOG_ERROR("A graphics pipeline that writes color needs a fragment module.");
+                return false;
+            }
+            return true;
+        }
+
         Result create_module(Device& device, const ShaderCode& code, VkShaderModule* out) {
             VkShaderModuleCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -85,8 +109,10 @@ namespace engine::gfx {
             state.blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
             state.blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            state.blend.attachmentCount = 1;
-            state.blend.pAttachments = &state.blend_attachment;
+            // A depth-only pipeline has no color attachment to blend into, and
+            // the blend state must agree with that or the pipeline is invalid.
+            state.blend.attachmentCount = desc.depth_only ? 0U : 1U;
+            state.blend.pAttachments = desc.depth_only ? nullptr : &state.blend_attachment;
         }
 
         /// Owns the storage that the vertex input state points at.
@@ -317,16 +343,17 @@ namespace engine::gfx {
                      "create_graphics_pipeline needs somewhere to put the handle.");
         *out_pipeline = PipelineHandle{};
 
-        if (desc.vertex.spirv == nullptr || desc.vertex.word_count == 0 ||
-            desc.fragment.spirv == nullptr || desc.fragment.word_count == 0) {
-            ENGINE_LOG_ERROR("A graphics pipeline needs both a vertex and a fragment module.");
+        // A depth-only pipeline writes no color, so it needs no fragment stage.
+        // Leaving it out is what makes a shadow pass cheap.
+        const bool has_fragment = has_module(desc.fragment);
+        if (!stages_are_valid(desc, has_fragment)) {
             return Result::ErrorInit;
         }
 
         VkShaderModule vertex = VK_NULL_HANDLE;
         VkShaderModule fragment = VK_NULL_HANDLE;
         Result result = create_module(*device, desc.vertex, &vertex);
-        if (succeeded(result)) {
+        if (succeeded(result) && has_fragment) {
             result = create_module(*device, desc.fragment, &fragment);
         }
 
@@ -358,6 +385,9 @@ namespace engine::gfx {
                     .pSpecializationInfo = nullptr,
                 },
             };
+            // One stage when there is no fragment module. The array holds two
+            // entries either way, and the count is what leaves the second out.
+            const std::uint32_t stage_count = has_fragment ? 2U : 1U;
 
             FixedState state;
             fill_fixed_state(state, desc);
@@ -377,8 +407,12 @@ namespace engine::gfx {
             // here. See DESIGN.md section 2.
             VkPipelineRenderingCreateInfo rendering{};
             rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            rendering.colorAttachmentCount = 1;
-            rendering.pColorAttachmentFormats = &device->swapchain_format;
+            // A depth-only pass attaches no color image, and a pipeline whose
+            // attachments disagree with the scope is undefined rather than an
+            // error. See GraphicsPipelineDesc::depth_only.
+            rendering.colorAttachmentCount = desc.depth_only ? 0 : 1;
+            rendering.pColorAttachmentFormats =
+                desc.depth_only ? nullptr : &device->swapchain_format;
             // Every frame attaches the depth image, so every pipeline must name
             // its format or the draw is invalid. depth_test decides only whether
             // the pipeline reads and writes depth, not whether it is attached.
@@ -387,7 +421,7 @@ namespace engine::gfx {
             VkGraphicsPipelineCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
             info.pNext = &rendering;
-            info.stageCount = static_cast<std::uint32_t>(stages.size());
+            info.stageCount = stage_count;
             info.pStages = stages.data();
             info.pVertexInputState = &state.vertex_input;
             info.pInputAssemblyState = &state.assembly;
