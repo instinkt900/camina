@@ -1106,8 +1106,6 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path source = scratch("read/src");
         const std::filesystem::path out = scratch("read/out");
         write_file(source / "one.dat", "{}");
-        // Four bytes, so it is a whole number of 32-bit words.
-        write_file(source / "words.bin", "abcd");
 
         const cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
@@ -1115,7 +1113,7 @@ void main() { out_color = push.model[0]; }
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
-        check(content.manifest().entries.size() == 2, "and it holds both entries");
+        check(content.manifest().entries.size() == 1, "and it holds one entry");
 
         const as::ManifestEntry* entry = content.find("one.dat");
         check(entry != nullptr, "an asset is findable by its source path");
@@ -1135,15 +1133,12 @@ void main() { out_color = push.model[0]; }
         check(!content.read_bytes(engine::Guid::generate(), by_guid),
               "an identity nothing cooked is refused");
 
-        std::vector<std::uint32_t> words;
-        check(content.read_words("words.bin", words), "a four-byte asset reads as words");
-        check(words.size() == 1, "and it is one word");
-
-        // Two bytes is not a whole number of words. Catching that here beats a
-        // driver rejecting the module later with a message that names nothing.
-        check(!content.read_words("one.dat", words),
-              "an asset that is not a whole number of words is refused");
-        check(!content.read_words("not_there", words), "an unknown source path is refused");
+        // The same bytes read by source path, which is the first lookup a caller
+        // makes before it has a GUID.
+        std::vector<std::byte> by_source;
+        check(content.read_bytes("one.dat", by_source),
+              "the same bytes read by source path");
+        check(by_source == bytes, "and they are the same bytes");
 
         as::Content empty;
         check(!empty.open(out / "not_there"), "a directory with no manifest is refused");

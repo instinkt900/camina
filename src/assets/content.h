@@ -50,8 +50,8 @@ namespace engine::assets {
      * @code
      * engine::assets::Content content;
      * if (content.open(directory)) {
-     *     std::vector<std::uint32_t> words;
-     *     content.read_words("cube.vert", words);
+     *     std::vector<std::byte> bytes;
+     *     content.read_bytes("cube.vert", bytes);
      * }
      * @endcode
      */
@@ -124,20 +124,6 @@ namespace engine::assets {
          */
         [[nodiscard]] bool read_bytes(std::string_view source,
                                       std::vector<std::byte>& out) const;
-
-        /**
-         * @brief Reads a cooked asset as 32-bit words, which is what SPIR-V is.
-         *
-         * This reports a file whose length is not a multiple of four, because
-         * that is not a SPIR-V module and the driver would reject it later
-         * with a message that names nothing useful.
-         *
-         * @param source The source path, as find() takes it.
-         * @param out The words.
-         * @return True when the asset was there and it read.
-         */
-        [[nodiscard]] bool read_words(std::string_view source,
-                                      std::vector<std::uint32_t>& out) const;
 
         /// @brief The directory this was opened on.
         /// @return The cooked root.

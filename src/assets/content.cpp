@@ -2,7 +2,6 @@
 
 #include "core/log.h"
 
-#include <cstring>
 #include <fstream>
 #include <map>
 #include <utility>
@@ -167,31 +166,6 @@ namespace engine::assets {
     bool Content::read_bytes(std::string_view source, std::vector<std::byte>& out) const {
         const ManifestOutput* output = sole_output(source);
         return output != nullptr && read_bytes(*output, out);
-    }
-
-    bool Content::read_words(std::string_view source, std::vector<std::uint32_t>& out) const {
-        const ManifestOutput* output = sole_output(source);
-        if (output == nullptr) {
-            return false;
-        }
-
-        std::vector<std::byte> bytes;
-        if (!read_bytes(*output, bytes)) {
-            return false;
-        }
-
-        constexpr std::size_t kWordSize = sizeof(std::uint32_t);
-        if (bytes.empty() || bytes.size() % kWordSize != 0) {
-            ENGINE_LOG_ERROR("{} is {} bytes, which is not a whole number of 32-bit words.",
-                             output->cooked, bytes.size());
-            return false;
-        }
-
-        // Copy rather than cast. A vector<byte> has no guarantee that its data
-        // is aligned for a 32-bit read, and a cast would be undefined.
-        out.resize(bytes.size() / kWordSize);
-        std::memcpy(out.data(), bytes.data(), bytes.size());
-        return true;
     }
 
 } // namespace engine::assets
