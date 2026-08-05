@@ -24,4 +24,28 @@ namespace engine::gfx {
         return "ErrorUnknown";
     }
 
+    const char* resource_state_name(ResourceState state) {
+        switch (state) {
+        case ResourceState::Undefined:
+            return "Undefined";
+        case ResourceState::ColorTarget:
+            return "ColorTarget";
+        case ResourceState::DepthTarget:
+            return "DepthTarget";
+        case ResourceState::DepthRead:
+            return "DepthRead";
+        case ResourceState::ShaderRead:
+            return "ShaderRead";
+        case ResourceState::ComputeWrite:
+            return "ComputeWrite";
+        case ResourceState::CopySource:
+            return "CopySource";
+        case ResourceState::CopyDestination:
+            return "CopyDestination";
+        case ResourceState::Present:
+            break;
+        }
+        return "Present";
+    }
+
 } // namespace engine::gfx

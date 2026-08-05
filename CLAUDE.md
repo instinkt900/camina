@@ -172,6 +172,17 @@ difference. Deleting the mip choice, the coefficients, or the table each moves t
 mip move the metal spheres, and the coefficients move the dielectric helmet and barely touch the
 metal.
 
+M5.3a is the first half of the render graph. `src/render/render_graph.h` turns a list of pass
+declarations into the barriers a frame needs, and it opens no device and names no Vulkan type.
+`gfx::ResourceState` is the whole vocabulary, and it carries no catch-all value on purpose,
+because a state meaning "anything" is what `ALL_COMMANDS` already is.
+
+A pass declares its reads and writes as data rather than by calling a builder, so the
+derivation is a pure function that `tests/test_render_graph.cpp` drives with no GPU. The three
+terms of the barrier condition were each checked by deleting them: dropping the state compare
+was caught by nothing until a test for a read that follows a read in a different state was
+added. Nothing runs through the graph yet, which is issue #121.
+
 The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
 `mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left
 the table reaching eight at a grazing angle, and only the energy test caught it: the mirror test
