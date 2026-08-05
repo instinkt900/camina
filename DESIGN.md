@@ -811,6 +811,30 @@ The order matters. The cull pass is a compute pass that writes a resource the me
 which is exactly what the frame graph in M5.3 exists to schedule. So the light grid lands after
 the graph and not before it. Issue #98 holds the decision and the work.
 
+**The graph derives barriers first, and aliases memory when something needs it.** A full
+aliasing allocator is a large piece of work, and today there is one pass and nothing to alias
+against. So M5.3 builds the half that is already owed: real stage and access masks derived from
+what each pass declared, and `ALL_COMMANDS` gone from the swapchain transition. That shortcut is
+correct and slow, which was right for M1 and wrong for a milestone whose test is a Sponza-class
+scene.
+
+Aliasing gets a seam rather than an implementation. The graph knows every resource lifetime
+already, because it knows the reads and the writes, so the allocator is an addition and not a
+rewrite. Rule 4.6 says to build it when a shadow atlas and a tonemap target are both live and
+neither needs the other.
+
+**A pass declares its reads and writes as data, not through calls into a builder.** A pass
+returns a descriptor naming what it reads, what it writes, and in what format. The graph is then
+a pure function of that data.
+
+That is the whole reason for the choice. A builder that a pass calls during a setup phase reads
+more naturally when the declaration is conditional, and it is the shape most published frame
+graphs use. But it cannot be tested without standing up a graph, and a graph cannot be stood up
+without a device. Issue #62 records that the render caches have no tests for exactly that reason,
+and putting the barrier logic behind the same wall would repeat the mistake at the point where it
+costs most. Barrier derivation is where a renderer hides bugs that appear on one vendor and no
+other, so it is the part that most needs a test with no device in it.
+
 **The environment is a cubemap an entity names, and it arrives before the lighting that reads
 it.** The cooker turns an equirectangular `.hdr` panorama into six faces with a mip chain, and
 `scene::Environment` names the result by GUID. One frame binds one cubemap, so the first entity
@@ -1086,8 +1110,8 @@ honest about what it measures.
 ### M5 — PBR and render graph
 A frame graph that handles barriers and transient resource aliasing. Cook-Torrance
 metallic-roughness. IBL: an HDR environment converted to irradiance SH, prefiltered
-specular, and a BRDF LUT. Cascaded shadow maps. ACES tonemap. Materials as a shader plus a
-reflected parameter block.
+specular, and a BRDF LUT. A clustered light cull, which the graph schedules. Cascaded
+shadow maps. ACES tonemap. Materials as a shader plus a reflected parameter block.
 **Done when:** a Sponza-class scene renders correctly.
 
 ### M6 — moth_ui spike, 2 to 3 days, timeboxed
