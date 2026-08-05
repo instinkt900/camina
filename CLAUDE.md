@@ -173,25 +173,106 @@ one-line tweak. When you are not sure which one applies, use a branch.
 a convention, not a lock. The user can set it aside at any time. Follow an explicit
 instruction to work on `main`.
 
-Steps:
+### The loop
 
-1. Branch from current `main`. Name the branch `<type>/<short-topic>`, for example
-   `feat/vulkan-swapchain` or `fix/arena-alignment`.
-2. Commit on the branch in the conventional style.
-3. Open a pull request with `gh pr create`. Write the title in the conventional style.
-   A squash merge uses that title as the commit subject.
-4. Wait for CI. The format, docs, vulkan-containment, and build jobs all run on a pull
-   request.
-5. Read the automated code review as well. It runs on each push, and it often finishes
-   after the other jobs. A green CI therefore does not mean the pull request is clear.
-6. **Collect every change before you push again.** Gather the CI failures, the review
-   comments, and any work you still owe the branch. Fix them together, and push once.
-7. Ask the user before you merge. Do not merge your own pull request on your own.
+**At the start of a milestone, before any code.** Read the `DESIGN.md` §10 definition, and
+read the GitHub milestone description beside it. They are two depths of one decision and
+they have to agree, so correct the milestone when it has drifted. See "Issue tracker" below.
+Then create the tracker issues for the increments inside the milestone, and name them
+`M<n>.<k> — ...`.
 
-Step 6 matters because a push restarts every CI job and starts a new review. Two pushes
-five minutes apart cost two full runs and two reviews, and the second review reads a
-branch the first one already covered. Waiting costs nothing, because the review has to
-arrive before the branch is ready either way.
+Do this first, so the work has a shape before the first branch exists. An increment that
+turns out to be two increments gets split into two issues, not carried as one large branch.
+
+**Then, for each issue, one at a time:**
+
+1. Branch from **current** `main`, after `git pull`. Name the branch
+   `<type>/<short-topic>`, for example `feat/vulkan-swapchain` or `fix/arena-alignment`.
+2. Do the work. Commit on the branch in the conventional style, and commit as you go
+   rather than at the end. A commit is cheap and losing an afternoon of edits is not.
+3. Open a pull request with `gh pr create`. Write the title in the conventional style,
+   because a squash merge uses it as the commit subject.
+4. **Start a monitor.** See "Monitoring a pull request" below. It is a regular source of
+   mistakes, so follow that section rather than writing a fresh watch loop.
+5. Read the automated review when it lands. Fix what is real. Say so, with a reason, when
+   a finding is wrong. Push once, then monitor again.
+6. When the checks are green and the review is either answered or absent, **post a summary
+   of the work and wait.** Do not merge.
+
+**Ask the user before you merge. Never merge your own pull request.**
+
+### One issue, one branch, one pull request
+
+**Open the pull request at the seam, not at the end of the issue.** An issue whose work
+splits cleanly in half is two pull requests. M5.1 was the cooker half in #103 and the
+renderer half in #106, and each was reviewable on its own. Holding both on one branch
+would have made one large review of work that was already finished.
+
+The test for a good seam is whether the first half stands up alone. A cooker change that
+alters no pixel and carries its own tests is a seam. Half a shader rewrite that leaves the
+sandbox rendering wrongly is not, and that half has to stay with its other half.
+
+Several commits on one branch are not the same thing as several pull requests. Commit
+often. Submit at the seam.
+
+### A finding during the work becomes an issue, not a detour
+
+When you find a bug, a shortcut, dead code, or a question the current work does not answer,
+**file an issue and carry on.** Do not fix it on the current branch.
+
+The exception is narrow: fix it here when it blocks this branch, or when it is genuinely
+part of the issue you are working on. A texture format that cannot express a cubemap blocks
+an environment rule, so it belongs. An unrelated overflow two functions away does not.
+
+The rules for such an issue are under "Issue tracker" below. A finding that lives only in a
+chat reply or a pull-request comment is lost.
+
+### Writing a pull request body
+
+Write it for somebody who has only the repository. They did not see the conversation that
+produced the work, and they never will.
+
+Put it in this order:
+
+1. **What the pull request does.** First, in a sentence or two.
+2. **What it gives, or why it was needed.**
+3. **How to verify it**, when a reviewer can check something themselves.
+4. Any other context that matters.
+5. Issue links last. Use `Closes #<n>` when it closes one.
+
+Rules:
+
+- **Do not list files or paths.** GitHub shows the diff. Name a file only to point at
+  something specific inside it.
+- Keep it short. Prefer a list to a paragraph, and a sentence to a list.
+- Follow the writing style below. Relaxed STE applies here.
+
+**When you push again to an open pull request, say only what changed and why.** Do not
+restate the branch.
+
+**`gh pr edit` cannot change a body here.** It asks for `projectCards`, which GitHub has
+retired, and the call fails with a deprecation notice that reads like a warning. The edit
+does not happen. Patch the body through REST instead, and read it back to check:
+
+```bash
+python3 -c "
+import json, subprocess
+body = open('body.md').read()
+subprocess.run(['gh','api','-X','PATCH','repos/<owner>/<repo>/pulls/<N>','--input','-'],
+               input=json.dumps({'body': body}), text=True)
+"
+gh pr view <N> --json body --jq '.body[0:200]'
+```
+
+### Collect every change before you push again
+
+Gather the CI failures, the review comments, and any work you still owe the branch. Fix
+them together, and push once.
+
+This matters because a push restarts every CI job and starts a new review. Two pushes five
+minutes apart cost two full runs and two reviews, and the second review reads a branch the
+first one already covered. Waiting costs nothing, because the review has to arrive before
+the branch is ready either way.
 
 Squash merge is the default here. `cliff.toml` skips merge commits and strips the
 `(#12)` suffix that GitHub adds to a squashed subject, so one pull request becomes one
@@ -205,15 +286,116 @@ owns the repository.
 Change `version.txt` in its own small commit on `main`, or in a release pull request of
 its own. A push to `main` that changes `version.txt` starts a release.
 
+## Monitoring a pull request
+
+Every mistake in this section has actually happened. Follow it exactly.
+
+**Start a background monitor as soon as the pull request exists.** Watch for two separate
+things: the checks finishing, and the automated review arriving. They are unrelated
+signals, and the review usually lands after the checks.
+
+### Watching the checks
+
+`gh` here is 2.45 and **`gh pr checks` has no `--json` flag**. A watch loop built on it
+writes its error to stderr, reads empty input, never becomes true, and spins silently until
+timeout. Silence looks exactly like "CI is still running".
+
+Use `gh pr view`, which does support `--json`, and gate on `status`:
+
+```bash
+gh pr view <N> --json statusCheckRollup \
+  --jq '[.statusCheckRollup[] | select(.name != null) | {name, status, conclusion}]'
+```
+
+Two traps, both of which have produced a false green:
+
+- **A running check reports `conclusion` as `""`, not `null`.** So `all(.conclusion != null)`
+  is true while the builds are still going. **Gate on `status == "COMPLETED"`**, which is
+  unambiguous, and read `conclusion` only after that.
+- **A bare `length > 0` exits far too early.** The review bot registers before the workflow
+  jobs do, so the loop sees one finished check and reports success before the build starts.
+  Require the expected count, which is **five**: `format`, `docs`, `vulkan-containment`, and
+  the two `build` jobs.
+
+Make the loop print the per-check result it decided on, so a wrong exit is visible in the
+event rather than hidden behind the word "success". After the monitor reports, **query the
+state once by hand** and report from that, not from the monitor's summary.
+
+### Reading the review
+
+A review is spread over three endpoints. Checking one or two and finding nothing proves
+nothing:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<N>/reviews    # the review and its summary
+gh api repos/<owner>/<repo>/pulls/<N>/comments   # inline comments, anchored to a line
+gh api repos/<owner>/<repo>/issues/<N>/comments  # top-level, where the walkthrough goes
+```
+
+`gh pr view <N> --json reviews` covers only the first. The walkthrough lands on the
+**issues** endpoint, which is easy to miss because the subject is a pull request.
+
+**An empty result means "not yet", never "clear".** Say that the review has not arrived.
+Never treat it as a pass.
+
+**A rate limit ends the wait.** CodeRabbit posts its own limit as a top-level comment, with
+a reset time. When it does, stop the monitor, say the review did not run, and hand back.
+Do not wait for the reset, and do not poll for it. Whether an automated review is worth
+waiting for is the user's call, not yours.
+
+### Answering the review
+
+Verify each finding against the code before acting on it. A finding can be wrong, and
+several have been. When one is wrong, say so with evidence rather than with an argument:
+measure the file, run the check, quote the line. When one is right, fix it and say what the
+failure would have been.
+
+Then push once and start the monitor again.
+
+**Stop the old monitor before you start the new one.** A push begins a fresh run, and a
+monitor still watching the previous one keeps reporting against a run that no longer
+matters. Two monitors on one pull request send overlapping events for different runs, and
+the older one can announce a result for work you have already replaced. Use `TaskStop` with
+the task id the monitor reported when it started.
+
 ## Issue tracker
 
 `DESIGN.md` §10 defines the milestones. The GitHub tracker holds the state.
+
+### `DESIGN.md` and the GitHub milestones are two halves of one thing
+
+**`DESIGN.md` is the source of truth, and the GitHub milestones are not a copy of it.** They
+carry different depths of the same decision, and they have to agree.
+
+- **A GitHub milestone carries enough to understand the work without opening anything else.**
+  What it builds, roughly how, and its done-when test. A person reading the tracker should
+  know what the milestone is for and when it is finished. Keep it to a few sentences.
+- **`DESIGN.md` §10 carries the detail.** The full definition, the reasoning, the named
+  dependencies, and anything that had to be settled. When the two disagree, `DESIGN.md`
+  wins and the milestone gets corrected.
+- **Update both together.** A decision that changes a milestone changes the `DESIGN.md`
+  section and the milestone description in the same pass. Half an update is drift, and drift
+  here is quiet: a milestone description is read far more often than it is checked.
+
+Drift is real and not hypothetical. The M10 description said its foundation was M5.5, which
+is cascaded shadow maps, while `DESIGN.md` said M6, the moth_ui spike. Nothing failed. It
+just told the wrong story to anybody reading the tracker.
+
+Check the two against each other when you start a milestone, which is when the cost of a
+wrong description is highest:
+
+```bash
+gh api repos/instinkt900/camina/milestones --jq '.[]|"\(.title)\n  \(.description)\n"'
+```
+
+### Issues
 
 - **One GitHub Milestone for each `DESIGN.md` milestone**, M0 through M11.
 - **Issues are work increments, not milestones.** M1 was one line in `DESIGN.md` and became
   three pull requests. Split a milestone the same way, and name the issues `M<n>.<k> — ...`.
 - **An issue links to its `DESIGN.md` section. It never copies the definition.** Two copies
-  drift. The issue body holds the task list and the state.
+  drift. The issue body holds the task list and the state. This is the one place a copy is
+  wrong: a milestone summarizes, and an issue points.
 - **Create issues for the milestone in progress and the next one.** A detailed ticket for
   M9 written today will be wrong by the time it starts.
 - Labels are `area: build`, `area: gfx`, `area: render`, `area: core`, `area: assets`, and
