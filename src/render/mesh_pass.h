@@ -239,6 +239,10 @@ namespace engine::render {
         /// Frees the per-frame sets, which belong to a pipeline layout.
         void destroy_frame_sets();
 
+        /// Resolves the cubemap the world names, and rebuilds the frame sets
+        /// when it is not the one they already bind.
+        void update_environment(const scene::World& world, const assets::Content& content);
+
         gfx::Device* device_ = nullptr;
         /**
          * @brief Every compiled form, opaque and blended.
@@ -270,6 +274,17 @@ namespace engine::render {
          * once more.
          */
         bool lights_overflowed_ = false;
+        /**
+         * @brief True while the world holds more than one Environment component.
+         *
+         * The first one wins. draw() warns when this turns on and stays quiet
+         * after that, the same way it treats a light overflow.
+         */
+        bool environments_overflowed_ = false;
+        /// @brief The cubemap the frame sets bind. Null until the first draw().
+        gfx::TextureHandle environment_;
+        /// @brief Which cubemap ::environment_ came from, so a change is visible.
+        Guid environment_guid_;
         MeshCache meshes_;
         TextureCache textures_;
         MaterialCache materials_;

@@ -133,7 +133,15 @@ blended submesh, sorts it back to front, and draws it after the opaque ones.
 is two tinted panes, because nothing else in the sandbox is transparent and the path would
 otherwise ship untested.
 
-The environment is still two colors until M5.4 cooks one, so a metal reads dark on purpose.
+M5.4a replaced those two colors. The cooker turns an equirectangular `.hdr` into a cubemap,
+`scene::Environment` names it by GUID, and `MeshPass` binds it at set 0 beside the frame block.
+`mesh.frag` reads it twice, once along the normal at the smallest mip and once along the
+reflection at a mip roughness chooses. That is not IBL, and issue #109 replaces the two samples
+with the split sum form.
+
+A `sampler2D` and a `samplerCube` need separate fallbacks, so `TextureCache` holds six grey
+texels beside its white one and refuses a file whose face count does not match the binding.
+Binding the wrong shape is undefined rather than an error, and the check is what keeps it out.
 
 The cooker half of the permutation work landed. A `.meta` sidecar carries a `shader` block with
 a list of variants, and each names its defines. The shader rule numbers its parts the way the

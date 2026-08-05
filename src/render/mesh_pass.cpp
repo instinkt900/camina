@@ -121,6 +121,23 @@ namespace engine::render {
             return !room;
         }
 
+        /// Finds the cubemap the world names.
+        /// @return The GUID, and a null one when no entity carries the component.
+        /// @param out_extra True when more than one entity carried it.
+        Guid find_environment(const scene::World& world, bool& out_extra) {
+            Guid found;
+            std::size_t count = 0;
+            for (const auto [entity, environment] :
+                 world.registry().view<const scene::Environment>().each()) {
+                if (count == 0) {
+                    found = environment.cubemap;
+                }
+                ++count;
+            }
+            out_extra = count > 1;
+            return found;
+        }
+
         /// Which descriptor set the frame block binds to. The material is set 1.
         constexpr std::uint32_t kFrameSet = 0;
 
@@ -340,6 +357,12 @@ namespace engine::render {
             return false;
         }
 
+        // The frame sets below need a cubemap to write, and no world has been
+        // seen yet. Starting on the fallback also means a scene that names no
+        // environment matches on the first update_environment() and rebuilds
+        // nothing.
+        environment_ = textures_.fallback_cube();
+
         if (!build_pipelines(content, pipelines_)) {
             return false;
         }
@@ -365,11 +388,19 @@ namespace engine::render {
                 return false;
             }
 
-            const std::array<gfx::DescriptorWrite, 1> writes{ {
+            // The environment is written into the set rather than bound beside
+            // it, because a descriptor set is filled once and a cubemap changes
+            // only when the scene names another one. update_environment() calls
+            // this again when that happens.
+            const std::array<gfx::DescriptorWrite, 2> writes{ {
                 { .binding = 0,
                   .kind = gfx::DescriptorKind::UniformBuffer,
                   .texture = {},
                   .buffer = frame_uniforms_[i] },
+                { .binding = 1,
+                  .kind = gfx::DescriptorKind::CombinedImageSampler,
+                  .texture = environment_.valid() ? environment_ : textures_.fallback_cube(),
+                  .buffer = {} },
             } };
             if (!gfx::succeeded(gfx::create_descriptor_set(device_, layout_pipeline(), kFrameSet,
                                                            writes.data(), writes.size(),
@@ -385,6 +416,54 @@ namespace engine::render {
         for (gfx::DescriptorSetHandle& set : frame_sets_) {
             gfx::destroy_descriptor_set(device_, set);
             set = gfx::DescriptorSetHandle{};
+        }
+    }
+
+    /**
+     * Resolves the cubemap the world names and rebuilds the frame sets for it.
+     *
+     * A descriptor set is written when it is built, so a new cubemap needs new
+     * sets. That is why this compares against what the sets already bind and
+     * does nothing on almost every frame. It runs when a scene loads, when a
+     * person names another environment, and when the cooked file changes.
+     *
+     * The wait is the same one reload() takes, and for the same reason: a frame
+     * the GPU has not finished may still read a set about to be freed. It costs
+     * a stall nobody can see, because it follows a person saving a file or a
+     * scene appearing.
+     */
+    void MeshPass::update_environment(const scene::World& world,
+                                      const assets::Content& content) {
+        bool extra = false;
+        const Guid wanted = find_environment(world, extra);
+        if (extra && !environments_overflowed_) {
+            ENGINE_LOG_WARN("The scene holds more than one Environment component, and the "
+                            "first one wins. One frame binds one cubemap.");
+        }
+        environments_overflowed_ = extra;
+
+        if (wanted == environment_guid_ && environment_.valid()) {
+            return;
+        }
+
+        // A GUID that will not load gives the grey fallback, which is a valid
+        // cubemap. So this always ends with something to bind, and the cache
+        // has already said by name what went wrong.
+        const gfx::TextureHandle resolved = textures_.get_cube(device_, content, wanted);
+
+        // Recorded before the early exit below, so a GUID that failed is asked
+        // for once rather than on every frame.
+        environment_guid_ = wanted;
+        if (resolved == environment_) {
+            return;
+        }
+        environment_ = resolved;
+
+        gfx::device_wait_idle(device_);
+        destroy_frame_sets();
+        if (!build_frame_sets()) {
+            ENGINE_LOG_ERROR("The frame sets did not rebuild for the environment, so nothing "
+                             "will draw.");
         }
     }
 
@@ -608,6 +687,10 @@ namespace engine::render {
             buffer = gfx::BufferHandle{};
         }
         textures_.destroy(device_);
+        // The fallback cubemap just went with the cache, so the handle beside
+        // it is stale. A second destroy() must not hand it to the device.
+        environment_ = gfx::TextureHandle{};
+        environment_guid_ = Guid{};
         meshes_.destroy(device_);
         destroy_pipelines(pipelines_);
         device_ = nullptr;
@@ -634,6 +717,13 @@ namespace engine::render {
             meshes_.drop(device_, guid);
             textures_.drop(device_, guid);
             materials_.drop(device_, guid);
+
+            // The frame sets still write the cubemap that just went. Forgetting
+            // the handle makes the next draw resolve it again and rebuild them,
+            // which is what a person saving an environment expects to see.
+            if (guid == environment_guid_) {
+                environment_ = gfx::TextureHandle{};
+            }
         }
     }
 
@@ -642,7 +732,18 @@ namespace engine::render {
                         const Vec3& camera_position) {
         draw_count_ = 0;
         pipeline_switches_ = 0;
-        if (!layout_pipeline().valid() || !frame_sets_[frame_slot_].valid()) {
+        if (!layout_pipeline().valid()) {
+            return;
+        }
+
+        // Before anything is recorded, because this may rebuild the frame sets
+        // and it waits for the device to go idle when it does. Nothing of this
+        // frame has been written into the command list yet, and a command list
+        // that is being recorded has not been submitted, so the wait cannot
+        // deadlock on it.
+        update_environment(world, content);
+
+        if (!frame_sets_[frame_slot_].valid()) {
             return;
         }
 

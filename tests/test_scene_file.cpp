@@ -89,18 +89,19 @@ namespace {
         check(registry.size() == 0, "a new component registry is empty");
 
         sc::register_builtin_components(registry);
-        check(registry.size() == 5,
-              "the engine registers Transform, Name, MeshRenderer, and the two lights");
+        check(registry.size() == 6,
+              "the engine registers Transform, Name, MeshRenderer, the two lights, and "
+              "Environment");
         check(registry.find("Transform") != nullptr, "Transform is findable by name");
         check(registry.find("WorldTransform") == nullptr,
               "a derived component stays out of the file");
         check(registry.find("Hierarchy") == nullptr, "the parent link is not a component in the file");
 
         sc::register_builtin_components(registry);
-        check(registry.size() == 5, "registering twice does nothing");
+        check(registry.size() == 6, "registering twice does nothing");
 
         registry.add<Health>();
-        check(registry.size() == 6, "a game component joins the same registry");
+        check(registry.size() == 7, "a game component joins the same registry");
         check(registry.find("Nothing") == nullptr, "an unknown name finds nothing");
 
         // Registering a type has to wire every operation, not only the two the
@@ -181,6 +182,38 @@ namespace {
         const engine::Mat4 actual =
             loaded.world_matrix(loaded.registry().get<sc::Hierarchy>(loaded_root).first_child);
         check(expected == actual, "a child ends up at the same place after a round trip");
+    }
+
+    /**
+     * An Environment names its cubemap by GUID, and that GUID has to survive a
+     * round trip through the file.
+     *
+     * A component the registry never heard of loads as a warning and not as an
+     * error, so a missing registration would leave the scene opening cleanly
+     * with no environment in it. The picture would then fall back to grey and
+     * nothing would say why.
+     */
+    void test_environment_round_trip() {
+        const sc::ComponentRegistry registry = make_registry();
+        engine::Guid cubemap;
+        check(engine::Guid::parse("89a25488-04ab-401d-8fd5-3b7c78c13336", cubemap),
+              "the test GUID parses");
+
+        sc::World original;
+        const entt::entity entity = original.create();
+        original.registry().emplace<sc::Name>(entity, sc::Name{ .value = "environment" });
+        original.registry().emplace<sc::Environment>(entity, sc::Environment{ .cubemap = cubemap });
+
+        sc::World loaded;
+        check(sc::load_scene(sc::save_scene(original, registry), loaded, registry),
+              "a scene with an environment loads");
+
+        std::size_t found = 0;
+        for (const auto [at, environment] : loaded.registry().view<const sc::Environment>().each()) {
+            ++found;
+            check(environment.cubemap == cubemap, "the cubemap GUID came back unchanged");
+        }
+        check(found == 1, "the environment component survived the round trip");
     }
 
     void test_dirty_after_load() {
@@ -309,6 +342,7 @@ int main() {
     test_round_trip();
     test_hierarchy_survives();
     test_transforms_match();
+    test_environment_round_trip();
     test_dirty_after_load();
     std::printf("tolerance\n");
     test_unknown_component_is_a_warning();

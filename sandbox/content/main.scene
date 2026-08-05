@@ -229,6 +229,17 @@
           "range": 8.0
         }
       }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "environment"
+        },
+        "Environment": {
+          "cubemap": "89a25488-04ab-401d-8fd5-3b7c78c13336"
+        }
+      }
     }
   ]
 }
