@@ -29,6 +29,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -121,28 +122,42 @@ namespace {
     /**
      * Reads a `<width>x<height>` pair.
      *
-     * @return True when both numbers parsed and neither was zero. A partly
-     * parsed value is refused rather than half applied, because a run that
-     * silently used one axis would produce an image nobody asked for.
+     * `std::from_chars` rather than `strtoul`, because strtoul accepts a leading
+     * sign and negates it. `-1` then arrives as the largest unsigned value, and
+     * a check for zero does not catch it. This form parses straight into the
+     * unsigned type, so a sign and an out of range value are both refused.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the size. Untouched unless the whole pair parsed.
+     * @return True when both numbers parsed, nothing was left over, and neither
+     * was zero. A partly parsed value is refused rather than half applied,
+     * because a run that silently used one axis would produce an image nobody
+     * asked for.
      */
     [[nodiscard]] bool parse_resolution(std::string_view text, engine::gfx::Extent2D& out) {
         const std::size_t cross = text.find('x');
-        if (cross == std::string_view::npos || cross == 0 || cross + 1 >= text.size()) {
+        if (cross == std::string_view::npos) {
             return false;
         }
-        const std::string width{ text.substr(0, cross) };
-        const std::string height{ text.substr(cross + 1) };
-        char* end = nullptr;
-        const unsigned long parsed_width = std::strtoul(width.c_str(), &end, kDecimalBase);
-        if (end == nullptr || *end != '\0') {
+
+        const auto read = [](std::string_view part, std::uint32_t& value) {
+            if (part.empty()) {
+                return false;
+            }
+            const char* first = part.data();
+            const char* last = part.data() + part.size();
+            const std::from_chars_result parsed = std::from_chars(first, last, value);
+            // ptr must reach the end, or there was trailing text such as "720p".
+            return parsed.ec == std::errc{} && parsed.ptr == last && value != 0;
+        };
+
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        if (!read(text.substr(0, cross), width) || !read(text.substr(cross + 1), height)) {
             return false;
         }
-        const unsigned long parsed_height = std::strtoul(height.c_str(), &end, kDecimalBase);
-        if (end == nullptr || *end != '\0' || parsed_width == 0 || parsed_height == 0) {
-            return false;
-        }
-        out = engine::gfx::Extent2D{ static_cast<std::uint32_t>(parsed_width),
-                                     static_cast<std::uint32_t>(parsed_height) };
+
+        out = engine::gfx::Extent2D{ width, height };
         return true;
     }
 

@@ -191,10 +191,43 @@ namespace engine::gfx {
                 return Result::ErrorInit;
             }
 
-            // The same format a swapchain would have picked. That format is what
-            // converts linear to sRGB on write, so a different one here would
-            // silently change every color. See DESIGN.md section 3.
-            device.swapchain_format = VK_FORMAT_B8G8R8A8_SRGB;
+            // An sRGB format, because that is what converts linear to sRGB on
+            // write and a different one would silently change every color. See
+            // DESIGN.md section 3.
+            //
+            // Which sRGB format is asked rather than assumed. A surface decides
+            // it for the windowed path, and there is no surface here, so this
+            // takes the first that can be a color attachment and a copy source.
+            // BGRA first because that is what a surface usually reports, which
+            // keeps the two paths on the same format where it is possible.
+            device.swapchain_format = VK_FORMAT_UNDEFINED;
+            constexpr VkFormatFeatureFlags kNeeded =
+                VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+            for (const VkFormat candidate :
+                 { VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB }) {
+                VkFormatProperties properties{};
+                vkGetPhysicalDeviceFormatProperties(device.physical, candidate, &properties);
+                if ((properties.optimalTilingFeatures & kNeeded) == kNeeded) {
+                    device.swapchain_format = candidate;
+                    break;
+                }
+            }
+            if (device.swapchain_format == VK_FORMAT_UNDEFINED) {
+                ENGINE_LOG_CRITICAL("This GPU can render into no 8-bit sRGB format, so an "
+                                    "offscreen image would not carry the right colors.");
+                return Result::ErrorInit;
+            }
+
+            // One clear message beats the wall of validation errors that an
+            // absurd size produces, and a size comes from the command line.
+            const std::uint32_t largest = device.properties.limits.maxImageDimension2D;
+            if (size.width > largest || size.height > largest) {
+                ENGINE_LOG_CRITICAL("This GPU renders at most {} texels on an axis, and {}x{} "
+                                    "was asked for.",
+                                    largest, size.width, size.height);
+                return Result::ErrorInit;
+            }
+
             device.swapchain_extent = VkExtent2D{ size.width, size.height };
 
             device.images.resize(kFramesInFlight, VK_NULL_HANDLE);
