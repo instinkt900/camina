@@ -31,6 +31,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -1981,6 +1982,12 @@ void main() { out_color = push.model[0]; }
         check(engine::assets::read_irradiance(
                   std::as_bytes(std::span(bytes.data(), bytes.size())), sh, "flat"),
               "and the runtime reader accepts it");
+        // An unread file leaves every coefficient at zero, which would fail the
+        // first check below and quietly pass the eight that follow it.
+        if (bytes.empty()) {
+            test::remove_tree(source.parent_path());
+            return;
+        }
 
         constexpr float kPi = 3.14159265F;
         const float wanted = kPi * kRadiance;
@@ -2115,6 +2122,10 @@ void main() { out_color = push.model[0]; }
         check(engine::assets::read_irradiance(
                   std::as_bytes(std::span(bytes.data(), bytes.size())), sh, "bands"),
               "the irradiance reads back");
+        if (bytes.empty()) {
+            test::remove_tree(source.parent_path());
+            return;
+        }
 
         constexpr float kPi = 3.14159265358979F;
         const float d_theta = kPi / static_cast<float>(kHeight);
@@ -2201,10 +2212,19 @@ void main() { out_color = push.model[0]; }
 
         // Every texel of every face and every level, because a roughness that
         // went wrong shows up on one level and not on the others.
-        float lowest = kRadiance;
-        float highest = kRadiance;
+        //
+        // The bounds start past either end rather than at the value under test.
+        // Seeding them with it would let a payload of nothing pass both checks
+        // below, which is the failure a cook that wrote no cubemap gives.
+        float lowest = std::numeric_limits<float>::max();
+        float highest = std::numeric_limits<float>::lowest();
         const auto* texels = reinterpret_cast<const std::uint16_t*>(view.payload.data());
         const std::size_t count = view.payload.size() / sizeof(std::uint16_t);
+        check(count > 0, "the cubemap holds texels to look at");
+        if (count == 0) {
+            test::remove_tree(source.parent_path());
+            return;
+        }
         for (std::size_t i = 0; i < count; ++i) {
             // Channel 3 is alpha, which the source carries as 1 and the filter
             // averages the same way. Only the colour channels are asserted.
@@ -2252,7 +2272,15 @@ void main() { out_color = push.model[0]; }
         const engine::assets::ManifestEntry* entry =
             engine::assets::find_by_source(manifest, "sky.hdr");
         check(entry != nullptr, "the panorama has an entry");
+        if (entry == nullptr) {
+            test::remove_tree(source.parent_path());
+            return;
+        }
         check(entry->outputs.size() == 2, "and it wrote two parts");
+        if (entry->outputs.size() != 2) {
+            test::remove_tree(source.parent_path());
+            return;
+        }
 
         engine::Guid parent;
         check(engine::Guid::parse("5d8e3a11-90bb-4c27-8e14-7a2f6b0d4e55", parent),
