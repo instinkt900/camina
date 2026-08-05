@@ -2,11 +2,11 @@
 
 #include "assets/texture.h"
 #include "core/log.h"
+#include "to_half.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <fstream>
 #include <limits>
 #include <numbers>
@@ -29,56 +29,6 @@ namespace cooker {
                 out.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
             }
             return out;
-        }
-
-        /// Where each part of a 32-bit float sits, and what a half float holds.
-        constexpr std::uint32_t kFloatMantissaBits = 23;
-        constexpr std::uint32_t kFloatExponentMask = 0xFFU;
-        constexpr std::uint32_t kFloatMantissaMask = 0x7FFFFFU;
-        constexpr std::uint32_t kFloatImplicitOne = 0x800000U;
-        constexpr std::int32_t kFloatExponentBias = 127;
-        constexpr std::uint32_t kHalfMantissaBits = 10;
-        constexpr std::int32_t kHalfExponentBias = 15;
-        constexpr std::int32_t kHalfExponentMax = 0x1F;
-        constexpr std::uint32_t kHalfSignShift = 16;
-        constexpr std::uint32_t kHalfSignMask = 0x8000U;
-        constexpr std::uint32_t kHalfLargestFinite = 0x7BFFU;
-        constexpr std::int32_t kHalfDenormalFloor = -10;
-
-        /**
-         * Turns a float into a 16-bit half float.
-         *
-         * The same three cases the environment rule handles: a value too large,
-         * which clamps rather than becoming infinity, a value too small, which
-         * flushes to zero, and a denormal, which needs the mantissa shifted by
-         * hand. Issue #114 holds the duplication this leaves.
-         */
-        [[nodiscard]] std::uint16_t to_half(float value) {
-            std::uint32_t bits = 0;
-            std::memcpy(&bits, &value, sizeof(bits));
-
-            const std::uint32_t sign = (bits >> kHalfSignShift) & kHalfSignMask;
-            const std::int32_t exponent =
-                static_cast<std::int32_t>((bits >> kFloatMantissaBits) & kFloatExponentMask) -
-                kFloatExponentBias + kHalfExponentBias;
-            std::uint32_t mantissa = bits & kFloatMantissaMask;
-
-            if (exponent >= kHalfExponentMax) {
-                return static_cast<std::uint16_t>(sign | kHalfLargestFinite);
-            }
-            if (exponent <= 0) {
-                if (exponent < kHalfDenormalFloor) {
-                    return static_cast<std::uint16_t>(sign);
-                }
-                mantissa |= kFloatImplicitOne;
-                const auto shift = static_cast<std::uint32_t>(
-                    static_cast<std::int32_t>(kFloatMantissaBits - kHalfMantissaBits) + 1 -
-                    exponent);
-                return static_cast<std::uint16_t>(sign | (mantissa >> shift));
-            }
-            return static_cast<std::uint16_t>(
-                sign | (static_cast<std::uint32_t>(exponent) << kHalfMantissaBits) |
-                (mantissa >> (kFloatMantissaBits - kHalfMantissaBits)));
         }
 
         /// The radical inverse of an index, which is the second Hammersley axis.
