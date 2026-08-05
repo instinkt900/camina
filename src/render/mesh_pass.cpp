@@ -779,17 +779,6 @@ namespace engine::render {
         destroy_pipelines(pipelines_);
         pipelines_ = rebuilt;
 
-        // The lookup table is in the same tree as the shaders, and the runtime
-        // calls this for any change to it. A person retuning the ray budget in
-        // `ibl.brdf.meta` therefore sees the new table without a restart.
-        //
-        // A table that will not read leaves the white texel behind, which shades
-        // far too bright. That is loud on purpose: resolve_brdf_lut() names the
-        // file, and a wrong picture is easier to notice than a stale one.
-        textures_.drop(device_, brdf_guid_);
-        brdf_lut_ = gfx::TextureHandle{};
-        (void)resolve_brdf_lut(content);
-
         // Every descriptor set was allocated against the layout of the pipeline
         // that just went. A rebuilt shader may declare a different set, and a
         // set that no longer matches its layout is undefined to bind. So they
@@ -802,6 +791,43 @@ namespace engine::render {
         }
 
         ENGINE_LOG_INFO("The mesh shaders were built again.");
+        return true;
+    }
+
+    bool MeshPass::reload_brdf_lut(const assets::Content& content) {
+        if (device_ == nullptr) {
+            return false;
+        }
+
+        // Save the old table before trying the new one. A resolve that fails
+        // must leave the active table in place, and the old texture must not
+        // be freed while a submitted frame may still be reading it.
+        const Guid old_guid = brdf_guid_;
+        const gfx::TextureHandle old_lut = brdf_lut_;
+
+        if (!resolve_brdf_lut(content)) {
+            // Restore what the frame sets already bind.
+            brdf_guid_ = old_guid;
+            brdf_lut_ = old_lut;
+            ENGINE_LOG_WARN("The split sum table would not reload, so the pass keeps the one "
+                            "it has. Fix {} and save again.",
+                            kBrdfSource);
+            return false;
+        }
+
+        // The new table is ready. Now it is safe to wait for the GPU and
+        // retire the old one. The frame sets bake the BRDF handle at creation
+        // time, so they go with it.
+        gfx::device_wait_idle(device_);
+        textures_.drop(device_, old_guid);
+        destroy_frame_sets();
+        if (!build_frame_sets()) {
+            ENGINE_LOG_ERROR("The frame sets did not rebuild for the table, so nothing "
+                             "will draw.");
+            return false;
+        }
+
+        ENGINE_LOG_INFO("The split sum table was read again.");
         return true;
     }
 

@@ -828,12 +828,42 @@ namespace {
                           engine::scene::World& world) {
         std::vector<engine::assets::AssetChange> changed;
 
-        // The engine tree holds the two shaders and the split sum lookup table,
-        // and MeshPass::reload_shaders rebuilds for either. A change to one of
-        // them therefore also rebuilds for the other, which costs a stall and
-        // nothing else, because both follow a person saving a file.
+        // The engine tree holds the two shaders and the split sum lookup table.
+        // They share a tree but not a reload path. Editing a shader rebuilds
+        // only the pipelines, and editing ibl.brdf.meta reloads only the table.
+        //
+        // The GUID is captured before poll(), because poll() updates the
+        // manifest. A BRDF that was removed would then look the same as a file
+        // that was never there, and its gone-guid would drive a pipeline rebuild
+        // rather than a table reload.
+        const engine::assets::ManifestEntry* previous_brdf =
+            runtime.engine_content.find("ibl.brdf");
+        const engine::Guid previous_brdf_guid =
+            previous_brdf != nullptr ? previous_brdf->guid : engine::Guid{};
+
         if (runtime.engine_reload.poll(runtime.engine_content, changed)) {
-            (void)runtime.mesh.reload_shaders(runtime.engine_content);
+            bool had_shader = false;
+            bool had_brdf = false;
+            const engine::assets::ManifestEntry* current_brdf =
+                runtime.engine_content.find("ibl.brdf");
+            const engine::Guid current_brdf_guid =
+                current_brdf != nullptr ? current_brdf->guid : engine::Guid{};
+
+            for (const engine::assets::AssetChange& change : changed) {
+                if ((previous_brdf_guid.valid() && change.guid == previous_brdf_guid) ||
+                    (current_brdf_guid.valid() && change.guid == current_brdf_guid)) {
+                    had_brdf = true;
+                } else {
+                    had_shader = true;
+                }
+            }
+
+            if (had_shader) {
+                (void)runtime.mesh.reload_shaders(runtime.engine_content);
+            }
+            if (had_brdf) {
+                (void)runtime.mesh.reload_brdf_lut(runtime.engine_content);
+            }
         }
 
         if (!runtime.reload.poll(runtime.game_content, changed)) {
