@@ -84,9 +84,10 @@ On Windows the binary is `build\RelWithDebInfo\apps\runtime\runtime.exe`.
 Press Escape or close the window to quit. Pass `--frames N` to exit after N frames, which is
 what a scripted run and a screenshot use.
 
-CI does not run the runtime. It builds both platforms and runs the tests, so nothing a frame
-does is checked there. The renderer needs a window, and a window needs a desktop. Issue #139
-holds the headless mode that would let CI draw.
+CI does not run the runtime, and it is not meant to. It builds both platforms and runs the
+tests. A CI runner has no GPU, so drawing there would mean a software rasterizer whose pixels
+are not those of any real driver, which would buy a smoke test at the cost of a second set of
+expectations to keep. Checking what a frame draws is done on a real GPU, offscreen.
 
 ## Render without a window
 
