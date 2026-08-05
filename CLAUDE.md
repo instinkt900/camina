@@ -311,6 +311,12 @@ failure would have been.
 
 Then push once and start the monitor again.
 
+**Stop the old monitor before you start the new one.** A push begins a fresh run, and a
+monitor still watching the previous one keeps reporting against a run that no longer
+matters. Two monitors on one pull request send overlapping events for different runs, and
+the older one can announce a result for work you have already replaced. Use `TaskStop` with
+the task id the monitor reported when it started.
+
 ## Issue tracker
 
 `DESIGN.md` §10 defines the milestones. The GitHub tracker holds the state.
