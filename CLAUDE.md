@@ -198,6 +198,20 @@ Such a transition now waits on the stage the new state uses. A 300-frame run rep
 The screenshot path still does, and issue #124 holds it. `capture_frame` waits for the device,
 and presentation is not device work.
 
+The sandbox is an interior now. `sandbox/content/models/room/` is five coloured walls, generated
+the way the spheres are, and everything else stands inside it. Open space could not test a
+shadow, because nothing occluded anything, and it could not justify several lights either.
+
+Two real scenes were measured and rejected. Khronos Sponza is `LicenseRef-CRYENGINE-Agreement`
+and not the CC-BY it is widely assumed to be. Intel Sponza is CC BY 4.0 and its geometry is a
+133 MiB `.bin`, which GitHub refuses. Issue #130 holds the large scene, fetched from outside
+git.
+
+The room colours are the usual Cornell values scaled to about a third, and that is measured
+rather than chosen. At full values 40 percent of the viewport clipped to white with **every
+light switched off**, because the image based ambient alone is enough. Nothing controls exposure
+until the tonemap in #88, and an interior is what made that impossible to miss.
+
 The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
 `mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left
 the table reaching eight at a grazing angle, and only the energy test caught it: the mirror test
