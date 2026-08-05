@@ -6,6 +6,7 @@
 add_library(cooker_lib STATIC
     cook.cpp
     document.cpp
+    brdf.cpp
     environment.cpp
     material.cpp
     mesh.cpp
