@@ -226,9 +226,10 @@ namespace cooker {
                     return cook_texture(source, to, meta.texture);
                 });
             case Rule::Environment:
-                return single([&](const std::filesystem::path& to) {
-                    return cook_environment(source, to, meta.environment);
-                });
+                // Two outputs, so it cannot use single(). The cubemap keeps the
+                // source identity and the irradiance derives one beside it.
+                return cook_environment(source, options.out, relative, meta.guid,
+                                        meta.environment, outputs);
             case Rule::Mesh:
                 return cook_gltf(source, options.out, relative, meta.guid, outputs);
             case Rule::Document:

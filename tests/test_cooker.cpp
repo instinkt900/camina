@@ -12,6 +12,7 @@
 
 #include "assets/content.h"
 #include "assets/hot_reload.h"
+#include "assets/irradiance.h"
 #include "assets/manifest.h"
 #include "assets/meta.h"
 #include "assets/reference.h"
@@ -25,7 +26,9 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <span>
@@ -1907,6 +1910,384 @@ void main() { out_color = push.model[0]; }
     }
 
 
+    /// A Radiance file of one repeated colour, at a size the SH sum can integrate.
+    [[nodiscard]] std::string constant_panorama(int width, int height, unsigned char mantissa,
+                                                unsigned char exponent) {
+        std::string hdr = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(height) +
+                          " +X " + std::to_string(width) + "\n";
+        for (int i = 0; i < width * height; ++i) {
+            hdr.push_back(static_cast<char>(mantissa));
+            hdr.push_back(static_cast<char>(mantissa));
+            hdr.push_back(static_cast<char>(mantissa));
+            hdr.push_back(static_cast<char>(exponent));
+        }
+        return hdr;
+    }
+
+    /// Turns a stored half float back into a float, for reading a cooked payload.
+    [[nodiscard]] float from_half(std::uint16_t bits) {
+        const std::uint32_t sign = static_cast<std::uint32_t>(bits & 0x8000U) << 16U;
+        const std::uint32_t exponent = (bits >> 10U) & 0x1FU;
+        const std::uint32_t mantissa = bits & 0x3FFU;
+
+        std::uint32_t out = 0;
+        if (exponent == 0) {
+            // Zero or a denormal. A denormal half is far below anything this
+            // test asserts on, so treating it as zero is enough here.
+            out = sign;
+        } else {
+            out = sign | ((exponent + 112U) << 23U) | (mantissa << 13U);
+        }
+        float value = 0.0F;
+        std::memcpy(&value, &out, sizeof(value));
+        return value;
+    }
+
+    /**
+     * A constant environment gives irradiance of pi times its radiance.
+     *
+     * This is the one number the whole projection can be checked against. A
+     * Lambertian surface under uniform radiance L receives exactly pi times L,
+     * whichever way it faces. So a wrong band constant, a wrong basis constant,
+     * or a missing solid angle weight all move this away from pi, and nothing
+     * else in the pipeline would report any of them.
+     *
+     * The direction sweep matters as much as the value. Every coefficient above
+     * the first must vanish for a constant source, and a sign error in one of
+     * them would leave the average right and make the answer lean.
+     */
+    void test_a_constant_environment_integrates_to_pi() {
+        const std::filesystem::path source = scratch("shconst/src");
+        const std::filesystem::path out = scratch("shconst/out");
+
+        // 128 by 64, because the projection is a Riemann sum and a coarse one
+        // does not converge. Mantissa 128 with exponent 128 is 0.5 in RGBE.
+        constexpr float kRadiance = 0.5F;
+        write_file(source / "flat.hdr", constant_panorama(128, 64, 128, 128));
+        write_file(source / "flat.hdr.meta", R"({
+  "__version": 4,
+  "guid": "3f1c9d20-77aa-4b18-91cc-5e0d2a6b7f31",
+  "environment": { "__version": 1, "face_size": 8, "specular_samples": 16 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a constant environment cooks");
+
+        const std::string bytes = read_file(out / "flat.hdr.irr");
+        check(!bytes.empty(), "the irradiance was written");
+
+        engine::assets::IrradianceSH sh;
+        check(engine::assets::read_irradiance(
+                  std::as_bytes(std::span(bytes.data(), bytes.size())), sh, "flat"),
+              "and the runtime reader accepts it");
+
+        constexpr float kPi = 3.14159265F;
+        const float wanted = kPi * kRadiance;
+
+        // One percent, which is the discretization of the sum above rather than
+        // anything the format loses.
+        const float tolerance = wanted * 0.01F;
+        check(std::abs(sh.c[0][0] - wanted) < tolerance,
+              "the first coefficient is pi times the radiance");
+
+        for (std::size_t i = 1; i < engine::assets::kIrradianceCoefficients; ++i) {
+            check(std::abs(sh.c[i][0]) < tolerance,
+                  "every coefficient above the first vanishes for a constant sky");
+        }
+
+        // The sum a shader writes, evaluated by hand in several directions. See
+        // assets/irradiance.h, which this must agree with exactly.
+        const std::array<std::array<float, 3>, 6> directions{ {
+            { 1.0F, 0.0F, 0.0F },
+            { -1.0F, 0.0F, 0.0F },
+            { 0.0F, 1.0F, 0.0F },
+            { 0.0F, -1.0F, 0.0F },
+            { 0.0F, 0.0F, 1.0F },
+            { 0.0F, 0.0F, -1.0F },
+        } };
+        for (const auto& n : directions) {
+            const float evaluated =
+                sh.c[0][0] + (sh.c[1][0] * n[1]) + (sh.c[2][0] * n[2]) + (sh.c[3][0] * n[0]) +
+                (sh.c[4][0] * n[0] * n[1]) + (sh.c[5][0] * n[1] * n[2]) +
+                (sh.c[6][0] * ((3.0F * n[2] * n[2]) - 1.0F)) + (sh.c[7][0] * n[0] * n[2]) +
+                (sh.c[8][0] * ((n[0] * n[0]) - (n[1] * n[1])));
+            check(std::abs(evaluated - wanted) < tolerance,
+                  "and the basis gives pi times the radiance whichever way a normal points");
+        }
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /// Encodes one linear colour as a Radiance RGBE quadruple.
+    void push_rgbe(std::string& out, float r, float g, float b) {
+        const float largest = std::max({ r, g, b });
+        if (largest < 1e-32F) {
+            out.append(4, '\0');
+            return;
+        }
+        int exponent = 0;
+        const float fraction = std::frexp(largest, &exponent);
+        const float scale = fraction * 256.0F / largest;
+        const auto byte = [scale](float value) {
+            return static_cast<char>(
+                static_cast<unsigned char>(std::clamp(value * scale, 0.0F, 255.0F)));
+        };
+        out.push_back(byte(r));
+        out.push_back(byte(g));
+        out.push_back(byte(b));
+        out.push_back(static_cast<char>(static_cast<unsigned char>(exponent + 128)));
+    }
+
+    /**
+     * A radiance field built only from the nine polynomials the format carries.
+     *
+     * Band limiting it to the second order is what makes the test exact. The
+     * projection throws nothing away, so a brute force integral and the nine
+     * coefficients have to agree, and any disagreement is an error rather than
+     * the truncation every real environment suffers.
+     *
+     * The constant term is large enough to keep the whole field positive.
+     */
+    [[nodiscard]] float band_limited_radiance(float x, float y, float z) {
+        return 0.9F + (0.25F * y) + (0.15F * x) + (0.10F * ((3.0F * z * z) - 1.0F)) +
+               (0.08F * x * y);
+    }
+
+    /// The direction one panorama texel points, matching the cooker's mapping.
+    void panorama_direction(std::size_t px, std::size_t py, int width, int height, float& x,
+                            float& y, float& z) {
+        constexpr float kPi = 3.14159265358979F;
+        const float theta =
+            (static_cast<float>(py) + 0.5F) / static_cast<float>(height) * kPi;
+        const float angle =
+            (((static_cast<float>(px) + 0.5F) / static_cast<float>(width)) - 0.5F) * 2.0F * kPi;
+        x = std::sin(angle) * std::sin(theta);
+        y = std::cos(theta);
+        z = -std::cos(angle) * std::sin(theta);
+    }
+
+    /**
+     * Every band of the irradiance projection, against an independent integral.
+     *
+     * The constant sky above pins the first coefficient and nothing else, because
+     * a uniform source has no first or second band to get wrong. Deliberately
+     * corrupting the band one constant leaves that test passing, so on its own it
+     * would let two thirds of the maths through untested.
+     *
+     * This drives a source that carries all three bands, and checks the nine
+     * coefficients against a direct cosine weighted sum over the same texels. The
+     * source is band limited, so the two are the same number rather than an
+     * approximation of one another.
+     */
+    void test_the_irradiance_matches_a_direct_integral() {
+        const std::filesystem::path source = scratch("shbands/src");
+        const std::filesystem::path out = scratch("shbands/out");
+
+        constexpr int kWidth = 128;
+        constexpr int kHeight = 64;
+
+        std::string hdr = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " +
+                          std::to_string(kHeight) + " +X " + std::to_string(kWidth) + "\n";
+        for (std::size_t py = 0; py < static_cast<std::size_t>(kHeight); ++py) {
+            for (std::size_t px = 0; px < static_cast<std::size_t>(kWidth); ++px) {
+                float dx = 0.0F;
+                float dy = 0.0F;
+                float dz = 0.0F;
+                panorama_direction(px, py, kWidth, kHeight, dx, dy, dz);
+                const float value = band_limited_radiance(dx, dy, dz);
+                push_rgbe(hdr, value, value, value);
+            }
+        }
+        write_file(source / "bands.hdr", hdr);
+        write_file(source / "bands.hdr.meta", R"({
+  "__version": 4,
+  "guid": "e2b7c451-38df-4a90-b6e2-1c5a9d3f7048",
+  "environment": { "__version": 1, "face_size": 4, "specular_samples": 8 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "a band limited environment cooks");
+
+        const std::string bytes = read_file(out / "bands.hdr.irr");
+        engine::assets::IrradianceSH sh;
+        check(engine::assets::read_irradiance(
+                  std::as_bytes(std::span(bytes.data(), bytes.size())), sh, "bands"),
+              "the irradiance reads back");
+
+        constexpr float kPi = 3.14159265358979F;
+        const float d_theta = kPi / static_cast<float>(kHeight);
+        const float d_phi = 2.0F * kPi / static_cast<float>(kWidth);
+
+        // Directions chosen so that every polynomial contributes to at least
+        // one of them. An axis alone would leave the cross terms at zero.
+        const std::array<std::array<float, 3>, 5> normals{ {
+            { 0.0F, 1.0F, 0.0F },
+            { 1.0F, 0.0F, 0.0F },
+            { 0.0F, 0.0F, 1.0F },
+            { 0.57735F, 0.57735F, 0.57735F },
+            { -0.57735F, 0.57735F, -0.57735F },
+        } };
+
+        for (const auto& n : normals) {
+            // The integral the coefficients stand in for, summed straight.
+            float direct = 0.0F;
+            for (std::size_t py = 0; py < static_cast<std::size_t>(kHeight); ++py) {
+                for (std::size_t px = 0; px < static_cast<std::size_t>(kWidth); ++px) {
+                    float dx = 0.0F;
+                    float dy = 0.0F;
+                    float dz = 0.0F;
+                    panorama_direction(px, py, kWidth, kHeight, dx, dy, dz);
+
+                    const float cosine = (n[0] * dx) + (n[1] * dy) + (n[2] * dz);
+                    if (cosine <= 0.0F) {
+                        continue;
+                    }
+                    const float solid_angle = std::sin(
+                        (static_cast<float>(py) + 0.5F) / static_cast<float>(kHeight) * kPi);
+                    direct += band_limited_radiance(dx, dy, dz) * cosine * solid_angle *
+                              d_theta * d_phi;
+                }
+            }
+
+            // The sum a shader writes. See assets/irradiance.h.
+            const float evaluated =
+                sh.c[0][0] + (sh.c[1][0] * n[1]) + (sh.c[2][0] * n[2]) + (sh.c[3][0] * n[0]) +
+                (sh.c[4][0] * n[0] * n[1]) + (sh.c[5][0] * n[1] * n[2]) +
+                (sh.c[6][0] * ((3.0F * n[2] * n[2]) - 1.0F)) + (sh.c[7][0] * n[0] * n[2]) +
+                (sh.c[8][0] * ((n[0] * n[0]) - (n[1] * n[1])));
+
+            // Three percent covers the eight bit mantissa a Radiance file
+            // stores and the coarseness of both sums. A wrong band constant
+            // moves this by tens of percent.
+            check(std::abs(evaluated - direct) < direct * 0.03F,
+                  "the coefficients rebuild the same irradiance the integral gives");
+        }
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * The prefiltered chain leaves a constant environment constant.
+     *
+     * Blurring something uniform must change nothing, at any roughness. That
+     * catches the errors importance sampling is prone to: a lobe that does not
+     * integrate to one, a weight left out of the divisor, or rays drawn from
+     * the wrong hemisphere. All three would darken or brighten the lower levels
+     * while a picture still looked plausible.
+     */
+    void test_a_constant_environment_survives_the_prefilter() {
+        const std::filesystem::path source = scratch("prefilter/src");
+        const std::filesystem::path out = scratch("prefilter/out");
+
+        constexpr float kRadiance = 0.5F;
+        write_file(source / "flat.hdr", constant_panorama(64, 32, 128, 128));
+        write_file(source / "flat.hdr.meta", R"({
+  "__version": 4,
+  "guid": "9a4b1e77-2c60-4d8f-b3a5-6f1e0c9d8a22",
+  "environment": { "__version": 1, "face_size": 8, "specular_samples": 64 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the environment cooks");
+
+        const std::string bytes = read_file(out / "flat.hdr.tex");
+        engine::assets::TextureView view;
+        check(engine::assets::read_texture(
+                  std::as_bytes(std::span(bytes.data(), bytes.size())), view, "flat"),
+              "the cubemap reads back");
+
+        // Every texel of every face and every level, because a roughness that
+        // went wrong shows up on one level and not on the others.
+        float lowest = kRadiance;
+        float highest = kRadiance;
+        const auto* texels = reinterpret_cast<const std::uint16_t*>(view.payload.data());
+        const std::size_t count = view.payload.size() / sizeof(std::uint16_t);
+        for (std::size_t i = 0; i < count; ++i) {
+            // Channel 3 is alpha, which the source carries as 1 and the filter
+            // averages the same way. Only the colour channels are asserted.
+            if (i % 4 == 3) {
+                continue;
+            }
+            const float value = from_half(texels[i]);
+            lowest = std::min(lowest, value);
+            highest = std::max(highest, value);
+        }
+
+        check(std::abs(lowest - kRadiance) < 0.02F,
+              "no texel of the prefiltered chain fell below the constant");
+        check(std::abs(highest - kRadiance) < 0.02F,
+              "and none rose above it");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * The irradiance is a sub-asset, so it derives its identity.
+     *
+     * A scene names an environment by one GUID. The renderer has to reach the
+     * second part from that alone, so the number the cooker writes and the
+     * number a consumer derives must be the same one.
+     */
+    void test_the_irradiance_derives_its_identity() {
+        const std::filesystem::path source = scratch("shguid/src");
+        const std::filesystem::path out = scratch("shguid/out");
+
+        write_file(source / "sky.hdr", constant_panorama(16, 8, 128, 128));
+        write_file(source / "sky.hdr.meta", R"({
+  "__version": 4,
+  "guid": "5d8e3a11-90bb-4c27-8e14-7a2f6b0d4e55",
+  "environment": { "__version": 1, "face_size": 4, "specular_samples": 8 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the environment cooks");
+
+        engine::assets::Manifest manifest;
+        check(engine::assets::load_manifest(out, manifest), "the manifest reads");
+
+        const engine::assets::ManifestEntry* entry =
+            engine::assets::find_by_source(manifest, "sky.hdr");
+        check(entry != nullptr, "the panorama has an entry");
+        check(entry->outputs.size() == 2, "and it wrote two parts");
+
+        engine::Guid parent;
+        check(engine::Guid::parse("5d8e3a11-90bb-4c27-8e14-7a2f6b0d4e55", parent),
+              "the sidecar GUID parses");
+        check(entry->outputs[0].guid == parent, "the cubemap keeps the source identity");
+
+        const engine::Guid derived =
+            engine::Guid::derive(parent, engine::assets::kIrradiancePartKind, 0);
+        check(entry->outputs[1].guid == derived,
+              "and the irradiance carries the one a consumer derives");
+        check(entry->outputs[1].cooked == "sky.hdr.irr", "under the irradiance extension");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /// A ray budget of nothing would divide by zero on every prefiltered texel.
+    void test_an_empty_ray_budget_is_refused() {
+        const std::filesystem::path source = scratch("norays/src");
+        const std::filesystem::path out = scratch("norays/out");
+
+        write_file(source / "sky.hdr", constant_panorama(16, 8, 128, 128));
+        write_file(source / "sky.hdr.meta", R"({
+  "__version": 4,
+  "guid": "c4a90f38-6b21-4e55-9d07-3e8f1a2b6c77",
+  "environment": { "__version": 1, "face_size": 4, "specular_samples": 0 }
+})");
+
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a ray budget of zero fails the cook");
+        check(result.failed == 1, "and it counts one failure");
+
+        test::remove_tree(source.parent_path());
+    }
+
     /// A face size the payload size field cannot hold is refused at the cook.
     void test_an_oversized_environment_face_is_refused() {
         const std::filesystem::path source = scratch("bigenv/src");
@@ -1953,6 +2334,11 @@ int main() {
     test_the_cooker_reflects_what_a_shader_reads();
     test_a_shader_cooks_once_for_each_variant();
     test_an_hdr_panorama_cooks_to_a_cubemap();
+    test_a_constant_environment_integrates_to_pi();
+    test_the_irradiance_matches_a_direct_integral();
+    test_a_constant_environment_survives_the_prefilter();
+    test_the_irradiance_derives_its_identity();
+    test_an_empty_ray_budget_is_refused();
     test_an_oversized_environment_face_is_refused();
     test_a_variant_list_that_starts_with_defines_is_refused();
     test_a_push_block_that_starts_late_reports_its_real_size();

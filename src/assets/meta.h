@@ -112,6 +112,18 @@ namespace engine::assets {
      */
     inline constexpr std::uint32_t kMaxFaceSize = 4096;
 
+    /// @brief How many rays each prefiltered texel averages when nothing says.
+    inline constexpr std::uint32_t kDefaultSpecularSamples = 128;
+
+    /**
+     * @brief The most rays a sidecar may ask each prefiltered texel to average.
+     *
+     * Cook time grows with this and quality stops improving long before it. The
+     * bound exists so that a typo in a sidecar fails rather than appearing to
+     * hang the build.
+     */
+    inline constexpr std::uint32_t kMaxSpecularSamples = 16384;
+
     /**
      * @brief How the cooker must turn an HDR image into an environment cubemap.
      *
@@ -129,6 +141,17 @@ namespace engine::assets {
          * memory a small scene uses.
          */
         std::uint32_t face_size = kDefaultFaceSize;
+
+        /**
+         * @brief How many rays each texel of the prefiltered chain averages.
+         *
+         * A mip level below the first holds the environment blurred for one
+         * roughness, and the cooker builds it by importance sampling the GGX
+         * lobe. Too few rays leave bright pixels scattered through a rough
+         * reflection, because a small very bright source is either hit or
+         * missed. More rays cost cook time and nothing else.
+         */
+        std::uint32_t specular_samples = kDefaultSpecularSamples;
     };
 
     /**
@@ -253,10 +276,17 @@ struct engine::reflect::Describe<engine::assets::EnvironmentImport> {
     /// @brief The fields, in the order a document holds them.
     /// @return The field descriptors.
     static constexpr auto fields() {
-        return std::make_tuple(ENGINE_FIELD(
-            engine::assets::EnvironmentImport, face_size,
-            engine::reflect::Tooltip{ "The width of one cubemap face, in texels. A face "
-                                      "is square." }));
+        return std::make_tuple(
+            ENGINE_FIELD(engine::assets::EnvironmentImport, face_size,
+                         engine::reflect::Tooltip{ "The width of one cubemap face, in texels. "
+                                                   "A face is square." }),
+            // Version 2, so an environment sidecar written before the
+            // prefiltered chain reads back with no warning about a field it
+            // cannot have.
+            ENGINE_FIELD(engine::assets::EnvironmentImport, specular_samples,
+                         engine::reflect::Version{ 2 },
+                         engine::reflect::Tooltip{ "Rays each prefiltered texel averages. "
+                                                   "More costs cook time and nothing else." }));
     }
 };
 

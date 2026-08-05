@@ -5,6 +5,7 @@ add_library(engine_core STATIC
     core/guid.cpp
     assets/content.cpp
     assets/hot_reload.cpp
+    assets/irradiance.cpp
     assets/manifest.cpp
     assets/material.cpp
     assets/meta.cpp
