@@ -677,6 +677,40 @@ table.
 - Quaternions in `wxyz` order.
 - Linear color working space. Convert sRGB at texture read and at final write only.
 
+## Checking the picture
+
+**Always capture with `--offscreen`. Never open a real window to take a screenshot.**
+
+```bash
+./build/RelWithDebInfo/bin/runtime --offscreen --resolution 1280x720 --frames 120 \
+    --no-watch --screenshot out.png
+```
+
+This is not a preference. A windowed capture is whatever size the window manager decided,
+and that size changes when somebody moves a window or changes a layout while the run is
+going. A capture taken that way once read as a rendering regression when the only thing
+that had changed was the desktop. A windowed run also steals focus and disturbs whoever is
+using the machine.
+
+Two offscreen runs of the same command produce the same image, texel for texel. So a
+comparison between them has **no noise floor to subtract**, and a difference of one pixel
+is a real difference. That is what makes a mutation test worth running:
+
+1. Capture the scene as it is.
+2. Break the one thing that is supposed to matter.
+3. Capture again and compare. Any difference at all is the effect of that thing.
+
+Two rules that follow from how it works:
+
+- **`--resolution` is exact only offscreen.** Windowed it is a request, and a tiling window
+  manager ignores it. A run that has to be reproducible needs `--offscreen` as well.
+- **An offscreen capture has no ImGui overlay**, because the backend needs the window. That
+  makes it the more sensitive image, and it means an offscreen capture and a windowed one
+  cannot be compared against each other. Pick one and stay on it.
+
+Run the windowed path as well before you trust a rendering change, because that is what
+ships. `--sync-validation` belongs on both.
+
 ## Build
 
 Three configurations exist: RelWithDebInfo (development), Debug (crashes), and
