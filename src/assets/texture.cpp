@@ -48,8 +48,9 @@ namespace engine::assets {
             constexpr std::size_t kBytesPerBlock = 16;
             return blocks_across * blocks_down * kBytesPerBlock;
         }
-        constexpr std::size_t kBytesPerTexel = 4;
-        return static_cast<std::size_t>(width) * height * kBytesPerTexel;
+        // Four half floats rather than four bytes.
+        const std::size_t bytes_per_texel = format == TextureFormat::RGBA16F ? 8 : 4;
+        return static_cast<std::size_t>(width) * height * bytes_per_texel;
     }
 
     std::size_t chain_bytes(TextureFormat format, std::uint32_t width, std::uint32_t height,
@@ -88,11 +89,27 @@ namespace engine::assets {
                              where, header.width, header.height, header.mip_count);
             return false;
         }
-        if (header.format > static_cast<std::uint32_t>(TextureFormat::BC7) ||
+        if (header.format > kTextureFormatMax ||
             header.color_space > static_cast<std::uint32_t>(ColorSpace::Linear)) {
             ENGINE_LOG_ERROR("{}: the header names a format or a color space this build does "
                              "not have.",
                              where);
+            return false;
+        }
+        // One face or six. Anything else is not a shape this build can upload,
+        // and a wrong count here would make the payload check pass on a file
+        // that is a different texture entirely.
+        if (header.face_count != 1 && header.face_count != kCubeFaceCount) {
+            ENGINE_LOG_ERROR("{}: a texture holds 1 face or {}, and this one says {}.", where,
+                             kCubeFaceCount, header.face_count);
+            return false;
+        }
+        // A cubemap face is square. The upload works out each level from the
+        // extent, and a rectangular face would give six chains of different
+        // shapes under one header.
+        if (header.face_count == kCubeFaceCount && header.width != header.height) {
+            ENGINE_LOG_ERROR("{}: a cubemap face is square, and this one is {} by {}.", where,
+                             header.width, header.height);
             return false;
         }
         if (header.mip_count > mip_count_for(header.width, header.height)) {
@@ -101,9 +118,23 @@ namespace engine::assets {
             return false;
         }
 
+        // Before the arithmetic below, not after. chain_bytes multiplies the
+        // two extents by the bytes of a texel, and the face count adds three
+        // more bits on top. Extents near the top of a uint32 wrap that product,
+        // and a wrapped `wanted` can come out small enough that a short file
+        // matches it. The check would then pass on a file it exists to refuse.
+        constexpr std::uint32_t kMaxExtent = 65536;
+        if (header.width > kMaxExtent || header.height > kMaxExtent) {
+            ENGINE_LOG_ERROR("{}: {} by {} texels is larger than any device samples.", where,
+                             header.width, header.height);
+            return false;
+        }
+
         const auto format = static_cast<TextureFormat>(header.format);
+        // Every face carries the whole chain, so six faces cost six chains.
         const std::size_t wanted =
-            chain_bytes(format, header.width, header.height, header.mip_count);
+            chain_bytes(format, header.width, header.height, header.mip_count) *
+            header.face_count;
         const std::size_t have = bytes.size() - sizeof(TextureHeader);
 
         // Both directions matter. Too few bytes makes the device read past the
@@ -121,6 +152,7 @@ namespace engine::assets {
         out.width = header.width;
         out.height = header.height;
         out.mip_count = header.mip_count;
+        out.face_count = header.face_count;
         out.payload = bytes.subspan(sizeof(TextureHeader));
         return true;
     }

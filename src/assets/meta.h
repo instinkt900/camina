@@ -98,13 +98,47 @@ namespace engine::assets {
         std::vector<ShaderVariant> variants; ///< One for each module to compile.
     };
 
+    /// @brief The face size an environment sidecar gets when it does not say.
+    inline constexpr std::uint32_t kDefaultFaceSize = 256;
+
+    /**
+     * @brief The largest face an environment sidecar may ask for.
+     *
+     * Six faces of a mip chain at half float cost about 64 times the square of
+     * this, so 4096 is close to 1 GB and 8192 would pass the size a cooked
+     * texture records in a 32-bit field. A cooker that took the larger number
+     * would write a header whose payload size wrapped, and the reader would
+     * then refuse a file that is on disk and correct.
+     */
+    inline constexpr std::uint32_t kMaxFaceSize = 4096;
+
+    /**
+     * @brief How the cooker must turn an HDR image into an environment cubemap.
+     *
+     * There is no color space here, and that is deliberate. An `.hdr` file is
+     * linear by definition, so the guess the texture rule makes from a file name
+     * has nothing to decide. See DESIGN.md section 3.
+     */
+    struct EnvironmentImport {
+        /**
+         * @brief The width of one cubemap face, in texels.
+         *
+         * A face is square, so this is both axes. The whole cubemap costs six
+         * faces and a mip chain, so 512 is already 8 MB at half float. The
+         * default is a size that shows a sky and a sun without dominating the
+         * memory a small scene uses.
+         */
+        std::uint32_t face_size = kDefaultFaceSize;
+    };
+
     /**
      * @brief What the engine keeps about a source asset, next to the file.
      */
     struct AssetMeta {
-        Guid guid;             ///< The identity every reference to this asset stores.
-        TextureImport texture; ///< Read by the texture rule. Ignored by every other rule.
-        ShaderImport shader;   ///< Read by the shader rule. Ignored by every other rule.
+        Guid guid;                     ///< The identity every reference to this asset stores.
+        TextureImport texture;         ///< Read by the texture rule. Ignored by every other rule.
+        ShaderImport shader;           ///< Read by the shader rule. Ignored by every other rule.
+        EnvironmentImport environment; ///< Read by the environment rule. Ignored by the rest.
     };
 
     /**
@@ -210,6 +244,22 @@ struct engine::reflect::Describe<engine::assets::ShaderImport> {
     }
 };
 
+/// @brief Field descriptors for the environment import settings.
+template <>
+struct engine::reflect::Describe<engine::assets::EnvironmentImport> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "EnvironmentImport";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(
+            engine::assets::EnvironmentImport, face_size,
+            engine::reflect::Tooltip{ "The width of one cubemap face, in texels. A face "
+                                      "is square." }));
+    }
+};
+
 /// @brief Field descriptors for the sidecar, so reflect/ reads and writes it.
 template <>
 struct engine::reflect::Describe<engine::assets::AssetMeta> {
@@ -230,6 +280,10 @@ struct engine::reflect::Describe<engine::assets::AssetMeta> {
             // Version 3, so every sidecar written before permutations reads back
             // with no warning about a field it cannot have.
             ENGINE_FIELD(engine::assets::AssetMeta, shader, engine::reflect::Version{ 3 },
-                         engine::reflect::Tooltip{ "Read by the shader rule alone." }));
+                         engine::reflect::Tooltip{ "Read by the shader rule alone." }),
+            // Version 4, so every sidecar written before the environment rule
+            // reads back with no warning about a field it cannot have.
+            ENGINE_FIELD(engine::assets::AssetMeta, environment, engine::reflect::Version{ 4 },
+                         engine::reflect::Tooltip{ "Read by the environment rule alone." }));
     }
 };

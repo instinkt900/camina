@@ -8,6 +8,7 @@
 #include "assets/texture.h"
 #include "core/log.h"
 #include "document.h"
+#include "environment.h"
 #include "mesh.h"
 #include "shader.h"
 #include "texture.h"
@@ -26,11 +27,12 @@ namespace cooker {
 
         /// What rule turns one source file into one cooked file.
         enum class Rule : std::uint8_t {
-            Shader,   ///< GLSL through glslc, out as SPIR-V and its reflected layout.
-            Texture,  ///< An image through stb, out as mip levels and BC7 blocks.
-            Mesh,     ///< glTF through cgltf, out as one cooked mesh for each mesh.
-            Document, ///< A scene or a prefab, with its asset references resolved.
-            Copy,     ///< No rule yet. The bytes go through unchanged.
+            Shader,      ///< GLSL through glslc, out as SPIR-V and its reflected layout.
+            Texture,     ///< An image through stb, out as mip levels and BC7 blocks.
+            Environment, ///< An HDR panorama through stb, out as a half float cubemap.
+            Mesh,        ///< glTF through cgltf, out as one cooked mesh for each mesh.
+            Document,    ///< A scene or a prefab, with its asset references resolved.
+            Copy,        ///< No rule yet. The bytes go through unchanged.
         };
 
         /// Whether a file is a scene or a prefab, which name assets by path.
@@ -42,6 +44,11 @@ namespace cooker {
             const std::string extension = source.extension().string();
             if (is_shader_extension(extension)) {
                 return Rule::Shader;
+            }
+            // Before the image rule, because both read through stb_image and
+            // an HDR panorama is not a texture a material samples.
+            if (is_environment_extension(extension)) {
+                return Rule::Environment;
             }
             if (is_image_extension(extension)) {
                 return Rule::Texture;
@@ -84,6 +91,9 @@ namespace cooker {
                 // stay two files rather than collapsing onto one name.
                 return as::kShaderExtension;
             case Rule::Texture:
+            case Rule::Environment:
+                // A cubemap is a texture with six faces, so it is the same
+                // cooked format and it keeps the same extension.
                 return as::kTextureExtension;
             case Rule::Mesh:
                 return as::kMeshExtension;
@@ -214,6 +224,10 @@ namespace cooker {
             case Rule::Texture:
                 return single([&](const std::filesystem::path& to) {
                     return cook_texture(source, to, meta.texture);
+                });
+            case Rule::Environment:
+                return single([&](const std::filesystem::path& to) {
+                    return cook_environment(source, to, meta.environment);
                 });
             case Rule::Mesh:
                 return cook_gltf(source, options.out, relative, meta.guid, outputs);
