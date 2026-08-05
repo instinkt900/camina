@@ -113,6 +113,15 @@ engine_enable_clang_tidy(test_render)
 
 add_test(NAME render COMMAND test_render)
 
+# The barrier derivation. It needs no device at all, which is the point of
+# declaring what a pass touches as data. See DESIGN.md section 9.
+add_executable(test_render_graph test_render_graph.cpp)
+target_link_libraries(test_render_graph PRIVATE engine::core)
+engine_set_warnings(test_render_graph)
+engine_enable_clang_tidy(test_render_graph)
+
+add_test(NAME render_graph COMMAND test_render_graph)
+
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
 add_executable(test_sandbox test_sandbox.cpp)

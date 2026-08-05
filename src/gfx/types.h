@@ -292,6 +292,52 @@ namespace engine::gfx {
         bool cull_back = false;
     };
 
+    /**
+     * @brief What a pass does with a resource, which is what decides a barrier.
+     *
+     * This is the whole vocabulary the render graph speaks. A pass says which
+     * state it needs a resource in, the graph compares that against the state
+     * the resource is already in, and a barrier is the difference between two
+     * of these values. See DESIGN.md section 9.
+     *
+     * Each value names one usage rather than a set of them, and there is no
+     * catch-all on purpose. A state that meant "anything" would map to
+     * `ALL_COMMANDS` on both sides of every barrier, which is the shortcut M5.3
+     * exists to remove. So the backend can turn each of these into one stage
+     * mask, one access mask, and one image layout with nothing left over.
+     *
+     * The read states and the write states are not marked apart here, because
+     * the caller says which it means by putting the access in ResourceRead or
+     * in ResourceWrite.
+     */
+    enum class ResourceState : std::uint32_t {
+        /// @brief No contents worth keeping. What a resource starts a frame in.
+        Undefined = 0,
+        /// @brief Written by the fragment stage as a color attachment.
+        ColorTarget,
+        /// @brief Written by the depth test as a depth attachment.
+        DepthTarget,
+        /// @brief Tested against but not written, so several passes may share it.
+        DepthRead,
+        /// @brief Sampled or read by a shader, in any stage that declares it.
+        ShaderRead,
+        /// @brief Written by a compute shader through a storage binding.
+        ComputeWrite,
+        /// @brief The source of a copy.
+        CopySource,
+        /// @brief The destination of a copy.
+        CopyDestination,
+        /// @brief Handed to the presentation engine. The last state of a frame.
+        Present,
+    };
+
+    /**
+     * @brief A short name for a ResourceState.
+     * @param state The value to name.
+     * @return A static string. The caller must not free it.
+     */
+    [[nodiscard]] const char* resource_state_name(ResourceState state);
+
     /// @brief The outcome of a gfx call.
     enum class Result : std::uint32_t {
         Success = 0,      ///< The call did what it says.
