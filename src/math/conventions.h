@@ -93,6 +93,43 @@ namespace engine {
     }
 
     /**
+     * @brief Builds a reverse-Z orthographic projection for Vulkan clip space.
+     *
+     * A directional light has no position, so its shadow map is orthographic.
+     * This maps @p z_near to depth 1 and @p z_far to depth 0, which is the same
+     * sense perspective_reverse_z() uses, so one depth compare serves both.
+     *
+     * The light looks down its own -Z, as a camera does. So a caller passes
+     * distances in front of the light, and both grow away from it.
+     *
+     * The negated [1][1] term flips Y for the same reason as the perspective
+     * form.
+     *
+     * @param half_width Half the volume across, in world units.
+     * @param half_height Half the volume up, in world units.
+     * @param z_near Distance to the near plane, which maps to depth 1.
+     * @param z_far Distance to the far plane, which maps to depth 0.
+     * @return The projection matrix.
+     *
+     * @warning @p z_far must be greater than @p z_near. An equal pair would
+     * divide by zero and fill the map with infinities.
+     */
+    inline Mat4 orthographic_reverse_z(float half_width, float half_height, float z_near,
+                                       float z_far) {
+        const float depth = z_far - z_near;
+
+        Mat4 result(1.0F);
+        result[0][0] = 1.0F / half_width;
+        result[1][1] = -1.0F / half_height;
+        // The light looks down -Z, so a point in front of it has a negative z in
+        // light space. Both terms carry that sign, which is what puts the near
+        // plane at 1 and the far plane at 0 rather than the other way round.
+        result[2][2] = 1.0F / depth;
+        result[3][2] = z_far / depth;
+        return result;
+    }
+
+    /**
      * @brief The depth compare sense that matches the reverse-Z convention.
      *
      * True means the test keeps the larger depth value. The render backend

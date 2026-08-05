@@ -60,9 +60,19 @@ namespace engine::render {
     /// @brief The depth target of a frame. Resource 1.
     inline constexpr ResourceId kFrameDepth{ 1 };
 
+    /**
+     * @brief The directional shadow map. Resource 2.
+     *
+     * The first resource that is not a frame target. The shadow pass writes it
+     * and the mesh pass reads it, which is the producer and consumer pair the
+     * graph exists to order. It is also the first resource that keeps its
+     * contents across the whole frame rather than being the frame itself.
+     */
+    inline constexpr ResourceId kShadowMap{ 2 };
+
     /// @brief How many resources a frame declares, which is the length of the
     /// state list derive_barriers() takes.
-    inline constexpr std::uint32_t kFrameResourceCount = 2;
+    inline constexpr std::uint32_t kFrameResourceCount = 3;
 
     /**
      * @brief One resource a pass reads.

@@ -31,6 +31,7 @@ add_library(engine_core STATIC
     render/material_cache.cpp
     render/mesh_cache.cpp
     render/mesh_pass.cpp
+    render/shadow_pass.cpp
     render/render_graph.cpp
     render/texture_cache.cpp
     scene/world.cpp
