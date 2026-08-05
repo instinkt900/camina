@@ -144,6 +144,11 @@ namespace engine::render {
          * alone. Somebody editing a shader breaks it often, and losing the
          * picture on every typo would make the loop useless.
          *
+         * This rebuilds only the pipelines and the descriptor sets that depend
+         * on their layout. The split sum lookup table is left alone, because
+         * its file is in the same tree and a person editing a shader did not
+         * retune the ray budget. Call reload_brdf_lut() for that.
+         *
          * @param content The engine content tree, which holds the shaders.
          * @return True when a new pipeline was built and swapped in.
          *
@@ -151,6 +156,21 @@ namespace engine::render {
          * open. It waits for the GPU, which cannot happen mid-frame.
          */
         [[nodiscard]] bool reload_shaders(const assets::Content& content);
+
+        /**
+         * @brief Drops the split sum lookup table and reads it again.
+         *
+         * The BRDF table lives in the engine content tree beside the shaders.
+         * Saving ibl.brdf.meta to retune the ray budget calls this so the new
+         * table appears without a restart. It does not touch the pipelines.
+         *
+         * @param content The engine content tree, which holds ibl.brdf.
+         * @return True when the table was read and the frame sets were rebuilt.
+         *
+         * @warning Call this between frames and never while a command list is
+         * open. It waits for the GPU, which cannot happen mid-frame.
+         */
+        [[nodiscard]] bool reload_brdf_lut(const assets::Content& content);
 
         /**
          * @brief What this pass reads and writes, for the render graph.
