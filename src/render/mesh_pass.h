@@ -93,8 +93,8 @@ namespace engine::render {
      *
      * @code
      * engine::render::MeshPass pass;
-     * pass.create(device, engine_content);
-     * pass.draw(commands, world, game_content, view_projection);
+     * pass.create(device, engine_content, shadow.map());
+     * pass.draw(commands, world, game_content, view_projection, camera_position);
      * @endcode
      */
     class MeshPass {
@@ -194,10 +194,13 @@ namespace engine::render {
         /**
          * @brief What this pass reads and writes, for the render graph.
          *
-         * It writes the color target and the depth target and reads nothing
-         * that the graph tracks. The textures a material names are uploaded
-         * once and never written by a pass, so they are not frame resources
-         * and the graph does not order them.
+         * It writes the color target and the depth target, and it reads the
+         * shadow map that the shadow pass wrote. That read is the producer and
+         * consumer pair the graph turns into a barrier.
+         *
+         * The textures a material names are uploaded once and never written by
+         * a pass, so they are not frame resources and the graph does not order
+         * them.
          *
          * The spans point at storage with static lifetime, so the result can
          * be held for as long as the caller likes.

@@ -719,12 +719,13 @@ namespace {
         world.update();
 
         // The render graph, before anything opens a rendering scope. begin_frame
-        // leaves both images in Undefined and this is what moves them, because
-        // the graph is what knows which pass needs them and in what state.
+        // leaves the frame images in Undefined and this is what moves them,
+        // because the graph is what knows which pass needs them and in what
+        // state.
         //
-        // One pass today, so this derives the two barriers that begin_frame used
-        // to issue by hand. The point is that a second pass costs nothing here:
-        // it declares what it touches and the barriers between the two fall out.
+        // Two passes now. Each declares what it touches, and the barrier that
+        // moves the shadow map from a depth target to a shader read falls out of
+        // the pair rather than being written by hand here.
         engine::render::GraphSchedule schedule;
         if (!derive_frame_barriers(*context.resource_states, schedule)) {
             return FrameOutcome::Failed;

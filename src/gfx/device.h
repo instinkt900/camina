@@ -357,6 +357,11 @@ namespace engine::gfx {
      * @warning The image starts in ResourceState::Undefined, and it holds
      * nothing until a pass has rendered into it. Sampling it before that reads
      * whatever the allocation held.
+     *
+     * @warning A GPU that cannot filter its depth format gets Filter::Nearest
+     * whatever @p desc asked for, and the log says so. Vulkan allows a linear
+     * comparison read without that feature and leaves the result
+     * implementation-dependent, which is worse than a hard edge.
      */
     [[nodiscard]] Result create_depth_target(Device* device, const DepthTargetDesc& desc,
                                              TextureHandle* out_texture);

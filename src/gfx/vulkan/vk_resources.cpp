@@ -848,6 +848,23 @@ namespace engine::gfx {
             return Result::ErrorInit;
         }
 
+        // A linear filter on a depth format is a separate feature from sampling
+        // one. With a comparison sampler Vulkan still allows the read without
+        // it, and then the filtered result is implementation-dependent rather
+        // than the four-tap average the caller asked for.
+        //
+        // So drop to a nearest filter instead of failing. A hard nearest shadow
+        // is a worse picture and a correct one, and refusing to start would be a
+        // worse answer than that on a GPU that can draw the rest of the scene.
+        SamplerDesc sampler = desc.sampler;
+        if (sampler.filter == Filter::Linear &&
+            (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) ==
+                0U) {
+            ENGINE_LOG_WARN("This GPU cannot filter its depth format, so the shadow map reads "
+                            "with a nearest filter and its edges will be hard.");
+            sampler.filter = Filter::Nearest;
+        }
+
         TextureEntry built;
 
         VkImageCreateInfo image{};
@@ -885,7 +902,7 @@ namespace engine::gfx {
             return Result::ErrorInit;
         }
 
-        const Result sampled = vk::resolve_sampler(*device, desc.sampler, &built.sampler);
+        const Result sampled = vk::resolve_sampler(*device, sampler, &built.sampler);
         if (!succeeded(sampled)) {
             vkDestroyImageView(device->device, built.view, nullptr);
             vmaDestroyImage(device->allocator, built.image, built.allocation);
