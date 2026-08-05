@@ -811,6 +811,27 @@ The order matters. The cull pass is a compute pass that writes a resource the me
 which is exactly what the frame graph in M5.3 exists to schedule. So the light grid lands after
 the graph and not before it. Issue #98 holds the decision and the work.
 
+**The environment is a cubemap an entity names, and it arrives before the lighting that reads
+it.** The cooker turns an equirectangular `.hdr` panorama into six faces with a mip chain, and
+`scene::Environment` names the result by GUID. One frame binds one cubemap, so the first entity
+that carries the component wins.
+
+The component sits on an entity rather than on the world. A prefab can then carry an
+environment, and the inspector edits it the way it edits every other component. The transform
+of that entity means nothing, because an environment has no place.
+
+M5.4a binds it and samples it directly, which is deliberately not image based lighting. The
+split sum approximation wants an irradiance term and a prefiltered term with a lookup beside
+them, and one texture read stands in for each. A rough metal therefore reads too sharp. That
+seam is the point: the transport is provable on its own, and the filtering that follows is a
+change to the shader rather than to the format. Issue #109 holds it.
+
+Two texture shapes now reach one shader, and they are not interchangeable. A `sampler2D` and a
+`samplerCube` need different fallbacks, because a descriptor a scene left unfilled still has to
+bind something valid. So `render::TextureCache` holds a white texel and six grey texels, and it
+refuses a cooked file whose face count does not match the binding that asked for it. Vulkan
+calls the mismatch undefined rather than an error.
+
 **An image with no file is a sub-asset too.** A glTF names its images three ways: a file
 beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a
 file can carry a `.meta` sidecar. The other two get a derived GUID under the kind word
