@@ -237,7 +237,9 @@ eight pipelines, four forms times opaque and blended, and a reload rebuilds all 
 keeps all of the old ones.
 
 The opaque draws are not grouped by form yet, so a mixed scene rebinds more than it has to.
-`pipeline_switch_count()` measures it and issue #105 holds the work for M5.3.
+`pipeline_switch_count()` measures it and issue #105 holds the work, under M5 rather than
+M5.3. M5.3 shipped without it, because the M5 done-when test is a scene that renders
+correctly rather than one that renders fast.
 
 Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
