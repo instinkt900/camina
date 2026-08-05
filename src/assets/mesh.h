@@ -103,8 +103,7 @@ namespace engine::assets {
      * texture hands the device a pointer into the buffer it read, because the
      * texels go to the GPU exactly as they sit on disk. A mesh cannot do the
      * same. The vertices start 48 bytes into the file, and nothing promises the
-     * caller's buffer puts that offset where a float may be read. `Content` made
-     * the same call for the same reason, in `read_words`.
+     * caller's buffer puts that offset where a float may be read.
      *
      * The caller may free the file bytes as soon as this returns.
      */
