@@ -190,11 +190,13 @@ the engine issues. Presentation stays in `end_frame`, because that wait belongs 
 semaphore.
 
 `--sync-validation` turns on the check that reads barriers rather than calls. It found two real
-races on the first run, both older than the graph: a transition out of `Undefined` used
-`TOP_OF_PIPE`, which ordered it against neither the swapchain acquire nor the previous frame's
-use of the one shared depth image. A transition out of `Undefined` now waits on the stage the
-new state uses. A 300-frame run reports nothing. The screenshot path still does, and issue #124
-holds it: `capture_frame` waits for the device, and presentation is not device work.
+races on the first run, and both are older than the graph. A transition out of `Undefined` used
+`TOP_OF_PIPE`. That ordered it against neither the swapchain acquire nor the frame before, which
+still had the one shared depth image.
+
+Such a transition now waits on the stage the new state uses. A 300-frame run reports nothing.
+The screenshot path still does, and issue #124 holds it. `capture_frame` waits for the device,
+and presentation is not device work.
 
 The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
 `mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left

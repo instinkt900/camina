@@ -67,6 +67,34 @@ namespace engine::gfx {
             return false;
         }
 
+        /**
+         * Whether the validation layer offers an instance extension.
+         *
+         * The validation features extension is implemented by the layer rather
+         * than by the driver, so it has to be enumerated against the layer name.
+         * Asking the driver for it reports nothing.
+         */
+        bool layer_extension_present(const char* extension) {
+            std::uint32_t count = 0;
+            if (vkEnumerateInstanceExtensionProperties(kValidationLayer, &count, nullptr) !=
+                VK_SUCCESS) {
+                return false;
+            }
+
+            std::vector<VkExtensionProperties> extensions(count);
+            if (vkEnumerateInstanceExtensionProperties(kValidationLayer, &count,
+                                                       extensions.data()) != VK_SUCCESS) {
+                return false;
+            }
+
+            for (const VkExtensionProperties& entry : extensions) {
+                if (std::strcmp(entry.extensionName, extension) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// A Vulkan 1.0 loader returns VK_ERROR_INCOMPATIBLE_DRIVER when the
         /// application asks for a higher version, and that error says nothing
         /// useful. Ask first, so the failure names the version we found.
@@ -143,13 +171,28 @@ namespace engine::gfx {
             features.enabledValidationFeatureCount = 1;
             features.pEnabledValidationFeatures = &kSyncFeature;
 
-            const bool want_sync = want_validation && desc.enable_sync_validation;
             if (want_validation) {
                 info.enabledLayerCount = 1;
                 info.ppEnabledLayerNames = &kValidationLayer;
                 info.pNext = &debug;
             }
+
+            // The structure above may only sit in the pNext chain when the
+            // extension that defines it is enabled. The specification says so,
+            // and a chain without it is invalid however well it happens to run.
+            // The extension comes from the layer, so this is asked of the layer.
+            bool want_sync = want_validation && desc.enable_sync_validation;
+            if (want_sync && !layer_extension_present(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)) {
+                ENGINE_LOG_WARN("Synchronization validation was asked for, and {} is not there "
+                                "to turn it on with.",
+                                VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+                want_sync = false;
+            }
             if (want_sync) {
+                extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+                info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+                info.ppEnabledExtensionNames = extensions.data();
+
                 // The messenger chains behind the features, so both are read.
                 features.pNext = &debug;
                 info.pNext = &features;
