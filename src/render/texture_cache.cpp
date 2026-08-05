@@ -66,12 +66,14 @@ namespace engine::render {
         // an environment is radiance and not a color to convert. A quarter is
         // dim enough to read as a room with no lamp in it, and bright enough
         // that a metal shows its shape rather than reading black.
-        constexpr std::uint8_t kGrey = 64; // 64 / 255 is about 0.25 linear.
+        constexpr std::uint8_t kGrey = 64;    // 64 / 255 is about 0.25 linear.
+        constexpr std::uint8_t kOpaque = 255; // The alpha of every face texel.
         constexpr std::size_t kFaceTexels = 4;
+        constexpr std::size_t kAlphaOffset = 3;
         std::array<std::uint8_t, assets::kCubeFaceCount * kFaceTexels> grey_faces{};
         grey_faces.fill(kGrey);
         for (std::size_t face = 0; face < assets::kCubeFaceCount; ++face) {
-            grey_faces[(face * kFaceTexels) + 3] = 255; // Opaque alpha.
+            grey_faces[(face * kFaceTexels) + kAlphaOffset] = kOpaque;
         }
 
         const gfx::TextureDesc cube_desc{

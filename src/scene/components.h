@@ -133,6 +133,26 @@ namespace engine::scene {
         float range = kDefaultLightRange;
     };
 
+    /**
+     * @brief The cubemap every surface in the scene reflects.
+     *
+     * The cooker turns an equirectangular `.hdr` panorama into this. One scene
+     * has one of them, and the first entity that carries it wins, because the
+     * shader binds a single cubemap for the whole frame.
+     *
+     * It sits on an entity rather than on the world so that a prefab can carry
+     * it, and so the inspector edits it the way it edits every other component.
+     * The transform of that entity means nothing. An environment has no place.
+     *
+     * @warning Sampling this directly is not image based lighting. Issue #109
+     * replaces the one sample with the split sum form, and only then does a
+     * rough metal read correctly.
+     */
+    struct Environment {
+        /// @brief The cooked cubemap. A null GUID gives the grey fallback.
+        Guid cubemap;
+    };
+
 } // namespace engine::scene
 
 /// @brief Describes Name for the inspector and for scene files.
@@ -192,5 +212,18 @@ struct engine::reflect::Describe<engine::scene::PointLight> {
             ENGINE_FIELD(engine::scene::PointLight, range,
                          engine::reflect::Range{ 0.0, 100.0, 0.05 },
                          engine::reflect::Tooltip{ "How far it reaches, in meters." }));
+    }
+};
+
+/// @brief Field descriptors for the environment cubemap.
+template <>
+struct engine::reflect::Describe<engine::scene::Environment> {
+    static constexpr const char* name = "Environment"; ///< The name a scene file stores.
+    /// @brief The one field.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(
+            engine::scene::Environment, cubemap,
+            engine::reflect::Tooltip{ "The cooked cubemap every surface reflects." }));
     }
 };

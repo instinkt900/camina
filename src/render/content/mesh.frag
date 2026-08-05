@@ -3,9 +3,11 @@
 // Cook-Torrance metallic-roughness, over the glTF material set the cooker has
 // written since M4.4b. See DESIGN.md section 9 "Materials".
 //
-// The environment term is still two constant colors. IBL is M5.4, and until it
-// lands a metal has almost nothing to reflect, so a metal reads dark here. That
-// is the expected result and not a bug in this shader.
+// The environment is a cooked cubemap now, and it is sampled directly. That is
+// not image based lighting: the split sum approximation wants an irradiance
+// term and a prefiltered term with a lookup beside them, and this is one sample
+// for each. A rough metal therefore reads too sharp. Issue #109 replaces the
+// two samples below and nothing else in this file.
 
 layout(location = 0) in vec3 in_world;
 layout(location = 1) in vec3 in_normal;
@@ -32,6 +34,14 @@ layout(set = 0, binding = 0) uniform Frame {
     uvec4 light_count;    // x is how many lights are real. The rest is padding.
     Light lights[kMaxLights];
 } frame;
+
+// The environment every surface reflects, which `scene::Environment` names and
+// `render::MeshPass` binds. A scene that names none binds six grey texels, so
+// this is always a valid sampler and the shader needs no branch.
+//
+// It is a linear float format. There is no sRGB conversion on this read,
+// because the cooker wrote radiance and not a color. See DESIGN.md section 3.
+layout(set = 0, binding = 1) uniform samplerCube environment_map;
 
 // Every one of these is always a valid sampler. A material that names no
 // texture for a slot binds a single white texel, so the shader needs no branch
@@ -73,10 +83,6 @@ layout(set = 1, binding = 5) uniform Material {
     uint has_maps;
     uint padding;
 } material;
-
-// The environment, until M5.4 replaces it with a cooked one.
-const vec3 kSkyColor = vec3(0.28, 0.34, 0.45);
-const vec3 kGroundColor = vec3(0.16, 0.14, 0.12);
 
 // A dielectric reflects about four percent head on, which is what glTF assumes
 // for every material that does not say otherwise.
@@ -191,11 +197,23 @@ void main() {
         direct += (diffuse + specular) * light.color.rgb * n_dot_l * attenuation;
     }
 
-    // The environment, which M5.4 replaces with a cooked one. A metal reflects
-    // it and has no diffuse, so a metal is nearly black until then.
-    float up = (dot(n, vec3(0.0, 1.0, 0.0)) * 0.5) + 0.5;
-    vec3 environment = mix(kGroundColor, kSkyColor, up);
-    vec3 ambient = environment * mix(albedo, albedo * f0, metallic);
+    // The environment, in two samples of the one cubemap.
+    //
+    // The cooker built the mip chain by halving in linear light, so the
+    // smallest level is close to the average of the whole panorama. Reading it
+    // stands in for the irradiance a diffuse surface receives, and reading the
+    // reflection at a level roughness chooses stands in for the prefiltered
+    // specular. Neither integral is the right one. Both are one texture read,
+    // and together they carry the color and the direction of the environment,
+    // which is what this increment set out to prove. See issue #109.
+    float levels = float(textureQueryLevels(environment_map)) - 1.0;
+    vec3 irradiance = textureLod(environment_map, n, levels).rgb;
+    vec3 reflection = textureLod(environment_map, reflect(-v, n), roughness * levels).rgb;
+
+    // A metal has no diffuse term, so it takes its ambient entirely from the
+    // reflection and tints it with f0. A dielectric takes almost all of its own
+    // from the irradiance.
+    vec3 ambient = (irradiance * albedo * (1.0 - metallic)) + (reflection * f0);
 
     float occlusion = 1.0;
 #ifdef HAS_OCCLUSION_MAP

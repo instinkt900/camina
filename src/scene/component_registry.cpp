@@ -66,6 +66,7 @@ namespace engine::scene {
         registry.add<MeshRenderer>();
         registry.add<DirectionalLight>();
         registry.add<PointLight>();
+        registry.add<Environment>();
         // Hierarchy and WorldTransform stay out on purpose. A scene file stores
         // the parent link itself, and World rebuilds both from it.
     }

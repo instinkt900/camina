@@ -89,18 +89,19 @@ namespace {
         check(registry.size() == 0, "a new component registry is empty");
 
         sc::register_builtin_components(registry);
-        check(registry.size() == 5,
-              "the engine registers Transform, Name, MeshRenderer, and the two lights");
+        check(registry.size() == 6,
+              "the engine registers Transform, Name, MeshRenderer, the two lights, and "
+              "Environment");
         check(registry.find("Transform") != nullptr, "Transform is findable by name");
         check(registry.find("WorldTransform") == nullptr,
               "a derived component stays out of the file");
         check(registry.find("Hierarchy") == nullptr, "the parent link is not a component in the file");
 
         sc::register_builtin_components(registry);
-        check(registry.size() == 5, "registering twice does nothing");
+        check(registry.size() == 6, "registering twice does nothing");
 
         registry.add<Health>();
-        check(registry.size() == 6, "a game component joins the same registry");
+        check(registry.size() == 7, "a game component joins the same registry");
         check(registry.find("Nothing") == nullptr, "an unknown name finds nothing");
 
         // Registering a type has to wire every operation, not only the two the
