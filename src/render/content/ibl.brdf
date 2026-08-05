@@ -1,0 +1,11 @@
+# The split sum BRDF table.
+#
+# This file carries no data on purpose. The table depends on no environment, no
+# material, and no scene, so there is nothing to author. It is the same numbers
+# in every project that uses this renderer.
+#
+# The file exists so that the table has a path, an identity from the sidecar
+# beside it, a manifest entry, and hot reload, the same as every other asset.
+# Change the size or the ray budget in ibl.brdf.meta and cook again.
+#
+# See DESIGN.md section 9, and tools/cooker/brdf.cpp for the integration.

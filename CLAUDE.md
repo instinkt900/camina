@@ -154,6 +154,15 @@ get wrong. So the tests also drive a band-limited source and check the coefficie
 direct cosine-weighted integral. Corrupting any band constant fails that one, and corrupting
 band 1 or 2 fails nothing without it.
 
+The third part of the split sum is `tools/cooker/brdf.cpp`, keyed on the `.brdf` extension. It
+integrates the table from `src/render/content/ibl.brdf`, a source file that carries no data
+because the table depends on nothing. Its sidecar holds the size and the ray budget.
+
+The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
+`mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left
+the table reaching eight at a grazing angle, and only the energy test caught it: the mirror test
+passed throughout, because at no roughness there is nothing to shadow.
+
 The cooker half of the permutation work landed. A `.meta` sidecar carries a `shader` block with
 a list of variants, and each names its defines. The shader rule numbers its parts the way the
 glTF rule does, so `mesh.frag` gives `mesh.frag.0.shader`. Part 0 is the base form and it keeps

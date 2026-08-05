@@ -7,6 +7,7 @@
 #include "assets/shader.h"
 #include "assets/texture.h"
 #include "core/log.h"
+#include "brdf.h"
 #include "document.h"
 #include "environment.h"
 #include "mesh.h"
@@ -30,6 +31,7 @@ namespace cooker {
             Shader,      ///< GLSL through glslc, out as SPIR-V and its reflected layout.
             Texture,     ///< An image through stb, out as mip levels and BC7 blocks.
             Environment, ///< An HDR panorama through stb, out as a half float cubemap.
+            Brdf,        ///< The split sum BRDF table, integrated from its sidecar alone.
             Mesh,        ///< glTF through cgltf, out as one cooked mesh for each mesh.
             Document,    ///< A scene or a prefab, with its asset references resolved.
             Copy,        ///< No rule yet. The bytes go through unchanged.
@@ -49,6 +51,9 @@ namespace cooker {
             // an HDR panorama is not a texture a material samples.
             if (is_environment_extension(extension)) {
                 return Rule::Environment;
+            }
+            if (is_brdf_extension(extension)) {
+                return Rule::Brdf;
             }
             if (is_image_extension(extension)) {
                 return Rule::Texture;
@@ -92,8 +97,10 @@ namespace cooker {
                 return as::kShaderExtension;
             case Rule::Texture:
             case Rule::Environment:
-                // A cubemap is a texture with six faces, so it is the same
-                // cooked format and it keeps the same extension.
+            case Rule::Brdf:
+                // A cubemap is a texture with six faces and the BRDF table is a
+                // two channel one, so all three are the same cooked format and
+                // they keep the same extension.
                 return as::kTextureExtension;
             case Rule::Mesh:
                 return as::kMeshExtension;
@@ -230,6 +237,12 @@ namespace cooker {
                 // source identity and the irradiance derives one beside it.
                 return cook_environment(source, options.out, relative, meta.guid,
                                         meta.environment, outputs);
+            case Rule::Brdf:
+                // The source file is read for nothing but its identity. Every
+                // number the table needs is in the sidecar.
+                return single([&](const std::filesystem::path& to) {
+                    return cook_brdf(to, meta.brdf);
+                });
             case Rule::Mesh:
                 return cook_gltf(source, options.out, relative, meta.guid, outputs);
             case Rule::Document:

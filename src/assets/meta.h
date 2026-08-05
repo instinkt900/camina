@@ -154,6 +154,48 @@ namespace engine::assets {
         std::uint32_t specular_samples = kDefaultSpecularSamples;
     };
 
+    /// @brief The width and the height of the BRDF table when nothing says.
+    inline constexpr std::uint32_t kDefaultBrdfSize = 256;
+
+    /// @brief The largest BRDF table a sidecar may ask for.
+    inline constexpr std::uint32_t kMaxBrdfSize = 2048;
+
+    /// @brief How many rays each entry of the BRDF table averages when nothing says.
+    inline constexpr std::uint32_t kDefaultBrdfSamples = 1024;
+
+    /// @brief The most rays a sidecar may ask each BRDF entry to average.
+    inline constexpr std::uint32_t kMaxBrdfSamples = 65536;
+
+    /**
+     * @brief How the cooker must build the split sum BRDF table.
+     *
+     * The table depends on no environment and on no material. It is the same
+     * numbers in every project, which is why it has a source file of its own
+     * rather than being cooked once for each environment that would share it.
+     *
+     * The source file carries no data. It exists so that the table has a path,
+     * an identity from a sidecar, a manifest entry, and hot reload, the same as
+     * every other asset. These two settings are the whole of its input.
+     */
+    struct BrdfImport {
+        /**
+         * @brief The width and the height of the table, in texels.
+         *
+         * One axis is the angle to the viewer and the other is roughness. The
+         * function is smooth in both, so a small table costs little accuracy.
+         */
+        std::uint32_t size = kDefaultBrdfSize;
+
+        /**
+         * @brief How many rays each entry averages.
+         *
+         * This runs once for the whole project rather than once for each texel
+         * of a cubemap, so it can afford far more rays than the environment
+         * rule takes. Too few leave the table visibly banded at low roughness.
+         */
+        std::uint32_t samples = kDefaultBrdfSamples;
+    };
+
     /**
      * @brief What the engine keeps about a source asset, next to the file.
      */
@@ -162,6 +204,7 @@ namespace engine::assets {
         TextureImport texture;         ///< Read by the texture rule. Ignored by every other rule.
         ShaderImport shader;           ///< Read by the shader rule. Ignored by every other rule.
         EnvironmentImport environment; ///< Read by the environment rule. Ignored by the rest.
+        BrdfImport brdf;               ///< Read by the BRDF rule. Ignored by every other rule.
     };
 
     /**
@@ -290,6 +333,25 @@ struct engine::reflect::Describe<engine::assets::EnvironmentImport> {
     }
 };
 
+/// @brief Field descriptors for the BRDF table settings.
+template <>
+struct engine::reflect::Describe<engine::assets::BrdfImport> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "BrdfImport";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(engine::assets::BrdfImport, size,
+                         engine::reflect::Tooltip{ "Both axes of the table, in texels. One is "
+                                                   "the view angle and one is roughness." }),
+            ENGINE_FIELD(engine::assets::BrdfImport, samples,
+                         engine::reflect::Tooltip{ "Rays each entry averages. This cooks once "
+                                                   "for the whole project." }));
+    }
+};
+
 /// @brief Field descriptors for the sidecar, so reflect/ reads and writes it.
 template <>
 struct engine::reflect::Describe<engine::assets::AssetMeta> {
@@ -314,6 +376,10 @@ struct engine::reflect::Describe<engine::assets::AssetMeta> {
             // Version 4, so every sidecar written before the environment rule
             // reads back with no warning about a field it cannot have.
             ENGINE_FIELD(engine::assets::AssetMeta, environment, engine::reflect::Version{ 4 },
-                         engine::reflect::Tooltip{ "Read by the environment rule alone." }));
+                         engine::reflect::Tooltip{ "Read by the environment rule alone." }),
+            // Version 5, so every sidecar written before the BRDF rule reads
+            // back with no warning about a field it cannot have.
+            ENGINE_FIELD(engine::assets::AssetMeta, brdf, engine::reflect::Version{ 5 },
+                         engine::reflect::Tooltip{ "Read by the BRDF rule alone." }));
     }
 };

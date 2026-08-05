@@ -856,6 +856,28 @@ the coefficients inside the cooked texture file was rejected, because `src/asset
 the format every 2D texture shares and environment-only data there would move its version for
 assets that gained nothing.
 
+**The BRDF table hangs off a source file that carries no data.** The third part of the split sum
+depends on no environment, no material, and no scene. It is the same numbers in every project,
+so cooking it once for each environment that shares it would be waste. It gets
+`src/render/content/ibl.brdf`, whose sidecar holds its size and its ray budget and whose body
+holds only a note saying why the file exists.
+
+That is odd to look at and it is still the cheapest answer. The alternative was a well known
+GUID written into the code, and that would make it the one asset whose identity does not come
+from a sidecar, with its size and sample count as C++ constants rather than something a person
+can retune and cook. A source file with no source data buys the whole existing model: a path, an
+identity, a manifest entry, freshness, and hot reload.
+
+**Two invariants pin the table, and they catch different errors.** A surface cannot reflect more
+than reaches it, so the scale and the bias never add past one. And at no roughness the lobe is a
+mirror, so they add to exactly one at every angle. The second says nothing about shadowing,
+because a mirror has none to do, so only the first catches a Smith term that stops shadowing at
+a grazing angle. The table reached eight at its worst entry while the mirror check still passed.
+
+The Smith remapping differs between direct light and this. Direct takes `(roughness + 1) squared
+over eight` and image based lighting takes `alpha over two`, where alpha is roughness squared.
+The two look alike enough that using one for the other survives a reading.
+
 **An image with no file is a sub-asset too.** A glTF names its images three ways: a file
 beside it, a buffer view inside a `.glb`, or a data URI. Only the first has a file, and only a
 file can carry a `.meta` sidecar. The other two get a derived GUID under the kind word

@@ -2316,6 +2316,126 @@ void main() { out_color = push.model[0]; }
         test::remove_tree(source.parent_path());
     }
 
+    /// Writes a BRDF source and its sidecar, and cooks the tree.
+    [[nodiscard]] bool cook_brdf_table(const std::filesystem::path& source,
+                                       const std::filesystem::path& out, const char* meta) {
+        write_file(source / "ibl.brdf", "# no data, see the sidecar\n");
+        write_file(source / "ibl.brdf.meta", meta);
+        cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        return cooker::cook_all(options, result);
+    }
+
+    /**
+     * The BRDF table obeys the two things that are true of it whatever else is.
+     *
+     * A surface cannot reflect more light than reaches it, so the scale and the
+     * bias together never pass one. And at no roughness at all the lobe is a
+     * mirror, every ray survives, and the two must add to exactly one at every
+     * angle.
+     *
+     * The second one pins the shape of the integral and the first one catches
+     * the errors that make it too bright. Both are worth having, because a
+     * table that is merely wrong still looks like a plausible gradient and
+     * nothing downstream reports it.
+     *
+     * This is not idle. The Smith remapping squared alpha a second time when it
+     * was first written, which stopped the term shadowing anything at a grazing
+     * angle. The table then reached eight at its worst entry, and the mirror
+     * check above still passed, because at no roughness there is nothing to
+     * shadow.
+     */
+    void test_the_brdf_table_conserves_energy() {
+        const std::filesystem::path source = scratch("brdf/src");
+        const std::filesystem::path out = scratch("brdf/out");
+
+        constexpr std::uint32_t kSize = 64;
+        check(cook_brdf_table(source, out, R"({
+  "__version": 5,
+  "guid": "0b3c8e51-46a2-4d77-9f18-2c7a5e9b1d04",
+  "brdf": { "__version": 1, "size": 64, "samples": 256 }
+})"),
+              "the BRDF table cooks");
+
+        const std::string bytes = read_file(out / "ibl.brdf.tex");
+        engine::assets::TextureView view;
+        check(engine::assets::read_texture(
+                  std::as_bytes(std::span(bytes.data(), bytes.size())), view, "brdf"),
+              "and the runtime reader accepts it");
+        check(view.width == kSize && view.height == kSize, "it is the size the sidecar asked for");
+        check(view.mip_count == 1, "and it carries one level, because roughness is an axis");
+        check(view.format == engine::assets::TextureFormat::RGBA16F, "stored as half float");
+
+        const std::size_t wanted = static_cast<std::size_t>(kSize) * kSize * 4;
+        const std::size_t count = view.payload.size() / sizeof(std::uint16_t);
+        check(count == wanted, "the payload holds every entry");
+        if (count != wanted) {
+            test::remove_tree(source.parent_path());
+            return;
+        }
+
+        const auto* texels = reinterpret_cast<const std::uint16_t*>(view.payload.data());
+        std::size_t over_unity = 0;
+        std::size_t negative = 0;
+        float worst_sum = 0.0F;
+
+        for (std::uint32_t y = 0; y < kSize; ++y) {
+            for (std::uint32_t x = 0; x < kSize; ++x) {
+                const std::size_t at = ((static_cast<std::size_t>(y) * kSize) + x) * 4;
+                const float scale = from_half(texels[at]);
+                const float bias = from_half(texels[at + 1]);
+
+                if (scale < 0.0F || bias < 0.0F) {
+                    ++negative;
+                }
+                // A little over one is the ray budget rather than the maths.
+                if (scale + bias > 1.01F) {
+                    ++over_unity;
+                }
+                worst_sum = std::max(worst_sum, scale + bias);
+            }
+        }
+
+        check(negative == 0, "no entry of the table is negative");
+        check(over_unity == 0, "and none reflects more light than reaches it");
+        check(worst_sum <= 1.01F, "so the whole table stays inside unity");
+
+        // The first row is the smoothest roughness the table carries. A mirror
+        // loses nothing, so the split has to add back up to one.
+        for (std::uint32_t x = 0; x < kSize; ++x) {
+            const float scale = from_half(texels[x * 4]);
+            const float bias = from_half(texels[(x * 4) + 1]);
+            check(std::abs((scale + bias) - 1.0F) < 0.02F,
+                  "a mirror keeps all of what it reflects, whichever way it is seen");
+        }
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /// A table of no size, or built from no rays, is refused at the cook.
+    void test_a_bad_brdf_sidecar_is_refused() {
+        const std::filesystem::path source = scratch("brdfbad/src");
+        const std::filesystem::path out = scratch("brdfbad/out");
+
+        check(!cook_brdf_table(source, out, R"({
+  "__version": 5,
+  "guid": "7e4a1c93-58b0-4f26-a3d5-9c1e6b8047af",
+  "brdf": { "__version": 1, "size": 0, "samples": 64 }
+})"),
+              "a table of no size fails the cook");
+        test::remove_tree(source.parent_path());
+
+        const std::filesystem::path second = scratch("brdfrays/src");
+        const std::filesystem::path second_out = scratch("brdfrays/out");
+        check(!cook_brdf_table(second, second_out, R"({
+  "__version": 5,
+  "guid": "1a9d5f27-3e64-4b81-8072-5f3c2a6e9d18",
+  "brdf": { "__version": 1, "size": 16, "samples": 0 }
+})"),
+              "and a ray budget of zero fails it too");
+        test::remove_tree(second.parent_path());
+    }
+
     /// A face size the payload size field cannot hold is refused at the cook.
     void test_an_oversized_environment_face_is_refused() {
         const std::filesystem::path source = scratch("bigenv/src");
@@ -2367,6 +2487,8 @@ int main() {
     test_a_constant_environment_survives_the_prefilter();
     test_the_irradiance_derives_its_identity();
     test_an_empty_ray_budget_is_refused();
+    test_the_brdf_table_conserves_energy();
+    test_a_bad_brdf_sidecar_is_refused();
     test_an_oversized_environment_face_is_refused();
     test_a_variant_list_that_starts_with_defines_is_refused();
     test_a_push_block_that_starts_late_reports_its_real_size();
