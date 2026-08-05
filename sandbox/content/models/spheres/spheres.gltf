@@ -1,0 +1,347 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "camina roughness spheres"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "spheres",
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "sphere 0.05",
+      "mesh": 0,
+      "translation": [
+        -3.3,
+        2.4,
+        1.2
+      ]
+    },
+    {
+      "name": "sphere 0.20",
+      "mesh": 1,
+      "translation": [
+        -2.2,
+        2.4,
+        1.2
+      ]
+    },
+    {
+      "name": "sphere 0.35",
+      "mesh": 2,
+      "translation": [
+        -1.1,
+        2.4,
+        1.2
+      ]
+    },
+    {
+      "name": "sphere 0.50",
+      "mesh": 3,
+      "translation": [
+        0.0,
+        2.4,
+        1.2
+      ]
+    },
+    {
+      "name": "sphere 0.65",
+      "mesh": 4,
+      "translation": [
+        1.1,
+        2.4,
+        1.2
+      ]
+    },
+    {
+      "name": "sphere 0.80",
+      "mesh": 5,
+      "translation": [
+        2.2,
+        2.4,
+        1.2
+      ]
+    },
+    {
+      "name": "sphere 0.95",
+      "mesh": 6,
+      "translation": [
+        3.3,
+        2.4,
+        1.2
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "sphere 0.05",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "sphere 0.20",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "sphere 0.35",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "sphere 0.50",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 3
+        }
+      ]
+    },
+    {
+      "name": "sphere 0.65",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 4
+        }
+      ]
+    },
+    {
+      "name": "sphere 0.80",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 5
+        }
+      ]
+    },
+    {
+      "name": "sphere 0.95",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 6
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "sphere 0.05",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.05
+      }
+    },
+    {
+      "name": "sphere 0.20",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.2
+      }
+    },
+    {
+      "name": "sphere 0.35",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.35
+      }
+    },
+    {
+      "name": "sphere 0.50",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.5
+      }
+    },
+    {
+      "name": "sphere 0.65",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.65
+      }
+    },
+    {
+      "name": "sphere 0.80",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.8
+      }
+    },
+    {
+      "name": "sphere 0.95",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.95,
+          0.94,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.95
+      }
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 24096,
+      "uri": "spheres.bin"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 6732,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 6732,
+      "byteLength": 6732,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 13464,
+      "byteLength": 4488,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 17952,
+      "byteLength": 6144,
+      "target": 34963
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 561,
+      "type": "VEC3",
+      "min": [
+        -0.5,
+        -0.5,
+        -0.5
+      ],
+      "max": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 561,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 561,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 3072,
+      "type": "SCALAR"
+    }
+  ]
+}

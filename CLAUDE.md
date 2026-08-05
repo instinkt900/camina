@@ -158,6 +158,20 @@ The third part of the split sum is `tools/cooker/brdf.cpp`, keyed on the `.brdf`
 integrates the table from `src/render/content/ibl.brdf`, a source file that carries no data
 because the table depends on nothing. Its sidecar holds the size and the ray budget.
 
+M5.4b is complete. `mesh.frag` reads all three parts by the split sum now. The nine coefficients
+ride in the frame block, the prefiltered cubemap and the table are set 0 beside it, and
+`MeshPass` resolves the irradiance from the environment GUID under the kind word `irradiance`.
+The lookup table comes through the manifest by source path, so no GUID is written into C++. A
+scene that names no environment gets the irradiance of the grey fallback, which is pi times
+`render::kFallbackCubeTexel`, so its diffuse and its specular come from one number.
+
+`sandbox/content/models/spheres/` is a row of seven metal spheres from roughness 0.05 to 0.95,
+because every other model in the sandbox is one material at one roughness and nothing showed the
+difference. Deleting the mip choice, the coefficients, or the table each moves the picture 60 to
+800 times the run-to-run noise floor, and each moves the surface it should: the table and the
+mip move the metal spheres, and the coefficients move the dielectric helmet and barely touch the
+metal.
+
 The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
 `mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left
 the table reaching eight at a grazing angle, and only the energy test caught it: the mirror test

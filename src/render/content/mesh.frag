@@ -3,11 +3,12 @@
 // Cook-Torrance metallic-roughness, over the glTF material set the cooker has
 // written since M4.4b. See DESIGN.md section 9 "Materials".
 //
-// The environment is a cooked cubemap now, and it is sampled directly. That is
-// not image based lighting: the split sum approximation wants an irradiance
-// term and a prefiltered term with a lookup beside them, and this is one sample
-// for each. A rough metal therefore reads too sharp. Issue #109 replaces the
-// two samples below and nothing else in this file.
+// The environment lights a surface by the split sum approximation, over three
+// things the cooker writes. The irradiance is nine coefficients in the frame
+// block, the specular is the environment prefiltered by roughness across the
+// mips of one cubemap, and the lookup table below is the integral of this BRDF
+// over every environment there is. So the shader reads three textures and
+// evaluates one polynomial where the integral belongs.
 
 layout(location = 0) in vec3 in_world;
 layout(location = 1) in vec3 in_normal;
@@ -28,10 +29,17 @@ struct Light {
     vec4 color;
 };
 
+// Must match kIrradianceCoefficients in src/assets/irradiance.h.
+const uint kIrradianceCoefficients = 9u;
+
 layout(set = 0, binding = 0) uniform Frame {
     mat4 view_projection;
     vec4 camera_position; // w is unused and keeps the block aligned.
     uvec4 light_count;    // x is how many lights are real. The rest is padding.
+    // The irradiance of the environment, as a second order spherical harmonic.
+    // rgb is one coefficient and w is padding, because std140 puts an array
+    // element on a sixteen byte boundary either way.
+    vec4 irradiance[kIrradianceCoefficients];
     Light lights[kMaxLights];
 } frame;
 
@@ -39,9 +47,19 @@ layout(set = 0, binding = 0) uniform Frame {
 // `render::MeshPass` binds. A scene that names none binds six grey texels, so
 // this is always a valid sampler and the shader needs no branch.
 //
+// Each mip level is the environment prefiltered for one roughness, so level 0
+// is a mirror and the last level is the roughest surface there is. The chain
+// is not a box filtered one, and reading it as if it were reads too sharp.
+//
 // It is a linear float format. There is no sRGB conversion on this read,
 // because the cooker wrote radiance and not a color. See DESIGN.md section 3.
 layout(set = 0, binding = 1) uniform samplerCube environment_map;
+
+// The split sum lookup, which `tools/cooker/brdf.cpp` integrates once from
+// `ibl.brdf` and every environment shares. Red is the scale on the reflectance
+// at normal incidence and green is the bias. The horizontal axis is the cosine
+// of the angle to the viewer and the vertical axis is roughness.
+layout(set = 0, binding = 2) uniform sampler2D brdf_lut;
 
 // Every one of these is always a valid sampler. A material that names no
 // texture for a slot binds a single white texel, so the shader needs no branch
@@ -111,6 +129,36 @@ float geometry_smith(float n_dot_v, float n_dot_l, float roughness) {
 // Fresnel by Schlick. How reflective the surface is at this angle.
 vec3 fresnel_schlick(float cos_theta, vec3 f0) {
     return f0 + ((1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0));
+}
+
+// Schlick again, with a ceiling that roughness lowers. A rough surface reflects
+// less at a grazing angle than a smooth one, and the plain form above has no
+// way to say so: it climbs to white at the edge whatever the roughness.
+//
+// This decides only how much light the ambient specular takes away from the
+// ambient diffuse. The specular itself uses the lookup table, which carries the
+// same effect properly.
+vec3 fresnel_schlick_roughness(float cos_theta, vec3 f0, float roughness) {
+    vec3 ceiling = max(vec3(1.0 - roughness), f0);
+    return f0 + ((ceiling - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0));
+}
+
+// Rebuilds irradiance from the nine cooked coefficients.
+//
+// Every basis constant and the per band cosine convolution are folded in at
+// cook time, so this sum is the whole of it and there is no table here to drift
+// from the one the cooker used. `src/assets/irradiance.h` carries the same sum
+// and the two must agree term for term.
+vec3 environment_irradiance(vec3 n) {
+    return frame.irradiance[0].rgb
+        + (frame.irradiance[1].rgb * n.y)
+        + (frame.irradiance[2].rgb * n.z)
+        + (frame.irradiance[3].rgb * n.x)
+        + (frame.irradiance[4].rgb * (n.x * n.y))
+        + (frame.irradiance[5].rgb * (n.y * n.z))
+        + (frame.irradiance[6].rgb * ((3.0 * n.z * n.z) - 1.0))
+        + (frame.irradiance[7].rgb * (n.x * n.z))
+        + (frame.irradiance[8].rgb * ((n.x * n.x) - (n.y * n.y)));
 }
 
 // Builds the shading normal from the vertex frame and the normal map.
@@ -197,23 +245,30 @@ void main() {
         direct += (diffuse + specular) * light.color.rgb * n_dot_l * attenuation;
     }
 
-    // The environment, in two samples of the one cubemap.
+    // The environment, by the split sum approximation.
     //
-    // The cooker built the mip chain by halving in linear light, so the
-    // smallest level is close to the average of the whole panorama. Reading it
-    // stands in for the irradiance a diffuse surface receives, and reading the
-    // reflection at a level roughness chooses stands in for the prefiltered
-    // specular. Neither integral is the right one. Both are one texture read,
-    // and together they carry the color and the direction of the environment,
-    // which is what this increment set out to prove. See issue #109.
-    float levels = float(textureQueryLevels(environment_map)) - 1.0;
-    vec3 irradiance = textureLod(environment_map, n, levels).rgb;
-    vec3 reflection = textureLod(environment_map, reflect(-v, n), roughness * levels).rgb;
+    // How much of the ambient light the specular takes. What is left goes to
+    // the diffuse, so a smooth surface seen edge on keeps almost none of it.
+    vec3 f_ambient = fresnel_schlick_roughness(n_dot_v, f0, roughness);
 
-    // A metal has no diffuse term, so it takes its ambient entirely from the
-    // reflection and tints it with f0. A dielectric takes almost all of its own
-    // from the irradiance.
-    vec3 ambient = (irradiance * albedo * (1.0 - metallic)) + (reflection * f0);
+    // The coefficients carry the cosine convolution and nothing else, so the
+    // Lambert divide belongs here. A metal has no diffuse term at all.
+    vec3 diffuse_ambient = max(environment_irradiance(n), vec3(0.0)) * albedo / kPi;
+    diffuse_ambient *= (vec3(1.0) - f_ambient) * (1.0 - metallic);
+
+    // One mip level for each roughness the cooker filtered for. The first level
+    // is the sharp environment and the last is the roughest, so roughness picks
+    // the level directly.
+    float levels = float(textureQueryLevels(environment_map)) - 1.0;
+    vec3 prefiltered = textureLod(environment_map, reflect(-v, n), roughness * levels).rgb;
+
+    // The other half of the split sum. It says what fraction of the reflection
+    // survives this surface at this angle, as a scale on f0 and a bias beside
+    // it, and it depends on no environment at all.
+    vec2 scale_bias = texture(brdf_lut, vec2(n_dot_v, roughness)).rg;
+    vec3 specular_ambient = prefiltered * ((f0 * scale_bias.x) + scale_bias.y);
+
+    vec3 ambient = diffuse_ambient + specular_ambient;
 
     float occlusion = 1.0;
 #ifdef HAS_OCCLUSION_MAP

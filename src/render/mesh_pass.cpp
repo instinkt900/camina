@@ -1,6 +1,7 @@
 #include "render/mesh_pass.h"
 
 #include "assets/mesh.h"
+#include "assets/reference.h"
 #include "assets/shader.h"
 #include "core/log.h"
 #include "scene/components.h"
@@ -21,6 +22,7 @@ namespace engine::render {
         /// What this pass reads out of the engine content tree, by source path.
         constexpr const char* kVertexShaderSource = "mesh.vert";
         constexpr const char* kFragmentShaderSource = "mesh.frag";
+        constexpr const char* kBrdfSource = "ibl.brdf";
 
         /// The push constant block, which must match mesh.vert exactly.
         struct Push {
@@ -68,6 +70,9 @@ namespace engine::render {
             /// x is how many entries of `lights` are real. The rest is padding,
             /// because std140 puts the array on a 16-byte boundary anyway.
             std::array<std::uint32_t, 4> light_count{};
+            /// The irradiance of the environment. Each entry is one coefficient
+            /// in rgb, and the fourth word is padding std140 would add anyway.
+            std::array<std::array<float, 4>, assets::kIrradianceCoefficients> irradiance{};
             std::array<GpuLight, kMaxLights> lights{};
         };
 
@@ -140,6 +145,25 @@ namespace engine::render {
 
         /// Which descriptor set the frame block binds to. The material is set 1.
         constexpr std::uint32_t kFrameSet = 0;
+
+        /**
+         * The irradiance of the fallback cubemap.
+         *
+         * That cubemap is one constant radiance in every direction, and the
+         * irradiance of a constant radiance L is pi times L in every direction.
+         * So the first coefficient carries all of it and the other eight are
+         * zero, which is the same thing the cooker writes for a flat sky.
+         *
+         * This is not an invented number. It is the right answer for the
+         * environment that is actually bound, so a scene with no environment
+         * lights its diffuse and its specular from one source.
+         */
+        assets::IrradianceSH fallback_irradiance() {
+            constexpr float kPi = 3.14159265358979323846F;
+            assets::IrradianceSH out;
+            out.c[0].fill(kPi * kFallbackCubeRadiance);
+            return out;
+        }
 
         /**
          * Reads every cooked form of one shader source.
@@ -362,11 +386,50 @@ namespace engine::render {
         // environment matches on the first update_environment() and rebuilds
         // nothing.
         environment_ = textures_.fallback_cube();
+        irradiance_ = fallback_irradiance();
+
+        // The lookup table lives in the engine content tree beside the shaders,
+        // so it is read once here and never again for a scene. A missing one is
+        // fatal, because there is no sensible thing to bind in its place: a
+        // white texel would say every reflection survives every surface whole.
+        if (!resolve_brdf_lut(content)) {
+            return false;
+        }
 
         if (!build_pipelines(content, pipelines_)) {
             return false;
         }
         return build_frame_sets();
+    }
+
+    /**
+     * Finds the split sum lookup table and uploads it.
+     *
+     * It comes through the manifest rather than from a GUID written into this
+     * file. `src/render/content/ibl.brdf` carries the identity in its sidecar,
+     * the same way every other asset does, so nothing here has to be kept in
+     * step with a number in a file.
+     */
+    bool MeshPass::resolve_brdf_lut(const assets::Content& content) {
+        const assets::ManifestEntry* entry = content.find(kBrdfSource);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("{} is not in the cooked engine content tree, so there is no "
+                             "split sum lookup and no image based lighting.",
+                             kBrdfSource);
+            return false;
+        }
+
+        const gfx::TextureHandle resolved = textures_.get(device_, content, entry->guid);
+        if (!resolved.valid() || resolved == textures_.fallback()) {
+            ENGINE_LOG_ERROR("{} did not load, and the cache has said why. The pass cannot "
+                             "shade without the table.",
+                             kBrdfSource);
+            return false;
+        }
+
+        brdf_guid_ = entry->guid;
+        brdf_lut_ = resolved;
+        return true;
     }
 
     /**
@@ -392,7 +455,7 @@ namespace engine::render {
             // it, because a descriptor set is filled once and a cubemap changes
             // only when the scene names another one. update_environment() calls
             // this again when that happens.
-            const std::array<gfx::DescriptorWrite, 2> writes{ {
+            const std::array<gfx::DescriptorWrite, 3> writes{ {
                 { .binding = 0,
                   .kind = gfx::DescriptorKind::UniformBuffer,
                   .texture = {},
@@ -400,6 +463,10 @@ namespace engine::render {
                 { .binding = 1,
                   .kind = gfx::DescriptorKind::CombinedImageSampler,
                   .texture = environment_.valid() ? environment_ : textures_.fallback_cube(),
+                  .buffer = {} },
+                { .binding = 2,
+                  .kind = gfx::DescriptorKind::CombinedImageSampler,
+                  .texture = brdf_lut_.valid() ? brdf_lut_ : textures_.fallback(),
                   .buffer = {} },
             } };
             if (!gfx::succeeded(gfx::create_descriptor_set(device_, layout_pipeline(), kFrameSet,
@@ -451,6 +518,11 @@ namespace engine::render {
         // has already said by name what went wrong.
         const gfx::TextureHandle resolved = textures_.get_cube(device_, content, wanted);
 
+        // The diffuse half, read here rather than in draw() for the same reason
+        // the cubemap is: it changes when the scene names another environment
+        // and on no other frame.
+        update_irradiance(content, wanted, resolved == textures_.fallback_cube());
+
         // Recorded before the early exit below, so a GUID that failed is asked
         // for once rather than on every frame.
         environment_guid_ = wanted;
@@ -465,6 +537,41 @@ namespace engine::render {
             ENGINE_LOG_ERROR("The frame sets did not rebuild for the environment, so nothing "
                              "will draw.");
         }
+    }
+
+    /**
+     * Reads the irradiance that belongs to the cubemap now bound.
+     *
+     * The cooker writes it as a sub-asset of the panorama, under a GUID derived
+     * from the source. So a scene names one identity and this works out the
+     * other, the same way a prefab names one mesh of a glTF file.
+     *
+     * @param environment The identity the scene named, which may be null.
+     * @param fallback True when the grey cubemap is what got bound, either
+     * because the scene named none or because the one it named would not load.
+     */
+    void MeshPass::update_irradiance(const assets::Content& content, Guid environment,
+                                     bool fallback) {
+        if (fallback) {
+            irradiance_ = fallback_irradiance();
+            return;
+        }
+
+        const Guid derived = Guid::derive(environment, assets::kIrradiancePartKind, 0);
+        std::vector<std::byte> bytes;
+        assets::IrradianceSH read;
+        if (content.read_bytes(derived, bytes) &&
+            assets::read_irradiance(bytes, read, "the environment irradiance")) {
+            irradiance_ = read;
+            return;
+        }
+
+        // Zero, and not the fallback constant. The cubemap that got bound is a
+        // real environment, so a grey diffuse beside it would light the scene
+        // from two different places and hide that anything is wrong.
+        ENGINE_LOG_WARN("The environment has no irradiance beside it, so nothing lights the "
+                        "diffuse of this scene. Cook the panorama again.");
+        irradiance_ = assets::IrradianceSH{};
     }
 
     /**
@@ -661,6 +768,17 @@ namespace engine::render {
         destroy_pipelines(pipelines_);
         pipelines_ = rebuilt;
 
+        // The lookup table is in the same tree as the shaders, and the runtime
+        // calls this for any change to it. A person retuning the ray budget in
+        // `ibl.brdf.meta` therefore sees the new table without a restart.
+        //
+        // A table that will not read leaves the white texel behind, which shades
+        // far too bright. That is loud on purpose: resolve_brdf_lut() names the
+        // file, and a wrong picture is easier to notice than a stale one.
+        textures_.drop(device_, brdf_guid_);
+        brdf_lut_ = gfx::TextureHandle{};
+        (void)resolve_brdf_lut(content);
+
         // Every descriptor set was allocated against the layout of the pipeline
         // that just went. A rebuilt shader may declare a different set, and a
         // set that no longer matches its layout is undefined to bind. So they
@@ -687,10 +805,13 @@ namespace engine::render {
             buffer = gfx::BufferHandle{};
         }
         textures_.destroy(device_);
-        // The fallback cubemap just went with the cache, so the handle beside
-        // it is stale. A second destroy() must not hand it to the device.
+        // The fallback cubemap and the lookup table just went with the cache, so
+        // the handles beside them are stale. A second destroy() must not hand
+        // one of them to the device.
         environment_ = gfx::TextureHandle{};
         environment_guid_ = Guid{};
+        brdf_lut_ = gfx::TextureHandle{};
+        brdf_guid_ = Guid{};
         meshes_.destroy(device_);
         destroy_pipelines(pipelines_);
         device_ = nullptr;
@@ -721,7 +842,15 @@ namespace engine::render {
             // The frame sets still write the cubemap that just went. Forgetting
             // the handle makes the next draw resolve it again and rebuild them,
             // which is what a person saving an environment expects to see.
-            if (guid == environment_guid_) {
+            //
+            // The irradiance is matched as well, though today it can never
+            // arrive alone: it is a sub-asset of the same source, and
+            // assets::Content hashes a whole entry rather than each output, so
+            // the two identities always change together. That is a fact about
+            // another file. Matching both keeps this one right on its own.
+            if (guid == environment_guid_ ||
+                (environment_guid_.valid() &&
+                 guid == Guid::derive(environment_guid_, assets::kIrradiancePartKind, 0))) {
                 environment_ = gfx::TextureHandle{};
             }
         }
@@ -757,6 +886,14 @@ namespace engine::render {
             .view_projection = view_projection,
             .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
         };
+
+        // rgb from the cooked coefficient and w left at zero. The shader reads
+        // only rgb, so the fourth word is the padding std140 would add anyway.
+        for (std::size_t i = 0; i < assets::kIrradianceCoefficients; ++i) {
+            frame.irradiance[i] = { irradiance_.c[i][0], irradiance_.c[i][1],
+                                    irradiance_.c[i][2], 0.0F };
+        }
+
         // Report the overflow when it starts and not on every frame after it.
         // draw() runs sixty times a second, so a scene with nine lights would
         // otherwise write sixty lines a second and hide everything else.

@@ -666,14 +666,14 @@ namespace {
     struct Runtime {
         engine::platform::Window window;
         engine::gfx::Device* device = nullptr;
-        /// The engine's own cooked assets, which today means the two shaders.
+        /// The engine's own cooked assets: the two shaders and the split sum table.
         engine::assets::Content engine_content;
         engine::render::MeshPass mesh;
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
         /// M4.5. Watches the game source tree and cooks what a person edits.
         engine::assets::HotReload reload;
-        /// M4.5. The same for the engine tree, which holds the two shaders.
+        /// M4.5. The same for the engine tree, which holds the shaders and the table.
         engine::assets::HotReload engine_reload;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
@@ -773,10 +773,10 @@ namespace {
                           engine::scene::World& world) {
         std::vector<engine::assets::AssetChange> changed;
 
-        // The engine tree holds the two shaders and nothing else, so any change
-        // to it means the pipeline. Adding a third asset to that tree would
-        // make this rebuild on a change that does not need it, which costs a
-        // stall and nothing else.
+        // The engine tree holds the two shaders and the split sum lookup table,
+        // and MeshPass::reload_shaders rebuilds for either. A change to one of
+        // them therefore also rebuilds for the other, which costs a stall and
+        // nothing else, because both follow a person saving a file.
         if (runtime.engine_reload.poll(runtime.engine_content, changed)) {
             (void)runtime.mesh.reload_shaders(runtime.engine_content);
         }
