@@ -10,8 +10,16 @@ behind each decision. Read [CLAUDE.md](CLAUDE.md) for the working rules.
 
 ## Status
 
-M0, foundations. The engine opens a window, runs the job system, and reports to the
-profiler. There is no renderer yet. See DESIGN.md section 10 for the milestone list.
+M5, the PBR renderer and the render graph, is in progress. M0 through M4 are complete.
+
+The runtime draws a scene of glTF models through Vulkan, shaded by Cook-Torrance
+metallic-roughness and lit by an HDR environment through the split sum approximation. A
+directional light casts a cascaded shadow. A render graph derives the barriers between
+passes from what each pass declares. Assets are cooked by `tools/cooker/` and reload while
+the program runs.
+
+What M5 has left is a clustered light cull and an ACES tonemap. See DESIGN.md section 10
+for the milestone list, and CLAUDE.md for the detail of what has landed.
 
 ## Requirements
 
