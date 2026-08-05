@@ -227,6 +227,43 @@ an environment rule, so it belongs. An unrelated overflow two functions away doe
 The rules for such an issue are under "Issue tracker" below. A finding that lives only in a
 chat reply or a pull-request comment is lost.
 
+### Writing a pull request body
+
+Write it for somebody who has only the repository. They did not see the conversation that
+produced the work, and they never will.
+
+Put it in this order:
+
+1. **What the pull request does.** First, in a sentence or two.
+2. **What it gives, or why it was needed.**
+3. **How to verify it**, when a reviewer can check something themselves.
+4. Any other context that matters.
+5. Issue links last. Use `Closes #<n>` when it closes one.
+
+Rules:
+
+- **Do not list files or paths.** GitHub shows the diff. Name a file only to point at
+  something specific inside it.
+- Keep it short. Prefer a list to a paragraph, and a sentence to a list.
+- Follow the writing style below. Relaxed STE applies here.
+
+**When you push again to an open pull request, say only what changed and why.** Do not
+restate the branch.
+
+**`gh pr edit` cannot change a body here.** It asks for `projectCards`, which GitHub has
+retired, and the call fails with a deprecation notice that reads like a warning. The edit
+does not happen. Patch the body through REST instead, and read it back to check:
+
+```bash
+python3 -c "
+import json, subprocess
+body = open('body.md').read()
+subprocess.run(['gh','api','-X','PATCH','repos/<owner>/<repo>/pulls/<N>','--input','-'],
+               input=json.dumps({'body': body}), text=True)
+"
+gh pr view <N> --json body --jq '.body[0:200]'
+```
+
 ### Collect every change before you push again
 
 Gather the CI failures, the review comments, and any work you still owe the branch. Fix
@@ -299,8 +336,12 @@ gh api repos/<owner>/<repo>/issues/<N>/comments  # top-level, where the walkthro
 **issues** endpoint, which is easy to miss because the subject is a pull request.
 
 **An empty result means "not yet", never "clear".** Say that the review has not arrived.
-CodeRabbit is rate limited and sometimes never reviews at all, which is a thing to state
-plainly rather than to treat as a pass.
+Never treat it as a pass.
+
+**A rate limit ends the wait.** CodeRabbit posts its own limit as a top-level comment, with
+a reset time. When it does, stop the monitor, say the review did not run, and hand back.
+Do not wait for the reset, and do not poll for it. Whether an automated review is worth
+waiting for is the user's call, not yours.
 
 ### Answering the review
 
