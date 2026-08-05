@@ -479,6 +479,11 @@ namespace engine::gfx {
             for (TextureEntry& entry : device.textures) {
                 // The sampler belongs to the cache, not to the texture.
                 // destroy_samplers() releases it.
+                for (VkImageView layer : entry.layer_views) {
+                    if (layer != VK_NULL_HANDLE) {
+                        vkDestroyImageView(device.device, layer, nullptr);
+                    }
+                }
                 if (entry.view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device.device, entry.view, nullptr);
                 }
@@ -831,9 +836,9 @@ namespace engine::gfx {
                      "create_depth_target needs somewhere to put the handle.");
         *out_texture = TextureHandle{};
 
-        if (desc.width == 0 || desc.height == 0) {
-            ENGINE_LOG_ERROR("A depth target needs a size, and this one is {}x{}.", desc.width,
-                             desc.height);
+        if (desc.width == 0 || desc.height == 0 || desc.layer_count == 0) {
+            ENGINE_LOG_ERROR("A depth target needs a size, and this one is {}x{} with {} layers.",
+                             desc.width, desc.height, desc.layer_count);
             return Result::ErrorInit;
         }
 
@@ -873,7 +878,7 @@ namespace engine::gfx {
         image.format = device->depth_format;
         image.extent = VkExtent3D{ desc.width, desc.height, 1 };
         image.mipLevels = 1;
-        image.arrayLayers = 1;
+        image.arrayLayers = desc.layer_count;
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
         // Both, because one pass renders into it and another reads it. That
@@ -888,24 +893,57 @@ namespace engine::gfx {
         ENGINE_VK_TRY(vmaCreateImage(device->allocator, &image, &allocation, &built.image,
                                      &built.allocation, nullptr));
 
+        // The view the shader samples covers every layer at once. An image with
+        // one layer stays a plain 2D view, because a shader that declares
+        // sampler2D cannot bind an array view even of length one.
+        const bool layered = desc.layer_count > 1;
         VkImageViewCreateInfo view{};
         view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         view.image = built.image;
-        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.viewType = layered ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
         view.format = device->depth_format;
         view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
         view.subresourceRange.levelCount = 1;
-        view.subresourceRange.layerCount = 1;
+        view.subresourceRange.layerCount = desc.layer_count;
         if (vkCreateImageView(device->device, &view, nullptr, &built.view) != VK_SUCCESS) {
             vmaDestroyImage(device->allocator, built.image, built.allocation);
             ENGINE_LOG_ERROR("The depth target view did not build.");
             return Result::ErrorInit;
         }
 
-        const Result sampled = vk::resolve_sampler(*device, sampler, &built.sampler);
-        if (!succeeded(sampled)) {
+        // One view for each layer, for rendering. An attachment is a single
+        // layer even when the image holds several, so the sampling view above
+        // cannot serve as one.
+        const auto release = [&built, device]() {
+            for (VkImageView each : built.layer_views) {
+                vkDestroyImageView(device->device, each, nullptr);
+            }
             vkDestroyImageView(device->device, built.view, nullptr);
             vmaDestroyImage(device->allocator, built.image, built.allocation);
+        };
+
+        built.layer_views.resize(desc.layer_count, VK_NULL_HANDLE);
+        for (std::uint32_t layer = 0; layer < desc.layer_count; ++layer) {
+            VkImageViewCreateInfo one{};
+            one.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            one.image = built.image;
+            one.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            one.format = device->depth_format;
+            one.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            one.subresourceRange.levelCount = 1;
+            one.subresourceRange.baseArrayLayer = layer;
+            one.subresourceRange.layerCount = 1;
+            if (vkCreateImageView(device->device, &one, nullptr, &built.layer_views[layer]) !=
+                VK_SUCCESS) {
+                release();
+                ENGINE_LOG_ERROR("A depth target layer view did not build.");
+                return Result::ErrorInit;
+            }
+        }
+
+        const Result sampled = vk::resolve_sampler(*device, sampler, &built.sampler);
+        if (!succeeded(sampled)) {
+            release();
             return sampled;
         }
 
@@ -1082,6 +1120,12 @@ namespace engine::gfx {
         // A descriptor set that names this texture is not freed here, because a
         // set belongs to whoever built it. The caller drops the set first, which
         // MaterialCache does when a material reloads.
+        for (VkImageView layer : entry->layer_views) {
+            if (layer != VK_NULL_HANDLE) {
+                vkDestroyImageView(device->device, layer, nullptr);
+            }
+        }
+        entry->layer_views.clear();
         vkDestroyImageView(device->device, entry->view, nullptr);
         vmaDestroyImage(device->allocator, entry->image, entry->allocation);
 

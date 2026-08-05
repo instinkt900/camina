@@ -32,15 +32,26 @@ struct Light {
 // Must match kIrradianceCoefficients in src/assets/irradiance.h.
 const uint kIrradianceCoefficients = 9u;
 
+// Must match kCascadeCount in render/shadow_pass.h. This is the size of the
+// array, not the number in use. light_count.z carries that.
+const uint kMaxCascades = 4u;
+
 layout(set = 0, binding = 0) uniform Frame {
     mat4 view_projection;
-    // Takes a world position into the shadow map's clip space. Identity when the
-    // scene has no directional light, and shadow_factor() reads light_count.y
-    // rather than testing the matrix.
-    mat4 light_view_projection;
+    // One for each cascade: takes a world position into that cascade's clip
+    // space. Identity when the scene has no directional light, and
+    // shadow_factor() reads light_count.y rather than testing the matrix.
+    mat4 light_view_projection[kMaxCascades];
     vec4 camera_position; // w is unused and keeps the block aligned.
+    // Where each cascade ends, as a distance in front of the camera. Increasing,
+    // and the last one is the whole shadow distance.
+    vec4 cascade_splits;
+    // The depth bias each cascade needs in its own clip space. A cascade that
+    // covers more world has larger texels and a longer depth range, so one
+    // number cannot serve them all.
+    vec4 cascade_biases;
     // x is how many lights are real. y is 1 when a directional light casts a
-    // shadow, and 0 when nothing does. The rest is padding.
+    // shadow. z is how many cascades are in use. w is padding.
     uvec4 light_count;
     // The irradiance of the environment, as a second order spherical harmonic.
     // rgb is one coefficient and w is padding, because std140 puts an array
@@ -74,7 +85,7 @@ layout(set = 0, binding = 2) uniform sampler2D brdf_lut;
 // The comparison is "greater or equal", which is what reverse-Z needs. Outside
 // the map the sampler reads a border of zero, the far plane, so every fragment
 // there is lit. See gfx::AddressMode::ClampToZeroBorder.
-layout(set = 0, binding = 3) uniform sampler2DShadow shadow_map;
+layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadow_map;
 
 /**
  * How much of the key light reaches this fragment. 1 is fully lit.
@@ -93,7 +104,21 @@ float shadow_factor(vec3 world, vec3 n, vec3 light_direction) {
         return 1.0;
     }
 
-    vec4 light_clip = frame.light_view_projection * vec4(world, 1.0);
+    // gl_FragCoord.w is one over the clip w that the projection produced, and
+    // for this projection clip w is the distance in front of the camera. So this
+    // is the view depth with nothing added to the frame block to carry it.
+    float view_depth = 1.0 / gl_FragCoord.w;
+
+    uint count = min(frame.light_count.z, kMaxCascades);
+    uint cascade = count - 1u;
+    for (uint i = 0u; i < count; ++i) {
+        if (view_depth < frame.cascade_splits[i]) {
+            cascade = i;
+            break;
+        }
+    }
+
+    vec4 light_clip = frame.light_view_projection[cascade] * vec4(world, 1.0);
     // An orthographic projection leaves w at 1, so this divide is a formality.
     // It stays because #135 may fit a cascade with a perspective volume.
     vec3 coord = light_clip.xyz / light_clip.w;
@@ -113,12 +138,11 @@ float shadow_factor(vec3 world, vec3 n, vec3 light_direction) {
     // straight-on value. Beyond that a grazing surface is barely lit anyway, and
     // an unbounded slope term detaches the shadow where it is needed most.
     float slope = clamp(tan(acos(n_dot_l)), 0.0, 8.0);
-    // One texel of the map, in depth. Reverse-Z means a lit surface needs a
-    // larger value, so the bias adds.
-    const float kTexelDepthBias = 0.0008;
-    float bias = kTexelDepthBias * (1.0 + slope);
+    // The base comes from this cascade's own texel size, worked out on the CPU.
+    // Reverse-Z means a lit surface needs a larger value, so the bias adds.
+    float bias = frame.cascade_biases[cascade] * (1.0 + slope);
 
-    return texture(shadow_map, vec3(coord.xy, coord.z + bias));
+    return texture(shadow_map, vec4(coord.xy, float(cascade), coord.z + bias));
 }
 
 // Every one of these is always a valid sampler. A material that names no

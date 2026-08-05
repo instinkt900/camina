@@ -145,7 +145,19 @@ namespace engine::gfx {
     struct DepthTargetDesc {
         std::uint32_t width = 0;  ///< Width in texels. Required.
         std::uint32_t height = 0; ///< Height in texels. Required.
-        SamplerDesc sampler;      ///< How a later pass reads it. Shared, not owned.
+        /**
+         * @brief How many array layers the image holds. 1 for a plain image.
+         *
+         * A cascade set is one image with a layer for each cascade. A shader
+         * reads the whole thing as one `sampler2DArrayShadow` and picks a layer,
+         * which is what keeps the selection to one sampler and no branch over
+         * several bindings.
+         *
+         * A pass renders into one layer at a time, so
+         * cmd_begin_depth_rendering() names which.
+         */
+        std::uint32_t layer_count = 1;
+        SamplerDesc sampler; ///< How a later pass reads it. Shared, not owned.
     };
 
     /**

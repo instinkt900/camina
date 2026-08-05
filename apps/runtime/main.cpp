@@ -734,10 +734,14 @@ namespace {
         // The shadow pass first, because the mesh pass reads what it wrote. Its
         // barriers go in before it records, and its own rendering scope opens
         // and closes inside draw().
+        const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
+
         issue_pass_barriers(info.commands, schedule, kShadowPassIndex, context.shadow_pass->map());
         context.shadow_pass->draw(info.commands, world, *context.game_content,
-                                  context.mesh_pass->meshes());
-        context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projection(),
+                                  context.mesh_pass->meshes(), clip_from_world);
+        context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projections(),
+                                           context.shadow_pass->cascade_splits(),
+                                           context.shadow_pass->cascade_biases(),
                                            context.shadow_pass->has_light());
 
         // Then the mesh pass barriers, which include moving the shadow map from
@@ -747,8 +751,6 @@ namespace {
         const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
                                             settings.clear_color.b, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, clear);
-
-        const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
 
         // Every entity that names a mesh draws it, and that is now every
         // entity that draws at all. This is the pipeline made visible: the

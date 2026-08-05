@@ -222,11 +222,18 @@ namespace engine::gfx {
      * @param commands The command list from begin_frame().
      * @param depth The image to render into. A null or stale handle logs and
      * opens no scope, and the draws that follow are then discarded.
+     * @param layer Which array layer to render into. Pass 0 for an image with
+     * one layer. A layer past the end logs and opens no scope.
      *
      * @warning The image must already be in ResourceState::DepthTarget. Close
      * the scope with cmd_end_rendering().
+     *
+     * @warning The clear covers only the layer named here. A cascade set needs
+     * one scope for each layer, because a layer nobody rendered into keeps
+     * whatever the allocation held.
      */
-    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth);
+    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth,
+                                   std::uint32_t layer);
 
     /**
      * @brief Closes the rendering scope that either begin function opened.

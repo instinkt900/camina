@@ -66,13 +66,18 @@ namespace engine::render {
          */
         struct FrameUniforms {
             Mat4 view_projection{ 1.0F };
-            /// Takes a world position into the shadow map's clip space, from
-            /// `render::ShadowPass`. Identity when nothing casts.
-            Mat4 light_view_projection{ 1.0F };
+            /// One for each cascade, from `render::ShadowPass`. Identity when
+            /// nothing casts.
+            std::array<Mat4, kCascadeCount> light_view_projection{};
             std::array<float, 4> camera_position{};
+            /// Where each cascade ends, as a distance in front of the camera.
+            std::array<float, 4> cascade_splits{};
+            /// The depth bias each cascade needs in its own clip space.
+            std::array<float, 4> cascade_biases{};
             /// x is how many entries of `lights` are real. y is 1 when a
-            /// directional light casts a shadow. The rest is padding, because
-            /// std140 puts the array on a 16-byte boundary anyway.
+            /// directional light casts a shadow. z is how many cascades are in
+            /// use. w is padding, because std140 puts the array on a 16-byte
+            /// boundary anyway.
             std::array<std::uint32_t, 4> light_count{};
             /// The irradiance of the environment. Each entry is one coefficient
             /// in rgb, and the fourth word is padding std140 would add anyway.
@@ -385,8 +390,12 @@ namespace engine::render {
         return PassDesc{ .name = "mesh", .reads = kReads, .writes = kWrites };
     }
 
-    void MeshPass::set_shadow_view(const Mat4& light_view_projection, bool casts) {
-        shadow_view_ = light_view_projection;
+    void MeshPass::set_shadow_view(const std::array<Mat4, kCascadeCount>& light_view_projections,
+                                   const std::array<float, kCascadeCount>& splits,
+                                   const std::array<float, kCascadeCount>& biases, bool casts) {
+        shadow_views_ = light_view_projections;
+        shadow_splits_ = splits;
+        shadow_biases_ = biases;
         shadow_casts_ = casts;
     }
 
@@ -954,8 +963,12 @@ namespace engine::render {
 
         FrameUniforms frame{
             .view_projection = view_projection,
-            .light_view_projection = shadow_view_,
+            .light_view_projection = shadow_views_,
             .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
+            .cascade_splits = { shadow_splits_[0], shadow_splits_[1], shadow_splits_[2],
+                                shadow_splits_[3] },
+            .cascade_biases = { shadow_biases_[0], shadow_biases_[1], shadow_biases_[2],
+                                shadow_biases_[3] },
         };
 
         // rgb from the cooked coefficient and w left at zero. The shader reads
@@ -972,6 +985,7 @@ namespace engine::render {
         // gather_lights() fills x, and this is the only other word the shader
         // reads. Set it after, because the call writes the whole element.
         frame.light_count[1] = shadow_casts_ ? 1U : 0U;
+        frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
         if (overflowed && !lights_overflowed_) {
             ENGINE_LOG_WARN("The scene has more than {} lights, and the rest are not lit. "
                             "See kMaxLights in mesh_pass.cpp.",
