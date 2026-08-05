@@ -666,14 +666,14 @@ namespace {
     struct Runtime {
         engine::platform::Window window;
         engine::gfx::Device* device = nullptr;
-        /// The engine's own cooked assets, which today means the two shaders.
+        /// The engine's own cooked assets: the two shaders and the split sum table.
         engine::assets::Content engine_content;
         engine::render::MeshPass mesh;
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
         /// M4.5. Watches the game source tree and cooks what a person edits.
         engine::assets::HotReload reload;
-        /// M4.5. The same for the engine tree, which holds the two shaders.
+        /// M4.5. The same for the engine tree, which holds the shaders and the table.
         engine::assets::HotReload engine_reload;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };

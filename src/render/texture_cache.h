@@ -33,7 +33,10 @@
 namespace engine::render {
 
     /**
-     * @brief What every channel of the cube fallback texels holds.
+     * @brief What every RGB channel of the cube fallback texels holds.
+     *
+     * Alpha is not one of them. It stays opaque, because the value here is a
+     * radiance and an environment has no transparency.
      *
      * About a quarter in linear light. Dim enough to read as a room with no
      * lamp in it, and bright enough that a metal shows its shape rather than

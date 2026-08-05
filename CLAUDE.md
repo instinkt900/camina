@@ -168,7 +168,7 @@ scene that names no environment gets the irradiance of the grey fallback, which 
 `sandbox/content/models/spheres/` is a row of seven metal spheres from roughness 0.05 to 0.95,
 because every other model in the sandbox is one material at one roughness and nothing showed the
 difference. Deleting the mip choice, the coefficients, or the table each moves the picture 60 to
-800 times the run to run noise floor, and each moves the surface it should: the table and the
+800 times the run-to-run noise floor, and each moves the surface it should: the table and the
 mip move the metal spheres, and the coefficients move the dielectric helmet and barely touch the
 metal.
 

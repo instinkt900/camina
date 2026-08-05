@@ -842,7 +842,15 @@ namespace engine::render {
             // The frame sets still write the cubemap that just went. Forgetting
             // the handle makes the next draw resolve it again and rebuild them,
             // which is what a person saving an environment expects to see.
-            if (guid == environment_guid_) {
+            //
+            // The irradiance is matched as well, though today it can never
+            // arrive alone: it is a sub-asset of the same source, and
+            // assets::Content hashes a whole entry rather than each output, so
+            // the two identities always change together. That is a fact about
+            // another file. Matching both keeps this one right on its own.
+            if (guid == environment_guid_ ||
+                (environment_guid_.valid() &&
+                 guid == Guid::derive(environment_guid_, assets::kIrradiancePartKind, 0))) {
                 environment_ = gfx::TextureHandle{};
             }
         }
