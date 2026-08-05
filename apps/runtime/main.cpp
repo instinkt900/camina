@@ -16,6 +16,7 @@
 #include "reflect/json.h"
 #include "reflect/registry.h"
 #include "render/mesh_pass.h"
+#include "render/shadow_pass.h"
 #include "screenshot.h"
 #include "sandbox/game.h"
 #include "scene/component_registry.h"
@@ -97,44 +98,76 @@ namespace {
         bool vsync = true;
     };
 
+    /// Which pass in the schedule is which. The order here is the order they run.
+    constexpr std::size_t kShadowPassIndex = 0;
+    constexpr std::size_t kMeshPassIndex = 1;
+
     /**
-     * Derives this frame's barriers and puts them into the command list.
+     * Works out every barrier this frame needs.
      *
      * The pass list is built fresh each frame rather than kept, because a
      * declaration is a handful of spans over static storage and building it
      * costs nothing. Keeping it would mean invalidating it whenever a pass
      * changed what it touches.
      *
-     * Both images start the frame in Undefined. A swapchain image is a
-     * different image on almost every acquire and its contents are never read,
-     * so there is nothing to carry over from the frame before.
-     *
-     * @param commands The command list from begin_frame().
+     * @param states What state each resource is in. Read and then updated, so
+     * the shadow map carries its state into the next frame.
+     * @param out The schedule. issue_pass_barriers() reads it one pass at a time.
      * @return False when a declaration was refused, which is a programming
      * error rather than a run-time condition.
      */
-    [[nodiscard]] bool issue_frame_barriers(engine::gfx::CommandList* commands) {
-        const std::array passes{ engine::render::MeshPass::declare() };
-        const std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> initial{
-            engine::gfx::ResourceState::Undefined, engine::gfx::ResourceState::Undefined
-        };
+    [[nodiscard]] bool derive_frame_barriers(
+        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states,
+        engine::render::GraphSchedule& out) {
+        const std::array passes{ engine::render::ShadowPass::declare(),
+                                 engine::render::MeshPass::declare() };
 
-        engine::render::GraphSchedule schedule;
-        if (!engine::render::derive_barriers(passes, initial, schedule)) {
+        // The two frame targets start over every frame. The swapchain image is a
+        // different image on almost every acquire, and the depth image is
+        // scratch that nothing reads across a frame boundary.
+        states[engine::render::kFrameColor.index] = engine::gfx::ResourceState::Undefined;
+        states[engine::render::kFrameDepth.index] = engine::gfx::ResourceState::Undefined;
+        // The shadow map does not. It is one image that every frame in flight
+        // shares, so the state the last frame left it in is what the barrier has
+        // to order against. Calling it Undefined here would derive a
+        // depth-to-depth barrier that does not wait for the previous frame's
+        // fragment shader to finish reading it, which is a write after read.
+        // That is the same hazard #125 found on the shared depth image.
+
+        if (!engine::render::derive_barriers(passes, states, out)) {
             ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
             return false;
         }
 
-        for (const engine::render::PassBarriers& pass : schedule.passes) {
-            for (const engine::render::GraphBarrier& barrier : pass.before) {
-                const engine::gfx::FrameTarget target =
-                    barrier.resource == engine::render::kFrameDepth
-                        ? engine::gfx::FrameTarget::Depth
-                        : engine::gfx::FrameTarget::Color;
-                engine::gfx::cmd_frame_barrier(commands, target, barrier.before, barrier.after);
-            }
+        // Carry the shadow map's state into the next frame. The graph works this
+        // out already, which is what final_states is for.
+        for (std::size_t i = 0; i < states.size(); ++i) {
+            states[i] = out.final_states[i];
         }
         return true;
+    }
+
+    /// Puts the barriers one pass needs into the command list.
+    void issue_pass_barriers(engine::gfx::CommandList* commands,
+                             const engine::render::GraphSchedule& schedule, std::size_t pass,
+                             engine::gfx::TextureHandle shadow_map) {
+        if (pass >= schedule.passes.size()) {
+            return;
+        }
+        for (const engine::render::GraphBarrier& barrier : schedule.passes[pass].before) {
+            if (barrier.resource == engine::render::kShadowMap) {
+                // Not a frame target, so it is named by a handle rather than by
+                // an enum. See gfx::cmd_texture_barrier.
+                engine::gfx::cmd_texture_barrier(commands, shadow_map, barrier.before,
+                                                 barrier.after);
+                continue;
+            }
+            const engine::gfx::FrameTarget target =
+                barrier.resource == engine::render::kFrameDepth
+                    ? engine::gfx::FrameTarget::Depth
+                    : engine::gfx::FrameTarget::Color;
+            engine::gfx::cmd_frame_barrier(commands, target, barrier.before, barrier.after);
+        }
     }
 
     /**
@@ -638,6 +671,11 @@ namespace {
     struct FrameContext {
         engine::gfx::Device* device = nullptr;
         engine::render::MeshPass* mesh_pass = nullptr;
+        engine::render::ShadowPass* shadow_pass = nullptr;
+        /// What state each graph resource is in. The shadow map carries its
+        /// state across frames, so this outlives one frame.
+        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>*
+            resource_states = nullptr;
         /// The game content tree, which holds the cooked meshes.
         const engine::assets::Content* game_content = nullptr;
         ViewSettings* settings = nullptr;
@@ -687,9 +725,23 @@ namespace {
         // One pass today, so this derives the two barriers that begin_frame used
         // to issue by hand. The point is that a second pass costs nothing here:
         // it declares what it touches and the barriers between the two fall out.
-        if (!issue_frame_barriers(info.commands)) {
+        engine::render::GraphSchedule schedule;
+        if (!derive_frame_barriers(*context.resource_states, schedule)) {
             return FrameOutcome::Failed;
         }
+
+        // The shadow pass first, because the mesh pass reads what it wrote. Its
+        // barriers go in before it records, and its own rendering scope opens
+        // and closes inside draw().
+        issue_pass_barriers(info.commands, schedule, kShadowPassIndex, context.shadow_pass->map());
+        context.shadow_pass->draw(info.commands, world, *context.game_content,
+                                  context.mesh_pass->meshes());
+        context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projection(),
+                                           context.shadow_pass->has_light());
+
+        // Then the mesh pass barriers, which include moving the shadow map from
+        // a depth target to something a shader can read.
+        issue_pass_barriers(info.commands, schedule, kMeshPassIndex, context.shadow_pass->map());
 
         const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
                                             settings.clear_color.b, 1.0F };
@@ -735,6 +787,10 @@ namespace {
         /// The engine's own cooked assets: the two shaders and the split sum table.
         engine::assets::Content engine_content;
         engine::render::MeshPass mesh;
+        /// Renders the directional light's depth, which the mesh pass samples.
+        engine::render::ShadowPass shadow;
+        /// Carried across frames, because the shadow map is one shared image.
+        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
         /// M4.5. Watches the game source tree and cooks what a person edits.
@@ -871,6 +927,7 @@ namespace {
 
             if (had_shader) {
                 (void)runtime.mesh.reload_shaders(runtime.engine_content);
+                (void)runtime.shadow.reload_shaders(runtime.engine_content);
             }
             if (had_brdf) {
                 (void)runtime.mesh.reload_brdf_lut(runtime.engine_content);
@@ -931,7 +988,13 @@ namespace {
             return false;
         }
 
-        if (!runtime.mesh.create(runtime.device, runtime.engine_content)) {
+        // The shadow pass first. The mesh pass binds its map into every frame
+        // descriptor set, so the map has to exist before those sets are built.
+        if (!runtime.shadow.create(runtime.device, runtime.engine_content)) {
+            return false;
+        }
+
+        if (!runtime.mesh.create(runtime.device, runtime.engine_content, runtime.shadow.map())) {
             return false;
         }
 
@@ -964,6 +1027,7 @@ namespace {
         // pipeline through the device, and its destructor runs when Runtime
         // goes out of scope, which is after this function returns.
         runtime.mesh.destroy();
+        runtime.shadow.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
         }
@@ -1172,6 +1236,8 @@ int main(int argc, char** argv) {
     const FrameContext context{
         .device = runtime.device,
         .mesh_pass = &runtime.mesh,
+        .shadow_pass = &runtime.shadow,
+        .resource_states = &runtime.states,
         .game_content = &runtime.game_content,
         .settings = &settings,
         .world = &world,

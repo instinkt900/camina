@@ -34,8 +34,14 @@ const uint kIrradianceCoefficients = 9u;
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 view_projection;
+    // Takes a world position into the shadow map's clip space. Identity when the
+    // scene has no directional light, and shadow_factor() reads light_count.y
+    // rather than testing the matrix.
+    mat4 light_view_projection;
     vec4 camera_position; // w is unused and keeps the block aligned.
-    uvec4 light_count;    // x is how many lights are real. The rest is padding.
+    // x is how many lights are real. y is 1 when a directional light casts a
+    // shadow, and 0 when nothing does. The rest is padding.
+    uvec4 light_count;
     // The irradiance of the environment, as a second order spherical harmonic.
     // rgb is one coefficient and w is padding, because std140 puts an array
     // element on a sixteen byte boundary either way.
@@ -60,6 +66,60 @@ layout(set = 0, binding = 1) uniform samplerCube environment_map;
 // at normal incidence and green is the bias. The horizontal axis is the cosine
 // of the angle to the viewer and the vertical axis is roughness.
 layout(set = 0, binding = 2) uniform sampler2D brdf_lut;
+
+// What the directional light can see, from render::ShadowPass. A sampler2DShadow
+// compares rather than returns the texel, so a linear filter gives four taps of
+// percentage closer filtering for the cost of one read.
+//
+// The comparison is "greater or equal", which is what reverse-Z needs. Outside
+// the map the sampler reads a border of zero, the far plane, so every fragment
+// there is lit. See gfx::AddressMode::ClampToZeroBorder.
+layout(set = 0, binding = 3) uniform sampler2DShadow shadow_map;
+
+/**
+ * How much of the key light reaches this fragment. 1 is fully lit.
+ *
+ * The bias is in shadow map texels rather than world units, because the error
+ * this corrects is a texel covering a slope. A surface nearly edge-on to the
+ * light spans far more depth across one texel than a surface facing it, and the
+ * normal-facing term is what tracks that.
+ *
+ * The shadow pass draws both faces, because a wall of the room is a single quad
+ * with no back and culling either side would let the light through it. So this
+ * bias carries the whole correction on its own.
+ */
+float shadow_factor(vec3 world, vec3 n, vec3 light_direction) {
+    if (frame.light_count.y == 0u) {
+        return 1.0;
+    }
+
+    vec4 light_clip = frame.light_view_projection * vec4(world, 1.0);
+    // An orthographic projection leaves w at 1, so this divide is a formality.
+    // It stays because #135 may fit a cascade with a perspective volume.
+    vec3 coord = light_clip.xyz / light_clip.w;
+
+    // Clip space is -1 to 1 across, and a texture reads 0 to 1. Depth is
+    // already 0 to 1 under Vulkan and must not be rescaled.
+    coord.xy = (coord.xy * 0.5) + 0.5;
+
+    // Behind the light's far plane. Nothing recorded a depth there, so treat it
+    // as lit rather than reading a coordinate outside the map.
+    if (coord.z <= 0.0) {
+        return 1.0;
+    }
+
+    float n_dot_l = clamp(dot(n, light_direction), 0.0, 1.0);
+    // Grows as the surface turns away from the light, up to eight times the
+    // straight-on value. Beyond that a grazing surface is barely lit anyway, and
+    // an unbounded slope term detaches the shadow where it is needed most.
+    float slope = clamp(tan(acos(n_dot_l)), 0.0, 8.0);
+    // One texel of the map, in depth. Reverse-Z means a lit surface needs a
+    // larger value, so the bias adds.
+    const float kTexelDepthBias = 0.0008;
+    float bias = kTexelDepthBias * (1.0 + slope);
+
+    return texture(shadow_map, vec3(coord.xy, coord.z + bias));
+}
 
 // Every one of these is always a valid sampler. A material that names no
 // texture for a slot binds a single white texel, so the shader needs no branch
@@ -205,6 +265,9 @@ void main() {
     vec3 f0 = mix(kDielectricF0, albedo, metallic);
 
     vec3 direct = vec3(0.0);
+    // Set once the loop has seen a directional light, so the second one does not
+    // read a map that was rendered for the first.
+    bool shadowed_one = false;
     for (uint i = 0u; i < min(frame.light_count.x, kMaxLights); ++i) {
         Light light = frame.lights[i];
 
@@ -212,8 +275,13 @@ void main() {
         // the way a directional light travels.
         vec3 l;
         float attenuation = 1.0;
+        // Only the first directional light casts. One map exists, and #135 is
+        // what gives a second caster somewhere to write.
+        bool casts = false;
         if (light.position.w < 0.5) {
             l = -light.position.xyz;
+            casts = !shadowed_one;
+            shadowed_one = true;
         } else {
             vec3 to_light = light.position.xyz - in_world;
             float distance = length(to_light);
@@ -242,7 +310,8 @@ void main() {
         vec3 specular = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 1e-7);
         vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / kPi;
 
-        direct += (diffuse + specular) * light.color.rgb * n_dot_l * attenuation;
+        float visibility = casts ? shadow_factor(in_world, n, l) : 1.0;
+        direct += (diffuse + specular) * light.color.rgb * n_dot_l * attenuation * visibility;
     }
 
     // The environment, by the split sum approximation.

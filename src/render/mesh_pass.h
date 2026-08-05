@@ -112,9 +112,28 @@ namespace engine::render {
          * @brief Builds the pipeline and the fallback texture.
          * @param device The device to draw with.
          * @param content The engine content tree, which holds the shaders.
+         * @param shadow_map The map the shadow pass renders. Required.
          * @return True when the pipeline built.
+         *
+         * @warning @p shadow_map must be a real depth target from
+         * ShadowPass::map(). The shader reads it as a comparison sampler and
+         * there is no fallback that would serve, so this fails without one.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content);
+        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content,
+                                  gfx::TextureHandle shadow_map);
+
+        /**
+         * @brief Tells the pass where the light looked from this frame.
+         *
+         * Call it after ShadowPass::draw() and before draw(), because the matrix
+         * is fitted to what the scene holds and can move on any frame.
+         *
+         * @param light_view_projection Takes a world position into the shadow
+         * map's clip space.
+         * @param casts False when the world has no directional light, which
+         * makes the shader skip the shadow lookup rather than read a stale map.
+         */
+        void set_shadow_view(const Mat4& light_view_projection, bool casts);
 
         /// @brief Frees the pipeline and everything the caches uploaded.
         void destroy();
@@ -206,6 +225,17 @@ namespace engine::render {
         void draw(gfx::CommandList* commands, const scene::World& world,
                   const assets::Content& content, const Mat4& view_projection,
                   const Vec3& camera_position);
+
+        /**
+         * @brief The mesh cache, so another pass can draw the same geometry.
+         *
+         * The shadow pass renders depth from the meshes this one uploaded.
+         * Giving it a cache of its own would put a second copy of every vertex
+         * on the device to render the same triangles.
+         *
+         * @return The cache. It is owned here and borrowed by the caller.
+         */
+        [[nodiscard]] MeshCache& meshes() { return meshes_; }
 
         /// @brief How many meshes are uploaded.
         /// @return The count.
@@ -339,6 +369,12 @@ namespace engine::render {
         assets::IrradianceSH irradiance_;
         /// @brief The split sum lookup table, which every material shares.
         gfx::TextureHandle brdf_lut_;
+        /// @brief The shadow map, owned by the shadow pass and read here.
+        gfx::TextureHandle shadow_map_;
+        /// @brief Where the light looked from this frame. See set_shadow_view().
+        Mat4 shadow_view_{ 1.0F };
+        /// @brief Whether anything casts, which the shader reads as light_count.y.
+        bool shadow_casts_ = false;
         /// @brief Which asset ::brdf_lut_ came from, so hot reload can drop it.
         Guid brdf_guid_;
         MeshCache meshes_;

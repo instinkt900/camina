@@ -33,8 +33,14 @@ namespace engine::render {
 
         /// The eight corners of an axis aligned box, as (x, y, z) selectors.
         constexpr std::array<std::array<int, 3>, 8> kBoxCorners{ {
-            { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 1, 1, 0 },
-            { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 }, { 1, 1, 1 },
+            { 0, 0, 0 },
+            { 1, 0, 0 },
+            { 0, 1, 0 },
+            { 1, 1, 0 },
+            { 0, 0, 1 },
+            { 1, 0, 1 },
+            { 0, 1, 1 },
+            { 1, 1, 1 },
         } };
 
         /// Reads the cooked shadow shader, which has one form and no variants.
@@ -89,10 +95,9 @@ namespace engine::render {
             .depth_test = true,
             .depth_write = true,
             .blend = false,
-            // Front faces are culled rather than back ones. Rendering the far
-            // side of a caster puts the recorded depth behind the surface that
-            // is lit, which moves the acne out of view without a bias large
-            // enough to detach a contact shadow. See the note in mesh.frag.
+            // Both faces. A wall of the room is a single quad with no back, so
+            // culling either side of it would drop it out of the map and let
+            // the light through a solid surface.
             .cull_back = false,
             .depth_only = true,
         };
@@ -244,7 +249,7 @@ namespace engine::render {
         }
 
         gfx::cmd_bind_pipeline(commands, pipeline_);
-        // Front faces, for the reason build_pipeline() gives.
+        // Both faces, for the reason build_pipeline() gives.
         gfx::cmd_set_cull_mode(commands, false);
 
         for (const auto [entity, transform, renderer] :
