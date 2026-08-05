@@ -62,11 +62,19 @@ namespace engine::gfx {
         VkImage image = VK_NULL_HANDLE;            ///< Null while the slot is free.
         VmaAllocation allocation = VK_NULL_HANDLE; ///< The VMA block behind the image.
         VkImageView view = VK_NULL_HANDLE;         ///< The view the sampler reads.
-        VkSampler sampler = VK_NULL_HANDLE;        ///< Shared. The device sampler cache owns it.
-        std::uint32_t width = 0;                   ///< Texels across mip level 0.
-        std::uint32_t height = 0;                  ///< Texels down mip level 0.
-        std::uint32_t generation = 1;              ///< Starts at 1, so slot 0 is never null.
-        bool alive = false;                        ///< Whether the slot holds a live texture.
+        /**
+         * @brief One view for each array layer, for rendering into it.
+         *
+         * Empty unless the texture is a depth target with layers. The sampler
+         * reads ::view, which covers every layer at once, and an attachment
+         * needs a view of one layer alone. The two cannot be the same object.
+         */
+        std::vector<VkImageView> layer_views;
+        VkSampler sampler = VK_NULL_HANDLE; ///< Shared. The device sampler cache owns it.
+        std::uint32_t width = 0;            ///< Texels across mip level 0.
+        std::uint32_t height = 0;           ///< Texels down mip level 0.
+        std::uint32_t generation = 1;       ///< Starts at 1, so slot 0 is never null.
+        bool alive = false;                 ///< Whether the slot holds a live texture.
     };
 
     /**

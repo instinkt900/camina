@@ -26,6 +26,9 @@
 #include "render/material_cache.h"
 #include "render/mesh_cache.h"
 #include "render/render_graph.h"
+// For kCascadeCount. The mesh pass reads what the shadow pass wrote, so the
+// number of cascades is shared between them rather than repeated.
+#include "render/shadow_pass.h"
 #include "render/texture_cache.h"
 #include "scene/world.h"
 
@@ -128,12 +131,18 @@ namespace engine::render {
          * Call it after ShadowPass::draw() and before draw(), because the matrix
          * is fitted to what the scene holds and can move on any frame.
          *
-         * @param light_view_projection Takes a world position into the shadow
-         * map's clip space.
+         * @param light_view_projections One for each cascade, taking a world
+         * position into that cascade's clip space.
+         * @param splits Where each cascade ends, in front of the camera. The
+         * shader picks a cascade by comparing a fragment's view depth against
+         * these, which is what keeps the split out of the shader as a constant.
+         * @param biases The depth bias each cascade needs in its own clip space.
          * @param casts False when the world has no directional light, which
          * makes the shader skip the shadow lookup rather than read a stale map.
          */
-        void set_shadow_view(const Mat4& light_view_projection, bool casts);
+        void set_shadow_view(const std::array<Mat4, kCascadeCount>& light_view_projections,
+                             const std::array<float, kCascadeCount>& splits,
+                             const std::array<float, kCascadeCount>& biases, bool casts);
 
         /// @brief Frees the pipeline and everything the caches uploaded.
         void destroy();
@@ -374,8 +383,12 @@ namespace engine::render {
         gfx::TextureHandle brdf_lut_;
         /// @brief The shadow map, owned by the shadow pass and read here.
         gfx::TextureHandle shadow_map_;
-        /// @brief Where the light looked from this frame. See set_shadow_view().
-        Mat4 shadow_view_{ 1.0F };
+        /// @brief Where the light looked from this frame, for each cascade.
+        std::array<Mat4, kCascadeCount> shadow_views_{};
+        /// @brief Where each cascade ends, in front of the camera.
+        std::array<float, kCascadeCount> shadow_splits_{};
+        /// @brief The depth bias each cascade needs in its own clip space.
+        std::array<float, kCascadeCount> shadow_biases_{};
         /// @brief Whether anything casts, which the shader reads as light_count.y.
         bool shadow_casts_ = false;
         /// @brief Which asset ::brdf_lut_ came from, so hot reload can drop it.

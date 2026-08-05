@@ -203,7 +203,8 @@ namespace engine::gfx {
                              depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
-    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth_target) {
+    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth_target,
+                                   std::uint32_t layer) {
         ENGINE_CHECK(commands != nullptr, "cmd_begin_depth_rendering needs a command list.");
         Device& device = *commands->owner;
 
@@ -212,11 +213,18 @@ namespace engine::gfx {
             ENGINE_LOG_ERROR("cmd_begin_depth_rendering received a stale or null handle.");
             return;
         }
+        if (layer >= entry->layer_views.size()) {
+            ENGINE_LOG_ERROR("cmd_begin_depth_rendering asked for layer {} of an image with {}.",
+                             layer, entry->layer_views.size());
+            return;
+        }
 
         // Reverse-Z clears to 0, the far plane, exactly as the frame does.
         VkRenderingAttachmentInfo depth{};
         depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth.imageView = entry->view;
+        // The view of that one layer. The sampling view covers every layer and
+        // cannot be an attachment.
+        depth.imageView = entry->layer_views[layer];
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         // Stored, not discarded. The frame's own depth is scratch, and this one
