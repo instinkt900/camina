@@ -10,6 +10,34 @@ namespace engine::render {
 
     namespace {
 
+        /// Computes per-submesh bounds from the vertex and index data.
+        void compute_submesh_bounds(const assets::Mesh& mesh, GpuMesh& out) {
+            out.submesh_min.resize(mesh.submeshes.size());
+            out.submesh_max.resize(mesh.submeshes.size());
+
+            for (std::size_t s = 0; s < mesh.submeshes.size(); ++s) {
+                const assets::MeshSubmesh& sub = mesh.submeshes[s];
+                Vec3 smin{ std::numeric_limits<float>::max() };
+                Vec3 smax{ std::numeric_limits<float>::lowest() };
+
+                for (std::uint32_t i = 0; i < sub.index_count; ++i) {
+                    const std::uint32_t idx =
+                        mesh.indices[static_cast<std::size_t>(sub.first_index) + i];
+                    const auto& pos_arr = mesh.vertices[idx].position;
+                    const Vec3 pos{ pos_arr[0], pos_arr[1], pos_arr[2] };
+                    smin.x = std::min(smin.x, pos.x);
+                    smin.y = std::min(smin.y, pos.y);
+                    smin.z = std::min(smin.z, pos.z);
+                    smax.x = std::max(smax.x, pos.x);
+                    smax.y = std::max(smax.y, pos.y);
+                    smax.z = std::max(smax.z, pos.z);
+                }
+
+                out.submesh_min[s] = smin;
+                out.submesh_max[s] = smax;
+            }
+        }
+
         /// Uploads one cooked mesh and fills in the handles.
         [[nodiscard]] bool upload(gfx::Device* device, const assets::Mesh& mesh, GpuMesh& out) {
             const gfx::BufferDesc vertices{
@@ -41,6 +69,7 @@ namespace engine::render {
             out.submeshes = mesh.submeshes;
             out.min = mesh.min;
             out.max = mesh.max;
+            compute_submesh_bounds(mesh, out);
             return true;
         }
 
