@@ -355,7 +355,10 @@ namespace engine::render {
             // Every layer opens a scope even with no light, because the clear is
             // what puts the far plane in a layer nobody rendered into. A layer
             // left alone holds whatever the allocation had.
-            gfx::cmd_begin_depth_rendering(commands, map_, static_cast<std::uint32_t>(cascade));
+            if (!gfx::cmd_begin_depth_rendering(commands, map_,
+                                                static_cast<std::uint32_t>(cascade))) {
+                continue;
+            }
             if (!has_light_) {
                 gfx::cmd_end_rendering(commands);
                 continue;
