@@ -1360,6 +1360,11 @@ namespace {
                     return false;
                 }
                 last_extent = extent;
+                // The swapchain was just rebuilt, so this frame has no image to
+                // draw into. draw_frame would see OutOfDate from the old extent
+                // and rebuild again, which is the double rebuild issue #145.
+                have_drawn = false;
+                continue;
             }
 
             const auto now = std::chrono::steady_clock::now();
