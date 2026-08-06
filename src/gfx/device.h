@@ -511,7 +511,12 @@ namespace engine::gfx {
                                  std::uint32_t set_index, DescriptorSetHandle set);
 
     /**
-     * @brief Sends push constants to the vertex stage.
+     * @brief Sends push constants to the stages the pipeline declared.
+     *
+     * Which stages those are comes from
+     * GraphicsPipelineDesc::push_constant_stages, so the caller does not repeat
+     * it here and the two cannot disagree.
+     *
      * @param commands The command list from begin_frame().
      * @param pipeline The bound pipeline, which supplies the layout.
      * @param data The bytes to send.

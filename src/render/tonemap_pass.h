@@ -20,9 +20,9 @@ namespace engine::render {
      * produce those. So the scene renders into a half float image this pass
      * owns, and this pass reads it and writes the frame out.
      *
-     * It applies no curve yet. The ACES fit and the exposure are M5.6b, in
-     * issue #142. This half exists to put the target and the pass in place
-     * without moving a pixel, which is a test the second half cannot have.
+     * It applies exposure and then the ACES curve. Exposure scales the scene
+     * first, because the curve is not a straight line, and the curve maps what
+     * is left into the range a display can show.
      *
      * @warning The target is the size of the window, so resize() has to run
      * whenever the swapchain is rebuilt. Nothing else notices.
@@ -94,12 +94,15 @@ namespace engine::render {
          * @brief Draws the full screen triangle that writes the frame out.
          *
          * @param commands The open command list.
+         * @param exposure A linear scale on the scene before the curve. One is
+         * neutral, and a value at or below zero is refused with a message
+         * because it would make the whole frame black.
          *
          * @warning Call this inside a gfx::cmd_begin_rendering() scope, which is
          * the scope over the swapchain image. The scene renders in a scope of
          * its own that has already closed by then.
          */
-        void draw(gfx::CommandList* commands);
+        void draw(gfx::CommandList* commands, float exposure);
 
     private:
         /// Builds the half float target at @p extent.

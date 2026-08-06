@@ -207,10 +207,21 @@ and not the CC-BY it is widely assumed to be. Intel Sponza is CC BY 4.0 and its 
 133 MiB `.bin`, which GitHub refuses. Issue #130 holds the large scene, fetched from outside
 git.
 
-The room colours are the usual Cornell values scaled to about a third, and that is measured
-rather than chosen. At full values 40 percent of the viewport clipped to white with **every
-light switched off**, because the image based ambient alone is enough. Nothing controls exposure
-until the tonemap in #88, and an interior is what made that impossible to miss.
+The room colours were the usual Cornell values scaled to about a third until M5.6b, and that
+scale was measured rather than chosen. At full values 35 percent of the viewport clipped to
+white with **every light switched off**, because the image based ambient alone is enough. An
+interior is what made that impossible to miss.
+
+M5.6 is complete and the scale is gone. M5.6a put the scene on a half float target and added a
+full screen pass that wrote it out, applying no curve, so the picture did not move. M5.6b put
+the ACES fit from Stephen Hill in that pass and made exposure a reflected `ViewSettings` field
+that `view.json` saves and `--exposure` overrides. At the full Cornell values with every light
+off, clipping is now 0.0018 percent, which is 17 pixels of specular highlight on two metal
+spheres. Exposure scales the scene before the curve, because scaling after a curve that is not
+a straight line throws away the highlight roll off.
+
+`gfx::GraphicsPipelineDesc` gained `push_constant_stages` for that. A push constant reached the
+vertex stage alone, and the exposure is applied where the curve is.
 
 The Smith remapping is `alpha / 2` for image based lighting, where alpha is roughness squared.
 `mesh.frag` uses `(roughness + 1) squared / 8` for direct light. Squaring alpha twice here left

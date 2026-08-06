@@ -40,7 +40,14 @@ namespace engine::gfx {
         /// @brief Starts at 1, so slot 0 never produces the null handle value.
         std::uint32_t generation = 1;
         std::uint32_t push_constant_size = 0; ///< Checked by cmd_push_constants().
-        bool alive = false;                   ///< Whether the slot holds a live pipeline.
+        /**
+         * @brief Which stages the push range names, as Vulkan stage flags.
+         *
+         * cmd_push_constants() has to write the same stages the layout declared,
+         * so the pipeline remembers them rather than assuming the vertex stage.
+         */
+        VkShaderStageFlags push_constant_stages = 0;
+        bool alive = false; ///< Whether the slot holds a live pipeline.
     };
 
     /// @brief One slot in the buffer pool that BufferHandle indexes.

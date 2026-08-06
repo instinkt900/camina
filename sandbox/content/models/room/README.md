@@ -28,18 +28,20 @@ Issue #130 holds the large scene, fetched from outside git rather than committed
 stands in until then, and it will still be useful afterwards because it is small enough to
 reason about.
 
-## The colours are darker than they look
+## The colours are the Cornell values
 
-The base colours are the usual Cornell values scaled to about a third. Nothing in the renderer
-controls exposure yet, and there is no tonemap until M5.6, so a bright environment lights a
-white floor past 1.0 and it clips to flat white.
+The base colours are the usual Cornell box values. They were scaled to about a third until
+M5.6b, because nothing controlled exposure and there was no tonemap, so a bright environment
+lit the white floor past 1.0 and it clipped to flat white.
 
-That is measurable rather than a matter of taste. At the full Cornell values, 40 percent of the
-viewport clipped with **every light switched off**, because the image based ambient alone was
-enough. At a third, it is under 1 percent, and what remains is specular highlights on the metal
-spheres, which are meant to be bright.
+That was measurable rather than a matter of taste, and the fix is measurable the same way. At
+the full values with **every light switched off**, the image based ambient alone clips 34.7
+percent of the viewport when the tonemap pass applies no curve. With the ACES curve it clips
+0.0018 percent, which is 17 pixels in two clusters along one row. Those are specular highlights
+on adjacent metal spheres, and they are meant to be bright.
 
-Put the values back when #88 lands an ACES tonemap. The scale is one number in the generator.
+The scale is gone rather than set to one. A number that is always one is a number somebody has
+to work out the meaning of later.
 
 ## How it was made
 
