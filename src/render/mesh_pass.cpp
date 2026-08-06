@@ -995,7 +995,8 @@ namespace engine::render {
                 continue;
             }
 
-            for (const assets::MeshSubmesh& submesh : mesh->submeshes) {
+            for (std::size_t s = 0; s < mesh->submeshes.size(); ++s) {
+                const assets::MeshSubmesh& submesh = mesh->submeshes[s];
                 const GpuMaterial& material = materials_.get(device_, content, textures_,
                                                              layout_pipeline(), submesh.material);
                 if (!material.set.valid()) {
@@ -1011,12 +1012,17 @@ namespace engine::render {
                 // one, and after the blended ones behind it, so it cannot go out
                 // in the order the view happens to hand it over.
                 if (material.source.alpha_mode == assets::AlphaMode::Blend) {
-                    // The bounds belong to the whole mesh, so every submesh of
-                    // one mesh sorts together. That is right for a window and
-                    // wrong for two blended parts of one model that overlap.
-                    // Issue #99 holds the per-submesh bounds that would fix it.
-                    const Vec3 center = Vec3{ transform.matrix *
-                                              Vec4{ (mesh->min + mesh->max) * 0.5F, 1.0F } };
+                    // Per-submesh bounds sort each blended part by its own
+                    // depth, not the depth of the whole mesh. See issue #99.
+                    const bool has_sub_bounds =
+                        s < mesh->submesh_min.size() && s < mesh->submesh_max.size();
+                    const Vec3 center = Vec3{
+                        transform.matrix *
+                        Vec4{ (has_sub_bounds
+                                   ? (mesh->submesh_min[s] + mesh->submesh_max[s]) * 0.5F
+                                   : (mesh->min + mesh->max) * 0.5F),
+                              1.0F }
+                    };
                     blended_.push_back(BlendedDraw{
                         .model = transform.matrix,
                         .vertices = mesh->vertices,
