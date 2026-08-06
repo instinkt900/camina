@@ -274,10 +274,10 @@ namespace engine::render {
         /**
          * @brief How many point lights the last draw() culled.
          *
-         * This is what says the frustum test is doing anything. A scene where it
-         * stays at zero while lights sit behind the camera has a broken test,
-         * and the picture looks right either way because culling a light that
-         * lights nothing visible changes no pixel.
+         * This is what says the frustum test is doing anything. A scene that
+         * keeps it at zero while lights sit behind the camera has a broken
+         * test. The picture looks right either way, because culling a light
+         * that lights nothing visible changes no pixel.
          *
          * @return The count of point lights whose range sphere missed the view.
          */
@@ -311,9 +311,9 @@ namespace engine::render {
          * everything, so there is nothing to test it against.
          *
          * A point light is kept only when its range sphere touches the frustum.
-         * The sphere rather than the centre is what matters: a lamp whose centre
-         * is off screen still lights what is on screen, and culling it by the
-         * centre would put a dark band along the edge of the view.
+         * The sphere rather than the centre is what matters. A lamp whose
+         * centre is off screen still lights what is on screen, and culling it
+         * by the centre would put a dark band along the edge of the view.
          *
          * @param world The world to read.
          * @param frustum The camera frustum, in world space.
@@ -325,10 +325,10 @@ namespace engine::render {
          * @brief Makes sure each light buffer holds at least @p needed lights.
          *
          * The buffer grows to fit rather than dropping what does not fit, so a
-         * scene is never refused for carrying too many lights. Growing waits for
-         * the device and rebuilds the frame sets, because every frame in flight
-         * may be reading its own buffer and the sets name those buffers. The
-         * capacity doubles for that reason, so the wait is rare.
+         * scene is never refused for carrying too many lights. Growing waits
+         * for the device and rebuilds the frame sets, because every frame in
+         * flight may be reading its own buffer. The capacity doubles for that
+         * reason, so the wait is rare.
          *
          * @param needed How many lights this frame wants to write.
          * @return False when the buffers could not be rebuilt, which leaves the

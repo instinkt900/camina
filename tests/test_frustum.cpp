@@ -38,7 +38,7 @@ namespace {
      * Every plane comes out unit length, apart from a degenerate one.
      *
      * The sphere test compares a signed distance against a radius in world
-     * units, so a plane that is not normalized makes the comparison meaningless
+     * units. A plane that is not normalized makes that comparison meaningless
      * rather than wrong in an obvious way.
      */
     void planes_are_normalized() {
@@ -116,8 +116,8 @@ namespace {
      * A radius large enough to reach the frustum keeps the sphere.
      *
      * This is the whole point of testing a sphere rather than a point. A lamp
-     * whose center is off screen still lights what is on screen, so culling it
-     * by its center would put a dark band at the edge of the view.
+     * whose center is off screen still lights what is on screen. Culling it by
+     * its center would put a dark band at the edge of the view.
      */
     void a_radius_that_reaches_is_kept() {
         const Frustum frustum = frustum_from_view_projection(camera_at_origin());
@@ -158,10 +158,10 @@ namespace {
         const Mat4 view = glm::lookAt(Vec3{ 0.0F, 0.0F, 100.0F }, Vec3{ 0.0F, 0.0F, 99.0F },
                                       Vec3{ 0.0F, 1.0F, 0.0F });
         const Frustum frustum = frustum_from_view_projection(projection * view);
-        // The camera sits at z = 100 and looks down -Z, so z = 50 is 50 meters
-        // ahead of it and z = 150 is 50 meters behind it. Both points would fall
-        // on the other side for a camera at the origin, which is what makes this
-        // a test of the translation.
+        // The camera sits at z = 100 and looks down -Z. So z = 50 is 50 meters
+        // ahead of it, and z = 150 is 50 meters behind it. Both would fall on
+        // the other side for a camera at the origin, which is what makes this a
+        // test of the translation.
         check(frustum_contains_sphere(frustum, Vec3{ 0.0F, 0.0F, 50.0F }, 0.0F),
               "a point ahead of the moved camera is not inside");
         check(!frustum_contains_sphere(frustum, Vec3{ 0.0F, 0.0F, 150.0F }, 0.0F),

@@ -371,10 +371,19 @@ namespace engine::gfx {
             // and a block of factors. A material set is the case it exists for.
             // There is no shared layout any more, because every set matches a
             // layout the reflected shader described.
-            const std::array<VkDescriptorPoolSize, 2> sizes{ {
+            // Every descriptor type a set layout can name has to appear here. A
+            // type the pool does not reserve makes vkAllocateDescriptorSets
+            // return VK_ERROR_OUT_OF_POOL_MEMORY.
+            //
+            // A driver may answer either way. The storage buffer was missing
+            // here at first and this machine ran anyway, because that driver
+            // ignores the per-type counts. Another vendor refuses the
+            // allocation, and then the frame sets are null and nothing draws.
+            const std::array<VkDescriptorPoolSize, 3> sizes{ {
                 { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                   .descriptorCount = kMaxTextures },
                 { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = kMaxSets },
+                { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = kMaxSets },
             } };
 
             VkDescriptorPoolCreateInfo pool{};

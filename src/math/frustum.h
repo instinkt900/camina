@@ -65,10 +65,10 @@ namespace engine {
      * from 1 at the near plane to 0 at infinity, so `w - z` is the near plane
      * here and `z` is the far one. A conventional 0 to 1 range wants those the
      * other way round, and writing `z` for the near plane is therefore the
-     * mistake to expect. It does not swap the pair, it drops the near plane
-     * entirely: the far one is already degenerate under an infinite projection,
-     * so the frustum ends up with no depth bound at all and keeps a light
-     * behind the camera.
+     * mistake to expect. It does not swap the pair. It drops the near plane
+     * entirely, because the far one is already degenerate under an infinite
+     * projection. The frustum then has no depth bound at all, and it keeps a
+     * light behind the camera.
      *
      * The planes come out normalized, so signed_distance() is a real distance in
      * world units and a sphere radius can be compared against it directly.

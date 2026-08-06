@@ -55,9 +55,9 @@ namespace engine::render {
          * to the same 16 bytes, and a written padding word is easier to read
          * than an implied one.
          *
-         * The lights are no longer in here. A uniform block declares the length
-         * of an array inside it, which is what put a ceiling on the count, so
-         * they moved to a storage buffer the shader indexes instead.
+         * The lights are no longer in here. A uniform block declares the
+         * length of an array inside it, and that length was the ceiling on the
+         * count. They moved to a storage buffer the shader indexes instead.
          */
         struct FrameUniforms {
             Mat4 view_projection{ 1.0F };
@@ -435,8 +435,8 @@ namespace engine::render {
                   .texture = shadow_map_,
                   .buffer = {} },
                 // The lights. A storage buffer rather than part of the block
-                // above, because a uniform block declares how long an array
-                // inside it is and that is what capped the count at eight.
+                // above. A uniform block declares how long an array inside it
+                // is, and that length capped the count at eight.
                 { .binding = 4,
                   .kind = gfx::DescriptorKind::StorageBuffer,
                   .texture = {},
@@ -843,6 +843,18 @@ namespace engine::render {
             gfx::destroy_buffer(device_, buffer);
             buffer = gfx::BufferHandle{};
         }
+        for (gfx::BufferHandle& buffer : light_buffers_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
+        // Back to zero, not left at whatever the last scene needed. A create()
+        // after this builds the buffers again, and build_frame_sets() only
+        // chooses a starting capacity when this is zero. Leaving it set would
+        // size the new buffers from the old scene and skip the message that says
+        // what happened.
+        light_capacity_ = 0;
+        visible_lights_.clear();
+        culled_lights_ = 0;
         textures_.destroy(device_);
         // The fallback cubemap and the lookup table just went with the cache, so
         // the handles beside them are stale. A second destroy() must not hand
@@ -948,10 +960,10 @@ namespace engine::render {
         frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
         culled_lights_ = culled;
 
-        // The buffer grows to fit rather than dropping what does not fit. This
-        // waits for the device and rewrites the sets, so it has to be rare, and
-        // it is: it happens when a scene first shows more lights than any frame
-        // before it did.
+        // The buffer grows to fit rather than dropping what does not fit.
+        // Growing waits for the device and rewrites the sets, so it has to be
+        // rare. It is rare: it happens when a scene first shows more lights
+        // than any frame before it did.
         if (!ensure_light_capacity(visible_lights_.size())) {
             return;
         }

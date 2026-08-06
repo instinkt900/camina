@@ -797,8 +797,8 @@ scene with two. The M5 done-when test is a Sponza-class scene, which carries far
 milestone needed an answer rather than a larger array.
 
 M5.7a took the first two of the three steps below. The list is a storage buffer that grows to
-fit, so the count is a number rather than a constant, and a point light whose range sphere
-misses the camera frustum never reaches it. That carries a few hundred lights. The cluster grid
+fit, so the count is a number rather than a constant. A point light whose range sphere misses
+the camera frustum never reaches the buffer. That carries a few hundred lights. The cluster grid
 is M5.7b in issue #151, and it is what carries thousands.
 
 A compute pass divides the frustum into a grid of tiles across depth slices, and writes a short
