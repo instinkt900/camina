@@ -791,10 +791,15 @@ A material lives on the submesh rather than on `MeshRenderer`. One mesh can use 
 a single field on the component could not say which submesh got which. A per-entity override
 belongs with the editor work in M9.
 
-**Lighting scales by clustered forward, not by deferred shading.** The frame block carries a
-fixed array of eight lights today. That follows rule 4.6, because the sandbox lights a scene
-with two. The M5 done-when test is a Sponza-class scene, which carries far more, so the
-milestone needs an answer rather than a larger array.
+**Lighting scales by clustered forward, not by deferred shading.** The frame block carried a
+fixed array of eight lights until M5.7a. That followed rule 4.6, because the sandbox lights a
+scene with two. The M5 done-when test is a Sponza-class scene, which carries far more, so the
+milestone needed an answer rather than a larger array.
+
+M5.7a took the first two of the three steps below. The list is a storage buffer that grows to
+fit, so the count is a number rather than a constant. A point light whose range sphere misses
+the camera frustum never reaches the buffer. That carries a few hundred lights. The cluster grid
+is M5.7b in issue #151, and it is what carries thousands.
 
 A compute pass divides the frustum into a grid of tiles across depth slices, and writes a short
 list of lights for each cell. The forward pass reads the list for the cell a pixel is in. The

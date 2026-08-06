@@ -1291,7 +1291,8 @@ namespace {
      * Vsync makes every one of them the refresh rate, so the report says so
      * rather than printing 16.67 and letting a reader draw a conclusion from it.
      */
-    void report_frame_time(const engine::FrameStats& stats, const Options& options) {
+    void report_frame_time(const engine::FrameStats& stats, const Options& options,
+                           const engine::render::MeshPass& mesh) {
         if (stats.counted() == 0) {
             ENGINE_LOG_INFO("No frame time to report. A run needs more than {} frames.",
                             kFrameStatsWarmup);
@@ -1304,6 +1305,12 @@ namespace {
             "p95 {:.3f} ms | p99 {:.3f} ms | low {:.3f} ms | high {:.3f} ms",
             run.count, run.median_ms, run.mean_ms, run.p95_ms, run.p99_ms, run.low_ms,
             run.high_ms);
+
+        // The light counts of the last frame. Reported because a cull that does
+        // nothing changes no pixel, so the picture cannot say whether it ran.
+        ENGINE_LOG_INFO("lights | {} lit the last frame | {} culled by the frustum | buffer holds {}",
+                        mesh.visible_light_count(), mesh.culled_light_count(),
+                        mesh.light_capacity());
 
         if (options.vsync) {
             ENGINE_LOG_INFO("Vsync is on, so that is the refresh rate. Use --no-vsync to measure "
@@ -1427,7 +1434,7 @@ namespace {
         }
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
-        report_frame_time(stats, options);
+        report_frame_time(stats, options, *context.mesh_pass);
         return true;
     }
 

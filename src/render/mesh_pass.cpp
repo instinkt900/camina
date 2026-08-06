@@ -39,24 +39,14 @@ namespace engine::render {
                       "The push block must fit the size every Vulkan device promises.");
 
         /**
-         * How many lights one frame can carry.
+         * How many lights the storage buffer holds when it is first allocated.
          *
-         * The block is a fixed-size array rather than a buffer that grows,
-         * because the sandbox lights a scene with a handful and rule 4.6 says
-         * to build the system when something needs more. A light past this
-         * count is dropped with a message rather than ignored quietly.
+         * It is a starting size and not a limit. gather_lights() reports how
+         * many the world holds and the buffer grows to fit, so a scene is never
+         * refused for having too many. The eight-light ceiling this replaced is
+         * gone. See issue #98 and DESIGN.md section 9.
          */
-        constexpr std::uint32_t kMaxLights = 8;
-
-        /// One light, as the shader reads it. Two vec4 and nothing else.
-        struct GpuLight {
-            /// xyz is the direction it points for a directional light, or where
-            /// it is for a point light. w is 0 for directional and 1 for point.
-            std::array<float, 4> position{};
-            /// rgb is the color times the intensity. a is the range in meters,
-            /// which a directional light leaves at zero.
-            std::array<float, 4> color{};
-        };
+        constexpr std::size_t kInitialLightCapacity = 64;
 
         /**
          * The per-frame block, which must match the Frame block in both shaders.
@@ -64,6 +54,10 @@ namespace engine::render {
          * It is std140, so the vec4 sits on a 16-byte boundary. A Vec3 would pad
          * to the same 16 bytes, and a written padding word is easier to read
          * than an implied one.
+         *
+         * The lights are no longer in here. A uniform block declares the
+         * length of an array inside it, and that length was the ceiling on the
+         * count. They moved to a storage buffer the shader indexes instead.
          */
         struct FrameUniforms {
             Mat4 view_projection{ 1.0F };
@@ -75,66 +69,15 @@ namespace engine::render {
             std::array<float, 4> cascade_splits{};
             /// The depth bias each cascade needs in its own clip space.
             std::array<float, 4> cascade_biases{};
-            /// x is how many entries of `lights` are real. y is 1 when a
+            /// x is how many lights the storage buffer holds. y is 1 when a
             /// directional light casts a shadow. z is how many cascades are in
-            /// use. w is padding, because std140 puts the array on a 16-byte
-            /// boundary anyway.
+            /// use. w is padding, because std140 puts the block that follows on
+            /// a 16-byte boundary anyway.
             std::array<std::uint32_t, 4> light_count{};
             /// The irradiance of the environment. Each entry is one coefficient
             /// in rgb, and the fourth word is padding std140 would add anyway.
             std::array<std::array<float, 4>, assets::kIrradianceCoefficients> irradiance{};
-            std::array<GpuLight, kMaxLights> lights{};
         };
-
-        /// Collects every light in the world into the frame block.
-        /// @return True when the world held more lights than the block can carry.
-        bool gather_lights(const scene::World& world, FrameUniforms& frame) {
-            std::uint32_t count = 0;
-            const auto add = [&frame, &count](const std::array<float, 4>& position,
-                                              const Vec3& color, float intensity, float range) {
-                if (count >= kMaxLights) {
-                    return false;
-                }
-                frame.lights[count] = GpuLight{
-                    .position = position,
-                    .color = { color.x * intensity, color.y * intensity, color.z * intensity,
-                               range },
-                };
-                ++count;
-                return true;
-            };
-
-            bool room = true;
-            const auto directional =
-                world.registry()
-                    .view<const scene::WorldTransform, const scene::DirectionalLight>();
-            for (const auto [entity, transform, light] : directional.each()) {
-                // Forward is local −Z turned into world space, per DESIGN.md
-                // section 3. So a light is aimed by turning its entity.
-                const Vec3 forward = glm::normalize(Vec3{ -transform.matrix[2] });
-                room = add({ forward.x, forward.y, forward.z, 0.0F }, light.color,
-                           light.intensity, 0.0F);
-                if (!room) {
-                    break;
-                }
-            }
-
-            if (room) {
-                const auto points =
-                    world.registry().view<const scene::WorldTransform, const scene::PointLight>();
-                for (const auto [entity, transform, light] : points.each()) {
-                    const Vec3 at{ transform.matrix[3] };
-                    room = add({ at.x, at.y, at.z, 1.0F }, light.color, light.intensity,
-                               light.range);
-                    if (!room) {
-                        break;
-                    }
-                }
-            }
-
-            frame.light_count[0] = count;
-            return !room;
-        }
 
         /// Finds the cubemap the world names.
         /// @return The GUID, and a null one when no entity carries the component.
@@ -390,6 +333,40 @@ namespace engine::render {
         return true;
     }
 
+    std::size_t MeshPass::gather_lights(const scene::World& world, const Frustum& frustum) {
+        visible_lights_.clear();
+
+        const auto directional =
+            world.registry().view<const scene::WorldTransform, const scene::DirectionalLight>();
+        for (const auto [entity, transform, light] : directional.each()) {
+            // Forward is local -Z turned into world space, per DESIGN.md section
+            // 3. So a light is aimed by turning its entity.
+            const Vec3 forward = glm::normalize(Vec3{ -transform.matrix[2] });
+            visible_lights_.push_back(GpuLight{
+                .position = { forward.x, forward.y, forward.z, 0.0F },
+                .color = { light.color.x * light.intensity, light.color.y * light.intensity,
+                           light.color.z * light.intensity, 0.0F },
+            });
+        }
+
+        std::size_t culled = 0;
+        const auto points =
+            world.registry().view<const scene::WorldTransform, const scene::PointLight>();
+        for (const auto [entity, transform, light] : points.each()) {
+            const Vec3 at{ transform.matrix[3] };
+            if (!frustum_contains_sphere(frustum, at, light.range)) {
+                ++culled;
+                continue;
+            }
+            visible_lights_.push_back(GpuLight{
+                .position = { at.x, at.y, at.z, 1.0F },
+                .color = { light.color.x * light.intensity, light.color.y * light.intensity,
+                           light.color.z * light.intensity, light.range },
+            });
+        }
+        return culled;
+    }
+
     /**
      * Builds the per-frame blocks and the sets that bind them.
      *
@@ -398,6 +375,10 @@ namespace engine::render {
      * rebuild, because nothing about them depends on the layout.
      */
     bool MeshPass::build_frame_sets() {
+        if (light_capacity_ == 0) {
+            light_capacity_ = kInitialLightCapacity;
+        }
+
         const FrameUniforms empty;
         for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
             const gfx::BufferDesc desc{ .data = &empty,
@@ -409,11 +390,29 @@ namespace engine::render {
                 return false;
             }
 
+            // The light list. One for each frame in flight, for the reason the
+            // frame block has one: update_buffer() writes straight into memory
+            // the GPU may still be reading.
+            //
+            // No data, so it allocates without uploading. A frame writes it
+            // before it draws, and a frame with no lights leaves it untouched
+            // because light_count is zero and the shader reads nothing.
+            if (!light_buffers_[i].valid()) {
+                const gfx::BufferDesc lights{ .data = nullptr,
+                                              .size = light_capacity_ * sizeof(GpuLight),
+                                              .usage = gfx::BufferUsage::Storage };
+                if (!gfx::succeeded(gfx::create_buffer(device_, lights, &light_buffers_[i]))) {
+                    ENGINE_LOG_ERROR("A light buffer could not be allocated for {} lights.",
+                                     light_capacity_);
+                    return false;
+                }
+            }
+
             // The environment is written into the set rather than bound beside
             // it, because a descriptor set is filled once and a cubemap changes
             // only when the scene names another one. update_environment() calls
             // this again when that happens.
-            const std::array<gfx::DescriptorWrite, 4> writes{ {
+            const std::array<gfx::DescriptorWrite, 5> writes{ {
                 { .binding = 0,
                   .kind = gfx::DescriptorKind::UniformBuffer,
                   .texture = {},
@@ -435,6 +434,13 @@ namespace engine::render {
                   .kind = gfx::DescriptorKind::CombinedImageSampler,
                   .texture = shadow_map_,
                   .buffer = {} },
+                // The lights. A storage buffer rather than part of the block
+                // above. A uniform block declares how long an array inside it
+                // is, and that length capped the count at eight.
+                { .binding = 4,
+                  .kind = gfx::DescriptorKind::StorageBuffer,
+                  .texture = {},
+                  .buffer = light_buffers_[i] },
             } };
             if (!gfx::succeeded(gfx::create_descriptor_set(device_, layout_pipeline(), kFrameSet,
                                                            writes.data(), writes.size(),
@@ -443,6 +449,41 @@ namespace engine::render {
                 return false;
             }
         }
+        return true;
+    }
+
+    bool MeshPass::ensure_light_capacity(std::size_t needed) {
+        if (needed <= light_capacity_) {
+            return true;
+        }
+
+        // Double until it fits, so a scene that grows one light at a time does
+        // not reallocate once for each. Starting from the count rather than the
+        // old capacity covers the jump from an empty scene to a large one.
+        std::size_t capacity = std::max(light_capacity_, kInitialLightCapacity);
+        while (capacity < needed) {
+            capacity *= 2;
+        }
+
+        // Every frame in flight may be reading its own buffer, and the sets name
+        // the buffers, so both go together and both wait. This is why the
+        // capacity doubles rather than growing to fit exactly.
+        gfx::device_wait_idle(device_);
+        destroy_frame_sets();
+        for (gfx::BufferHandle& buffer : light_buffers_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
+
+        const std::size_t previous = light_capacity_;
+        light_capacity_ = capacity;
+        if (!build_frame_sets()) {
+            ENGINE_LOG_ERROR("The light buffer could not grow to {}, so nothing can draw.",
+                             capacity);
+            return false;
+        }
+        ENGINE_LOG_INFO("The light buffer grew from {} to {} to fit {} lights.", previous,
+                        capacity, needed);
         return true;
     }
 
@@ -802,6 +843,18 @@ namespace engine::render {
             gfx::destroy_buffer(device_, buffer);
             buffer = gfx::BufferHandle{};
         }
+        for (gfx::BufferHandle& buffer : light_buffers_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
+        // Back to zero, not left at whatever the last scene needed. A create()
+        // after this builds the buffers again, and build_frame_sets() only
+        // chooses a starting capacity when this is zero. Leaving it set would
+        // size the new buffers from the old scene and skip the message that says
+        // what happened.
+        light_capacity_ = 0;
+        visible_lights_.clear();
+        culled_lights_ = 0;
         textures_.destroy(device_);
         // The fallback cubemap and the lookup table just went with the cache, so
         // the handles beside them are stale. A second destroy() must not hand
@@ -897,22 +950,29 @@ namespace engine::render {
                                     irradiance_.c[i][2], 0.0F };
         }
 
-        // Report the overflow when it starts and not on every frame after it.
-        // draw() runs sixty times a second, so a scene with nine lights would
-        // otherwise write sixty lines a second and hide everything else.
-        const bool overflowed = gather_lights(world, frame);
-        // gather_lights() fills x, and this is the only other word the shader
-        // reads. Set it after, because the call writes the whole element.
+        // Every light the camera can see, with the ones it cannot dropped. The
+        // member holds the storage between frames so the vector does not
+        // allocate on every one.
+        const std::size_t culled =
+            gather_lights(world, frustum_from_view_projection(view_projection));
+        frame.light_count[0] = static_cast<std::uint32_t>(visible_lights_.size());
         frame.light_count[1] = shadow_casts_ ? 1U : 0U;
         frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
-        if (overflowed && !lights_overflowed_) {
-            ENGINE_LOG_WARN("The scene has more than {} lights, and the rest are not lit. "
-                            "See kMaxLights in mesh_pass.cpp.",
-                            kMaxLights);
+        culled_lights_ = culled;
+
+        // The buffer grows to fit rather than dropping what does not fit.
+        // Growing waits for the device and rewrites the sets, so it has to be
+        // rare. It is rare: it happens when a scene first shows more lights
+        // than any frame before it did.
+        if (!ensure_light_capacity(visible_lights_.size())) {
+            return;
         }
-        lights_overflowed_ = overflowed;
 
         gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
+        if (!visible_lights_.empty()) {
+            gfx::update_buffer(device_, light_buffers_[frame_slot_], visible_lights_.data(),
+                               visible_lights_.size() * sizeof(GpuLight));
+        }
 
         // The frame set and the push constants are bound against this one
         // layout. Every form declares the same descriptors, so the layout is

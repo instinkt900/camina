@@ -350,11 +350,12 @@ namespace engine::gfx {
     void destroy_buffer(Device* device, BufferHandle buffer);
 
     /**
-     * @brief Writes new contents into a uniform buffer.
+     * @brief Writes new contents into a uniform or a storage buffer.
      *
-     * The buffer stays mapped, so this is a copy and nothing else. It works only
-     * on a BufferUsage::Uniform buffer, because a vertex or an index buffer
-     * lives in device-local memory that the host cannot reach.
+     * The buffer stays mapped, so this is a copy and nothing else. It works on a
+     * BufferUsage::Uniform or a BufferUsage::Storage buffer, because those are
+     * the two that live in host-visible memory. A vertex or an index buffer
+     * lives in device-local memory the host cannot reach.
      *
      * @param device The device that owns the buffer.
      * @param buffer The buffer to write. A null or stale handle logs and does nothing.

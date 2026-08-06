@@ -123,8 +123,32 @@ and the frame block is one buffer for each frame in flight. The vertex tangent i
 last, which is what normal mapping needed.
 
 M5.2 is complete. `scene::DirectionalLight` and `scene::PointLight` are reflected components,
-so a person aims the sun by turning its entity and moves a lamp by moving one. The frame block
-carries up to eight of them, and issue #98 holds the plan for carrying more.
+so a person aims the sun by turning its entity and moves a lamp by moving one.
+
+M5.7a lifted the eight-light ceiling those lights used to sit under. The list is a storage
+buffer now, one for each frame in flight. The count is a number in the frame block rather than a
+length the shader declares. The buffer doubles to fit rather than dropping what does not, so a
+scene is never refused for carrying too many. `kMaxLights` is gone, which closed #98.
+
+A point light whose range sphere misses the camera frustum never reaches the buffer.
+`src/math/frustum.h` extracts the six planes and tests the sphere, and it names no Vulkan type,
+so `tests/test_frustum.cpp` drives it with no GPU. Six mutations of it each fail a test.
+Swapping two planes in the array fails nothing. That is correct rather than a gap, because every
+reader iterates all six and the order carries no meaning.
+
+The cull cuts the frame time to under a third when most lights are out of view. The measurement
+is 11.2 ms against 36.0 ms, with 303 lights and the same geometry on screen. It is worth nothing
+measurable in the sandbox, where all three lights are in view. Measuring it needed a scene built
+for the purpose. One small room cannot hold many off-screen lights and a full view of the
+geometry at once.
+
+A first attempt measured the cull as slower. That run pointed the camera out of the open front,
+where the frame costs about 1 ms and fixed overhead swamps the difference. A frame that is
+mostly overhead cannot measure a change to the part that is not.
+
+The descriptor pool has to reserve every type a set layout names. It reserved no storage buffer
+at first, and this machine ran anyway, because that driver ignores the per-type counts. Another
+vendor answers `VK_ERROR_OUT_OF_POOL_MEMORY` instead.
 
 The alpha modes close it. Mask discards in the shader. Blend needs more than a shader, so
 `MeshPass` holds a second pipeline that blends and does not write depth, and it gathers every

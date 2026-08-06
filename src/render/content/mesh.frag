@@ -17,9 +17,6 @@ layout(location = 3) in vec2 in_uv;
 
 layout(location = 0) out vec4 out_color;
 
-// Must match kMaxLights in mesh_pass.cpp.
-const uint kMaxLights = 8u;
-
 struct Light {
     // xyz is the direction it points for a directional light, or where it is for
     // a point light. w is 0 for directional and 1 for point.
@@ -57,8 +54,20 @@ layout(set = 0, binding = 0) uniform Frame {
     // rgb is one coefficient and w is padding, because std140 puts an array
     // element on a sixteen byte boundary either way.
     vec4 irradiance[kIrradianceCoefficients];
-    Light lights[kMaxLights];
 } frame;
+
+// Every light the camera can see, which `render::MeshPass` culls and writes.
+//
+// A storage buffer rather than an array in the block above. A uniform block
+// declares how long an array inside it is, and that declared length was the
+// eight-light ceiling. This one has no length in the declaration, so the count
+// is whatever `light_count.x` says. See issue #98 and DESIGN.md section 9.
+//
+// It is `readonly` because nothing here writes it. That lets the driver treat it
+// as a read and skips the write hazards it would otherwise have to assume.
+layout(set = 0, binding = 4) readonly buffer Lights {
+    Light lights[];
+} light_buffer;
 
 // The environment every surface reflects, which `scene::Environment` names and
 // `render::MeshPass` binds. A scene that names none binds six grey texels, so
@@ -292,8 +301,10 @@ void main() {
     // Set once the loop has seen a directional light, so the second one does not
     // read a map that was rendered for the first.
     bool shadowed_one = false;
-    for (uint i = 0u; i < min(frame.light_count.x, kMaxLights); ++i) {
-        Light light = frame.lights[i];
+    // No clamp on the count. The buffer holds exactly what the pass wrote, and
+    // the pass grows the buffer to fit rather than dropping what does not.
+    for (uint i = 0u; i < frame.light_count.x; ++i) {
+        Light light = light_buffer.lights[i];
 
         // l points from the surface towards the light, which is the opposite of
         // the way a directional light travels.
