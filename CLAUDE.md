@@ -620,11 +620,31 @@ here, consider whether moth_ui wants the same change.
   than it returns. So Debug is a configuration a person builds when they need it, and
   it can break without anybody hearing. Build it before you trust it.
 - **A Debug build that fails in `pulseaudio` is a poisoned Conan cache, not this
-  repository.** A `libmp3lame` Debug package built elsewhere on the machine with
-  AddressSanitizer records only `build_type=Debug` in its package ID, so Conan reuses
-  it here. `pulseaudio` then links it without `-fsanitize=address` and the ASan
-  symbols are missing. The fix is `conan remove "libmp3lame/*" -c` and then install
-  again. Nothing in `profiles/`, `cmake/`, or `CMakeLists.txt` sets a sanitizer.
+  repository.** Debug packages built elsewhere on the machine with a sanitizer record
+  only `build_type=Debug` in the package ID, so Conan reuses them. The downstream package
+  then links without the sanitizer flags and the symbols are missing.
+
+  The failure walks: `libmp3lame` → `libsndfile` → `wayland-scanner` → `wayland`.
+  Removing one package with `conan remove "<pkg>/*" -c` moves the failure to the next,
+  because several were poisoned together.
+
+  **The fix is to remove every affected package at once**, and then install again:
+
+  ```
+  conan remove "libmp3lame/*" -c
+  conan remove "libsndfile/*" -c
+  conan remove "wayland/*" -c
+  conan remove "wayland-protocols/*" -c
+  conan remove "sdl/*" -c
+  conan install . -pr:h profiles/linux-debug -pr:b profiles/linux-debug \
+    -s 'sdl/*:wayland=False' -b missing
+  ```
+
+  **`conan remove "<pkg>/*" -c` clears every configuration of that package, including
+  RelWithDebInfo.** After the cleanup, the RelWithDebInfo build also needs a reinstall
+  from source: `conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang
+  -b missing`. Nothing warns before this happens, and the next build fails on missing
+  libraries. Nothing in `profiles/`, `cmake/`, or `CMakeLists.txt` sets a sanitizer.
 - **A test that must die.** ctest cannot express "this program must abort, and it must
   say why". `PASS_REGULAR_EXPRESSION` does not override a process that a signal
   stopped, and `WILL_FAIL` passes whether the message appeared or not.
