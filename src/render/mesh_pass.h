@@ -348,6 +348,18 @@ namespace engine::render {
             float depth = 0.0F;            ///< Distance to the camera, for the sort.
         };
 
+        /// One opaque submesh, waiting to be sorted by pipeline variant.
+        struct OpaqueDraw {
+            Mat4 model{ 1.0F };            ///< The model matrix to push.
+            gfx::BufferHandle vertices;    ///< The stream the submesh reads.
+            gfx::BufferHandle indices;     ///< The indices the submesh reads.
+            gfx::DescriptorSetHandle set;  ///< The material set to bind.
+            std::uint32_t index_count = 0; ///< How many indices to draw.
+            std::uint32_t first_index = 0; ///< Where the submesh starts.
+            std::size_t variant = 0;       ///< Which compiled form it needs.
+            bool double_sided = false;     ///< Whether the material wants both faces.
+        };
+
         /**
          * Every pipeline the pass draws with.
          *
@@ -477,6 +489,7 @@ namespace engine::render {
         TextureCache textures_;
         MaterialCache materials_;
         /// @brief The blended submeshes of the current frame. Kept to reuse its storage.
+        std::vector<OpaqueDraw> opaque_;
         std::vector<BlendedDraw> blended_;
         std::size_t draw_count_ = 0;
         /// @brief How many times the last draw() changed pipeline. See #105.

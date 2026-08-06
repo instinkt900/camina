@@ -978,13 +978,11 @@ namespace engine::render {
         // layout. Every form declares the same descriptors, so the layout is
         // compatible with all of them and both survive a pipeline change.
         // build_pipelines() refuses a set of forms where that is not true.
-        gfx::cmd_bind_pipeline(commands, layout_pipeline());
-        gfx::cmd_set_cull_mode(commands, true);
         gfx::cmd_bind_descriptor_set(commands, layout_pipeline(), kFrameSet,
                                      frame_sets_[frame_slot_]);
-        gfx::PipelineHandle bound = layout_pipeline();
 
         blended_.clear();
+        opaque_.clear();
 
         const auto view =
             world.registry().view<const scene::WorldTransform, const scene::MeshRenderer>();
@@ -997,14 +995,6 @@ namespace engine::render {
                 continue;
             }
 
-            const Push push{ .model = transform.matrix };
-            gfx::cmd_push_constants(commands, layout_pipeline(), &push, sizeof(push));
-            gfx::cmd_bind_vertex_buffer(commands, mesh->vertices);
-            gfx::cmd_bind_index_buffer(commands, mesh->indices);
-
-            // One draw call for each submesh. They share the two buffers, so
-            // only the material and the index range change between them. The
-            // material is the reason they are separate calls.
             for (const assets::MeshSubmesh& submesh : mesh->submeshes) {
                 const GpuMaterial& material = materials_.get(device_, content, textures_,
                                                              layout_pipeline(), submesh.material);
@@ -1041,22 +1031,43 @@ namespace engine::render {
                     continue;
                 }
 
-                // Only when it changes. The view hands entities over in no
-                // useful order, so a scene that alternates between two forms
-                // rebinds on every submesh. Sorting the opaque draws by form
-                // would fix that, and it belongs with the render graph in
-                // M5.3. Issue #105 holds it.
-                if (!(bound == pipelines_.opaque[variant])) {
-                    bound = pipelines_.opaque[variant];
-                    gfx::cmd_bind_pipeline(commands, bound);
-                    ++pipeline_switches_;
-                }
-
-                gfx::cmd_bind_descriptor_set(commands, bound, kMaterialSet, material.set);
-                gfx::cmd_set_cull_mode(commands, !material.source.double_sided);
-                gfx::cmd_draw_indexed(commands, submesh.index_count, 1, submesh.first_index, 0);
-                ++draw_count_;
+                opaque_.push_back(OpaqueDraw{
+                    .model = transform.matrix,
+                    .vertices = mesh->vertices,
+                    .indices = mesh->indices,
+                    .set = material.set,
+                    .index_count = submesh.index_count,
+                    .first_index = submesh.first_index,
+                    .variant = variant,
+                    .double_sided = material.source.double_sided,
+                });
             }
+        }
+
+        // Sort opaque draws by variant so that the pipeline is rebound only
+        // when the form changes, and not on every submesh that alternates
+        // between two materials.
+        //
+        // Depth order does not matter here: the depth test decides what wins.
+        // The blended draws are a different case, and draw_blended() keeps
+        // the back-to-front sort.
+        std::sort(opaque_.begin(), opaque_.end(),
+                  [](const OpaqueDraw& a, const OpaqueDraw& b) { return a.variant < b.variant; });
+
+        gfx::PipelineHandle bound;
+        for (const OpaqueDraw& draw : opaque_) {
+            if (!(bound == pipelines_.opaque[draw.variant])) {
+                bound = pipelines_.opaque[draw.variant];
+                gfx::cmd_bind_pipeline(commands, bound);
+                ++pipeline_switches_;
+            }
+            gfx::cmd_push_constants(commands, bound, &draw.model, sizeof(draw.model));
+            gfx::cmd_bind_vertex_buffer(commands, draw.vertices);
+            gfx::cmd_bind_index_buffer(commands, draw.indices);
+            gfx::cmd_bind_descriptor_set(commands, bound, kMaterialSet, draw.set);
+            gfx::cmd_set_cull_mode(commands, !draw.double_sided);
+            gfx::cmd_draw_indexed(commands, draw.index_count, 1, draw.first_index, 0);
+            ++draw_count_;
         }
 
         draw_blended(commands);
