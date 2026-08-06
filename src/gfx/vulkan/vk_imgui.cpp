@@ -11,6 +11,8 @@
 
 #include <SDL3/SDL_events.h>
 
+#include <cmath>
+
 namespace engine::gfx {
 
     namespace {
@@ -25,6 +27,42 @@ namespace engine::gfx {
             if (result != VK_SUCCESS) {
                 ENGINE_LOG_ERROR("The ImGui backend reported {}",
                                  vk::vk_result_name(result));
+            }
+        }
+
+        /// Converts one sRGB channel to linear, for the hardware sRGB encode.
+        [[nodiscard]] float srgb_to_linear(float c) {
+            if (c <= 0.04045F) {
+                return c / 12.92F;
+            }
+            return std::pow((c + 0.055F) / 1.055F, 2.4F);
+        }
+
+        /**
+         * Walks the draw data and converts every vertex colour from sRGB to
+         * linear. ImGui works in sRGB, but the swapchain is _SRGB and the
+         * hardware encodes every write. Giving the hardware a linear colour
+         * gets the sRGB one back out. See DESIGN.md section 3.
+         */
+        void convert_draw_colors_to_linear(ImDrawData* data) {
+            for (int n = 0; n < data->CmdListsCount; ++n) {
+                const ImDrawList* list = data->CmdLists[n];
+                ImDrawVert* vertices = list->VtxBuffer.Data;
+                for (int v = 0; v < list->VtxBuffer.Size; ++v) {
+                    ImU32 col = vertices[v].col;
+                    float r = static_cast<float>((col >> IM_COL32_R_SHIFT) & 0xFF) / 255.0F;
+                    float g = static_cast<float>((col >> IM_COL32_G_SHIFT) & 0xFF) / 255.0F;
+                    float b = static_cast<float>((col >> IM_COL32_B_SHIFT) & 0xFF) / 255.0F;
+                    float a = static_cast<float>((col >> IM_COL32_A_SHIFT) & 0xFF) / 255.0F;
+
+                    r = srgb_to_linear(r);
+                    g = srgb_to_linear(g);
+                    b = srgb_to_linear(b);
+
+                    vertices[v].col =
+                        IM_COL32(static_cast<int>(r * 255.0F), static_cast<int>(g * 255.0F),
+                                 static_cast<int>(b * 255.0F), static_cast<int>(a * 255.0F));
+                }
             }
         }
 
@@ -148,7 +186,9 @@ namespace engine::gfx {
         }
         ImGui::Render();
         if (commands != nullptr) {
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands->buffer);
+            ImDrawData* data = ImGui::GetDrawData();
+            convert_draw_colors_to_linear(data);
+            ImGui_ImplVulkan_RenderDrawData(data, commands->buffer);
         }
     }
 
