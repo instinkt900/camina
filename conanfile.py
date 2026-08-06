@@ -79,7 +79,14 @@ class CaminaConan(ConanFile):
         # See DESIGN.md section 9 "Shader pipeline".
         #
         # The version tracks volk above, because both follow the Vulkan SDK.
-        self.requires("spirv-reflect/1.4.350.0")
+        # The version tracks the spirv-headers that shaderc brings through
+        # spirv-tools, so the two agree.
+        self.requires("spirv-reflect/1.4.313.0")
+
+        # shaderc was a build tool in M1–M5.1, when the cooker spawned glslc as a
+        # subprocess. It became a library in #43 so that a compile is a function
+        # call rather than a process spawn. Only the cooker links it.
+        self.requires("shaderc/2025.3")
 
         if self.options.with_editor:
             self.requires("imguizmo/1.83")
@@ -97,10 +104,7 @@ class CaminaConan(ConanFile):
             self.requires("moth_ui/[>=0.1]")
 
     def build_requirements(self):
-        # shaderc is a build tool here, not a library. The engine compiles GLSL to
-        # SPIR-V during the build and embeds the result, so the runtime carries no
-        # shader compiler. See cmake/Shaders.cmake and DESIGN.md section 2.
-        self.tool_requires("shaderc/2025.3")
+        pass
 
     def layout(self):
         cmake_layout(self)

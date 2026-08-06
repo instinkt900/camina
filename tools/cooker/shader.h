@@ -4,7 +4,7 @@
  * @file
  * @brief The cooker rule that turns a GLSL source into a cooked shader.
  *
- * This is the only place that runs glslc or reflects a SPIR-V module.
+ * This compiles GLSL through libshaderc and reflects the SPIR-V module.
  * `src/assets/shader.h` holds the file format the two sides agree on, and the
  * runtime reads that and nothing else.
  *
@@ -44,7 +44,7 @@ namespace cooker {
     /**
      * @brief Reflects a compiled module and fills in everything but the words.
      *
-     * The caller supplies the module glslc produced. This works out the
+     * The caller supplies the compiled SPIR-V module. This works out the
      * descriptors it reads, the members of every uniform block, and the size of
      * the push constant range.
      *
@@ -67,18 +67,16 @@ namespace cooker {
     /**
      * @brief Cooks one GLSL source into one cooked shader file.
      *
-     * This runs glslc, reads the module back, reflects it, and writes the module
-     * and its description together.
+     * This compiles the source through libshaderc, reflects the module, and
+     * writes the module and its description together.
      *
-     * @param glslc The glslc program to run.
      * @param source The GLSL source to read.
      * @param destination The cooked file to write. The directory must exist.
      * @param defines The defines to compile with. An empty list is the base form.
      * @return True when the cooked file was written. False reports why in the
      * log, by source path.
      */
-    [[nodiscard]] bool cook_shader(const std::filesystem::path& glslc,
-                                   const std::filesystem::path& source,
+    [[nodiscard]] bool cook_shader(const std::filesystem::path& source,
                                    const std::filesystem::path& destination,
                                    const std::vector<std::string>& defines);
 

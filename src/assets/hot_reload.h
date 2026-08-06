@@ -33,14 +33,6 @@ namespace engine::assets {
 
         /// @brief The cooker executable, which normally sits beside this program.
         std::filesystem::path cooker;
-
-        /**
-         * @brief The glslc to compile a changed shader with.
-         *
-         * Empty leaves the choice to the cooker, which looks for glslc on the
-         * PATH. A cook that changes no shader never needs it.
-         */
-        std::string glslc;
     };
 
     /**
@@ -66,7 +58,7 @@ namespace engine::assets {
          * with no source tree beside it looks like. The log then says which
          * one was missing, and the caller runs on without hot reload.
          *
-         * @param desc The source tree, the cooker, and the shader compiler.
+         * @param desc The source tree and the cooker.
          * @return True when it will watch. False when it will not, with the
          * reason in the log.
          */
@@ -114,7 +106,6 @@ namespace engine::assets {
         platform::DirectoryWatcher watcher_;
         std::filesystem::path source_;
         std::filesystem::path cooker_;
-        std::string glslc_;
         std::size_t cooks_ = 0;
         bool active_ = false;
     };

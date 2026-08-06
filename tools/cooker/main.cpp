@@ -9,7 +9,7 @@ namespace {
 
     void usage() {
         std::printf("cooker --content <source directory> --out <cooked directory>\n"
-                    "       [--glslc <path>] [--force]\n");
+                    "       [--force]\n");
     }
 
     /// Reads the command line. Reports what is wrong rather than guessing.
@@ -22,8 +22,6 @@ namespace {
                 options.content = argv[++i];
             } else if (argument == "--out" && has_value) {
                 options.out = argv[++i];
-            } else if (argument == "--glslc" && has_value) {
-                options.glslc = argv[++i];
             } else if (argument == "--force") {
                 options.force = true;
             } else {

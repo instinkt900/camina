@@ -101,8 +101,6 @@ namespace {
         std::string content;
         /// The source content tree to watch. Empty means the compiled-in default.
         std::string watch;
-        /// The shader compiler to cook with. Empty means the compiled-in default.
-        std::string glslc;
         bool hot_reload = true; ///< False turns the watcher and the cooker off.
         /// Whether to wait for the refresh. On by default, because a person
         /// flying around the sandbox wants it. Turn it off to measure a change.
@@ -385,9 +383,6 @@ namespace {
                 ++i;
             } else if (arg == "--watch" && has_value) {
                 options.watch = argv[i + 1];
-                ++i;
-            } else if (arg == "--glslc" && has_value) {
-                options.glslc = argv[i + 1];
                 ++i;
             } else if (arg == "--no-watch") {
                 options.hot_reload = false;
@@ -1039,14 +1034,10 @@ namespace {
             return;
         }
 
-        const std::string glslc =
-            options.glslc.empty() ? std::string{ ENGINE_GLSLC_PATH } : options.glslc;
-
         const engine::assets::HotReloadDesc desc{
             .source = options.watch.empty() ? std::filesystem::path{ ENGINE_GAME_CONTENT_SOURCE }
                                             : std::filesystem::path{ options.watch },
             .cooker = cooker_path(),
-            .glslc = glslc,
         };
         // HotReload::start reports a source tree that is not there, so this
         // does not check for one first.
@@ -1059,7 +1050,6 @@ namespace {
         const engine::assets::HotReloadDesc engine_desc{
             .source = std::filesystem::path{ ENGINE_ENGINE_CONTENT_SOURCE },
             .cooker = cooker_path(),
-            .glslc = glslc,
         };
         (void)runtime.engine_reload.start(engine_desc);
     }
