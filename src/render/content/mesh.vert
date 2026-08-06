@@ -34,9 +34,10 @@ void main() {
     gl_Position = frame.view_projection * world;
     out_world = world.xyz;
 
-    // mat3 of the model matrix is right for a rotation and a uniform scale, and
-    // wrong for a non-uniform one. Issue #94 holds the inverse transpose.
-    mat3 to_world = mat3(push.model);
+    // The inverse transpose of the model matrix correctly transforms normals
+    // under non-uniform scale. mat3(model) is right only for rotation and
+    // uniform scale.
+    mat3 to_world = mat3(transpose(inverse(push.model)));
     out_normal = normalize(to_world * in_normal);
     out_tangent = vec4(normalize(to_world * in_tangent.xyz), in_tangent.w);
     out_uv = in_uv;
