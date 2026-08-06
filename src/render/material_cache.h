@@ -89,6 +89,13 @@ namespace engine::render {
     };
 
     /**
+     * @brief Returns a readable name for a ParamType, for an inspector.
+     * @param type The type to name.
+     * @return A static string such as "Float", "Vec4", or "Unknown".
+     */
+    [[nodiscard]] const char* param_type_name(assets::ParamType type);
+
+    /**
      * @brief What the `Material` block in `mesh.frag` has to declare.
      *
      * @return The members, in offset order. The storage is static.

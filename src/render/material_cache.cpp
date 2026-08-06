@@ -11,6 +11,28 @@
 
 namespace engine::render {
 
+    const char* param_type_name(assets::ParamType type) {
+        switch (type) {
+        case assets::ParamType::Float:
+            return "Float";
+        case assets::ParamType::Vec2:
+            return "Vec2";
+        case assets::ParamType::Vec3:
+            return "Vec3";
+        case assets::ParamType::Vec4:
+            return "Vec4";
+        case assets::ParamType::Int:
+            return "Int";
+        case assets::ParamType::UInt:
+            return "UInt";
+        case assets::ParamType::Mat4:
+            return "Mat4";
+        case assets::ParamType::Unknown:
+            break;
+        }
+        return "Unknown";
+    }
+
     namespace {
 
         /// Sets a bit in the map mask when the material named that texture.

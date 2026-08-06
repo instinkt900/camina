@@ -15,6 +15,7 @@
 #include "reflect/inspector.h"
 #include "reflect/json.h"
 #include "reflect/registry.h"
+#include "render/material_cache.h"
 #include "render/mesh_pass.h"
 #include "render/shadow_pass.h"
 #include "render/tonemap_pass.h"
@@ -738,6 +739,44 @@ namespace {
      * described component to the registry and it appears in this window, game
      * types included.
      */
+    /**
+     * Draws the material block layout that mesh.frag declares.
+     *
+     * The renderer validates these against the shader at startup, and a
+     * person editing a material needs to see the names and the types the
+     * shader expects. The values come from the cooked material asset, and
+     * editing them needs a material source that does not exist yet. Issue
+     * #102 records that decision.
+     */
+    void draw_material_block_info() {
+        if (!ImGui::CollapsingHeader("Material block", ImGuiTreeNodeFlags_DefaultOpen)) {
+            return;
+        }
+
+        ImGui::TextDisabled("What mesh.frag expects. The values come from the cooked glTF.");
+        ImGui::Separator();
+
+        if (!ImGui::BeginTable("material_params", 3,
+                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            return;
+        }
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Type");
+        ImGui::TableSetupColumn("Offset");
+        ImGui::TableHeadersRow();
+
+        for (const engine::render::MaterialUniformMember& member :
+             engine::render::material_uniform_layout()) {
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(member.name);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(engine::render::param_type_name(member.type));
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", member.offset);
+        }
+        ImGui::EndTable();
+    }
+
     void draw_inspector_window(engine::scene::World& world, entt::entity selected) {
         ENGINE_PROFILE_ZONE_N("draw_inspector_window");
 
@@ -762,6 +801,11 @@ namespace {
                     moved = ops.inspect(world.registry(), selected) || moved;
                 }
                 ImGui::PopID();
+            }
+
+            const auto* renderer = world.registry().try_get<engine::scene::MeshRenderer>(selected);
+            if (renderer != nullptr && renderer->mesh.valid()) {
+                draw_material_block_info();
             }
 
             if (moved) {
@@ -844,6 +888,8 @@ namespace {
             resource_states = nullptr;
         /// The game content tree, which holds the cooked meshes.
         const engine::assets::Content* game_content = nullptr;
+        /// The engine content tree, which holds the cooked shaders.
+        const engine::assets::Content* engine_content = nullptr;
         ViewSettings* settings = nullptr;
         engine::scene::World* world = nullptr;
         /// The entity the inspector edits, or entt::null for none.
@@ -1505,6 +1551,7 @@ int main(int argc, char** argv) {
         .overlay = runtime.overlay,
         .resource_states = &runtime.states,
         .game_content = &runtime.game_content,
+        .engine_content = &runtime.engine_content,
         .settings = &settings,
         .world = &world,
         .selected = &selected,
