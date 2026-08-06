@@ -205,8 +205,11 @@ namespace engine::gfx {
      *
      * @param commands The command list from begin_frame().
      * @param clear_color The linear color to clear to.
+     * @param attach_depth Whether to attach the frame depth image. A pass that
+     * neither reads nor writes depth passes false to skip the clear.
      */
-    void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color);
+    void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color,
+                             bool attach_depth = true);
 
     /**
      * @brief Opens dynamic rendering into a color target and the frame depth.

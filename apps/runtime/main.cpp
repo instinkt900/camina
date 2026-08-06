@@ -957,9 +957,10 @@ namespace {
         issue_pass_barriers(info.commands, schedule, kTonemapPassIndex, textures);
 
         // Black, because the full screen triangle covers every pixel. The clear
-        // color a person picked belongs to the scene image above.
+        // color a person picked belongs to the scene image above. The pass
+        // attaches no depth, because the triangle neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
-        engine::gfx::cmd_begin_rendering(info.commands, kFrameClear);
+        engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
         context.tonemap_pass->draw(info.commands, settings.exposure);
 
         // The overlay goes over the tonemapped image rather than through it. It

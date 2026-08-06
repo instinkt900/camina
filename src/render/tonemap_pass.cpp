@@ -54,14 +54,8 @@ namespace engine::render {
             { kSceneColor, gfx::ResourceState::ShaderRead },
         } };
         // The swapchain image, which this pass is the only writer of.
-        //
-        // The depth image is here because the rendering scope attaches it and
-        // clears it, not because anything draws depth-tested. Declaring it is
-        // what orders that clear against the mesh pass writing the same image.
-        // Issue #143 takes the attachment away, which takes this line with it.
-        static constexpr std::array<ResourceWrite, 2> kWrites{ {
+        static constexpr std::array<ResourceWrite, 1> kWrites{ {
             { kFrameColor, gfx::ResourceState::ColorTarget },
-            { kFrameDepth, gfx::ResourceState::DepthTarget },
         } };
         return PassDesc{ .name = "tonemap", .reads = kReads, .writes = kWrites };
     }
@@ -111,6 +105,7 @@ namespace engine::render {
             .binding_count = bindings.size(),
             // The triangle covers everything, so there is nothing to test
             // against and nothing worth recording.
+            .depth_attachment = false,
             .depth_test = false,
             .depth_write = false,
             .blend = false,
