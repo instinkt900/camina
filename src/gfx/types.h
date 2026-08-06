@@ -344,8 +344,21 @@ namespace engine::gfx {
         std::size_t attribute_count = 0; ///< How many entries @c attributes holds.
         std::uint32_t vertex_stride = 0; ///< Bytes from one vertex to the next.
 
-        /// @brief How many bytes of push constants the vertex stage reads. 0 for none.
+        /// @brief How many bytes of push constants the pipeline reads. 0 for none.
         std::uint32_t push_constant_size = 0;
+        /**
+         * @brief Which stages read the push constants, as kStageBit values.
+         *
+         * The default is the vertex stage, because a model matrix is what a push
+         * constant carried first. A pass whose fragment stage needs one says so
+         * here, and the exposure the tonemap applies is the first of those.
+         *
+         * @warning This must name every stage that declares the block. Vulkan
+         * matches the range in the layout against the stages cmd_push_constants()
+         * writes, and a stage that reads a block nobody wrote to it reads
+         * undefined values rather than reporting anything.
+         */
+        std::uint32_t push_constant_stages = kStageBitVertex;
 
         /**
          * @brief The descriptors the pipeline reads, or null for none.

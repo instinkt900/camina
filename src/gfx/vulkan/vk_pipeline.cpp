@@ -257,7 +257,7 @@ namespace engine::gfx {
             }
 
             VkPushConstantRange push{};
-            push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            push.stageFlags = to_vk_stage_flags(desc.push_constant_stages);
             push.size = desc.push_constant_size;
 
             VkPipelineLayoutCreateInfo info{};
@@ -276,7 +276,8 @@ namespace engine::gfx {
         /// Claims a free slot, or grows the pool. Returns the handle for the slot.
         PipelineHandle claim_slot(Device& device, VkPipeline pipeline, VkPipelineLayout layout,
                                   std::vector<VkDescriptorSetLayout>&& set_layouts,
-                                  std::uint32_t push_constant_size) {
+                                  std::uint32_t push_constant_size,
+                                  VkShaderStageFlags push_constant_stages) {
             std::uint32_t index = 0;
             if (!device.free_pipelines.empty()) {
                 index = device.free_pipelines.back();
@@ -291,6 +292,7 @@ namespace engine::gfx {
             entry.layout = layout;
             entry.set_layouts = std::move(set_layouts);
             entry.push_constant_size = push_constant_size;
+            entry.push_constant_stages = push_constant_stages;
             entry.alive = true;
             return PipelineHandle::make(index, entry.generation);
         }
@@ -465,7 +467,8 @@ namespace engine::gfx {
         }
 
         *out_pipeline = claim_slot(*device, pipeline, layout, std::move(set_layouts),
-                                   desc.push_constant_size);
+                                   desc.push_constant_size,
+                                   to_vk_stage_flags(desc.push_constant_stages));
         return Result::Success;
     }
 
@@ -540,7 +543,9 @@ namespace engine::gfx {
             return;
         }
 
-        vkCmdPushConstants(commands->buffer, entry->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, size,
+        // The same stages the layout declared. Vulkan matches the two, and a
+        // mismatch is undefined rather than an error.
+        vkCmdPushConstants(commands->buffer, entry->layout, entry->push_constant_stages, 0, size,
                            data);
     }
 

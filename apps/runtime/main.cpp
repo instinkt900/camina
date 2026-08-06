@@ -118,6 +118,15 @@ namespace {
          * time needs --offscreen as well.
          */
         engine::gfx::Extent2D resolution{ 0, 0 };
+        /**
+         * The exposure to apply, or zero to keep whatever view.json holds.
+         *
+         * Zero rather than one as the "not given" value, because one is a
+         * setting somebody may want and this has to tell the two apart. An
+         * exposure of zero would black the frame, so it is not a value anybody
+         * loses by spending it here.
+         */
+        float exposure = 0.0F;
     };
 
     /**
@@ -128,19 +137,16 @@ namespace {
      * a check for zero does not catch it. This form parses straight into the
      * unsigned type, so a sign and an out of range value are both refused.
      *
+     * A value it refuses is reported here rather than by the caller, so the rule
+     * and the message about the rule sit together.
+     *
+     * A partly parsed pair is refused rather than half applied, because a run
+     * that silently used one axis would produce an image nobody asked for.
+     *
      * @param text The value given on the command line.
      * @param out Receives the size. Untouched unless the whole pair parsed.
-     * @return True when both numbers parsed, nothing was left over, and neither
-     * was zero. A partly parsed value is refused rather than half applied,
-     * because a run that silently used one axis would produce an image nobody
-     * asked for.
      */
-    [[nodiscard]] bool parse_resolution(std::string_view text, engine::gfx::Extent2D& out) {
-        const std::size_t cross = text.find('x');
-        if (cross == std::string_view::npos) {
-            return false;
-        }
-
+    void parse_resolution(std::string_view text, engine::gfx::Extent2D& out) {
         const auto read = [](std::string_view part, std::uint32_t& value) {
             if (part.empty()) {
                 return false;
@@ -152,14 +158,51 @@ namespace {
             return parsed.ec == std::errc{} && parsed.ptr == last && value != 0;
         };
 
+        const std::size_t cross = text.find('x');
         std::uint32_t width = 0;
         std::uint32_t height = 0;
-        if (!read(text.substr(0, cross), width) || !read(text.substr(cross + 1), height)) {
-            return false;
+        const bool parsed = cross != std::string_view::npos &&
+                            read(text.substr(0, cross), width) &&
+                            read(text.substr(cross + 1), height);
+        if (!parsed) {
+            ENGINE_LOG_WARN("--resolution wants <width>x<height> above zero, so {} was ignored.",
+                            text);
+            return;
         }
 
         out = engine::gfx::Extent2D{ width, height };
-        return true;
+    }
+
+    /**
+     * Reads the exposure.
+     *
+     * `std::from_chars` for a float needs a whole value and no trailing text,
+     * which is what refuses "1.0x" and "abc".
+     *
+     * It does parse "inf" and "nan", so those have to be refused by value
+     * rather than by a parse failure. Both reach the shader as a scale that
+     * makes the curve produce something no display can show: infinity divided
+     * by infinity is not a number, and a frame of those is undefined rather
+     * than black. `std::isfinite` is what rejects the pair, and the comparison
+     * against zero alone would let infinity through.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the exposure. Untouched unless the whole value parsed
+     * and came out finite and above zero.
+     */
+    void parse_exposure(std::string_view text, float& out) {
+        const char* first = text.data();
+        const char* last = text.data() + text.size();
+        float value = 0.0F;
+        const std::from_chars_result parsed = std::from_chars(first, last, value);
+        const bool usable = parsed.ec == std::errc{} && parsed.ptr == last &&
+                            std::isfinite(value) && value > 0.0F;
+        if (!usable) {
+            ENGINE_LOG_WARN("--exposure wants a finite number above zero, so {} was ignored.",
+                            text);
+            return;
+        }
+        out = value;
     }
 
     /// Which pass in the schedule is which. The order here is the order they run.
@@ -266,6 +309,16 @@ namespace {
         float move_speed = 6.0F;
         float look_sensitivity = 0.12F;
 
+        /**
+         * A linear scale on the scene before the ACES curve. One is neutral.
+         *
+         * It lives here rather than on the camera because it is a property of
+         * the view and this struct is what the view already is. A
+         * `scene::Camera` field is where it belongs once a scene carries more
+         * than one camera, which nothing does yet.
+         */
+        float exposure = 1.0F;
+
         std::uint64_t frames_drawn = 0;
     };
 
@@ -296,6 +349,8 @@ struct engine::reflect::Describe<ViewSettings> {
                          Tooltip{ "Meters each second. Hold shift to go faster" }),
             ENGINE_FIELD(ViewSettings, look_sensitivity, Range{ 0.01, 1.0, 0.01 },
                          Category{ "Camera" }, Tooltip{ "Degrees for each mouse count" }),
+            ENGINE_FIELD(ViewSettings, exposure, Range{ 0.05, 8.0, 0.01 },
+                         Tooltip{ "Scales the scene before the ACES curve. One is neutral" }),
             // ReadOnly keeps the editor from changing it. Transient keeps it out
             // of the file. The two attributes are read by different consumers,
             // and neither consumer knows about the other.
@@ -345,10 +400,10 @@ namespace {
             } else if (arg == "--offscreen") {
                 options.offscreen = true;
             } else if (arg == "--resolution" && has_value) {
-                if (!parse_resolution(argv[i + 1], options.resolution)) {
-                    ENGINE_LOG_WARN("--resolution wants <width>x<height>, so {} was ignored.",
-                                    argv[i + 1]);
-                }
+                parse_resolution(argv[i + 1], options.resolution);
+                ++i;
+            } else if (arg == "--exposure" && has_value) {
+                parse_exposure(argv[i + 1], options.exposure);
                 ++i;
             }
         }
@@ -905,7 +960,7 @@ namespace {
         // color a person picked belongs to the scene image above.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear);
-        context.tonemap_pass->draw(info.commands);
+        context.tonemap_pass->draw(info.commands, settings.exposure);
 
         // The overlay goes over the tonemapped image rather than through it. It
         // is authored in display colors, so mapping it down with the scene would
@@ -1401,6 +1456,13 @@ int main(int argc, char** argv) {
     // continues where the last one stopped.
     if (std::filesystem::exists(kViewPath) && engine::reflect::load_json(kViewPath, settings)) {
         ENGINE_LOG_INFO("Read {}.", kViewPath);
+    }
+
+    // After the file, because a flag on the command line is the more specific
+    // of the two. A run that has to produce one exposure every time cannot rely
+    // on whatever the last session happened to save.
+    if (options.exposure > 0.0F) {
+        settings.exposure = options.exposure;
     }
 
     // The engine registers what it defines, then the game registers what it

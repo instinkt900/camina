@@ -75,9 +75,9 @@
       "name": "floor",
       "pbrMetallicRoughness": {
         "baseColorFactor": [
-          0.2555,
-          0.252,
-          0.245,
+          0.73,
+          0.72,
+          0.70,
           1.0
         ],
         "metallicFactor": 0.0,
@@ -88,9 +88,9 @@
       "name": "ceiling",
       "pbrMetallicRoughness": {
         "baseColorFactor": [
-          0.287,
-          0.287,
-          0.28,
+          0.82,
+          0.82,
+          0.80,
           1.0
         ],
         "metallicFactor": 0.0,
@@ -101,9 +101,9 @@
       "name": "back wall",
       "pbrMetallicRoughness": {
         "baseColorFactor": [
-          0.245,
-          0.245,
-          0.252,
+          0.70,
+          0.70,
+          0.72,
           1.0
         ],
         "metallicFactor": 0.0,
@@ -114,9 +114,9 @@
       "name": "left wall",
       "pbrMetallicRoughness": {
         "baseColorFactor": [
-          0.217,
-          0.0385,
-          0.0385,
+          0.62,
+          0.11,
+          0.11,
           1.0
         ],
         "metallicFactor": 0.0,
@@ -127,9 +127,9 @@
       "name": "right wall",
       "pbrMetallicRoughness": {
         "baseColorFactor": [
-          0.0385,
-          0.168,
-          0.0595,
+          0.11,
+          0.48,
+          0.17,
           1.0
         ],
         "metallicFactor": 0.0,

@@ -6,6 +6,7 @@
 #include "render/shader_bindings.h"
 
 #include <array>
+#include <cmath>
 #include <vector>
 
 namespace engine::render {
@@ -17,6 +18,11 @@ namespace engine::render {
 
         /// A full screen triangle. See tonemap.vert for why it is not two.
         constexpr std::uint32_t kFullScreenVertices = 3;
+
+        /// The push block, which must match tonemap.frag exactly.
+        struct Push {
+            float exposure = 1.0F;
+        };
 
         /**
          * Reads one cooked shader that has a single form and no variants.
@@ -97,7 +103,10 @@ namespace engine::render {
             .attributes = nullptr,
             .attribute_count = 0,
             .vertex_stride = 0,
-            .push_constant_size = 0,
+            .push_constant_size = sizeof(Push),
+            // The fragment stage, not the vertex stage. The exposure is applied
+            // where the curve is, and the vertex shader has no use for it.
+            .push_constant_stages = gfx::kStageBitFragment,
             .bindings = bindings.data(),
             .binding_count = bindings.size(),
             // The triangle covers everything, so there is nothing to test
@@ -224,12 +233,30 @@ namespace engine::render {
         return true;
     }
 
-    void TonemapPass::draw(gfx::CommandList* commands) {
+    void TonemapPass::draw(gfx::CommandList* commands, float exposure) {
         if (!pipeline_.valid() || !set_.valid()) {
             return;
         }
+
+        // Zero or less blacks the whole frame. Infinity and a value that is not
+        // a number are worse: the curve divides one by the other and every
+        // pixel comes out undefined rather than any colour. So the test is for
+        // a finite number above zero, and a comparison against zero alone would
+        // let infinity through.
+        //
+        // None of the three is a setting anybody means, and each is easy to
+        // reach from a slider or a mistyped flag, so this says so rather than
+        // showing nothing.
+        Push push;
+        if (std::isfinite(exposure) && exposure > 0.0F) {
+            push.exposure = exposure;
+        } else {
+            ENGINE_LOG_WARN("An exposure of {} cannot be used. Falling back to 1.", exposure);
+        }
+
         gfx::cmd_bind_pipeline(commands, pipeline_);
         gfx::cmd_bind_descriptor_set(commands, pipeline_, kSceneSet, set_);
+        gfx::cmd_push_constants(commands, pipeline_, &push, sizeof(push));
         gfx::cmd_draw(commands, kFullScreenVertices, 1, 0, 0);
     }
 
