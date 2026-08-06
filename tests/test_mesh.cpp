@@ -463,11 +463,15 @@ namespace {
         std::vector<as::ManifestOutput> cooked;
         check(cook_gltf(dir / "two.gltf", out, "two.gltf", cooked),
               "a .gltf with a separate buffer cooks");
-        check(cooked.size() == 2, "and two meshes give two cooked files");
-        check(cooked.at(1).cooked == "two.gltf.1.mesh", "numbered in mesh order");
+        // Two meshes sharing accessors write two files with the same bytes.
+        // The second is not re-processed — its bytes are copied from the first.
+        check(cooked.size() == 2, "and two meshes give two manifest entries");
+        check(cooked.at(0).cooked == "two.gltf.0.mesh", "the first is numbered in mesh order");
+        check(cooked.at(1).cooked == "two.gltf.1.mesh", "the second is at its own index");
+        check(cooked.at(0).guid != cooked.at(1).guid, "with different derived GUIDs");
         check(std::filesystem::exists(out / cooked.at(0).cooked) &&
                   std::filesystem::exists(out / cooked.at(1).cooked),
-              "and both landed");
+              "and both files are there");
 
         test::remove_tree(dir.parent_path());
     }

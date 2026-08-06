@@ -12,7 +12,9 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <span>
 #include <string_view>
+#include <unordered_map>
 
 namespace cooker {
 
@@ -363,8 +365,7 @@ namespace cooker {
             built.vertices = std::move(reordered);
         }
 
-        [[nodiscard]] bool write_mesh(const std::filesystem::path& destination,
-                                      const Built& built) {
+        [[nodiscard]] std::vector<std::byte> build_mesh_bytes(const Built& built) {
             as::MeshHeader header;
             header.vertex_count = static_cast<std::uint32_t>(built.vertices.size());
             header.index_count = static_cast<std::uint32_t>(built.indices.size());
@@ -372,28 +373,46 @@ namespace cooker {
             header.min = { built.min.x, built.min.y, built.min.z };
             header.max = { built.max.x, built.max.y, built.max.z };
 
-            std::error_code error;
-            std::filesystem::create_directories(destination.parent_path(), error);
+            const std::size_t total = sizeof(header) +
+                                      built.vertices.size() * sizeof(as::MeshVertex) +
+                                      built.indices.size() * sizeof(std::uint32_t) +
+                                      built.submeshes.size() * sizeof(as::MeshSubmesh);
+            std::vector<std::byte> out(total);
+            std::byte* cursor = out.data();
 
-            std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+            auto push = [&](const void* data, std::size_t size) {
+                std::memcpy(cursor, data, size);
+                cursor += size;
+            };
+            push(&header, sizeof(header));
+            push(built.vertices.data(), built.vertices.size() * sizeof(as::MeshVertex));
+            push(built.indices.data(), built.indices.size() * sizeof(std::uint32_t));
+            push(built.submeshes.data(), built.submeshes.size() * sizeof(as::MeshSubmesh));
+            return out;
+        }
+
+        [[nodiscard]] bool write_bytes(const std::filesystem::path& path,
+                                       std::span<const std::byte> bytes) {
+            std::error_code error;
+            std::filesystem::create_directories(path.parent_path(), error);
+            std::ofstream file(path, std::ios::binary | std::ios::trunc);
             if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it for writing.", destination.string());
+                ENGINE_LOG_ERROR("{}: could not open it for writing.", path.string());
                 return false;
             }
-            const auto write = [&](const void* data, std::size_t size) {
-                file.write(reinterpret_cast<const char*>(data),
-                           static_cast<std::streamsize>(size));
-            };
-            write(&header, sizeof(header));
-            write(built.vertices.data(), built.vertices.size() * sizeof(as::MeshVertex));
-            write(built.indices.data(), built.indices.size() * sizeof(std::uint32_t));
-            write(built.submeshes.data(), built.submeshes.size() * sizeof(as::MeshSubmesh));
-
+            file.write(reinterpret_cast<const char*>(bytes.data()),
+                       static_cast<std::streamsize>(bytes.size()));
             if (!file) {
-                ENGINE_LOG_ERROR("{}: the write failed part way through.", destination.string());
+                ENGINE_LOG_ERROR("{}: the write failed part way through.", path.string());
                 return false;
             }
             return true;
+        }
+
+        [[nodiscard]] bool write_mesh(const std::filesystem::path& destination,
+                                      const Built& built) {
+            const std::vector<std::byte> bytes = build_mesh_bytes(built);
+            return write_bytes(destination, bytes);
         }
 
     } // namespace
@@ -505,9 +524,61 @@ namespace cooker {
         std::vector<engine::Guid> mesh_guids;
         mesh_guids.reserve(held.data->meshes_count);
 
+        /// The positions accessor each already-written mesh first named.
+        /// When a later mesh names the same one, the meshes share their
+        /// accessors and the second copy writes the same bytes without
+        /// re-processing. See issue #118.
+        struct SharedAccessorRecord {
+            engine::Guid guid;            ///< The cooked mesh GUID this accessor was written under.
+            std::vector<std::byte> bytes; ///< The cooked file bytes, to write again.
+        };
+        std::unordered_map<const void*, SharedAccessorRecord> seen_accessors;
+
         for (cgltf_size at = 0; at < held.data->meshes_count; ++at) {
             const cgltf_mesh& mesh = held.data->meshes[at];
             const std::string where = name + " mesh " + std::to_string(at);
+
+            if (mesh.primitives_count == 0) {
+                ENGINE_LOG_ERROR("{}: it holds no primitives.", where);
+                return false;
+            }
+
+            // Every glTF mesh with at least one primitive has a first
+            // primitive. If its positions accessor was already cooked
+            // under another mesh, the two share their accessors and this
+            // one is a duplicate.
+            const cgltf_accessor* first_positions = nullptr;
+            for (cgltf_size pa = 0;
+                 pa < mesh.primitives[0].attributes_count && first_positions == nullptr; ++pa) {
+                if (mesh.primitives[0].attributes[pa].type ==
+                    cgltf_attribute_type_position) {
+                    first_positions = mesh.primitives[0].attributes[pa].data;
+                }
+            }
+            if (first_positions == nullptr) {
+                ENGINE_LOG_ERROR("{}: the first primitive has no positions.", where);
+                return false;
+            }
+
+            const engine::Guid mesh_guid =
+                engine::Guid::derive(parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
+
+            if (const auto found = seen_accessors.find(first_positions);
+                found != seen_accessors.end()) {
+                ENGINE_LOG_INFO("{}: shares its accessors with a mesh already cooked "
+                                "as {}. Writing the same bytes.",
+                                where, found->second.guid.to_text());
+
+                std::filesystem::path cooked_relative = relative;
+                cooked_relative += "." + std::to_string(at);
+                cooked_relative += as::kMeshExtension;
+                write_bytes(out_root / cooked_relative, found->second.bytes);
+
+                mesh_guids.push_back(mesh_guid);
+                outputs.push_back(as::ManifestOutput{
+                    .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
+                continue;
+            }
 
             Built built;
             bool has_tangents = true;
@@ -537,11 +608,15 @@ namespace cooker {
             cooked_relative += "." + std::to_string(at);
             cooked_relative += as::kMeshExtension;
 
-            if (!write_mesh(out_root / cooked_relative, built)) {
+            const std::vector<std::byte> bytes = build_mesh_bytes(built);
+            if (bytes.empty()) {
                 return false;
             }
-            const engine::Guid mesh_guid =
-                engine::Guid::derive(parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
+            if (!write_bytes(out_root / cooked_relative, bytes)) {
+                return false;
+            }
+            seen_accessors.emplace(first_positions,
+                                   SharedAccessorRecord{ mesh_guid, bytes });
             mesh_guids.push_back(mesh_guid);
             outputs.push_back(as::ManifestOutput{
                 .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
