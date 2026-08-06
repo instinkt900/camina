@@ -17,6 +17,7 @@
 #include "reflect/registry.h"
 #include "render/mesh_pass.h"
 #include "render/shadow_pass.h"
+#include "render/tonemap_pass.h"
 #include "screenshot.h"
 #include "sandbox/game.h"
 #include "scene/component_registry.h"
@@ -164,6 +165,7 @@ namespace {
     /// Which pass in the schedule is which. The order here is the order they run.
     constexpr std::size_t kShadowPassIndex = 0;
     constexpr std::size_t kMeshPassIndex = 1;
+    constexpr std::size_t kTonemapPassIndex = 2;
 
     /**
      * Works out every barrier this frame needs.
@@ -183,19 +185,21 @@ namespace {
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states,
         engine::render::GraphSchedule& out) {
         const std::array passes{ engine::render::ShadowPass::declare(),
-                                 engine::render::MeshPass::declare() };
+                                 engine::render::MeshPass::declare(),
+                                 engine::render::TonemapPass::declare() };
 
         // The two frame targets start over every frame. The swapchain image is a
         // different image on almost every acquire, and the depth image is
         // scratch that nothing reads across a frame boundary.
         states[engine::render::kFrameColor.index] = engine::gfx::ResourceState::Undefined;
         states[engine::render::kFrameDepth.index] = engine::gfx::ResourceState::Undefined;
-        // The shadow map does not. It is one image that every frame in flight
-        // shares, so the state the last frame left it in is what the barrier has
-        // to order against. Calling it Undefined here would derive a
-        // depth-to-depth barrier that does not wait for the previous frame's
-        // fragment shader to finish reading it, which is a write after read.
-        // That is the same hazard #125 found on the shared depth image.
+        // The shadow map and the scene color do not. Each is one image that
+        // every frame in flight shares, so the state the last frame left it in
+        // is what the barrier has to order against. Calling either Undefined
+        // here would derive a barrier that waits on the stage the new state
+        // uses, and what it has to wait for is the previous frame's fragment
+        // shader reading the image. That is a write after read, and it is the
+        // same hazard #125 found on the shared depth image.
 
         if (!engine::render::derive_barriers(passes, states, out)) {
             ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
@@ -210,19 +214,24 @@ namespace {
         return true;
     }
 
+    /// Which image each graph resource is, for the ones the frame does not own.
+    /// The two frame targets are null here, because an enum names those.
+    using GraphTextures =
+        std::array<engine::gfx::TextureHandle, engine::render::kFrameResourceCount>;
+
     /// Puts the barriers one pass needs into the command list.
     void issue_pass_barriers(engine::gfx::CommandList* commands,
                              const engine::render::GraphSchedule& schedule, std::size_t pass,
-                             engine::gfx::TextureHandle shadow_map) {
+                             const GraphTextures& textures) {
         if (pass >= schedule.passes.size()) {
             return;
         }
         for (const engine::render::GraphBarrier& barrier : schedule.passes[pass].before) {
-            if (barrier.resource == engine::render::kShadowMap) {
+            const engine::gfx::TextureHandle texture = textures[barrier.resource.index];
+            if (texture.valid()) {
                 // Not a frame target, so it is named by a handle rather than by
                 // an enum. See gfx::cmd_texture_barrier.
-                engine::gfx::cmd_texture_barrier(commands, shadow_map, barrier.before,
-                                                 barrier.after);
+                engine::gfx::cmd_texture_barrier(commands, texture, barrier.before, barrier.after);
                 continue;
             }
             const engine::gfx::FrameTarget target =
@@ -727,14 +736,39 @@ namespace {
         return extent;
     }
 
-    /// @return True when the swapchain now matches @p extent.
-    bool rebuild_swapchain(engine::gfx::Device* device, engine::gfx::Extent2D extent) {
+    /**
+     * Rebuilds the swapchain and everything sized with it.
+     *
+     * The scene color target is the size of the window, so it goes with the
+     * swapchain rather than surviving it. Its state is carried between frames,
+     * and a new image has no history, so that carried state resets here as well.
+     *
+     * @param device The device to resize.
+     * @param extent The size to ask for.
+     * @param tonemap The pass that owns the scene color target.
+     * @param states The carried resource states, which this resets for the
+     * image it replaced.
+     * @return True when the swapchain and the target now match @p extent.
+     */
+    bool rebuild_swapchain(
+        engine::gfx::Device* device, engine::gfx::Extent2D extent,
+        engine::render::TonemapPass& tonemap,
+        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states) {
         const engine::gfx::Result result = engine::gfx::device_resize(device, extent);
         if (!engine::gfx::succeeded(result)) {
             ENGINE_LOG_CRITICAL("The swapchain did not rebuild: {}",
                                 engine::gfx::result_name(result));
             return false;
         }
+
+        // What the device settled on, which is not always what was asked for.
+        // A surface can refuse a size, and the target has to match the frame
+        // rather than the request.
+        if (!tonemap.resize(device_extent(device))) {
+            ENGINE_LOG_CRITICAL("The scene color target did not rebuild, so nothing can draw.");
+            return false;
+        }
+        states[engine::render::kSceneColor.index] = engine::gfx::ResourceState::Undefined;
         return true;
     }
 
@@ -750,6 +784,8 @@ namespace {
         engine::gfx::Device* device = nullptr;
         engine::render::MeshPass* mesh_pass = nullptr;
         engine::render::ShadowPass* shadow_pass = nullptr;
+        /// Owns the scene color target and writes the frame out.
+        engine::render::TonemapPass* tonemap_pass = nullptr;
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
         /// What state each graph resource is in. The shadow map carries its
@@ -778,8 +814,10 @@ namespace {
         engine::gfx::Result result = engine::gfx::begin_frame(device, &info);
 
         if (result == engine::gfx::Result::OutOfDate) {
-            return rebuild_swapchain(device, extent) ? FrameOutcome::Skipped
-                                                     : FrameOutcome::Failed;
+            return rebuild_swapchain(device, extent, *context.tonemap_pass,
+                                     *context.resource_states)
+                       ? FrameOutcome::Skipped
+                       : FrameOutcome::Failed;
         }
         if (!engine::gfx::succeeded(result)) {
             ENGINE_LOG_CRITICAL("begin_frame failed: {}", engine::gfx::result_name(result));
@@ -806,20 +844,26 @@ namespace {
         // because the graph is what knows which pass needs them and in what
         // state.
         //
-        // Two passes now. Each declares what it touches, and the barrier that
-        // moves the shadow map from a depth target to a shader read falls out of
-        // the pair rather than being written by hand here.
+        // Three passes now. Each declares what it touches, and the barriers that
+        // move the shadow map and the scene color from a target to a shader read
+        // fall out of the declarations rather than being written by hand here.
         engine::render::GraphSchedule schedule;
         if (!derive_frame_barriers(*context.resource_states, schedule)) {
             return FrameOutcome::Failed;
         }
+
+        // Which image each resource is. The two frame targets stay null, because
+        // an enum names those and the handle table is how the rest are found.
+        GraphTextures textures{};
+        textures[engine::render::kShadowMap.index] = context.shadow_pass->map();
+        textures[engine::render::kSceneColor.index] = context.tonemap_pass->target();
 
         // The shadow pass first, because the mesh pass reads what it wrote. Its
         // barriers go in before it records, and its own rendering scope opens
         // and closes inside draw().
         const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
 
-        issue_pass_barriers(info.commands, schedule, kShadowPassIndex, context.shadow_pass->map());
+        issue_pass_barriers(info.commands, schedule, kShadowPassIndex, textures);
         context.shadow_pass->draw(info.commands, world, *context.game_content,
                                   context.mesh_pass->meshes(), clip_from_world);
         context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projections(),
@@ -829,19 +873,43 @@ namespace {
 
         // Then the mesh pass barriers, which include moving the shadow map from
         // a depth target to something a shader can read.
-        issue_pass_barriers(info.commands, schedule, kMeshPassIndex, context.shadow_pass->map());
+        issue_pass_barriers(info.commands, schedule, kMeshPassIndex, textures);
 
         const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
                                             settings.clear_color.b, 1.0F };
-        engine::gfx::cmd_begin_rendering(info.commands, clear);
+        // Into the half float scene image, not the swapchain. An 8-bit sRGB
+        // image would clip every value above 1 as the fragment shader wrote it.
+        //
+        // A draw or an end outside a rendering scope is invalid, so nothing is
+        // recorded when the scope did not open. The frame then reaches the
+        // tonemap pass with a scene image nobody drew into, which is a black
+        // picture rather than undefined behavior.
+        if (engine::gfx::cmd_begin_color_rendering(info.commands, context.tonemap_pass->target(),
+                                                   clear)) {
+            // Every entity that names a mesh draws it, and that is now every
+            // entity that draws at all. This is the pipeline made visible: the
+            // geometry comes from a cooked file that a glTF produced, and
+            // nothing here knows which file that was.
+            context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
+                                    settings.camera_position);
 
-        // Every entity that names a mesh draws it, and that is now every
-        // entity that draws at all. This is the pipeline made visible: the
-        // geometry comes from a cooked file that a glTF produced, and nothing
-        // here knows which file that was.
-        context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
-                                settings.camera_position);
+            engine::gfx::cmd_end_rendering(info.commands);
+        }
 
+        // Then the frame itself. The tonemap pass reads the scene image and
+        // writes the swapchain, and the barrier that moves the scene image to a
+        // shader read is the one the graph derived from the pair.
+        issue_pass_barriers(info.commands, schedule, kTonemapPassIndex, textures);
+
+        // Black, because the full screen triangle covers every pixel. The clear
+        // color a person picked belongs to the scene image above.
+        constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
+        engine::gfx::cmd_begin_rendering(info.commands, kFrameClear);
+        context.tonemap_pass->draw(info.commands);
+
+        // The overlay goes over the tonemapped image rather than through it. It
+        // is authored in display colors, so mapping it down with the scene would
+        // be wrong twice over.
         if (context.overlay) {
             engine::gfx::imgui_render(info.commands);
         }
@@ -851,7 +919,8 @@ namespace {
         if (result == engine::gfx::Result::OutOfDate) {
             // The frame did present. The swapchain is now stale or suboptimal, and
             // the window size alone does not report that, so rebuild here.
-            if (!rebuild_swapchain(device, extent)) {
+            if (!rebuild_swapchain(device, extent, *context.tonemap_pass,
+                                   *context.resource_states)) {
                 return FrameOutcome::Failed;
             }
         } else if (!engine::gfx::succeeded(result)) {
@@ -877,7 +946,10 @@ namespace {
         engine::render::MeshPass mesh;
         /// Renders the directional light's depth, which the mesh pass samples.
         engine::render::ShadowPass shadow;
-        /// Carried across frames, because the shadow map is one shared image.
+        /// Owns the half float image the scene renders into, and writes it out.
+        engine::render::TonemapPass tonemap;
+        /// Carried across frames, because the shadow map and the scene color are
+        /// each one image that every frame in flight shares.
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
@@ -1016,6 +1088,7 @@ namespace {
             if (had_shader) {
                 (void)runtime.mesh.reload_shaders(runtime.engine_content);
                 (void)runtime.shadow.reload_shaders(runtime.engine_content);
+                (void)runtime.tonemap.reload_shaders(runtime.engine_content);
             }
             if (had_brdf) {
                 (void)runtime.mesh.reload_brdf_lut(runtime.engine_content);
@@ -1099,6 +1172,13 @@ namespace {
             return false;
         }
 
+        // After the device, because the target is the size the swapchain
+        // settled on rather than the size that was asked for.
+        if (!runtime.tonemap.create(runtime.device, runtime.engine_content,
+                                    device_extent(runtime.device))) {
+            return false;
+        }
+
         if (options.offscreen) {
             // The ImGui SDL backend needs the window. A capture with no panels
             // over it is also the more useful one to compare.
@@ -1138,6 +1218,7 @@ namespace {
         // goes out of scope, which is after this function returns.
         runtime.mesh.destroy();
         runtime.shadow.destroy();
+        runtime.tonemap.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
         }
@@ -1221,7 +1302,8 @@ namespace {
             const engine::gfx::Extent2D extent =
                 options.offscreen ? last_extent : window_extent(runtime.window);
             if (extent.width != last_extent.width || extent.height != last_extent.height) {
-                if (!rebuild_swapchain(runtime.device, extent)) {
+                if (!rebuild_swapchain(runtime.device, extent, runtime.tonemap,
+                                       runtime.states)) {
                     return false;
                 }
                 last_extent = extent;
@@ -1359,6 +1441,7 @@ int main(int argc, char** argv) {
         .device = runtime.device,
         .mesh_pass = &runtime.mesh,
         .shadow_pass = &runtime.shadow,
+        .tonemap_pass = &runtime.tonemap,
         .overlay = runtime.overlay,
         .resource_states = &runtime.states,
         .game_content = &runtime.game_content,

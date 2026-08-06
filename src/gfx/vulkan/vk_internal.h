@@ -354,6 +354,19 @@ namespace engine::gfx {
         [[nodiscard]] Result immediate_submit(Device& device,
                                               const std::function<void(VkCommandBuffer)>& record);
 
+        /**
+         * @brief Turns a ColorTargetFormat into the VkFormat it names.
+         *
+         * ColorTargetFormat::Swapchain is not a fixed format, so this needs the
+         * device to answer. Both the pipeline and the target it draws into go
+         * through here, which is what makes them agree by construction.
+         *
+         * @param device The device, which knows what the swapchain chose.
+         * @param format The value from a ColorTargetDesc or a GraphicsPipelineDesc.
+         * @return The Vulkan format.
+         */
+        [[nodiscard]] VkFormat color_target_format(const Device& device, ColorTargetFormat format);
+
     } // namespace vk
 
 } // namespace engine::gfx
