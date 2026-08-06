@@ -26,6 +26,31 @@ namespace engine::reflect {
         const char* name = "";       ///< The name from the Describe specialization.
         std::size_t size = 0;        ///< `sizeof` the type, in bytes.
         std::size_t field_count = 0; ///< How many fields the type describes.
+
+        /**
+         * @brief A callback that receives one field from a described type.
+         *
+         * @param name       The field name.
+         * @param type_name  A readable name for the field type, or "".
+         * @param offset     Byte offset of the field inside the struct.
+         * @param size       Byte size of the field.
+         * @param user       Whatever the caller passed.
+         */
+        using FieldVisitor = void (*)(const char* name, const char* type_name,
+                                      std::size_t offset, std::size_t size, void* user);
+
+        /**
+         * @brief Walks every described field of @p instance, calling @p visit.
+         *
+         * nullptr when the type was not registered through add() or when the
+         * type has no fields.
+         *
+         * @param instance A pointer to a live instance of this type. The caller
+         * knows the type from the name and casts it.
+         * @param visit    Called once for each described field.
+         * @param user     Passed through to every call of @p visit.
+         */
+        void (*walk_fields)(void* instance, FieldVisitor visit, void* user) = nullptr;
     };
 
     /**
@@ -49,7 +74,19 @@ namespace engine::reflect {
             if (find(type_name<T>()) != nullptr) {
                 return;
             }
-            types_.push_back(TypeInfo{ type_name<T>(), sizeof(T), field_count<T>() });
+            TypeInfo info{ type_name<T>(), sizeof(T), field_count<T>() };
+            if constexpr (field_count<T>() > 0) {
+                info.walk_fields = [](void* instance, TypeInfo::FieldVisitor visit,
+                                      void* user) {
+                    T& object = *static_cast<T*>(instance);
+                    for_each_field(object, [&](const auto& field, const auto& value) {
+                        const std::size_t offset = reinterpret_cast<const char*>(&value) -
+                                                   reinterpret_cast<const char*>(&object);
+                        visit(field.name(), "", offset, sizeof(value), user);
+                    });
+                };
+            }
+            types_.push_back(info);
         }
 
         /**
