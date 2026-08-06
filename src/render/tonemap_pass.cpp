@@ -122,18 +122,20 @@ namespace engine::render {
         return true;
     }
 
-    bool TonemapPass::build_set() {
+    bool TonemapPass::build_set(gfx::PipelineHandle pipeline, gfx::DescriptorSetHandle& out) {
         const std::array<gfx::DescriptorWrite, 1> writes{ {
             { .binding = 0,
               .kind = gfx::DescriptorKind::CombinedImageSampler,
               .texture = target_,
               .buffer = {} },
         } };
-        if (!gfx::succeeded(gfx::create_descriptor_set(device_, pipeline_, kSceneSet,
-                                                       writes.data(), writes.size(), &set_))) {
+        gfx::DescriptorSetHandle built;
+        if (!gfx::succeeded(gfx::create_descriptor_set(device_, pipeline, kSceneSet, writes.data(),
+                                                       writes.size(), &built))) {
             ENGINE_LOG_ERROR("The tonemap descriptor set could not be built.");
             return false;
         }
+        out = built;
         return true;
     }
 
@@ -149,7 +151,7 @@ namespace engine::render {
             ENGINE_LOG_ERROR("The tonemap pipeline did not build.");
             return false;
         }
-        return build_set();
+        return build_set(pipeline_, set_);
     }
 
     void TonemapPass::destroy() {
@@ -179,7 +181,10 @@ namespace engine::render {
         gfx::destroy_texture(device_, target_);
         target_ = gfx::TextureHandle{};
 
-        return build_target(extent) && build_set();
+        // Nothing is preserved on failure here, unlike a shader reload. The old
+        // target is the wrong size, so there is no working state to fall back
+        // to, and the runtime stops when this returns false.
+        return build_target(extent) && build_set(pipeline_, set_);
     }
 
     bool TonemapPass::reload_shaders(const assets::Content& content) {
@@ -193,19 +198,28 @@ namespace engine::render {
             return false;
         }
 
-        gfx::device_wait_idle(device_);
-        gfx::destroy_pipeline(device_, pipeline_);
-        pipeline_ = rebuilt;
-
-        // A set is allocated against the layout of a pipeline, so the old one
+        // A set is allocated against the layout of a pipeline, so the old set
         // cannot be bound to the new pipeline even though it names the same
-        // image.
-        gfx::destroy_descriptor_set(device_, set_);
-        set_ = gfx::DescriptorSetHandle{};
-        if (!build_set()) {
-            ENGINE_LOG_ERROR("The tonemap set did not rebuild, so the frame cannot be written.");
+        // image. Both have to change together.
+        //
+        // So the new set is built first, against the new pipeline and while the
+        // old pair is still live. Swapping the pipeline first and then building
+        // the set would leave the pass with neither if that build failed, and
+        // this function promises the opposite: the old pipeline stays when the
+        // new one will not work.
+        gfx::DescriptorSetHandle replacement;
+        if (!build_set(rebuilt, replacement)) {
+            ENGINE_LOG_WARN("The tonemap set would not build against the new pipeline. Keeping "
+                            "the old pipeline.");
+            gfx::destroy_pipeline(device_, rebuilt);
             return false;
         }
+
+        gfx::device_wait_idle(device_);
+        gfx::destroy_descriptor_set(device_, set_);
+        gfx::destroy_pipeline(device_, pipeline_);
+        pipeline_ = rebuilt;
+        set_ = replacement;
         ENGINE_LOG_INFO("The tonemap pipeline was rebuilt.");
         return true;
     }

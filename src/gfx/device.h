@@ -219,10 +219,15 @@ namespace engine::gfx {
      * The render area, the viewport, and the scissor are the size of @p color.
      *
      * @param commands The command list from begin_frame().
-     * @param color The image to render into, from create_color_target(). A null
-     * or stale handle logs and opens no scope, and the draws that follow are
-     * then discarded.
+     * @param color The image to render into, from create_color_target().
      * @param clear_color The linear color to clear to.
+     * @return True when the scope is open. False means the handle was null or
+     * stale and no scope was opened.
+     *
+     * @warning Record nothing when this returns false, and do not call
+     * cmd_end_rendering(). A draw or an end outside a rendering scope is
+     * invalid, so a caller that ignores the result turns a bad handle into
+     * undefined behavior.
      *
      * @warning @p color must already be in ResourceState::ColorTarget and the
      * frame depth image in ResourceState::DepthTarget. The caller issues the
@@ -232,8 +237,8 @@ namespace engine::gfx {
      * ColorTargetFormat the target holds. Close the scope with
      * cmd_end_rendering().
      */
-    void cmd_begin_color_rendering(CommandList* commands, TextureHandle color,
-                                   const ColorRGBA& clear_color);
+    [[nodiscard]] bool cmd_begin_color_rendering(CommandList* commands, TextureHandle color,
+                                                 const ColorRGBA& clear_color);
 
     /**
      * @brief Opens dynamic rendering into a depth image and no color image.

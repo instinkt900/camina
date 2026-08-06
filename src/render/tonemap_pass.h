@@ -107,8 +107,20 @@ namespace engine::render {
         /// Builds a pipeline from the cooked shaders into @p out.
         [[nodiscard]] bool build_pipeline(const assets::Content& content,
                                           gfx::PipelineHandle& out);
-        /// Builds the set that binds the target. Needs a live pipeline and target.
-        [[nodiscard]] bool build_set();
+        /**
+         * Builds the set that binds the target into @p out.
+         *
+         * It takes the pipeline rather than reading the member, so a reload can
+         * build the replacement set against the new pipeline while the old one
+         * is still the live one. A set is allocated against a pipeline's layout,
+         * so the two cannot be swapped in separate steps without a window where
+         * neither is whole.
+         *
+         * @param pipeline The pipeline whose layout the set is allocated against.
+         * @param out Receives the set. Untouched on failure.
+         * @return False when the set could not be built.
+         */
+        [[nodiscard]] bool build_set(gfx::PipelineHandle pipeline, gfx::DescriptorSetHandle& out);
 
         gfx::Device* device_ = nullptr;
         gfx::PipelineHandle pipeline_;

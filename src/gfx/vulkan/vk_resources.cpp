@@ -1004,6 +1004,23 @@ namespace engine::gfx {
             return Result::ErrorInit;
         }
 
+        // Filtering is a third feature, separate from the two above, and the
+        // default sampler asks for it. Both formats ColorTargetFormat names are
+        // in the Vulkan mandatory format table with a linear filter, so this is
+        // a guard against a format added later rather than a live condition.
+        //
+        // It drops to a nearest filter rather than failing, which is what
+        // create_depth_target() does and for the same reason: a worse picture
+        // beats refusing to start on a GPU that can draw the rest of the scene.
+        SamplerDesc sampler = desc.sampler;
+        if (sampler.filter == Filter::Linear &&
+            (properties.optimalTilingFeatures &
+             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0U) {
+            ENGINE_LOG_WARN("This GPU cannot filter the color target format, so the scene image "
+                            "reads with a nearest filter.");
+            sampler.filter = Filter::Nearest;
+        }
+
         TextureEntry built;
 
         VkImageCreateInfo image{};
@@ -1044,7 +1061,7 @@ namespace engine::gfx {
         // One layer, so the sampling view serves as the attachment as well and
         // no layer view is needed. create_depth_target() builds those only
         // because a cascade set has several layers.
-        const Result sampled = vk::resolve_sampler(*device, desc.sampler, &built.sampler);
+        const Result sampled = vk::resolve_sampler(*device, sampler, &built.sampler);
         if (!succeeded(sampled)) {
             vkDestroyImageView(device->device, built.view, nullptr);
             vmaDestroyImage(device->allocator, built.image, built.allocation);

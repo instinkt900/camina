@@ -350,7 +350,7 @@ namespace engine::gfx {
         vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
     }
 
-    void cmd_begin_color_rendering(CommandList* commands, TextureHandle color_target,
+    bool cmd_begin_color_rendering(CommandList* commands, TextureHandle color_target,
                                    const ColorRGBA& clear_color) {
         ENGINE_CHECK(commands != nullptr, "cmd_begin_color_rendering needs a command list.");
         Device& device = *commands->owner;
@@ -358,7 +358,7 @@ namespace engine::gfx {
         const TextureEntry* entry = vk::resolve_texture(device, color_target);
         if (entry == nullptr) {
             ENGINE_LOG_ERROR("cmd_begin_color_rendering received a stale or null handle.");
-            return;
+            return false;
         }
 
         VkRenderingAttachmentInfo color{};
@@ -412,6 +412,7 @@ namespace engine::gfx {
         VkRect2D scissor{};
         scissor.extent = VkExtent2D{ entry->width, entry->height };
         vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
+        return true;
     }
 
     void cmd_end_rendering(CommandList* commands) {

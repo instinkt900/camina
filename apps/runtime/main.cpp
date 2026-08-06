@@ -879,17 +879,22 @@ namespace {
                                             settings.clear_color.b, 1.0F };
         // Into the half float scene image, not the swapchain. An 8-bit sRGB
         // image would clip every value above 1 as the fragment shader wrote it.
-        engine::gfx::cmd_begin_color_rendering(info.commands, context.tonemap_pass->target(),
-                                               clear);
+        //
+        // A draw or an end outside a rendering scope is invalid, so nothing is
+        // recorded when the scope did not open. The frame then reaches the
+        // tonemap pass with a scene image nobody drew into, which is a black
+        // picture rather than undefined behavior.
+        if (engine::gfx::cmd_begin_color_rendering(info.commands, context.tonemap_pass->target(),
+                                                   clear)) {
+            // Every entity that names a mesh draws it, and that is now every
+            // entity that draws at all. This is the pipeline made visible: the
+            // geometry comes from a cooked file that a glTF produced, and
+            // nothing here knows which file that was.
+            context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
+                                    settings.camera_position);
 
-        // Every entity that names a mesh draws it, and that is now every
-        // entity that draws at all. This is the pipeline made visible: the
-        // geometry comes from a cooked file that a glTF produced, and nothing
-        // here knows which file that was.
-        context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
-                                settings.camera_position);
-
-        engine::gfx::cmd_end_rendering(info.commands);
+            engine::gfx::cmd_end_rendering(info.commands);
+        }
 
         // Then the frame itself. The tonemap pass reads the scene image and
         // writes the swapchain, and the barrier that moves the scene image to a
