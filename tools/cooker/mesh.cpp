@@ -524,15 +524,39 @@ namespace cooker {
         std::vector<engine::Guid> mesh_guids;
         mesh_guids.reserve(held.data->meshes_count);
 
-        /// The positions accessor each already-written mesh first named.
-        /// When a later mesh names the same one, the meshes share their
-        /// accessors and the second copy writes the same bytes without
-        /// re-processing. See issue #118.
-        struct SharedAccessorRecord {
-            engine::Guid guid;            ///< The cooked mesh GUID this accessor was written under.
-            std::vector<std::byte> bytes; ///< The cooked file bytes, to write again.
+        /// The full set of geometry accessors for one glTF mesh's first
+        /// primitive. When a later mesh names the same set, its data can
+        /// be reused without re-processing. See issue #118.
+        struct GeometryKey {
+            const void* positions = nullptr;
+            const void* normals = nullptr;
+            const void* texcoords = nullptr;
+            const void* indices = nullptr;
+
+            bool operator==(const GeometryKey& other) const {
+                return positions == other.positions && normals == other.normals &&
+                       texcoords == other.texcoords && indices == other.indices;
+            }
         };
-        std::unordered_map<const void*, SharedAccessorRecord> seen_accessors;
+        struct GeometryKeyHash {
+            std::size_t operator()(const GeometryKey& key) const {
+                std::size_t h = 0;
+                auto mix = [&h](const void* p) {
+                    h ^= reinterpret_cast<std::uintptr_t>(p) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                };
+                mix(key.positions);
+                mix(key.normals);
+                mix(key.texcoords);
+                mix(key.indices);
+                return h;
+            }
+        };
+
+        struct CachedGeometry {
+            std::vector<engine::assets::MeshVertex> vertices;
+            std::vector<std::uint32_t> indices;
+        };
+        std::unordered_map<GeometryKey, CachedGeometry, GeometryKeyHash> seen_geometry;
 
         for (cgltf_size at = 0; at < held.data->meshes_count; ++at) {
             const cgltf_mesh& mesh = held.data->meshes[at];
@@ -543,42 +567,34 @@ namespace cooker {
                 return false;
             }
 
-            // Every glTF mesh with at least one primitive has a first
-            // primitive. If its positions accessor was already cooked
-            // under another mesh, the two share their accessors and this
-            // one is a duplicate.
-            const cgltf_accessor* first_positions = nullptr;
-            for (cgltf_size pa = 0;
-                 pa < mesh.primitives[0].attributes_count && first_positions == nullptr; ++pa) {
-                if (mesh.primitives[0].attributes[pa].type ==
-                    cgltf_attribute_type_position) {
-                    first_positions = mesh.primitives[0].attributes[pa].data;
+            GeometryKey key;
+            const cgltf_primitive& first = mesh.primitives[0];
+            for (cgltf_size pa = 0; pa < first.attributes_count; ++pa) {
+                switch (first.attributes[pa].type) {
+                case cgltf_attribute_type_position:
+                    key.positions = first.attributes[pa].data;
+                    break;
+                case cgltf_attribute_type_normal:
+                    key.normals = first.attributes[pa].data;
+                    break;
+                case cgltf_attribute_type_texcoord:
+                    if (first.attributes[pa].index == 0) {
+                        key.texcoords = first.attributes[pa].data;
+                    }
+                    break;
+                default:
+                    break;
                 }
             }
-            if (first_positions == nullptr) {
+            key.indices = first.indices;
+
+            if (key.positions == nullptr) {
                 ENGINE_LOG_ERROR("{}: the first primitive has no positions.", where);
                 return false;
             }
 
             const engine::Guid mesh_guid =
                 engine::Guid::derive(parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
-
-            if (const auto found = seen_accessors.find(first_positions);
-                found != seen_accessors.end()) {
-                ENGINE_LOG_INFO("{}: shares its accessors with a mesh already cooked "
-                                "as {}. Writing the same bytes.",
-                                where, found->second.guid.to_text());
-
-                std::filesystem::path cooked_relative = relative;
-                cooked_relative += "." + std::to_string(at);
-                cooked_relative += as::kMeshExtension;
-                write_bytes(out_root / cooked_relative, found->second.bytes);
-
-                mesh_guids.push_back(mesh_guid);
-                outputs.push_back(as::ManifestOutput{
-                    .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
-                continue;
-            }
 
             Built built;
             bool has_tangents = true;
@@ -596,13 +612,22 @@ namespace cooker {
                 return false;
             }
 
-            if (!has_tangents) {
-                ENGINE_LOG_INFO("{}: the source has no tangents, so the cooker built them.",
+            const bool is_dup = seen_geometry.contains(key);
+            if (is_dup) {
+                ENGINE_LOG_INFO("{}: shares its accessors with an already-cooked mesh. "
+                                "Reusing that geometry.",
                                 where);
-                build_tangents(built.vertices, built.indices);
+                built.vertices = seen_geometry.at(key).vertices;
+                built.indices = seen_geometry.at(key).indices;
+            } else {
+                if (!has_tangents) {
+                    ENGINE_LOG_INFO("{}: the source has no tangents, so the cooker built them.",
+                                    where);
+                    build_tangents(built.vertices, built.indices);
+                }
+                optimize(built);
+                seen_geometry.emplace(key, CachedGeometry{ built.vertices, built.indices });
             }
-
-            optimize(built);
 
             std::filesystem::path cooked_relative = relative;
             cooked_relative += "." + std::to_string(at);
@@ -615,8 +640,6 @@ namespace cooker {
             if (!write_bytes(out_root / cooked_relative, bytes)) {
                 return false;
             }
-            seen_accessors.emplace(first_positions,
-                                   SharedAccessorRecord{ mesh_guid, bytes });
             mesh_guids.push_back(mesh_guid);
             outputs.push_back(as::ManifestOutput{
                 .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
