@@ -56,6 +56,9 @@ namespace engine::scene {
          * because the change went around set_local().
          */
         bool (*inspect)(entt::registry& registry, entt::entity entity) = nullptr;
+
+        /// @brief The field names that carry AssetRef, or empty.
+        std::vector<const char*> reference_field_names;
     };
 
     /**
@@ -106,6 +109,15 @@ namespace engine::scene {
             ops.inspect = [](entt::registry& registry, entt::entity entity) {
                 return reflect::inspect(registry.get<T>(entity));
             };
+            if constexpr (reflect::field_count<T>() > 0) {
+                T instance{};
+                reflect::for_each_field(instance, [&](const auto& field, const auto& /*value*/) {
+                    if constexpr (reflect::has_attribute_v<reflect::AssetRef,
+                                                           decltype(field)>) {
+                        ops.reference_field_names.push_back(field.name());
+                    }
+                });
+            }
             entries_.push_back(ops);
         }
 
