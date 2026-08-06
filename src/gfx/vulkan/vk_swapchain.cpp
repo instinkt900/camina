@@ -414,6 +414,9 @@ namespace engine::gfx {
 
         vkDeviceWaitIdle(device->device);
         vk::destroy_swapchain(*device);
+        if (device->headless) {
+            return vk::create_offscreen_targets(*device, size);
+        }
         return vk::create_swapchain(*device, size);
     }
 
