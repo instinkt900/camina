@@ -1,12 +1,13 @@
 #include "shader.h"
 
 #include "core/log.h"
-#include "platform/process.h"
 
+#include <shaderc/shaderc.h>
 #include <spirv_reflect.h>
 
 #include <algorithm>
 #include <fstream>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -242,26 +243,22 @@ namespace cooker {
                       });
         }
 
-        /// Reads a whole file into 32-bit words, which is what SPIR-V is.
-        [[nodiscard]] bool read_words(const std::filesystem::path& path,
-                                      std::vector<std::uint32_t>& out) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
+        /// Reads a whole text file from @p path and returns it as a string.
+        [[nodiscard]] std::string read_text(const std::filesystem::path& path) {
+            std::ifstream file(path, std::ios::ate);
             if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open the module glslc wrote.", path.string());
-                return false;
+                return {};
             }
             const std::streamsize size = file.tellg();
-            if (size <= 0 || (size % 4) != 0) {
-                ENGINE_LOG_ERROR("{}: {} bytes is not a SPIR-V module.", path.string(), size);
-                return false;
+            if (size <= 0) {
+                return {};
             }
             file.seekg(0);
-            out.resize(static_cast<std::size_t>(size) / sizeof(std::uint32_t));
-            if (!file.read(reinterpret_cast<char*>(out.data()), size)) {
-                ENGINE_LOG_ERROR("{}: the module did not read.", path.string());
-                return false;
+            std::string text(static_cast<std::size_t>(size), '\0');
+            if (!file.read(text.data(), size)) {
+                return {};
             }
-            return true;
+            return text;
         }
 
         /// Writes a whole cooked file.
@@ -335,7 +332,19 @@ namespace cooker {
         return ok;
     }
 
-    bool cook_shader(const std::filesystem::path& glslc, const std::filesystem::path& source,
+    [[nodiscard]] shaderc_shader_kind to_shaderc_kind(as::ShaderStage stage) {
+        switch (stage) {
+        case as::ShaderStage::Vertex:
+            return shaderc_vertex_shader;
+        case as::ShaderStage::Fragment:
+            return shaderc_fragment_shader;
+        case as::ShaderStage::Compute:
+            return shaderc_compute_shader;
+        }
+        return shaderc_vertex_shader;
+    }
+
+    bool cook_shader(const std::filesystem::path& source,
                      const std::filesystem::path& destination,
                      const std::vector<std::string>& defines) {
         as::ShaderStage stage{};
@@ -344,74 +353,64 @@ namespace cooker {
             return false;
         }
 
-        // glslc writes a module and this rule writes a module with a description
-        // in front of it, so the compiler output lands beside the cooked file
-        // and goes away again.
-        std::filesystem::path module_path = destination;
-        module_path += ".spv";
+        const std::string text = read_text(source);
+        if (text.empty()) {
+            ENGINE_LOG_ERROR("{}: could not read the source file.", source.string());
+            return false;
+        }
 
-        // No -O here, and that is deliberate. glslc passes -O to spirv-opt,
-        // which strips every OpName from the module. The set and the binding
-        // survive, because they are decorations the module needs to be correct,
-        // and every name does not.
-        //
-        // A parameter block with no names gives an inspector nothing to label a
-        // field with, and DESIGN.md section 7 asks for that editor. The driver
-        // runs its own optimizer over whatever it is given.
-        //
-        // Measured on the M5.6 sandbox scene at 1280x720 on a GeForce MX250:
-        // median frame time without -O was 1.808 ms and with -O was 1.812 ms
-        // (average of three 300-frame runs each). That is inside the run-to-run
-        // noise, so dropping -O costs nothing measurable.
-        // run_process takes an argument vector and starts the program without a
-        // shell, so a define needs no quoting and nothing can reinterpret one.
-        std::vector<std::string> arguments{ "--target-env=vulkan1.3" };
+        // No optimizations here, and that is deliberate. spirv-opt strips every
+        // OpName from the module, and a parameter block with no names gives an
+        // inspector nothing to label a field with. The driver runs its own
+        // optimizer. Measured on the M5.6 sandbox scene at 1280x720 on a
+        // GeForce MX250: median frame time without -O was 1.808 ms and with -O
+        // was 1.812 ms (average of three 300-frame runs each). That is inside
+        // the run-to-run noise, so dropping -O costs nothing measurable.
+        shaderc_compiler_t compiler = shaderc_compiler_initialize();
+        shaderc_compile_options_t options = shaderc_compile_options_initialize();
+        shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
+                                               shaderc_env_version_vulkan_1_3);
+        shaderc_compile_options_set_source_language(options,
+                                                    shaderc_source_language_glsl);
         for (const std::string& define : defines) {
-            arguments.push_back("-D" + define);
+            shaderc_compile_options_add_macro_definition(
+                options, define.c_str(), define.size(), nullptr, 0);
         }
-        arguments.push_back("-o");
-        arguments.push_back(module_path.string());
-        arguments.push_back(source.string());
 
-        const engine::platform::ProcessResult result =
-            engine::platform::run_process(glslc, arguments);
+        const shaderc_compilation_result_t result = shaderc_compile_into_spv(
+            compiler, text.c_str(), text.size(), to_shaderc_kind(stage),
+            source.string().c_str(), "main", options);
 
-        const auto clean_up = [&module_path]() {
-            std::error_code error;
-            std::filesystem::remove(module_path, error);
-        };
+        shaderc_compile_options_release(options);
+        shaderc_compiler_release(compiler);
 
-        if (!result.ran) {
-            ENGINE_LOG_ERROR("{}: glslc could not start.", source.string());
-            clean_up();
-            return false;
-        }
-        if (result.exit_code != 0) {
-            ENGINE_LOG_ERROR("{}: glslc returned {}. Its messages are above.", source.string(),
-                             result.exit_code);
-            clean_up();
+        const shaderc_compilation_status status =
+            shaderc_result_get_compilation_status(result);
+        if (status != shaderc_compilation_status_success) {
+            ENGINE_LOG_ERROR("{}: {}\n{}", source.string(),
+                             status == shaderc_compilation_status_compilation_error
+                                 ? "compilation failed"
+                                 : "an internal error stopped the compiler",
+                             shaderc_result_get_error_message(result));
+            shaderc_result_release(result);
             return false;
         }
 
-        std::vector<std::uint32_t> words;
-        if (!read_words(module_path, words)) {
-            clean_up();
-            return false;
-        }
+        const std::size_t byte_count = shaderc_result_get_length(result);
+        const auto* words_begin =
+            reinterpret_cast<const std::uint32_t*>(shaderc_result_get_bytes(result));
+        std::vector<std::uint32_t> words(words_begin, words_begin + byte_count / sizeof(std::uint32_t));
+
+        shaderc_result_release(result);
 
         as::Shader shader;
         if (!reflect_shader(words, stage, shader, source.string())) {
-            clean_up();
             return false;
         }
         shader.spirv = std::move(words);
-        // What this module was built with travels with it, so a consumer picks a
-        // variant by what it declares rather than by where it sits in the
-        // manifest.
         shader.defines = defines;
 
         const std::vector<std::byte> bytes = as::write_shader(shader);
-        clean_up();
         return write_bytes(destination, bytes);
     }
 

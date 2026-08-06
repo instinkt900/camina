@@ -27,14 +27,12 @@ target_link_libraries(runtime PRIVATE
 # M4.5. Hot reload runs the cooker over the source content tree, and neither
 # path can be worked out from the running program. The cooker sits beside the
 # executable, so that one is found at runtime. These two cannot be.
-#
 # A build away from its source tree gets a directory that is not there. Hot
 # reload then reports that and turns itself off, which is what a shipped build
-# should do. --watch and --glslc override both.
+# should do. --watch overrides it.
 target_compile_definitions(runtime PRIVATE
     ENGINE_GAME_CONTENT_SOURCE="${CMAKE_SOURCE_DIR}/sandbox/content"
     ENGINE_ENGINE_CONTENT_SOURCE="${CMAKE_SOURCE_DIR}/src/render/content"
-    ENGINE_GLSLC_PATH="${ENGINE_GLSLC_EXE}"
 )
 
 engine_set_warnings(runtime)

@@ -26,7 +26,6 @@ namespace engine::assets {
         active_ = false;
         source_ = desc.source;
         cooker_ = desc.cooker;
-        glslc_ = desc.glslc;
 
         std::error_code error;
         if (!std::filesystem::is_directory(source_, error)) {
@@ -59,10 +58,6 @@ namespace engine::assets {
         // of its inputs changed and the entry lists them all.
         std::vector<std::string> arguments{ "--content", source_.string(), "--out",
                                             content.root().string() };
-        if (!glslc_.empty()) {
-            arguments.emplace_back("--glslc");
-            arguments.push_back(glslc_);
-        }
 
         const platform::ProcessResult result = platform::run_process(cooker_, arguments);
         if (!result.ran) {

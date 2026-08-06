@@ -26,15 +26,6 @@ namespace cooker {
         /// @brief The cooked tree to write. The cooker makes it when it is missing.
         std::filesystem::path out;
 
-        /**
-         * @brief The glslc to compile shaders with.
-         *
-         * CMake passes the one it found, so a build uses the compiler the
-         * Conan environment supplies. A person running the cooker by hand gets
-         * whichever glslc is on PATH.
-         */
-        std::string glslc = "glslc";
-
         /// @brief Cook every asset, even one the manifest calls unchanged.
         bool force = false;
     };

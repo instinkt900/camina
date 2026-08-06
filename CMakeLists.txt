@@ -56,6 +56,10 @@ find_package(meshoptimizer REQUIRED)
 # links it. See tools/cooker/CMakeLists.txt.
 find_package(spirv-reflect-static REQUIRED)
 
+# The cooker links shaderc to compile GLSL to SPIR-V in process. It was a
+# subprocess through glslc until #43. Only the cooker links this.
+find_package(shaderc REQUIRED)
+
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)

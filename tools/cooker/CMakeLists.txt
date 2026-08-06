@@ -42,6 +42,7 @@ target_link_libraries(cooker_lib
         cgltf::cgltf
         meshoptimizer::meshoptimizer
         spirv-reflect-static
+        shaderc::shaderc
 )
 
 engine_set_warnings(cooker_lib)
@@ -52,17 +53,6 @@ target_link_libraries(cooker PRIVATE cooker_lib)
 
 engine_set_warnings(cooker)
 engine_enable_clang_tidy(cooker)
-
-# glslc compiles the shaders. It arrives through the shaderc tool requirement
-# in conanfile.py, and the same find_program the deleted cmake/Shaders.cmake
-# used now only tells the cooker where it is.
-find_program(ENGINE_GLSLC_EXE NAMES glslc)
-if(NOT ENGINE_GLSLC_EXE)
-    message(FATAL_ERROR
-        "glslc was not found. Run conan install first, and make sure the "
-        "generated build environment is active.")
-endif()
-message(STATUS "Using glslc at ${ENGINE_GLSLC_EXE}")
 
 # Cooks one source tree into the directory the executables run from.
 #
@@ -89,7 +79,6 @@ function(engine_cook_content name source)
         COMMAND cooker
                 --content "${source}"
                 --out "${out_dir}"
-                --glslc "${ENGINE_GLSLC_EXE}"
         COMMAND ${CMAKE_COMMAND} -E touch "${stamp}"
         DEPENDS cooker ${cook_inputs}
         COMMENT "Cooking ${name} content"

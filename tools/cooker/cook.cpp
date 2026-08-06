@@ -28,7 +28,7 @@ namespace cooker {
 
         /// What rule turns one source file into one cooked file.
         enum class Rule : std::uint8_t {
-            Shader,      ///< GLSL through glslc, out as SPIR-V and its reflected layout.
+            Shader,      ///< GLSL through shaderc, out as SPIR-V and its reflected layout.
             Texture,     ///< An image through stb, out as mip levels and BC7 blocks.
             Environment, ///< An HDR panorama through stb, out as a half float cubemap.
             Brdf,        ///< The split sum BRDF table, integrated from its sidecar alone.
@@ -182,7 +182,7 @@ namespace cooker {
 
                 std::error_code error;
                 std::filesystem::create_directories(destination.parent_path(), error);
-                if (!cook_shader(options.glslc, source, destination, variant.defines)) {
+                if (!cook_shader(source, destination, variant.defines)) {
                     ENGINE_LOG_ERROR("{}: variant {} did not compile.", relative.string(),
                                      variant.name.empty() ? "with no name" : variant.name);
                     return false;

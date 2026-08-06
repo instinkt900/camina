@@ -5,10 +5,8 @@
 // that skips too much ships a stale asset. Both failures are quiet, so the
 // tests here drive the second run and check the counts rather than the output.
 //
-// test_a_shell_metacharacter_name_still_cooks is the one test that cooks a shader.
-// It needs glslc, which the CMake test target passes through a compile
-// definition. The copy rule exercises the same manifest path for the rest of
-// the tests.
+// The cooker now links libshaderc, so shader tests no longer need a separate
+// glslc executable.
 
 #include "assets/content.h"
 #include "assets/hot_reload.h"
@@ -270,7 +268,6 @@ namespace {
     }
 
     void test_a_shell_metacharacter_name_still_cooks() {
-#if defined(ENGINE_GLSLC_PATH)
         // A shader whose name a shell would read as a command. glslc now runs
         // through run_process, so no shell ever sees the name, and the cooker
         // no longer refuses it. Without shell_safe, a content tree holding a
@@ -285,7 +282,6 @@ namespace {
         write_file(source / name, "#version 450\nvoid main() {}\n");
 
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(cooker::cook_all(options, result), "a name a shell would expand now cooks");
         check(result.cooked == 1, "it counted the cook");
@@ -293,7 +289,6 @@ namespace {
               "the cooked shader was written");
 
         test::remove_tree(source.parent_path());
-#endif
     }
 
     /**
@@ -312,7 +307,6 @@ namespace {
      * modules and pass a weaker test.
      */
     void test_a_shader_cooks_once_for_each_variant() {
-#if defined(ENGINE_GLSLC_PATH)
         const std::filesystem::path source = scratch("variants/src");
         const std::filesystem::path out = scratch("variants/out");
         write_file(source / "many.frag", R"(#version 450
@@ -345,7 +339,6 @@ void main() {
 })");
 
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(cooker::cook_all(options, result), "a shader with two variants cooks");
 
@@ -407,12 +400,10 @@ void main() {
         }
 
         test::remove_tree(source.parent_path());
-#endif
     }
 
     /// The base form has to be first, because it keeps the source's identity.
     void test_a_variant_list_that_starts_with_defines_is_refused() {
-#if defined(ENGINE_GLSLC_PATH)
         const std::filesystem::path source = scratch("badvariants/src");
         const std::filesystem::path out = scratch("badvariants/out");
         write_file(source / "first.frag", R"(#version 450
@@ -432,7 +423,6 @@ void main() { out_color = vec4(1.0); }
 })");
 
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(!cooker::cook_all(options, result),
               "a list whose first variant defines something fails the cook");
@@ -441,11 +431,9 @@ void main() { out_color = vec4(1.0); }
               "and it wrote no module");
 
         test::remove_tree(source.parent_path());
-#endif
     }
 
     void test_the_cooker_reflects_what_a_shader_reads() {
-#if defined(ENGINE_GLSLC_PATH)
         const std::filesystem::path source = scratch("reflect/src");
         const std::filesystem::path out = scratch("reflect/out");
         write_file(source / "look.frag", R"(#version 450
@@ -464,7 +452,6 @@ void main() {
 )");
 
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(cooker::cook_all(options, result), "a shader with real bindings cooks");
 
@@ -513,7 +500,6 @@ void main() {
         }
 
         test::remove_tree(source.parent_path());
-#endif
     }
 
     /**
@@ -526,7 +512,6 @@ void main() {
      * is correct.
      */
     void test_a_push_block_that_starts_late_reports_its_real_size() {
-#if defined(ENGINE_GLSLC_PATH)
         const std::filesystem::path source = scratch("push_offset/src");
         const std::filesystem::path out = scratch("push_offset/out");
         // One mat4 at offset 64, so the range runs to 128 and not to 192.
@@ -539,7 +524,6 @@ void main() { out_color = push.model[0]; }
 )");
 
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(cooker::cook_all(options, result), "a shader with a late push block cooks");
 
@@ -553,7 +537,6 @@ void main() { out_color = push.model[0]; }
               "the push range ends at 128, not at the offset plus the size");
 
         test::remove_tree(source.parent_path());
-#endif
     }
 
     /**
@@ -564,13 +547,11 @@ void main() { out_color = push.model[0]; }
      * later, at pipeline build, with a message that names no source line.
      */
     void test_a_shader_that_does_not_compile_writes_nothing() {
-#if defined(ENGINE_GLSLC_PATH)
         const std::filesystem::path source = scratch("broken_shader/src");
         const std::filesystem::path out = scratch("broken_shader/out");
         write_file(source / "bad.frag", "#version 450\nthis is not GLSL\n");
 
         cooker::Options options{ .content = source, .out = out };
-        options.glslc = ENGINE_GLSLC_PATH;
         cooker::Result result;
         check(!cooker::cook_all(options, result), "a shader that will not compile fails the cook");
         check(result.failed == 1, "and it counts one failure");
@@ -582,7 +563,6 @@ void main() { out_color = push.model[0]; }
               "and the compiler output did not stay behind");
 
         test::remove_tree(source.parent_path());
-#endif
     }
 
     /**
@@ -1346,7 +1326,7 @@ void main() { out_color = push.model[0]; }
         const engine::Guid scene = identity_of(content, "a.scene");
 
         as::HotReload reload;
-        check(reload.start({ .source = source, .cooker = cooker_program(), .glslc = {} }),
+        check(reload.start({ .source = source, .cooker = cooker_program() }),
               "hot reload starts when the source tree and the cooker are both there");
         check(reload.active(), "and it reports itself active");
 
@@ -1387,7 +1367,7 @@ void main() { out_color = push.model[0]; }
         const engine::Guid scene = identity_of(content, "a.scene");
 
         as::HotReload reload;
-        check(reload.start({ .source = source, .cooker = cooker_program(), .glslc = {} }),
+        check(reload.start({ .source = source, .cooker = cooker_program() }),
               "hot reload starts");
         reload.watcher().set_interval(std::chrono::milliseconds{ 0 });
         reload.watcher().set_settle(std::chrono::milliseconds{ 0 });
@@ -1431,15 +1411,14 @@ void main() { out_color = push.model[0]; }
         std::vector<as::AssetChange> changed;
 
         as::HotReload missing_cooker;
-        check(!missing_cooker.start({ .source = source, .cooker = source / "no_cooker", .glslc = {} }),
+        check(!missing_cooker.start({ .source = source, .cooker = source / "no_cooker" }),
               "hot reload will not start without a cooker");
         check(!missing_cooker.active(), "and it reports itself off");
         check(!missing_cooker.poll(content, changed), "polling it does nothing");
 
         as::HotReload missing_source;
         check(!missing_source.start({ .source = source / "not_here",
-                                      .cooker = cooker_program(),
-                                      .glslc = {} }),
+                                      .cooker = cooker_program() }),
               "and it will not start without a source tree");
 
         test::remove_tree(source.parent_path());
@@ -1882,9 +1861,7 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 8 }
 })");
 
-        // No glslc here. This test cooks no shader, and ENGINE_GLSLC_PATH is
-        // only defined when CMake found the compiler, so naming it would make
-        // this test fail to build on a machine that has none.
+        // This test cooks no shader, so libshaderc is never called.
         cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
         check(cooker::cook_all(options, result), "an HDR panorama cooks");

@@ -63,11 +63,6 @@ engine_enable_clang_tidy(test_cooker)
 # looking for a program that is not there yet.
 add_dependencies(test_cooker cooker)
 
-find_program(ENGINE_GLSLC_EXE NAMES glslc)
-if(ENGINE_GLSLC_EXE)
-    target_compile_definitions(test_cooker PRIVATE ENGINE_GLSLC_PATH="${ENGINE_GLSLC_EXE}")
-endif()
-
 add_test(NAME cooker COMMAND test_cooker)
 
 # The glTF importer and the cooked mesh format. This links cooker_lib for the
