@@ -33,8 +33,8 @@ namespace engine::render {
         std::vector<assets::MeshSubmesh> submeshes; ///< One draw call for each.
         Vec3 min{ 0.0F };                           ///< The smallest corner of the bounds.
         Vec3 max{ 0.0F };                           ///< The largest corner of the bounds.
-        std::vector<Vec3> submesh_min; ///< One per submesh, for per-submesh depth sorting. See issue #99.
-        std::vector<Vec3> submesh_max; ///< One per submesh, in the same order as submesh_min.
+        std::vector<Vec3> submesh_min;              ///< One per submesh, for per-submesh depth sorting. See issue #99.
+        std::vector<Vec3> submesh_max;              ///< One per submesh, in the same order as submesh_min.
     };
 
     /**
