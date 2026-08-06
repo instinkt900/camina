@@ -12,7 +12,9 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <span>
 #include <string_view>
+#include <unordered_map>
 
 namespace cooker {
 
@@ -363,8 +365,7 @@ namespace cooker {
             built.vertices = std::move(reordered);
         }
 
-        [[nodiscard]] bool write_mesh(const std::filesystem::path& destination,
-                                      const Built& built) {
+        [[nodiscard]] std::vector<std::byte> build_mesh_bytes(const Built& built) {
             as::MeshHeader header;
             header.vertex_count = static_cast<std::uint32_t>(built.vertices.size());
             header.index_count = static_cast<std::uint32_t>(built.indices.size());
@@ -372,28 +373,46 @@ namespace cooker {
             header.min = { built.min.x, built.min.y, built.min.z };
             header.max = { built.max.x, built.max.y, built.max.z };
 
-            std::error_code error;
-            std::filesystem::create_directories(destination.parent_path(), error);
+            const std::size_t total = sizeof(header) +
+                                      built.vertices.size() * sizeof(as::MeshVertex) +
+                                      built.indices.size() * sizeof(std::uint32_t) +
+                                      built.submeshes.size() * sizeof(as::MeshSubmesh);
+            std::vector<std::byte> out(total);
+            std::byte* cursor = out.data();
 
-            std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+            auto push = [&](const void* data, std::size_t size) {
+                std::memcpy(cursor, data, size);
+                cursor += size;
+            };
+            push(&header, sizeof(header));
+            push(built.vertices.data(), built.vertices.size() * sizeof(as::MeshVertex));
+            push(built.indices.data(), built.indices.size() * sizeof(std::uint32_t));
+            push(built.submeshes.data(), built.submeshes.size() * sizeof(as::MeshSubmesh));
+            return out;
+        }
+
+        [[nodiscard]] bool write_bytes(const std::filesystem::path& path,
+                                       std::span<const std::byte> bytes) {
+            std::error_code error;
+            std::filesystem::create_directories(path.parent_path(), error);
+            std::ofstream file(path, std::ios::binary | std::ios::trunc);
             if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it for writing.", destination.string());
+                ENGINE_LOG_ERROR("{}: could not open it for writing.", path.string());
                 return false;
             }
-            const auto write = [&](const void* data, std::size_t size) {
-                file.write(reinterpret_cast<const char*>(data),
-                           static_cast<std::streamsize>(size));
-            };
-            write(&header, sizeof(header));
-            write(built.vertices.data(), built.vertices.size() * sizeof(as::MeshVertex));
-            write(built.indices.data(), built.indices.size() * sizeof(std::uint32_t));
-            write(built.submeshes.data(), built.submeshes.size() * sizeof(as::MeshSubmesh));
-
+            file.write(reinterpret_cast<const char*>(bytes.data()),
+                       static_cast<std::streamsize>(bytes.size()));
             if (!file) {
-                ENGINE_LOG_ERROR("{}: the write failed part way through.", destination.string());
+                ENGINE_LOG_ERROR("{}: the write failed part way through.", path.string());
                 return false;
             }
             return true;
+        }
+
+        [[nodiscard]] bool write_mesh(const std::filesystem::path& destination,
+                                      const Built& built) {
+            const std::vector<std::byte> bytes = build_mesh_bytes(built);
+            return write_bytes(destination, bytes);
         }
 
     } // namespace
@@ -505,9 +524,77 @@ namespace cooker {
         std::vector<engine::Guid> mesh_guids;
         mesh_guids.reserve(held.data->meshes_count);
 
+        /// The full set of geometry accessors for one glTF mesh's first
+        /// primitive. When a later mesh names the same set, its data can
+        /// be reused without re-processing. See issue #118.
+        struct GeometryKey {
+            const void* positions = nullptr;
+            const void* normals = nullptr;
+            const void* texcoords = nullptr;
+            const void* indices = nullptr;
+
+            bool operator==(const GeometryKey& other) const {
+                return positions == other.positions && normals == other.normals &&
+                       texcoords == other.texcoords && indices == other.indices;
+            }
+        };
+        struct GeometryKeyHash {
+            std::size_t operator()(const GeometryKey& key) const {
+                std::size_t h = 0;
+                auto mix = [&h](const void* p) {
+                    h ^= reinterpret_cast<std::uintptr_t>(p) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                };
+                mix(key.positions);
+                mix(key.normals);
+                mix(key.texcoords);
+                mix(key.indices);
+                return h;
+            }
+        };
+
+        struct CachedGeometry {
+            std::vector<engine::assets::MeshVertex> vertices;
+            std::vector<std::uint32_t> indices;
+        };
+        std::unordered_map<GeometryKey, CachedGeometry, GeometryKeyHash> seen_geometry;
+
         for (cgltf_size at = 0; at < held.data->meshes_count; ++at) {
             const cgltf_mesh& mesh = held.data->meshes[at];
             const std::string where = name + " mesh " + std::to_string(at);
+
+            if (mesh.primitives_count == 0) {
+                ENGINE_LOG_ERROR("{}: it holds no primitives.", where);
+                return false;
+            }
+
+            GeometryKey key;
+            const cgltf_primitive& first = mesh.primitives[0];
+            for (cgltf_size pa = 0; pa < first.attributes_count; ++pa) {
+                switch (first.attributes[pa].type) {
+                case cgltf_attribute_type_position:
+                    key.positions = first.attributes[pa].data;
+                    break;
+                case cgltf_attribute_type_normal:
+                    key.normals = first.attributes[pa].data;
+                    break;
+                case cgltf_attribute_type_texcoord:
+                    if (first.attributes[pa].index == 0) {
+                        key.texcoords = first.attributes[pa].data;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+            key.indices = first.indices;
+
+            if (key.positions == nullptr) {
+                ENGINE_LOG_ERROR("{}: the first primitive has no positions.", where);
+                return false;
+            }
+
+            const engine::Guid mesh_guid =
+                engine::Guid::derive(parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
 
             Built built;
             bool has_tangents = true;
@@ -525,23 +612,34 @@ namespace cooker {
                 return false;
             }
 
-            if (!has_tangents) {
-                ENGINE_LOG_INFO("{}: the source has no tangents, so the cooker built them.",
+            const bool is_dup = seen_geometry.contains(key);
+            if (is_dup) {
+                ENGINE_LOG_INFO("{}: shares its accessors with an already-cooked mesh. "
+                                "Reusing that geometry.",
                                 where);
-                build_tangents(built.vertices, built.indices);
+                built.vertices = seen_geometry.at(key).vertices;
+                built.indices = seen_geometry.at(key).indices;
+            } else {
+                if (!has_tangents) {
+                    ENGINE_LOG_INFO("{}: the source has no tangents, so the cooker built them.",
+                                    where);
+                    build_tangents(built.vertices, built.indices);
+                }
+                optimize(built);
+                seen_geometry.emplace(key, CachedGeometry{ built.vertices, built.indices });
             }
-
-            optimize(built);
 
             std::filesystem::path cooked_relative = relative;
             cooked_relative += "." + std::to_string(at);
             cooked_relative += as::kMeshExtension;
 
-            if (!write_mesh(out_root / cooked_relative, built)) {
+            const std::vector<std::byte> bytes = build_mesh_bytes(built);
+            if (bytes.empty()) {
                 return false;
             }
-            const engine::Guid mesh_guid =
-                engine::Guid::derive(parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
+            if (!write_bytes(out_root / cooked_relative, bytes)) {
+                return false;
+            }
             mesh_guids.push_back(mesh_guid);
             outputs.push_back(as::ManifestOutput{
                 .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
