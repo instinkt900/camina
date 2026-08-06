@@ -177,6 +177,10 @@ namespace engine::gfx {
         std::uint32_t image_index = 0;               ///< Which swapchain image the open frame holds.
         bool frame_open = false;                     ///< True between begin_frame() and end_frame().
         bool vsync = true;                           ///< Chooses the present mode on rebuild.
+
+        /// GPU timestamp queries. Allocated lazily on the first write.
+        VkQueryPool timestamp_pool = VK_NULL_HANDLE; ///< The query pool, or null until created.
+        std::uint32_t timestamp_count = 0;           ///< How many query slots the pool holds.
     };
 
     namespace vk {

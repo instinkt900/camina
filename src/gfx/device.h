@@ -547,4 +547,52 @@ namespace engine::gfx {
                           std::uint32_t instance_count, std::uint32_t first_index,
                           std::uint32_t first_instance);
 
+    /**
+     * @brief Resets the timestamp query pool for a new frame.
+     *
+     * Call this at the start of the frame, before any cmd_write_timestamp().
+     *
+     * @param commands The command list from begin_frame().
+     */
+    void cmd_reset_timestamps(CommandList* commands);
+
+    /**
+     * @brief Writes a GPU timestamp into a query pool slot.
+     *
+     * Timestamps are written when the GPU reaches this point in the command
+     * stream. Read them back a frame or two later with read_timestamps().
+     *
+     * @param commands The command list from begin_frame().
+     * @param index Which pool slot to write. The caller allocates these.
+     *
+     * @warning Timestamps on different queues are not comparable.
+     */
+    void cmd_write_timestamp(CommandList* commands, std::uint32_t index);
+
+    /**
+     * @brief Reads GPU timestamp query results back.
+     *
+     * The queries must have finished (the frame fence signaled) before this
+     * is called. The pool holds one query per slot, and each is 64 bits wide.
+     *
+     * @param device The device that owns the pool.
+     * @param first The first query to read.
+     * @param count How many queries to read.
+     * @param out Where to write the results. Must hold at least @p count entries.
+     * @return True when the results were read.
+     */
+    [[nodiscard]] bool read_timestamps(Device* device, std::uint32_t first, std::uint32_t count,
+                                       std::uint64_t* out);
+
+    /**
+     * @brief How many ticks one nanosecond is, from the physical device.
+     *
+     * Multiply a timestamp delta by this to get nanoseconds.
+     *
+     * @param device The device.
+     * @return The timestamp period in nanoseconds per tick. Zero when the device
+     * supports no timestamps.
+     */
+    [[nodiscard]] float timestamp_period(Device* device);
+
 } // namespace engine::gfx

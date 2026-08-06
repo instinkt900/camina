@@ -900,6 +900,41 @@ namespace {
         std::filesystem::path source_scene;
     };
 
+    /// GPU timestamp deltas for the last frame, in nanoseconds. Index 0-1 is the
+    /// shadow pass, 2-3 the mesh pass, and 4-5 the tonemap pass.
+    std::array<double, 3> g_gpu_pass_ns{};
+    /// The GPU timestamp period, in nanoseconds per tick.
+    float g_timestamp_period = 0.0F;
+    /// True after the first frame's pool reset, so reads are valid.
+    bool g_timestamps_ready = false;
+
+    /// Resets the timestamp pool at the start of the frame and reads results
+    /// from the previous one, once they are ready.
+    void read_gpu_timestamps(engine::gfx::Device* device, engine::gfx::FrameInfo& info) {
+        engine::gfx::cmd_reset_timestamps(info.commands);
+
+        if (!g_timestamps_ready) {
+            g_timestamps_ready = true;
+            return;
+        }
+
+        if (g_timestamp_period == 0.0F) {
+            g_timestamp_period = engine::gfx::timestamp_period(device);
+        }
+        if (g_timestamp_period <= 0.0F) {
+            return;
+        }
+
+        std::array<std::uint64_t, 8> ticks{};
+        if (!engine::gfx::read_timestamps(device, 0, 6, ticks.data())) {
+            return;
+        }
+
+        g_gpu_pass_ns[0] = static_cast<double>(ticks[1] - ticks[0]) * g_timestamp_period;
+        g_gpu_pass_ns[1] = static_cast<double>(ticks[3] - ticks[2]) * g_timestamp_period;
+        g_gpu_pass_ns[2] = static_cast<double>(ticks[5] - ticks[4]) * g_timestamp_period;
+    }
+
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
                             engine::gfx::Extent2D& out_extent) {
         engine::gfx::Device* device = context.device;
@@ -919,6 +954,8 @@ namespace {
             ENGINE_LOG_CRITICAL("begin_frame failed: {}", engine::gfx::result_name(result));
             return FrameOutcome::Failed;
         }
+
+        read_gpu_timestamps(device, info);
 
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
@@ -960,8 +997,10 @@ namespace {
         const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
 
         issue_pass_barriers(info.commands, schedule, kShadowPassIndex, textures);
+        engine::gfx::cmd_write_timestamp(info.commands, 0);
         context.shadow_pass->draw(info.commands, world, *context.game_content,
                                   context.mesh_pass->meshes(), clip_from_world);
+        engine::gfx::cmd_write_timestamp(info.commands, 1);
         context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projections(),
                                            context.shadow_pass->cascade_splits(),
                                            context.shadow_pass->cascade_biases(),
@@ -986,8 +1025,10 @@ namespace {
             // entity that draws at all. This is the pipeline made visible: the
             // geometry comes from a cooked file that a glTF produced, and
             // nothing here knows which file that was.
+            engine::gfx::cmd_write_timestamp(info.commands, 2);
             context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
                                     settings.camera_position);
+            engine::gfx::cmd_write_timestamp(info.commands, 3);
 
             engine::gfx::cmd_end_rendering(info.commands);
         }
@@ -1002,7 +1043,9 @@ namespace {
         // attaches no depth, because the triangle neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
+        engine::gfx::cmd_write_timestamp(info.commands, 4);
         context.tonemap_pass->draw(info.commands, settings.exposure);
+        engine::gfx::cmd_write_timestamp(info.commands, 5);
 
         // The overlay goes over the tonemapped image rather than through it. It
         // is authored in display colors, so mapping it down with the scene would
@@ -1348,6 +1391,12 @@ namespace {
         ENGINE_LOG_INFO("lights | {} lit the last frame | {} culled by the frustum | buffer holds {}",
                         mesh.visible_light_count(), mesh.culled_light_count(),
                         mesh.light_capacity());
+
+        if (g_gpu_pass_ns[0] > 0.0 || g_gpu_pass_ns[1] > 0.0 || g_gpu_pass_ns[2] > 0.0) {
+            ENGINE_LOG_INFO("gpu passes | shadow {:.3f} ms | mesh {:.3f} ms | tonemap {:.3f} ms",
+                            g_gpu_pass_ns[0] * 1e-6, g_gpu_pass_ns[1] * 1e-6,
+                            g_gpu_pass_ns[2] * 1e-6);
+        }
 
         if (options.vsync) {
             ENGINE_LOG_INFO("Vsync is on, so that is the refresh rate. Use --no-vsync to measure "
