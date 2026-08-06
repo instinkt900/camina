@@ -555,6 +555,16 @@ namespace engine::gfx {
             device.samplers.clear();
         }
 
+        VkFormat color_target_format(const Device& device, ColorTargetFormat format) {
+            switch (format) {
+            case ColorTargetFormat::Swapchain:
+                return device.swapchain_format;
+            case ColorTargetFormat::RGBA16F:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            }
+            return device.swapchain_format;
+        }
+
     } // namespace vk
 
     namespace {
@@ -963,6 +973,100 @@ namespace engine::gfx {
         entry.alive = true;
         *out_texture = TextureHandle::make(index, generation);
         ENGINE_LOG_DEBUG("Created a {}x{} depth target.", desc.width, desc.height);
+        return Result::Success;
+    }
+
+    Result create_color_target(Device* device, const ColorTargetDesc& desc,
+                               TextureHandle* out_texture) {
+        ENGINE_CHECK(device != nullptr, "create_color_target needs a device.");
+        ENGINE_CHECK(out_texture != nullptr,
+                     "create_color_target needs somewhere to put the handle.");
+        *out_texture = TextureHandle{};
+
+        if (desc.width == 0 || desc.height == 0) {
+            ENGINE_LOG_ERROR("A color target needs a size, and this one is {}x{}.", desc.width,
+                             desc.height);
+            return Result::ErrorInit;
+        }
+
+        const VkFormat format = vk::color_target_format(*device, desc.format);
+
+        // Attaching and sampling are separate features. A GPU that can render
+        // into half float and not sample it would give a black picture with no
+        // message, so ask for both by name.
+        constexpr VkFormatFeatureFlags kNeeded =
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(device->physical, format, &properties);
+        if ((properties.optimalTilingFeatures & kNeeded) != kNeeded) {
+            ENGINE_LOG_ERROR("This GPU cannot both render into and sample the color target "
+                             "format, so a pass cannot hand its result to the next one.");
+            return Result::ErrorInit;
+        }
+
+        TextureEntry built;
+
+        VkImageCreateInfo image{};
+        image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image.imageType = VK_IMAGE_TYPE_2D;
+        image.format = format;
+        image.extent = VkExtent3D{ desc.width, desc.height, 1 };
+        image.mipLevels = 1;
+        image.arrayLayers = 1;
+        image.samples = VK_SAMPLE_COUNT_1_BIT;
+        image.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // Both, for the same reason create_depth_target() asks for both: one
+        // pass renders into it and another reads it.
+        image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        built.width = desc.width;
+        built.height = desc.height;
+
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO;
+        allocation.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        ENGINE_VK_TRY(vmaCreateImage(device->allocator, &image, &allocation, &built.image,
+                                     &built.allocation, nullptr));
+
+        VkImageViewCreateInfo view{};
+        view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view.image = built.image;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = format;
+        view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view.subresourceRange.levelCount = 1;
+        view.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(device->device, &view, nullptr, &built.view) != VK_SUCCESS) {
+            vmaDestroyImage(device->allocator, built.image, built.allocation);
+            ENGINE_LOG_ERROR("The color target view did not build.");
+            return Result::ErrorInit;
+        }
+
+        // One layer, so the sampling view serves as the attachment as well and
+        // no layer view is needed. create_depth_target() builds those only
+        // because a cascade set has several layers.
+        const Result sampled = vk::resolve_sampler(*device, desc.sampler, &built.sampler);
+        if (!succeeded(sampled)) {
+            vkDestroyImageView(device->device, built.view, nullptr);
+            vmaDestroyImage(device->allocator, built.image, built.allocation);
+            return sampled;
+        }
+
+        std::uint32_t index = 0;
+        if (!device->free_textures.empty()) {
+            index = device->free_textures.back();
+            device->free_textures.pop_back();
+        } else {
+            index = static_cast<std::uint32_t>(device->textures.size());
+            device->textures.emplace_back();
+        }
+
+        TextureEntry& entry = device->textures[index];
+        const std::uint32_t generation = entry.generation;
+        entry = built;
+        entry.generation = generation;
+        entry.alive = true;
+        *out_texture = TextureHandle::make(index, generation);
+        ENGINE_LOG_DEBUG("Created a {}x{} color target.", desc.width, desc.height);
         return Result::Success;
     }
 

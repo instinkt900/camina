@@ -411,8 +411,12 @@ namespace engine::gfx {
             // attachments disagree with the scope is undefined rather than an
             // error. See GraphicsPipelineDesc::depth_only.
             rendering.colorAttachmentCount = desc.depth_only ? 0 : 1;
-            rendering.pColorAttachmentFormats =
-                desc.depth_only ? nullptr : &device->swapchain_format;
+            // The pipeline names its own color format, because the frame no
+            // longer draws into one image. A scene pass renders half float and
+            // the tonemap pass renders the swapchain, and the two cannot share a
+            // format. See GraphicsPipelineDesc::color_format.
+            const VkFormat color_format = vk::color_target_format(*device, desc.color_format);
+            rendering.pColorAttachmentFormats = desc.depth_only ? nullptr : &color_format;
             // Every frame attaches the depth image, so every pipeline must name
             // its format or the draw is invalid. depth_test decides only whether
             // the pipeline reads and writes depth, not whether it is attached.

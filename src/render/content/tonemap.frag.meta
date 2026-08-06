@@ -1,0 +1,24 @@
+{
+  "__version": 5,
+  "brdf": {
+    "__version": 1,
+    "samples": 1024,
+    "size": 256
+  },
+  "environment": {
+    "__version": 2,
+    "face_size": 256,
+    "specular_samples": 128
+  },
+  "guid": "0173ef7f-8642-4551-b3e0-098f24147523",
+  "shader": {
+    "__version": 1,
+    "variants": []
+  },
+  "texture": {
+    "__version": 1,
+    "color_space": "sRGB",
+    "compress": true,
+    "mips": true
+  }
+}

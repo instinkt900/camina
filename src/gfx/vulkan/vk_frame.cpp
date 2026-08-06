@@ -230,9 +230,10 @@ namespace engine::gfx {
             return;
         }
 
-        // A depth target is the only texture the graph moves today, and the
-        // aspect follows the state rather than the handle. A sampled color
-        // texture never reaches here, because nothing transitions one.
+        // The aspect follows the state rather than the handle, because a handle
+        // does not say which it is. A shadow map moves between depth states and
+        // a scene color target moves between color ones, and no state names both
+        // aspects, so the four depth states below decide it.
         const bool depth = before == ResourceState::DepthTarget ||
                            after == ResourceState::DepthTarget ||
                            before == ResourceState::DepthRead || after == ResourceState::DepthRead;
@@ -346,6 +347,70 @@ namespace engine::gfx {
 
         VkRect2D scissor{};
         scissor.extent = VkExtent2D{ commands->extent.width, commands->extent.height };
+        vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
+    }
+
+    void cmd_begin_color_rendering(CommandList* commands, TextureHandle color_target,
+                                   const ColorRGBA& clear_color) {
+        ENGINE_CHECK(commands != nullptr, "cmd_begin_color_rendering needs a command list.");
+        Device& device = *commands->owner;
+
+        const TextureEntry* entry = vk::resolve_texture(device, color_target);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("cmd_begin_color_rendering received a stale or null handle.");
+            return;
+        }
+
+        VkRenderingAttachmentInfo color{};
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        // One layer, so the view the sampler reads is the attachment as well.
+        color.imageView = entry->view;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        // Stored, because the next pass reads it. The frame's own color image is
+        // stored for the same reason and the depth image is not.
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color.float32[0] = clear_color.r;
+        color.clearValue.color.float32[1] = clear_color.g;
+        color.clearValue.color.float32[2] = clear_color.b;
+        color.clearValue.color.float32[3] = clear_color.a;
+
+        // The frame's own depth image, not one of the caller's. A scene pass
+        // needs depth and there is only ever one, so nothing would be gained by
+        // asking for it here. Reverse-Z clears to 0, the far plane.
+        VkRenderingAttachmentInfo depth{};
+        depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth.imageView = device.depth_view;
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.clearValue.depthStencil.depth = 0.0F;
+
+        ENGINE_ASSERT(device.depth_view != VK_NULL_HANDLE,
+                      "A frame is open but the depth attachment is missing.");
+
+        VkRenderingInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        // The target's own size, not the frame's. They match while the target is
+        // rebuilt with the swapchain, and reading it from the image is what
+        // keeps a missed rebuild from rendering into part of it.
+        info.renderArea.extent = VkExtent2D{ entry->width, entry->height };
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &color;
+        info.pDepthAttachment = &depth;
+
+        vkCmdBeginRendering(commands->buffer, &info);
+
+        VkViewport viewport{};
+        viewport.width = static_cast<float>(entry->width);
+        viewport.height = static_cast<float>(entry->height);
+        viewport.minDepth = 0.0F;
+        viewport.maxDepth = 1.0F;
+        vkCmdSetViewport(commands->buffer, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = VkExtent2D{ entry->width, entry->height };
         vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
     }
 

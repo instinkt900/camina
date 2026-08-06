@@ -161,6 +161,62 @@ namespace engine::gfx {
     };
 
     /**
+     * @brief The format of a color attachment.
+     *
+     * This is a separate enum from TextureFormat, for two reasons. A render
+     * target has to be able to say "whatever the swapchain chose", and that
+     * format is picked at run time from what the surface offers, so no compile
+     * time name can stand for it. And most of TextureFormat can never be a
+     * render target, because a GPU does not write BC7 blocks from a fragment
+     * shader.
+     *
+     * A pipeline and the target it draws into name the same value here. Vulkan
+     * calls a mismatch undefined rather than an error, so the two have to agree
+     * and this is the one word they agree on.
+     */
+    enum class ColorTargetFormat : std::uint32_t {
+        /**
+         * @brief Whatever create_swapchain() chose, which is an 8-bit sRGB format.
+         *
+         * The final write of a frame goes here, and the hardware converts from
+         * linear to sRGB as it lands. See DESIGN.md section 3.
+         */
+        Swapchain = 0,
+        /**
+         * @brief Four 16-bit half floats.
+         *
+         * What a scene renders into before it is tonemapped. A half float
+         * carries values above 1, which is the whole point: an sRGB target
+         * clips them at the moment the fragment shader writes, and nothing
+         * after that can recover them.
+         */
+        RGBA16F,
+    };
+
+    /**
+     * @brief Settings for create_color_target().
+     *
+     * The color partner of DepthTargetDesc. The image carries no pixels: one
+     * pass renders color into it and a later pass samples it. That pair is what
+     * an intermediate target is, and it is what a tonemap needs.
+     */
+    struct ColorTargetDesc {
+        std::uint32_t width = 0;  ///< Width in texels. Required.
+        std::uint32_t height = 0; ///< Height in texels. Required.
+        /// @brief What the texels hold. The pipeline that draws into it declares the same.
+        ColorTargetFormat format = ColorTargetFormat::RGBA16F;
+        /**
+         * @brief How a later pass reads it. Shared, not owned.
+         *
+         * AddressMode::ClampToEdge is the sane default for a full-screen read.
+         * A target the size of the window is sampled at the texel centers it
+         * already has, so nothing should ever reach outside it, and clamping is
+         * what keeps a rounding error at the edge from wrapping to the far side.
+         */
+        SamplerDesc sampler{ .filter = Filter::Linear, .address = AddressMode::ClampToEdge };
+    };
+
+    /**
      * @brief How the texels of a texture are stored, and how a shader reads them.
      *
      * The sRGB entries make the sampler convert to linear on read, which is what
@@ -357,6 +413,18 @@ namespace engine::gfx {
          * undefined rather than an error.
          */
         bool depth_only = false;
+        /**
+         * @brief The format of the color attachment the pipeline draws into.
+         *
+         * It has to match the target the rendering scope binds, because Vulkan
+         * calls a mismatch undefined rather than an error. A pipeline the mesh
+         * pass builds names ColorTargetFormat::RGBA16F, and one that writes the
+         * frame out names ColorTargetFormat::Swapchain.
+         *
+         * @c depth_only ignores this, because such a pipeline attaches no color
+         * image at all.
+         */
+        ColorTargetFormat color_format = ColorTargetFormat::Swapchain;
     };
 
     /**

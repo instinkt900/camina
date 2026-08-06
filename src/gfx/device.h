@@ -209,6 +209,33 @@ namespace engine::gfx {
     void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color);
 
     /**
+     * @brief Opens dynamic rendering into a color target and the frame depth.
+     *
+     * The same scope cmd_begin_rendering() opens, over an image the caller owns
+     * rather than the swapchain image. A scene draws into one of these and the
+     * tonemap pass then writes the swapchain, which is what keeps a value above
+     * 1 alive until something maps it down.
+     *
+     * The render area, the viewport, and the scissor are the size of @p color.
+     *
+     * @param commands The command list from begin_frame().
+     * @param color The image to render into, from create_color_target(). A null
+     * or stale handle logs and opens no scope, and the draws that follow are
+     * then discarded.
+     * @param clear_color The linear color to clear to.
+     *
+     * @warning @p color must already be in ResourceState::ColorTarget and the
+     * frame depth image in ResourceState::DepthTarget. The caller issues the
+     * barriers the render graph derived.
+     *
+     * @warning The pipeline that draws here must declare the same
+     * ColorTargetFormat the target holds. Close the scope with
+     * cmd_end_rendering().
+     */
+    void cmd_begin_color_rendering(CommandList* commands, TextureHandle color,
+                                   const ColorRGBA& clear_color);
+
+    /**
      * @brief Opens dynamic rendering into a depth image and no color image.
      *
      * This is what a shadow pass records into. The image clears to zero, which
@@ -371,6 +398,32 @@ namespace engine::gfx {
      * implementation-dependent, which is worse than a hard edge.
      */
     [[nodiscard]] Result create_depth_target(Device* device, const DepthTargetDesc& desc,
+                                             TextureHandle* out_texture);
+
+    /**
+     * @brief Creates an empty color image that a pass renders into and samples.
+     *
+     * The color partner of create_depth_target(), and the same shape: the image
+     * carries no pixels, one pass renders into it, and a later pass reads it.
+     * destroy_texture() releases it.
+     *
+     * A scene renders into one of these in half float, and the tonemap pass
+     * reads it and writes the swapchain. That intermediate is what stops a
+     * value above 1 clipping at the moment the fragment shader writes it.
+     *
+     * @param device The device that owns the image.
+     * @param desc The size, the format, and the sampler state.
+     * @param out_texture Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the image was not created.
+     *
+     * @warning The image starts in ResourceState::Undefined, and it holds
+     * nothing until a pass has rendered into it.
+     *
+     * @warning A target the size of the window has to be rebuilt when the
+     * window resizes, and anything that named the old handle has to be rebuilt
+     * with it. The device does not do this for the caller.
+     */
+    [[nodiscard]] Result create_color_target(Device* device, const ColorTargetDesc& desc,
                                              TextureHandle* out_texture);
 
     /**

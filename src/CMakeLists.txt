@@ -33,7 +33,9 @@ add_library(engine_core STATIC
     render/mesh_pass.cpp
     render/shadow_pass.cpp
     render/render_graph.cpp
+    render/shader_bindings.cpp
     render/texture_cache.cpp
+    render/tonemap_pass.cpp
     scene/world.cpp
     scene/component_registry.cpp
     scene/scene_file.cpp

@@ -4,6 +4,7 @@
 #include "assets/reference.h"
 #include "assets/shader.h"
 #include "core/log.h"
+#include "render/shader_bindings.h"
 #include "scene/components.h"
 
 #include <algorithm>
@@ -224,96 +225,6 @@ namespace engine::render {
             return true;
         }
 
-        /// The gfx name for a kind the cooked shader reports.
-        [[nodiscard]] gfx::DescriptorKind to_gfx_kind(assets::DescriptorKind kind) {
-            switch (kind) {
-            case assets::DescriptorKind::UniformBuffer:
-                return gfx::DescriptorKind::UniformBuffer;
-            case assets::DescriptorKind::StorageBuffer:
-                return gfx::DescriptorKind::StorageBuffer;
-            case assets::DescriptorKind::CombinedImageSampler:
-                break;
-            }
-            return gfx::DescriptorKind::CombinedImageSampler;
-        }
-
-        /// The gfx stage bits for the ones the cooked shader reports.
-        [[nodiscard]] std::uint32_t to_gfx_stages(std::uint32_t stages) {
-            std::uint32_t out = 0;
-            if ((stages & assets::kStageBitVertex) != 0) {
-                out |= gfx::kStageBitVertex;
-            }
-            if ((stages & assets::kStageBitFragment) != 0) {
-                out |= gfx::kStageBitFragment;
-            }
-            if ((stages & assets::kStageBitCompute) != 0) {
-                out |= gfx::kStageBitCompute;
-            }
-            return out;
-        }
-
-        /**
-         * Joins the descriptors of the two stages into one layout.
-         *
-         * A binding both stages read appears once with both stage bits set.
-         * Vulkan takes one set layout for the whole pipeline, so declaring it
-         * twice would be two layouts for one set.
-         *
-         * The two stages have to agree about a slot they share. The cooker
-         * cannot check that, because it reflects one module at a time and never
-         * sees the pair. So this is the only place the disagreement can be
-         * caught, and catching it here beats a validation error or a wrong read
-         * later.
-         *
-         * The result comes out sorted by set and then by binding, which is what
-         * GraphicsPipelineDesc::bindings asks for.
-         */
-        [[nodiscard]] bool merge_bindings(const assets::Shader& vertex,
-                                          const assets::Shader& fragment,
-                                          std::vector<gfx::DescriptorBinding>& merged) {
-            bool ok = true;
-            const auto add = [&merged, &ok](const assets::Shader& shader) {
-                for (const assets::ShaderBinding& source : shader.bindings) {
-                    const auto found = std::find_if(
-                        merged.begin(), merged.end(),
-                        [&source](const gfx::DescriptorBinding& entry) {
-                            return entry.set == source.set && entry.binding == source.binding;
-                        });
-                    if (found != merged.end()) {
-                        const gfx::DescriptorKind kind = to_gfx_kind(source.kind);
-                        if (found->kind != kind || found->count != source.count) {
-                            ENGINE_LOG_ERROR(
-                                "The two stages declare set {} binding {} differently, so one "
-                                "layout cannot serve both. One says {} of kind {}, the other "
-                                "says {} of kind {}.",
-                                source.set, source.binding, found->count,
-                                static_cast<std::uint32_t>(found->kind), source.count,
-                                static_cast<std::uint32_t>(kind));
-                            ok = false;
-                            continue;
-                        }
-                        found->stages |= to_gfx_stages(source.stages);
-                        continue;
-                    }
-                    merged.push_back(gfx::DescriptorBinding{
-                        .set = source.set,
-                        .binding = source.binding,
-                        .count = source.count,
-                        .stages = to_gfx_stages(source.stages),
-                        .kind = to_gfx_kind(source.kind),
-                    });
-                }
-            };
-            add(vertex);
-            add(fragment);
-
-            std::sort(merged.begin(), merged.end(),
-                      [](const gfx::DescriptorBinding& a, const gfx::DescriptorBinding& b) {
-                          return a.set != b.set ? a.set < b.set : a.binding < b.binding;
-                      });
-            return ok;
-        }
-
     } // namespace
 
     std::size_t mesh_variant_index(std::uint32_t has_maps) {
@@ -377,8 +288,11 @@ namespace engine::render {
         // Static, because a PassDesc holds spans and the caller may keep it.
         // Both are writes: the color target is drawn into and the depth target
         // is both tested and updated, which is one access and not two.
+        //
+        // The color target is the half float scene image rather than the
+        // swapchain. The tonemap pass reads it and writes the swapchain.
         static constexpr std::array<ResourceWrite, 2> kWrites{ {
-            { kFrameColor, gfx::ResourceState::ColorTarget },
+            { kSceneColor, gfx::ResourceState::ColorTarget },
             { kFrameDepth, gfx::ResourceState::DepthTarget },
         } };
         // The shadow map, which the shadow pass wrote. This is the read that
@@ -783,6 +697,11 @@ namespace engine::render {
             // records it. Honoring it needs a second pipeline or a dynamic cull
             // state, so M5 does that with the rest of the material state.
             .cull_back = true,
+            .depth_only = false,
+            // Half float, because the scene renders into the intermediate the
+            // tonemap pass reads. Writing an 8-bit sRGB image here would clip
+            // every value above 1 before anything could map it down.
+            .color_format = gfx::ColorTargetFormat::RGBA16F,
         };
 
         const gfx::Result result = gfx::create_graphics_pipeline(device_, desc, &out);

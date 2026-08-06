@@ -48,12 +48,16 @@ namespace engine::render {
     };
 
     /**
-     * @brief The color target of a frame. Resource 0.
+     * @brief The swapchain image of a frame. Resource 0.
      *
-     * A frame has exactly two resources today, and this file names them so a
-     * pass and the runtime agree without passing a table around. A pass that
-     * owns a transient of its own will need an id the caller hands it, and
-     * rule 4.6 says to build that when a pass asks for it.
+     * This file names the resources a frame has, so a pass and the runtime
+     * agree without passing a table around. A pass that owns a transient of its
+     * own will need an id the caller hands it, and rule 4.6 says to build that
+     * when a pass asks for it.
+     *
+     * Only the last pass of a frame writes this one. It is an 8-bit sRGB image,
+     * so a value above 1 clips as it lands, and the scene therefore renders
+     * into kSceneColor first.
      */
     inline constexpr ResourceId kFrameColor{ 0 };
 
@@ -70,9 +74,25 @@ namespace engine::render {
      */
     inline constexpr ResourceId kShadowMap{ 2 };
 
+    /**
+     * @brief The half float image the scene renders into. Resource 3.
+     *
+     * The mesh pass writes it and the tonemap pass reads it, which is the
+     * second producer and consumer pair in the frame. It exists because the
+     * swapchain image cannot hold a value above 1.
+     *
+     * Like the shadow map, one image serves every frame in flight, so its state
+     * carries from one frame into the next rather than starting at
+     * ResourceState::Undefined. Resetting it would derive a barrier that waits
+     * on the color attachment stage, and what it has to wait for is the
+     * previous frame's fragment shader reading it. That is a write after read,
+     * and it is the same hazard #125 found on the shared depth image.
+     */
+    inline constexpr ResourceId kSceneColor{ 3 };
+
     /// @brief How many resources a frame declares, which is the length of the
     /// state list derive_barriers() takes.
-    inline constexpr std::uint32_t kFrameResourceCount = 3;
+    inline constexpr std::uint32_t kFrameResourceCount = 4;
 
     /**
      * @brief One resource a pass reads.
