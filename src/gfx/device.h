@@ -255,10 +255,16 @@ namespace engine::gfx {
      * in place would render the scene into one corner of the map.
      *
      * @param commands The command list from begin_frame().
-     * @param depth The image to render into. A null or stale handle logs and
-     * opens no scope, and the draws that follow are then discarded.
+     * @param depth The image to render into.
      * @param layer Which array layer to render into. Pass 0 for an image with
-     * one layer. A layer past the end logs and opens no scope.
+     * one layer.
+     * @return True when the scope is open. False means the handle was null or
+     * stale, or the layer was past the end, and no scope was opened.
+     *
+     * @warning Record nothing when this returns false, and do not call
+     * cmd_end_rendering(). A draw or an end outside a rendering scope is
+     * invalid, so a caller that ignores the result turns a bad handle into
+     * undefined behavior.
      *
      * @warning The image must already be in ResourceState::DepthTarget. Close
      * the scope with cmd_end_rendering().
@@ -267,8 +273,8 @@ namespace engine::gfx {
      * one scope for each layer, because a layer nobody rendered into keeps
      * whatever the allocation held.
      */
-    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth,
-                                   std::uint32_t layer);
+    [[nodiscard]] bool cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth,
+                                                 std::uint32_t layer);
 
     /**
      * @brief Closes the rendering scope that either begin function opened.

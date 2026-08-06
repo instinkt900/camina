@@ -241,7 +241,7 @@ namespace engine::gfx {
                              depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
-    void cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth_target,
+    bool cmd_begin_depth_rendering(CommandList* commands, TextureHandle depth_target,
                                    std::uint32_t layer) {
         ENGINE_CHECK(commands != nullptr, "cmd_begin_depth_rendering needs a command list.");
         Device& device = *commands->owner;
@@ -249,12 +249,12 @@ namespace engine::gfx {
         const TextureEntry* entry = vk::resolve_texture(device, depth_target);
         if (entry == nullptr) {
             ENGINE_LOG_ERROR("cmd_begin_depth_rendering received a stale or null handle.");
-            return;
+            return false;
         }
         if (layer >= entry->layer_views.size()) {
             ENGINE_LOG_ERROR("cmd_begin_depth_rendering asked for layer {} of an image with {}.",
                              layer, entry->layer_views.size());
-            return;
+            return false;
         }
 
         // Reverse-Z clears to 0, the far plane, exactly as the frame does.
@@ -292,6 +292,7 @@ namespace engine::gfx {
         VkRect2D scissor{};
         scissor.extent = VkExtent2D{ entry->width, entry->height };
         vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
+        return true;
     }
 
     void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color,
