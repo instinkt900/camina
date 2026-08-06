@@ -245,7 +245,7 @@ namespace cooker {
 
         /// Reads a whole text file from @p path and returns it as a string.
         [[nodiscard]] std::string read_text(const std::filesystem::path& path) {
-            std::ifstream file(path, std::ios::ate);
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file) {
                 return {};
             }
