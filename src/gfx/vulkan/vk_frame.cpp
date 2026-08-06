@@ -294,7 +294,8 @@ namespace engine::gfx {
         vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
     }
 
-    void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color) {
+    void cmd_begin_rendering(CommandList* commands, const ColorRGBA& clear_color,
+                             bool attach_depth) {
         ENGINE_CHECK(commands != nullptr, "cmd_begin_rendering needs a command list.");
 
         VkRenderingAttachmentInfo color{};
@@ -311,18 +312,20 @@ namespace engine::gfx {
         // Reverse-Z clears depth to 0, which is the far plane. See DESIGN.md
         // section 3.
         VkRenderingAttachmentInfo depth{};
-        depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth.imageView = commands->owner->depth_view;
-        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depth.clearValue.depthStencil.depth = 0.0F;
+        if (attach_depth) {
+            depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            depth.imageView = commands->owner->depth_view;
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depth.clearValue.depthStencil.depth = 0.0F;
 
-        // create_swapchain() builds the depth image, and begin_frame() opens a
-        // frame only when the swapchain is live. So a frame always has depth, and
-        // every pipeline declares the depth format for attachment compatibility.
-        ENGINE_ASSERT(commands->owner->depth_view != VK_NULL_HANDLE,
-                      "A frame is open but the depth attachment is missing.");
+            // create_swapchain() builds the depth image, and begin_frame() opens a
+            // frame only when the swapchain is live. So a frame always has depth, and
+            // every pipeline declares the depth format for attachment compatibility.
+            ENGINE_ASSERT(commands->owner->depth_view != VK_NULL_HANDLE,
+                          "A frame is open but the depth attachment is missing.");
+        }
 
         VkRenderingInfo info{};
         info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -330,7 +333,7 @@ namespace engine::gfx {
         info.layerCount = 1;
         info.colorAttachmentCount = 1;
         info.pColorAttachments = &color;
-        info.pDepthAttachment = &depth;
+        info.pDepthAttachment = attach_depth ? &depth : nullptr;
 
         vkCmdBeginRendering(commands->buffer, &info);
 

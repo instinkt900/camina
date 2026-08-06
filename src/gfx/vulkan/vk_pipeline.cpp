@@ -422,7 +422,10 @@ namespace engine::gfx {
             // Every frame attaches the depth image, so every pipeline must name
             // its format or the draw is invalid. depth_test decides only whether
             // the pipeline reads and writes depth, not whether it is attached.
-            rendering.depthAttachmentFormat = device->depth_format;
+            // A pass that neither reads nor writes depth may leave it off
+            // entirely to skip the clear. See GraphicsPipelineDesc::depth_attachment.
+            rendering.depthAttachmentFormat =
+                desc.depth_attachment ? device->depth_format : VK_FORMAT_UNDEFINED;
 
             VkGraphicsPipelineCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;

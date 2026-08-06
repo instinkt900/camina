@@ -63,14 +63,13 @@ namespace engine::gfx {
             return Result::ErrorInit;
         }
 
-        // Every attachment the frame opens must appear here. A pipeline that
-        // leaves one out fails validation the moment it draws. This is the same
-        // trap the cube pass hit in M1.3.
+        // ImGui draws in the tonemap scope, which attaches no depth. The
+        // pipeline must agree.
         VkPipelineRenderingCreateInfo rendering{};
         rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
         rendering.colorAttachmentCount = 1;
         rendering.pColorAttachmentFormats = &device->swapchain_format;
-        rendering.depthAttachmentFormat = device->depth_format;
+        rendering.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
 
         ImGui_ImplVulkan_InitInfo info{};
         info.ApiVersion = VK_API_VERSION_1_3;

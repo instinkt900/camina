@@ -387,12 +387,22 @@ namespace engine::gfx {
         const DescriptorBinding* bindings = nullptr;
         std::size_t binding_count = 0; ///< How many entries @c bindings holds.
         /**
+         * @brief Whether the rendering scope must attach a depth image.
+         *
+         * False means the pipeline declares VK_FORMAT_UNDEFINED for depth, so
+         * the scope must not attach one. A full-screen pass that neither reads
+         * nor writes depth sets this false to skip the clear.
+         *
+         * @warning A pipeline built with this set false must draw only inside a
+         * scope that attaches no depth, and a pipeline with it true must draw
+         * only inside one that does. Vulkan calls a mismatch undefined rather
+         * than an error.
+         */
+        bool depth_attachment = true;
+        /**
          * @brief Whether to test and write depth. Reverse-Z keeps nearer fragments.
          *
-         * This does not decide whether a depth attachment is present. Every frame
-         * attaches one, and every pipeline declares its format. A pipeline that
-         * leaves this false still renders into the same attachment, and simply
-         * does not read or write it.
+         * This does nothing when @c depth_attachment is false.
          */
         bool depth_test = false;
         /**
