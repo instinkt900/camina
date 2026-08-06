@@ -23,6 +23,7 @@
 #include "core/guid.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
+#include "math/frustum.h"
 #include "render/material_cache.h"
 #include "render/mesh_cache.h"
 #include "render/render_graph.h"
@@ -265,7 +266,75 @@ namespace engine::render {
         /// @return The count, over the opaque draws and the blended ones.
         [[nodiscard]] std::size_t pipeline_switch_count() const { return pipeline_switches_; }
 
+        /// @brief How many lights the last draw() sent to the shader.
+        /// @return The count, which is every directional light plus the point
+        /// lights whose range reaches the view.
+        [[nodiscard]] std::size_t visible_light_count() const { return visible_lights_.size(); }
+
+        /**
+         * @brief How many point lights the last draw() culled.
+         *
+         * This is what says the frustum test is doing anything. A scene where it
+         * stays at zero while lights sit behind the camera has a broken test,
+         * and the picture looks right either way because culling a light that
+         * lights nothing visible changes no pixel.
+         *
+         * @return The count of point lights whose range sphere missed the view.
+         */
+        [[nodiscard]] std::size_t culled_light_count() const { return culled_lights_; }
+
+        /// @brief How many lights the storage buffer holds without growing.
+        /// @return The capacity, which grows to fit and never shrinks.
+        [[nodiscard]] std::size_t light_capacity() const { return light_capacity_; }
+
     private:
+        /**
+         * @brief One light, as the shader reads it. Two vec4 and nothing else.
+         *
+         * It must match the Light struct in `mesh.frag` exactly. It lives here
+         * rather than in the source file because ::visible_lights_ holds them,
+         * and a member needs a complete type.
+         */
+        struct GpuLight {
+            /// @brief xyz is the direction it points for a directional light, or
+            /// where it is for a point light. w is 0 for directional, 1 for point.
+            std::array<float, 4> position{};
+            /// @brief rgb is the color times the intensity. a is the range in
+            /// meters, which a directional light leaves at zero.
+            std::array<float, 4> color{};
+        };
+
+        /**
+         * @brief Collects every light the camera can see into ::visible_lights_.
+         *
+         * A directional light is always kept. It has no position and it lights
+         * everything, so there is nothing to test it against.
+         *
+         * A point light is kept only when its range sphere touches the frustum.
+         * The sphere rather than the centre is what matters: a lamp whose centre
+         * is off screen still lights what is on screen, and culling it by the
+         * centre would put a dark band along the edge of the view.
+         *
+         * @param world The world to read.
+         * @param frustum The camera frustum, in world space.
+         * @return How many point lights the frustum test dropped.
+         */
+        [[nodiscard]] std::size_t gather_lights(const scene::World& world, const Frustum& frustum);
+
+        /**
+         * @brief Makes sure each light buffer holds at least @p needed lights.
+         *
+         * The buffer grows to fit rather than dropping what does not fit, so a
+         * scene is never refused for carrying too many lights. Growing waits for
+         * the device and rebuilds the frame sets, because every frame in flight
+         * may be reading its own buffer and the sets name those buffers. The
+         * capacity doubles for that reason, so the wait is rare.
+         *
+         * @param needed How many lights this frame wants to write.
+         * @return False when the buffers could not be rebuilt, which leaves the
+         * pass unable to draw.
+         */
+        [[nodiscard]] bool ensure_light_capacity(std::size_t needed);
         /// One blended submesh, waiting for the sort.
         struct BlendedDraw {
             Mat4 model{ 1.0F };            ///< The model matrix to push.
@@ -349,18 +418,29 @@ namespace engine::render {
          * ring means a write never touches what a live frame reads.
          */
         std::array<gfx::BufferHandle, gfx::kFramesInFlight> frame_uniforms_;
+        /**
+         * @brief One light list for each frame in flight, as a storage buffer.
+         *
+         * The lights used to sit in the block above, which capped them at the
+         * length the shader declared. A storage buffer has no declared length,
+         * so the count is a number the frame block carries. See issue #98.
+         */
+        std::array<gfx::BufferHandle, gfx::kFramesInFlight> light_buffers_;
+        /// @brief How many lights each buffer above holds. Grows, never shrinks.
+        std::size_t light_capacity_ = 0;
+        /**
+         * @brief The lights this frame kept, rebuilt by every draw().
+         *
+         * A member rather than a local so the storage survives between frames
+         * and the vector stops allocating after the first few.
+         */
+        std::vector<GpuLight> visible_lights_;
+        /// @brief How many point lights the frustum test dropped last frame.
+        std::size_t culled_lights_ = 0;
         /// @brief The set that binds each block above.
         std::array<gfx::DescriptorSetHandle, gfx::kFramesInFlight> frame_sets_;
         /// @brief Which slot of the ring the next draw uses.
         std::uint32_t frame_slot_ = 0;
-        /**
-         * @brief True while the world holds more lights than one frame carries.
-         *
-         * draw() warns when this turns on and stays quiet after that. Deleting a
-         * light until the world fits again clears it, so a later overflow warns
-         * once more.
-         */
-        bool lights_overflowed_ = false;
         /**
          * @brief True while the world holds more than one Environment component.
          *

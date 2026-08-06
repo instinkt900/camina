@@ -69,6 +69,19 @@ namespace engine::gfx {
         Vertex = 0, ///< Bound with cmd_bind_vertex_buffer().
         Index,      ///< Bound with cmd_bind_index_buffer(). Holds 32-bit indices.
         Uniform,    ///< Read through a descriptor set, as a block of parameters.
+        /**
+         * @brief Read through a descriptor set, as an array the shader indexes.
+         *
+         * The difference from Uniform is size and shape rather than speed. A
+         * uniform block is a fixed set of named fields, so an array inside one
+         * has a length the shader declares. A storage buffer is an array whose
+         * length the shader does not need to know, which is what carries a
+         * light count that is a number rather than a constant.
+         *
+         * Like Uniform, this lives in host-visible memory and stays mapped, so
+         * update_buffer() writes it. See DESIGN.md section 9 and issue #98.
+         */
+        Storage,
     };
 
     /**

@@ -131,6 +131,16 @@ engine_enable_clang_tidy(test_render_graph)
 
 add_test(NAME render_graph COMMAND test_render_graph)
 
+# The frustum planes and the sphere test. Also no device, for the same reason.
+# A sign error in one plane culls everything or nothing, and neither failure
+# points back at the arithmetic. See issue #98.
+add_executable(test_frustum test_frustum.cpp)
+target_link_libraries(test_frustum PRIVATE engine::core)
+engine_set_warnings(test_frustum)
+engine_enable_clang_tidy(test_frustum)
+
+add_test(NAME frustum COMMAND test_frustum)
+
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
 add_executable(test_sandbox test_sandbox.cpp)
