@@ -512,4 +512,42 @@ namespace engine::gfx {
         return result;
     }
 
+    void cmd_reset_timestamps(CommandList* commands) {
+        ENGINE_CHECK(commands != nullptr, "cmd_reset_timestamps needs a command list.");
+        Device& device = *commands->owner;
+        if (device.timestamp_pool != VK_NULL_HANDLE && device.timestamp_count > 0) {
+            vkCmdResetQueryPool(commands->buffer, device.timestamp_pool, 0,
+                                device.timestamp_count);
+        }
+    }
+
+    void cmd_write_timestamp(CommandList* commands, std::uint32_t index) {
+        ENGINE_CHECK(commands != nullptr, "cmd_write_timestamp needs a command list.");
+        Device& device = *commands->owner;
+
+        if (device.timestamp_pool == VK_NULL_HANDLE || index >= device.timestamp_count) {
+            return;
+        }
+        vkCmdWriteTimestamp2(commands->buffer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                             device.timestamp_pool, index);
+    }
+
+    bool read_timestamps(Device* device, std::uint32_t first, std::uint32_t count,
+                         std::uint64_t* out) {
+        if (device == nullptr || device->timestamp_pool == VK_NULL_HANDLE || out == nullptr) {
+            return false;
+        }
+        const VkResult result = vkGetQueryPoolResults(
+            device->device, device->timestamp_pool, first, count, count * sizeof(std::uint64_t),
+            out, sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        return result == VK_SUCCESS;
+    }
+
+    float timestamp_period(Device* device) {
+        if (device == nullptr) {
+            return 0.0F;
+        }
+        return device->properties.limits.timestampPeriod;
+    }
+
 } // namespace engine::gfx

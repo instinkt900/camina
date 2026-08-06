@@ -600,6 +600,20 @@ namespace engine::gfx {
                         device->swapchain_extent.width, device->swapchain_extent.height,
                         kFramesInFlight);
 
+        // Two timestamps per pass for every pass in the frame. The render
+        // graph declares the passes, so this is a fixed ceiling rather than
+        // a dynamic allocation.
+        constexpr std::uint32_t kMaxTimestamps = 32;
+        VkQueryPoolCreateInfo query_info{};
+        query_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        query_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        query_info.queryCount = kMaxTimestamps;
+        const VkResult query_created =
+            vkCreateQueryPool(device->device, &query_info, nullptr, &device->timestamp_pool);
+        if (query_created == VK_SUCCESS) {
+            device->timestamp_count = kMaxTimestamps;
+        }
+
         *out_device = device;
         return Result::Success;
     }
@@ -617,6 +631,10 @@ namespace engine::gfx {
             vk::destroy_swapchain(*device);
             vk::destroy_shared_resources(*device);
             destroy_frames(*device);
+            if (device->timestamp_pool != VK_NULL_HANDLE) {
+                vkDestroyQueryPool(device->device, device->timestamp_pool, nullptr);
+                device->timestamp_pool = VK_NULL_HANDLE;
+            }
         }
 
         if (device->allocator != VK_NULL_HANDLE) {
