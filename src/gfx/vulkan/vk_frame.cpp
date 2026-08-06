@@ -55,6 +55,33 @@ namespace engine::gfx {
             }
         }
 
+        /**
+         * Points the frame at the image it will draw into.
+         *
+         * A windowed device asks the swapchain. An offscreen one rotates the
+         * images it owns, which is the same rotation an acquire would give and
+         * is the only place the two paths differ before recording starts.
+         */
+        [[nodiscard]] Result acquire_target(Device& device, Frame& frame) {
+            if (device.headless) {
+                device.image_index = device.frame_index;
+                return Result::Success;
+            }
+
+            const VkResult acquired =
+                vkAcquireNextImageKHR(device.device, device.swapchain, UINT64_MAX,
+                                      frame.image_available, VK_NULL_HANDLE, &device.image_index);
+            if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+                return Result::OutOfDate;
+            }
+            if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+                ENGINE_LOG_ERROR("vkAcquireNextImageKHR failed with {}",
+                                 vk::vk_result_name(acquired));
+                return vk::to_result(acquired);
+            }
+            return Result::Success;
+        }
+
     } // namespace
 
     Result begin_frame(Device* device, FrameInfo* out_frame) {
@@ -62,7 +89,7 @@ namespace engine::gfx {
         ENGINE_CHECK(out_frame != nullptr, "begin_frame needs somewhere to put the frame.");
         ENGINE_ASSERT(!device->frame_open, "begin_frame was called twice without an end_frame.");
 
-        if (device->swapchain == VK_NULL_HANDLE) {
+        if (device->images.empty() || (!device->headless && device->swapchain == VK_NULL_HANDLE)) {
             // The window is minimized, so there is nothing to draw into.
             return Result::OutOfDate;
         }
@@ -71,17 +98,10 @@ namespace engine::gfx {
 
         ENGINE_VK_TRY(vkWaitForFences(device->device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX));
 
-        const VkResult acquired =
-            vkAcquireNextImageKHR(device->device, device->swapchain, UINT64_MAX,
-                                  frame.image_available, VK_NULL_HANDLE, &device->image_index);
-        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+        const Result got = acquire_target(*device, frame);
+        if (!succeeded(got)) {
             // Leave the fence signaled. Nothing was submitted, so the slot is free.
-            return Result::OutOfDate;
-        }
-        if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
-            ENGINE_LOG_ERROR("vkAcquireNextImageKHR failed with {}",
-                             vk::vk_result_name(acquired));
-            return vk::to_result(acquired);
+            return got;
         }
 
         const Result opened = open_recording(*device, frame);
@@ -112,8 +132,13 @@ namespace engine::gfx {
         // the present semaphore below, and a caller that forgot this barrier
         // would present an image in the wrong layout. So the graph owns every
         // barrier inside the frame and this one owns the way out of it.
+        //
+        // Offscreen there is nothing to present to, and PRESENT_SRC is a layout
+        // only a swapchain image may take. The way out is a copy instead, so the
+        // image ends where capture_frame() needs it.
         vk::transition_image(frame.commands.buffer, frame.commands.target_image,
-                             ResourceState::ColorTarget, ResourceState::Present,
+                             ResourceState::ColorTarget,
+                             device->headless ? ResourceState::CopySource : ResourceState::Present,
                              VK_IMAGE_ASPECT_COLOR_BIT);
 
         ENGINE_VK_TRY(vkEndCommandBuffer(frame.commands.buffer));
@@ -125,7 +150,11 @@ namespace engine::gfx {
 
         VkSemaphoreSubmitInfo signal{};
         signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        signal.semaphore = device->render_finished[device->image_index];
+        // Offscreen there are no present semaphores at all, so this must not be
+        // indexed. Only the swapchain path builds that list.
+        if (!device->headless) {
+            signal.semaphore = device->render_finished[device->image_index];
+        }
         signal.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
 
         VkCommandBufferSubmitInfo commands{};
@@ -134,14 +163,22 @@ namespace engine::gfx {
 
         VkSubmitInfo2 submit{};
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        submit.waitSemaphoreInfoCount = 1;
-        submit.pWaitSemaphoreInfos = &wait;
+        // Offscreen waits on nothing and signals nothing. Both semaphores exist
+        // to order the frame against an acquire and a present, and there is
+        // neither. The fence still gates the frames in flight.
+        submit.waitSemaphoreInfoCount = device->headless ? 0U : 1U;
+        submit.pWaitSemaphoreInfos = device->headless ? nullptr : &wait;
         submit.commandBufferInfoCount = 1;
         submit.pCommandBufferInfos = &commands;
-        submit.signalSemaphoreInfoCount = 1;
-        submit.pSignalSemaphoreInfos = &signal;
+        submit.signalSemaphoreInfoCount = device->headless ? 0U : 1U;
+        submit.pSignalSemaphoreInfos = device->headless ? nullptr : &signal;
 
         ENGINE_VK_TRY(vkQueueSubmit2(device->graphics_queue, 1, &submit, frame.in_flight));
+
+        if (device->headless) {
+            device->frame_index = (device->frame_index + 1) % kFramesInFlight;
+            return Result::Success;
+        }
 
         VkPresentInfoKHR present{};
         present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -322,7 +359,8 @@ namespace engine::gfx {
         ENGINE_ASSERT(!device->frame_open,
                       "capture_frame was called while a frame was still open.");
 
-        if (device->swapchain == VK_NULL_HANDLE || device->images.empty()) {
+        if (device->images.empty() ||
+            (!device->headless && device->swapchain == VK_NULL_HANDLE)) {
             return Result::ErrorInit;
         }
 
@@ -367,8 +405,11 @@ namespace engine::gfx {
 
         VkImage image = device->images[device->image_index];
         Result result = vk::immediate_submit(*device, [&](VkCommandBuffer commands) {
-            // The image is in PRESENT_SRC because end_frame left it there.
-            vk::transition_image(commands, image, ResourceState::Present,
+            // end_frame() left it in PRESENT_SRC, or in CopySource offscreen
+            // where there is no presentation to leave it ready for.
+            vk::transition_image(commands, image,
+                                 device->headless ? ResourceState::CopySource
+                                                  : ResourceState::Present,
                                  ResourceState::CopySource, VK_IMAGE_ASPECT_COLOR_BIT);
 
             VkBufferImageCopy region{};
@@ -380,8 +421,14 @@ namespace engine::gfx {
 
             // Put it back, because the presentation engine still owns it and the
             // next acquire expects to find it as it was.
-            vk::transition_image(commands, image, ResourceState::CopySource,
-                                 ResourceState::Present, VK_IMAGE_ASPECT_COLOR_BIT);
+            //
+            // Offscreen it stays where it is. PRESENT_SRC needs the swapchain
+            // extension, which a device with no surface never enabled, and the
+            // next frame starts this image from Undefined anyway.
+            if (!device->headless) {
+                vk::transition_image(commands, image, ResourceState::CopySource,
+                                     ResourceState::Present, VK_IMAGE_ASPECT_COLOR_BIT);
+            }
         });
 
         if (succeeded(result)) {

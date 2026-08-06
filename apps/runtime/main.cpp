@@ -29,6 +29,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -59,6 +60,15 @@ namespace {
     constexpr float kSprintFactor = 4.0F;
     /// The largest step one frame may apply. A stall must not teleport the camera.
     constexpr float kLongestFrame = 0.1F;
+
+    /// The step an offscreen run advances the world by, in seconds.
+    ///
+    /// An offscreen run exists to be compared against another one, and the
+    /// sandbox turns things by elapsed time. Driving that from the wall clock
+    /// makes the captured frame depend on how fast the run went, so two runs of
+    /// the same length land on different rotations. Counting frames instead
+    /// makes the same command produce the same image.
+    constexpr float kOffscreenStep = 1.0F / 60.0F;
 
     /// How many frames the frame time report ignores at the start of a run.
     /// The first frames build pipelines and fill the caches, so they measure
@@ -96,7 +106,60 @@ namespace {
         /// Whether to wait for the refresh. On by default, because a person
         /// flying around the sandbox wants it. Turn it off to measure a change.
         bool vsync = true;
+        /// Whether to draw without opening a window. See issue #139.
+        bool offscreen = false;
+        /**
+         * The size to render at. Zero takes the default.
+         *
+         * Offscreen this is exact, because nothing else has a say. Windowed it
+         * is only a request: a window manager is free to give another size, and
+         * a tiling one always does. So a run that has to be the same size every
+         * time needs --offscreen as well.
+         */
+        engine::gfx::Extent2D resolution{ 0, 0 };
     };
+
+    /**
+     * Reads a `<width>x<height>` pair.
+     *
+     * `std::from_chars` rather than `strtoul`, because strtoul accepts a leading
+     * sign and negates it. `-1` then arrives as the largest unsigned value, and
+     * a check for zero does not catch it. This form parses straight into the
+     * unsigned type, so a sign and an out of range value are both refused.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the size. Untouched unless the whole pair parsed.
+     * @return True when both numbers parsed, nothing was left over, and neither
+     * was zero. A partly parsed value is refused rather than half applied,
+     * because a run that silently used one axis would produce an image nobody
+     * asked for.
+     */
+    [[nodiscard]] bool parse_resolution(std::string_view text, engine::gfx::Extent2D& out) {
+        const std::size_t cross = text.find('x');
+        if (cross == std::string_view::npos) {
+            return false;
+        }
+
+        const auto read = [](std::string_view part, std::uint32_t& value) {
+            if (part.empty()) {
+                return false;
+            }
+            const char* first = part.data();
+            const char* last = part.data() + part.size();
+            const std::from_chars_result parsed = std::from_chars(first, last, value);
+            // ptr must reach the end, or there was trailing text such as "720p".
+            return parsed.ec == std::errc{} && parsed.ptr == last && value != 0;
+        };
+
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        if (!read(text.substr(0, cross), width) || !read(text.substr(cross + 1), height)) {
+            return false;
+        }
+
+        out = engine::gfx::Extent2D{ width, height };
+        return true;
+    }
 
     /// Which pass in the schedule is which. The order here is the order they run.
     constexpr std::size_t kShadowPassIndex = 0;
@@ -270,6 +333,14 @@ namespace {
                 options.sync_validation = true;
             } else if (arg == "--no-vsync") {
                 options.vsync = false;
+            } else if (arg == "--offscreen") {
+                options.offscreen = true;
+            } else if (arg == "--resolution" && has_value) {
+                if (!parse_resolution(argv[i + 1], options.resolution)) {
+                    ENGINE_LOG_WARN("--resolution wants <width>x<height>, so {} was ignored.",
+                                    argv[i + 1]);
+                }
+                ++i;
             }
         }
         return options;
@@ -649,6 +720,13 @@ namespace {
                                       static_cast<std::uint32_t>(window.size().y) };
     }
 
+    /// What the device renders at, which is the only size an offscreen run has.
+    engine::gfx::Extent2D device_extent(engine::gfx::Device* device) {
+        engine::gfx::Extent2D extent{};
+        (void)engine::gfx::capture_frame(device, nullptr, 0, &extent);
+        return extent;
+    }
+
     /// @return True when the swapchain now matches @p extent.
     bool rebuild_swapchain(engine::gfx::Device* device, engine::gfx::Extent2D extent) {
         const engine::gfx::Result result = engine::gfx::device_resize(device, extent);
@@ -672,6 +750,8 @@ namespace {
         engine::gfx::Device* device = nullptr;
         engine::render::MeshPass* mesh_pass = nullptr;
         engine::render::ShadowPass* shadow_pass = nullptr;
+        /// False when there is no window, so no ImGui and no input.
+        bool overlay = false;
         /// What state each graph resource is in. The shadow map carries its
         /// state across frames, so this outlives one frame.
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>*
@@ -708,10 +788,13 @@ namespace {
 
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
-        engine::gfx::imgui_new_frame();
-        draw_view_window(settings);
-        draw_world_window(world, *context.selected, context.source_scene, *context.game_content);
-        draw_inspector_window(world, *context.selected);
+        if (context.overlay) {
+            engine::gfx::imgui_new_frame();
+            draw_view_window(settings);
+            draw_world_window(world, *context.selected, context.source_scene,
+                              *context.game_content);
+            draw_inspector_window(world, *context.selected);
+        }
 
         // An edit in the inspector went around set_local(), so the matrices are
         // stale until this runs. Doing it here rather than before the windows is
@@ -759,7 +842,9 @@ namespace {
         context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
                                 settings.camera_position);
 
-        engine::gfx::imgui_render(info.commands);
+        if (context.overlay) {
+            engine::gfx::imgui_render(info.commands);
+        }
         engine::gfx::cmd_end_rendering(info.commands);
 
         result = engine::gfx::end_frame(device);
@@ -973,16 +1058,29 @@ namespace {
             return false;
         }
 
-        if (!runtime.window.create({ .title = "Camina Engine (M4 sandbox)" })) {
-            return false;
+        // No window at all when drawing offscreen. Opening one and hiding it
+        // would still need a desktop, which is half of what this avoids.
+        if (!options.offscreen) {
+            engine::platform::WindowDesc window_desc{ .title = "Camina Engine (M4 sandbox)" };
+            if (options.resolution.width != 0) {
+                window_desc.width = static_cast<int>(options.resolution.width);
+                window_desc.height = static_cast<int>(options.resolution.height);
+            }
+            if (!runtime.window.create(window_desc)) {
+                return false;
+            }
         }
 
         const engine::gfx::DeviceDesc device_desc{
-            .window = runtime.window.native(),
+            .window = options.offscreen ? nullptr : runtime.window.native(),
             .app_name = "camina",
             .enable_validation = options.validation,
             .enable_sync_validation = options.sync_validation,
             .vsync = options.vsync,
+            .offscreen_extent = options.resolution.width != 0
+                                    ? options.resolution
+                                    : engine::gfx::Extent2D{ engine::gfx::kDefaultOffscreenWidth,
+                                                             engine::gfx::kDefaultOffscreenHeight },
         };
         engine::gfx::Result result = engine::gfx::create_device(device_desc, &runtime.device);
         if (!engine::gfx::succeeded(result)) {
@@ -999,6 +1097,15 @@ namespace {
 
         if (!runtime.mesh.create(runtime.device, runtime.engine_content, runtime.shadow.map())) {
             return false;
+        }
+
+        if (options.offscreen) {
+            // The ImGui SDL backend needs the window. A capture with no panels
+            // over it is also the more useful one to compare.
+            ENGINE_LOG_INFO("Drawing offscreen at {}x{}. There is no overlay and no window.",
+                            device_desc.offscreen_extent.width,
+                            device_desc.offscreen_extent.height);
+            return true;
         }
 
         result = engine::gfx::imgui_init(runtime.device, runtime.window.native());
@@ -1076,7 +1183,10 @@ namespace {
         auto started = std::chrono::steady_clock::now();
         auto last_report = started;
         auto last_frame = started;
-        engine::gfx::Extent2D last_extent = window_extent(runtime.window);
+        // Offscreen the size is fixed for the whole run, which is the point of
+        // it. Nothing resizes, so nothing rebuilds.
+        engine::gfx::Extent2D last_extent =
+            options.offscreen ? device_extent(runtime.device) : window_extent(runtime.window);
 
         engine::FrameStats stats(kFrameStatsWarmup);
         // A period runs from the start of one drawn frame to the start of the
@@ -1087,11 +1197,13 @@ namespace {
         bool have_drawn = false;
         double period_ms = 0.0;
 
-        while (runtime.window.poll()) {
+        // With no window there is nothing to poll and no way to quit by hand, so
+        // an offscreen run ends on the frame limit alone.
+        while (options.offscreen ? true : runtime.window.poll()) {
             ENGINE_PROFILE_ZONE_N("frame");
             frame_arena.reset();
 
-            if (runtime.window.minimized()) {
+            if (!options.offscreen && runtime.window.minimized()) {
                 // poll() does not block, so without this the loop pins one core
                 // while the window is minimized and there is nothing to draw.
                 std::this_thread::sleep_for(std::chrono::milliseconds(kMinimizedSleepMs));
@@ -1106,7 +1218,8 @@ namespace {
             apply_hot_reload(runtime, context, world);
 
             // The window reports its new size before the swapchain knows about it.
-            const engine::gfx::Extent2D extent = window_extent(runtime.window);
+            const engine::gfx::Extent2D extent =
+                options.offscreen ? last_extent : window_extent(runtime.window);
             if (extent.width != last_extent.width || extent.height != last_extent.height) {
                 if (!rebuild_swapchain(runtime.device, extent)) {
                     return false;
@@ -1115,12 +1228,18 @@ namespace {
             }
 
             const auto now = std::chrono::steady_clock::now();
-            const float seconds = std::chrono::duration<float>(now - started).count();
+            // Offscreen counts frames rather than reading the clock, so the same
+            // command produces the same image. See kOffscreenStep.
+            const float seconds = options.offscreen
+                                      ? static_cast<float>(frame) * kOffscreenStep
+                                      : std::chrono::duration<float>(now - started).count();
             // A long stall, a debugger break, or a driver hitch would otherwise
             // multiply move_speed by the whole gap and throw the camera across
             // the scene in one step.
-            const float delta = std::min(
-                std::chrono::duration<float>(now - last_frame).count(), kLongestFrame);
+            const float delta =
+                options.offscreen ? kOffscreenStep
+                                  : std::min(std::chrono::duration<float>(now - last_frame).count(),
+                                             kLongestFrame);
             last_frame = now;
 
             update_camera(settings, delta);
@@ -1240,6 +1359,7 @@ int main(int argc, char** argv) {
         .device = runtime.device,
         .mesh_pass = &runtime.mesh,
         .shadow_pass = &runtime.shadow,
+        .overlay = runtime.overlay,
         .resource_states = &runtime.states,
         .game_content = &runtime.game_content,
         .settings = &settings,

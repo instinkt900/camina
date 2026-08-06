@@ -126,6 +126,17 @@ namespace engine::gfx {
         std::uint32_t graphics_family = 0;                   ///< Queue family that draws and presents.
         VkQueue graphics_queue = VK_NULL_HANDLE;             ///< The single queue this milestone uses.
 
+        /**
+         * @brief True when there is no window, so no surface and no swapchain.
+         *
+         * The images below are then owned here rather than by a swapchain, and
+         * begin_frame() rotates them instead of acquiring one. Everything after
+         * that is the same code. See gfx::DeviceDesc::window.
+         */
+        bool headless = false;
+        /// @brief The allocations behind the offscreen images. Empty when windowed.
+        std::vector<VmaAllocation> offscreen_allocations;
+
         VkSwapchainKHR swapchain = VK_NULL_HANDLE;       ///< Rebuilt on every resize.
         VkFormat swapchain_format = VK_FORMAT_UNDEFINED; ///< The surface format in use.
         VkExtent2D swapchain_extent{};                   ///< The current image size.
@@ -175,6 +186,20 @@ namespace engine::gfx {
          * @return Result::Success, or the reason the build failed.
          */
         [[nodiscard]] Result create_swapchain(Device& device, Extent2D size);
+
+        /**
+         * @brief Builds the images a headless device draws into.
+         *
+         * One for each frame in flight, so begin_frame() rotates them the way it
+         * rotates swapchain images and nothing downstream can tell the
+         * difference. They carry the format a swapchain would have chosen,
+         * because that format is what converts linear to sRGB on write.
+         *
+         * @param device The device to fill. Its depth image is built here too.
+         * @param size The extent to render at.
+         * @return Result::Success, or the reason an image was not created.
+         */
+        [[nodiscard]] Result create_offscreen_targets(Device& device, Extent2D size);
 
         /**
          * @brief Destroys the swapchain, its views, and its semaphores.
