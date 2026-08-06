@@ -529,6 +529,40 @@ namespace cooker {
 
     } // namespace
 
+    /// Removes cooked files that nothing in the manifest names.
+    void prune_orphan_outputs(const std::filesystem::path& out, const as::Manifest& manifest) {
+        // Every output the manifest knows about, relative to the cooked root.
+        std::set<std::filesystem::path> known;
+        known.insert("manifest.json");
+        for (const as::ManifestEntry& entry : manifest.entries) {
+            for (const as::ManifestOutput& output : entry.outputs) {
+                known.insert(as::manifest_path(output.cooked));
+            }
+        }
+
+        std::set<std::filesystem::path> removed;
+        auto iter = std::filesystem::recursive_directory_iterator(
+            out, std::filesystem::directory_options::skip_permission_denied);
+        for (const auto& entry : iter) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const std::filesystem::path relative = std::filesystem::relative(entry.path(), out);
+            if (!known.contains(relative)) {
+                std::error_code error;
+                std::filesystem::remove(entry.path(), error);
+                if (!error) {
+                    removed.insert(relative);
+                }
+            }
+        }
+
+        if (!removed.empty()) {
+            ENGINE_LOG_INFO("Pruned {} cooked files the new manifest no longer names.",
+                            removed.size());
+        }
+    }
+
     bool cook_all(const Options& options, Result& result) {
         result = Result{};
 
@@ -626,6 +660,8 @@ namespace cooker {
         if (!as::save_manifest(options.out, next)) {
             return false;
         }
+
+        prune_orphan_outputs(options.out, next);
 
         return result.failed == 0;
     }
