@@ -690,4 +690,69 @@ namespace engine::scene {
         return out;
     }
 
+    nlohmann::json make_prefab(const World& world, entt::entity root,
+                               const ComponentRegistry& registry) {
+        const entt::registry& entities = world.registry();
+        if (root == entt::null || !entities.valid(root)) {
+            ENGINE_LOG_ERROR("make_prefab: the root entity is null or invalid.");
+            return {};
+        }
+        if (!entities.all_of<Hierarchy>(root)) {
+            ENGINE_LOG_ERROR("make_prefab: the root entity has no Hierarchy component.");
+            return {};
+        }
+
+        std::vector<PrefabEntity> result;
+        std::unordered_map<entt::entity, int> index;
+        std::vector<entt::entity> stack{ root };
+
+        while (!stack.empty()) {
+            const entt::entity current = stack.back();
+            stack.pop_back();
+
+            PrefabEntity entry;
+            entry.components = save_components(entities, current, registry);
+
+            if (!result.empty()) {
+                // The parent is somewhere earlier in the list. Find it.
+                const entt::entity parent =
+                    entities.all_of<Hierarchy>(current)
+                        ? entities.get<Hierarchy>(current).parent
+                        : entt::null;
+                const auto found = index.find(parent);
+                if (found != index.end()) {
+                    entry.parent = found->second;
+                }
+            }
+
+            index[current] = static_cast<int>(result.size());
+            result.push_back(std::move(entry));
+
+            // Push children in reverse order so the first child comes out first.
+            if (entities.all_of<Hierarchy>(current)) {
+                const Hierarchy& node = entities.get<Hierarchy>(current);
+                std::vector<entt::entity> children;
+                for (entt::entity child = node.first_child; child != entt::null;
+                     child = entities.get<Hierarchy>(child).next_sibling) {
+                    children.push_back(child);
+                }
+                for (auto it = children.rbegin(); it != children.rend(); ++it) {
+                    stack.push_back(*it);
+                }
+            }
+        }
+
+        nlohmann::json out = nlohmann::json::object();
+        out["version"] = kPrefabVersion;
+        nlohmann::json json_entities = nlohmann::json::array();
+        for (PrefabEntity& entry : result) {
+            nlohmann::json record = nlohmann::json::object();
+            record[kParentKey] = entry.parent;
+            record[kComponentsKey] = std::move(entry.components);
+            json_entities.push_back(std::move(record));
+        }
+        out["entities"] = std::move(json_entities);
+        return out;
+    }
+
 } // namespace engine::scene
