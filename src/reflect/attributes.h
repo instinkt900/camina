@@ -75,4 +75,14 @@ namespace engine::reflect {
      */
     struct EditorOnly {};
 
+    /**
+     * @brief The field holds a GUID that names an asset.
+     *
+     * restore_references() replaces this field's value with a reference path
+     * on save, and the cooker resolves it on load. A string field without this
+     * attribute is never treated as a reference, even when its text looks like
+     * a GUID.
+     */
+    struct AssetRef {};
+
 } // namespace engine::reflect

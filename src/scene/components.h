@@ -175,6 +175,7 @@ struct engine::reflect::Describe<engine::scene::MeshRenderer> {
     static constexpr auto fields() {
         return std::make_tuple(
             ENGINE_FIELD(engine::scene::MeshRenderer, mesh,
+                         engine::reflect::AssetRef{},
                          engine::reflect::Tooltip{ "The cooked mesh this entity draws." }));
     }
 };
@@ -224,6 +225,7 @@ struct engine::reflect::Describe<engine::scene::Environment> {
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(
             engine::scene::Environment, cubemap,
+            engine::reflect::AssetRef{},
             engine::reflect::Tooltip{ "The cooked cubemap every surface reflects." }));
     }
 };
