@@ -259,4 +259,19 @@ namespace engine::scene {
         const World& world, entt::entity root, const Prefab& prefab,
         const ComponentRegistry& registry = components());
 
+    /**
+     * @brief Turns a live subtree into a prefab document.
+     *
+     * The entities come out root first, each parent before its children. The
+     * components are saved through the registry, so a component type the
+     * registry does not know is skipped.
+     *
+     * @param world The world holding the subtree.
+     * @param root The root entity to save. Every descendant goes with it.
+     * @param registry The component types to save.
+     * @return A prefab document, as Prefab::parse() reads.
+     */
+    [[nodiscard]] nlohmann::json make_prefab(const World& world, entt::entity root,
+                                             const ComponentRegistry& registry = components());
+
 } // namespace engine::scene
