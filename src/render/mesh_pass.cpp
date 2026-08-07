@@ -24,6 +24,7 @@ namespace engine::render {
         constexpr const char* kVertexShaderSource = "mesh.vert";
         constexpr const char* kFragmentShaderSource = "mesh.frag";
         constexpr const char* kBrdfSource = "ibl.brdf";
+        constexpr const char* kClusterCullSource = "cluster_cull.comp";
 
         /// The push constant block, which must match mesh.vert exactly.
         struct Push {
@@ -47,6 +48,15 @@ namespace engine::render {
          * gone. See issue #98 and DESIGN.md section 9.
          */
         constexpr std::size_t kInitialLightCapacity = 64;
+
+        /**
+         * The cluster cull uniform block, which must match ClusterParams in
+         * cluster_cull.comp. It is std140 for the mat4.
+         */
+        struct ClusterUniforms {
+            Mat4 inv_view_projection{ 1.0F };
+            std::array<std::uint32_t, 4> grid_info{}; // x = light count
+        };
 
         /**
          * The per-frame block, which must match the Frame block in both shaders.
@@ -300,7 +310,13 @@ namespace engine::render {
         if (!build_pipelines(content, pipelines_)) {
             return false;
         }
-        return build_frame_sets();
+        if (!build_compute_pipeline(content)) {
+            return false;
+        }
+        if (!build_frame_sets()) {
+            return false;
+        }
+        return build_compute_sets();
     }
 
     /**
@@ -379,6 +395,13 @@ namespace engine::render {
             light_capacity_ = kInitialLightCapacity;
         }
 
+        // The cluster grid buffers must exist before the frame sets reference
+        // them at binding 5. ensure_cluster_grid() creates them once and does
+        // nothing on every later call.
+        if (!ensure_cluster_grid()) {
+            return false;
+        }
+
         const FrameUniforms empty;
         for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
             const gfx::BufferDesc desc{ .data = &empty,
@@ -412,7 +435,7 @@ namespace engine::render {
             // it, because a descriptor set is filled once and a cubemap changes
             // only when the scene names another one. update_environment() calls
             // this again when that happens.
-            const std::array<gfx::DescriptorWrite, 5> writes{ {
+            const std::array<gfx::DescriptorWrite, 6> writes{ {
                 { .binding = 0,
                   .kind = gfx::DescriptorKind::UniformBuffer,
                   .texture = {},
@@ -441,6 +464,12 @@ namespace engine::render {
                   .kind = gfx::DescriptorKind::StorageBuffer,
                   .texture = {},
                   .buffer = light_buffers_[i] },
+                // The cluster grid. The compute cull writes it and the fragment
+                // shader reads it, so each cell loops over far fewer lights.
+                { .binding = 5,
+                  .kind = gfx::DescriptorKind::StorageBuffer,
+                  .texture = {},
+                  .buffer = cluster_grids_[i] },
             } };
             if (!gfx::succeeded(gfx::create_descriptor_set(device_, layout_pipeline(), kFrameSet,
                                                            writes.data(), writes.size(),
@@ -482,6 +511,10 @@ namespace engine::render {
                              capacity);
             return false;
         }
+        if (!build_compute_sets()) {
+            ENGINE_LOG_ERROR("The compute sets could not be rebuilt for the new light buffers.");
+            return false;
+        }
         ENGINE_LOG_INFO("The light buffer grew from {} to {} to fit {} lights.", previous,
                         capacity, needed);
         return true;
@@ -492,6 +525,129 @@ namespace engine::render {
             gfx::destroy_descriptor_set(device_, set);
             set = gfx::DescriptorSetHandle{};
         }
+    }
+
+    bool MeshPass::build_compute_pipeline(const assets::Content& content) {
+        std::vector<assets::Shader> forms;
+        if (!read_stage(content, kClusterCullSource, forms) || forms.empty()) {
+            ENGINE_LOG_ERROR("{} would not read from the content tree.", kClusterCullSource);
+            return false;
+        }
+
+        const assets::Shader& shader = forms[0];
+        std::vector<gfx::DescriptorBinding> bindings;
+        bindings.reserve(shader.bindings.size());
+        for (const assets::ShaderBinding& source : shader.bindings) {
+            gfx::DescriptorKind kind = gfx::DescriptorKind::CombinedImageSampler;
+            switch (source.kind) {
+            case assets::DescriptorKind::UniformBuffer:
+                kind = gfx::DescriptorKind::UniformBuffer;
+                break;
+            case assets::DescriptorKind::StorageBuffer:
+                kind = gfx::DescriptorKind::StorageBuffer;
+                break;
+            case assets::DescriptorKind::CombinedImageSampler:
+                break;
+            }
+
+            std::uint32_t stages = 0;
+            if ((source.stages & assets::kStageBitCompute) != 0) {
+                stages |= gfx::kStageBitCompute;
+            }
+
+            bindings.push_back(gfx::DescriptorBinding{
+                .set = source.set,
+                .binding = source.binding,
+                .count = source.count,
+                .stages = stages,
+                .kind = kind,
+            });
+        }
+
+        const gfx::ComputePipelineDesc desc{
+            .compute = { shader.spirv.data(), shader.spirv.size() },
+            .bindings = bindings.data(),
+            .binding_count = bindings.size(),
+        };
+
+        gfx::PipelineHandle pipeline;
+        if (!gfx::succeeded(gfx::create_compute_pipeline(device_, desc, &pipeline))) {
+            ENGINE_LOG_ERROR("The cluster cull pipeline did not build.");
+            return false;
+        }
+
+        if (compute_pipeline_.valid()) {
+            gfx::destroy_pipeline(device_, compute_pipeline_);
+        }
+        compute_pipeline_ = pipeline;
+
+        return true;
+    }
+
+    bool MeshPass::build_compute_sets() {
+        if (!compute_pipeline_.valid()) {
+            return true;
+        }
+        if (!ensure_cluster_grid()) {
+            return false;
+        }
+
+        for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
+            if (compute_sets_[i].valid()) {
+                gfx::destroy_descriptor_set(device_, compute_sets_[i]);
+                compute_sets_[i] = gfx::DescriptorSetHandle{};
+            }
+
+            const std::array<gfx::DescriptorWrite, 3> compute_writes{ {
+                { .binding = 0,
+                  .kind = gfx::DescriptorKind::UniformBuffer,
+                  .buffer = cluster_uniforms_[i] },
+                { .binding = 1,
+                  .kind = gfx::DescriptorKind::StorageBuffer,
+                  .buffer = light_buffers_[i] },
+                { .binding = 2,
+                  .kind = gfx::DescriptorKind::StorageBuffer,
+                  .buffer = cluster_grids_[i] },
+            } };
+            if (!gfx::succeeded(gfx::create_descriptor_set(device_, compute_pipeline_,
+                                                           0, compute_writes.data(),
+                                                           compute_writes.size(),
+                                                           &compute_sets_[i]))) {
+                ENGINE_LOG_ERROR("The compute descriptor set could not be built for frame {}.",
+                                 i);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool MeshPass::ensure_cluster_grid() {
+        if (cluster_grids_[0].valid()) {
+            return true;
+        }
+
+        const std::size_t size = kClusterCellCount * kClusterCellStride * sizeof(std::uint32_t);
+        for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
+            const gfx::BufferDesc desc{ .data = nullptr,
+                                        .size = size,
+                                        .usage = gfx::BufferUsage::Storage };
+            if (!gfx::succeeded(gfx::create_buffer(device_, desc, &cluster_grids_[i]))) {
+                ENGINE_LOG_ERROR("A cluster grid buffer could not be allocated.");
+                return false;
+            }
+
+            const ClusterUniforms empty;
+            const gfx::BufferDesc uniform_desc{ .data = &empty,
+                                                .size = sizeof(empty),
+                                                .usage = gfx::BufferUsage::Uniform };
+            if (!gfx::succeeded(
+                    gfx::create_buffer(device_, uniform_desc, &cluster_uniforms_[i]))) {
+                ENGINE_LOG_ERROR("A cluster uniform buffer could not be allocated.");
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -791,6 +947,16 @@ namespace engine::render {
             ENGINE_LOG_ERROR("The frame sets did not rebuild, so nothing will draw.");
             return false;
         }
+        if (!build_compute_pipeline(content)) {
+            ENGINE_LOG_ERROR("The compute pipeline did not rebuild, so the cluster cull "
+                             "will not run.");
+            return false;
+        }
+        if (!build_compute_sets()) {
+            ENGINE_LOG_ERROR("The compute sets did not rebuild, so the cluster cull "
+                             "will not run.");
+            return false;
+        }
 
         ENGINE_LOG_INFO("The mesh shaders were built again.");
         return true;
@@ -844,6 +1010,20 @@ namespace engine::render {
             buffer = gfx::BufferHandle{};
         }
         for (gfx::BufferHandle& buffer : light_buffers_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
+        gfx::destroy_pipeline(device_, compute_pipeline_);
+        compute_pipeline_ = gfx::PipelineHandle{};
+        for (gfx::DescriptorSetHandle& set : compute_sets_) {
+            gfx::destroy_descriptor_set(device_, set);
+            set = gfx::DescriptorSetHandle{};
+        }
+        for (gfx::BufferHandle& buffer : cluster_grids_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
+        for (gfx::BufferHandle& buffer : cluster_uniforms_) {
             gfx::destroy_buffer(device_, buffer);
             buffer = gfx::BufferHandle{};
         }
@@ -905,6 +1085,34 @@ namespace engine::render {
                 environment_ = gfx::TextureHandle{};
             }
         }
+    }
+
+    void MeshPass::cull(gfx::CommandList* commands, const Mat4& view_projection) {
+        if (!compute_pipeline_.valid() || !compute_sets_[frame_slot_].valid()) {
+            return;
+        }
+        if (visible_lights_.empty()) {
+            return;
+        }
+
+        ClusterUniforms cull_uniforms;
+        cull_uniforms.inv_view_projection = glm::inverse(view_projection);
+        cull_uniforms.grid_info[0] =
+            static_cast<std::uint32_t>(visible_lights_.size());
+        gfx::update_buffer(device_, cluster_uniforms_[frame_slot_], &cull_uniforms,
+                           sizeof(cull_uniforms));
+
+        gfx::cmd_bind_compute_pipeline(commands, compute_pipeline_);
+        gfx::cmd_bind_compute_descriptor_set(commands, compute_pipeline_, 0,
+                                             compute_sets_[frame_slot_]);
+
+        const std::uint32_t group_count = (kClusterCellCount + 63) / 64;
+        gfx::cmd_dispatch(commands, group_count, 1, 1);
+
+        // The mesh pass reads what the compute pass wrote. A buffer barrier
+        // orders the fragment reads against the compute writes.
+        gfx::cmd_buffer_barrier(commands, gfx::ResourceState::ComputeWrite,
+                                gfx::ResourceState::ShaderRead);
     }
 
     void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,

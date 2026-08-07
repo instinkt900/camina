@@ -22,7 +22,7 @@ namespace engine::gfx {
     struct PipelineTag {};
 
     /**
-     * @brief Refers to a graphics pipeline the device owns.
+     * @brief Refers to a graphics or compute pipeline the device owns.
      *
      * The handle is 8 bytes and carries a generation, so a stale handle resolves
      * to nothing instead of to the wrong pipeline. See rule 4.2 in DESIGN.md.
@@ -344,6 +344,40 @@ namespace engine::gfx {
         DescriptorKind kind = DescriptorKind::CombinedImageSampler;
         TextureHandle texture; ///< The texture, for a CombinedImageSampler.
         BufferHandle buffer;   ///< The buffer, for a UniformBuffer or StorageBuffer.
+    };
+
+    /// @brief Settings for create_compute_pipeline().
+    struct ComputePipelineDesc {
+        /// @brief The compute stage. Required.
+        ShaderCode compute;
+
+        /// @brief How many bytes of push constants the pipeline reads. 0 for none.
+        std::uint32_t push_constant_size = 0;
+        /**
+         * @brief Which stages read the push constants, as kStageBit values.
+         *
+         * The default is the compute stage, because that is the only stage a
+         * compute pipeline has.
+         *
+         * @warning This must name every stage that declares the block. Vulkan
+         * matches the range in the layout against the stages cmd_push_constants()
+         * writes, and a stage that reads a block nobody wrote to it reads
+         * undefined values rather than reporting anything.
+         */
+        std::uint32_t push_constant_stages = kStageBitCompute;
+
+        /**
+         * @brief The descriptors the pipeline reads, or null for none.
+         *
+         * These come from the cooked shader, which carries what SPIRV-Reflect
+         * found. A compute pipeline has one stage, so no merge is needed.
+         *
+         * @warning The entries must be sorted by set and then by binding, and no
+         * set may be skipped. Vulkan numbers set layouts by position, so a gap
+         * would silently shift every set after it.
+         */
+        const DescriptorBinding* bindings = nullptr;
+        std::size_t binding_count = 0; ///< How many entries @c bindings holds.
     };
 
     /// @brief Settings for create_graphics_pipeline().

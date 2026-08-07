@@ -283,6 +283,22 @@ namespace engine::gfx {
     void cmd_end_rendering(CommandList* commands);
 
     /**
+     * @brief Builds a compute pipeline from one SPIR-V module.
+     *
+     * A compute pipeline needs only the compute stage. It writes into storage
+     * buffers and images that the bindings declare, and it has no vertex
+     * input, no rasterizer, and no color target.
+     *
+     * @param device The device that owns the pipeline.
+     * @param desc The compute stage and its bindings.
+     * @param out_pipeline Receives the handle on success, and a null handle on failure.
+     * @return Result::Success, or the reason the pipeline did not build.
+     */
+    [[nodiscard]] Result create_compute_pipeline(Device* device,
+                                                 const ComputePipelineDesc& desc,
+                                                 PipelineHandle* out_pipeline);
+
+    /**
      * @brief Builds a graphics pipeline from two SPIR-V modules.
      *
      * The pipeline draws into the swapchain format with dynamic rendering, and it
@@ -316,6 +332,54 @@ namespace engine::gfx {
      * @param pipeline The pipeline to bind. A stale handle logs and does nothing.
      */
     void cmd_bind_pipeline(CommandList* commands, PipelineHandle pipeline);
+
+    /**
+     * @brief Binds a compute pipeline for the dispatches that follow.
+     * @param commands The command list from begin_frame().
+     * @param pipeline The compute pipeline to bind. A stale handle logs and does nothing.
+     */
+    void cmd_bind_compute_pipeline(CommandList* commands, PipelineHandle pipeline);
+
+    /**
+     * @brief Binds a descriptor set for the dispatches that follow.
+     *
+     * @param commands The command list from begin_frame().
+     * @param pipeline The bound compute pipeline, which supplies the layout.
+     * @param set_index Which set this fills, matching create_descriptor_set().
+     * @param set The set to bind. A stale handle logs and does nothing.
+     */
+    void cmd_bind_compute_descriptor_set(CommandList* commands, PipelineHandle pipeline,
+                                         std::uint32_t set_index, DescriptorSetHandle set);
+
+    /**
+     * @brief Dispatches a compute shader.
+     *
+     * The pipeline bound by cmd_bind_compute_pipeline() runs over the group
+     * counts given. A group size the shader declares decides how many threads
+     * each group runs.
+     *
+     * @param commands The command list from begin_frame().
+     * @param group_count_x Groups in the X dimension.
+     * @param group_count_y Groups in the Y dimension.
+     * @param group_count_z Groups in the Z dimension.
+     */
+    void cmd_dispatch(CommandList* commands, std::uint32_t group_count_x,
+                      std::uint32_t group_count_y, std::uint32_t group_count_z);
+
+    /**
+     * @brief Moves a storage buffer from one state to another.
+     *
+     * A buffer barrier between two passes. It carries only the stage and the
+     * access masks, because a buffer has no image layout.
+     *
+     * A compute pass that writes a cluster grid and a mesh pass that reads it
+     * is the pair this exists for.
+     *
+     * @param commands The command list from begin_frame().
+     * @param before The state the buffer is in now.
+     * @param after The state the next pass needs it in.
+     */
+    void cmd_buffer_barrier(CommandList* commands, ResourceState before, ResourceState after);
 
     /**
      * @brief Sets whether back faces are culled for the draws that follow.

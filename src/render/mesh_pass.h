@@ -92,6 +92,26 @@ namespace engine::render {
     [[nodiscard]] const assets::Shader* pick_shader_variant(
         std::span<const assets::Shader> forms, std::span<const std::string_view> defines);
 
+    /// @brief What one pass reads and writes.
+    ///
+    /// The compute cull writes a cluster grid the mesh pass reads, so the
+    /// counts below are shared between the two halves rather than repeated.
+    ///
+    /// @brief How many tiles across the frustum the cluster grid divides into.
+    inline constexpr std::uint32_t kClusterTileCountX = 16;
+    /// @brief How many tiles down the frustum the cluster grid divides into.
+    inline constexpr std::uint32_t kClusterTileCountY = 12;
+    /// @brief How many depth slices the cluster grid uses.
+    inline constexpr std::uint32_t kClusterSliceCount = 16;
+    /// @brief How many cells the cluster grid holds.
+    inline constexpr std::uint32_t kClusterCellCount =
+        kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
+    /// @brief How many light indices one cell holds at most.
+    inline constexpr std::uint32_t kMaxLightsPerCell = 64;
+
+    /// @brief How many uint32 values one cell of the cluster grid occupies.
+    inline constexpr std::uint32_t kClusterCellStride = 1 + kMaxLightsPerCell;
+
     /**
      * @brief Draws the meshes a world names.
      *
@@ -218,6 +238,22 @@ namespace engine::render {
          * @return The declaration.
          */
         [[nodiscard]] static PassDesc declare();
+
+        /**
+         * @brief Divides the frustum into tiles and dispatches the cluster cull.
+         *
+         * Call this after gather_lights() has uploaded the lights and before
+         * draw() records meshes. It writes per-cell light lists into the cluster
+         * grid, and issues a buffer barrier ordering the compute writes against
+         * the fragment reads draw() will issue.
+         *
+         * It must run outside a rendering scope, because a compute dispatch and a
+         * pipeline barrier cannot happen inside one.
+         *
+         * @param commands The open command list.
+         * @param view_projection The camera, from which the inverse is worked out.
+         */
+        void cull(gfx::CommandList* commands, const Mat4& view_projection);
 
         /**
          * @brief Draws every entity that has a MeshRenderer and a WorldTransform.
@@ -494,6 +530,30 @@ namespace engine::render {
         std::size_t draw_count_ = 0;
         /// @brief How many times the last draw() changed pipeline. See #105.
         std::size_t pipeline_switches_ = 0;
+
+        /// @brief Reads and uploads the cluster cull compute shader, and builds its pipeline.
+        [[nodiscard]] bool build_compute_pipeline(const assets::Content& content);
+
+        /// @brief Builds the per-frame compute descriptor sets. Call after build_frame_sets().
+        [[nodiscard]] bool build_compute_sets();
+
+        /// @brief Makes sure the cluster grid buffer holds enough uint32 values.
+        [[nodiscard]] bool ensure_cluster_grid();
+
+        /**
+         * @brief The compute pipeline that fills the cluster grid.
+         *
+         * It is one pipeline, because a compute shader has no variant form. It
+         * stays alive across shader reloads until a clean replacement is built.
+         */
+        gfx::PipelineHandle compute_pipeline_;
+        /// @brief The descriptor set for the compute pass. Rebuilt when the
+        /// light buffer or the compute pipeline changes.
+        std::array<gfx::DescriptorSetHandle, gfx::kFramesInFlight> compute_sets_;
+        /// @brief One cluster grid for each frame in flight.
+        std::array<gfx::BufferHandle, gfx::kFramesInFlight> cluster_grids_;
+        /// @brief The uniform buffer that holds the cluster cull parameters.
+        std::array<gfx::BufferHandle, gfx::kFramesInFlight> cluster_uniforms_;
     };
 
 } // namespace engine::render

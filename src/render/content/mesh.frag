@@ -69,6 +69,22 @@ layout(set = 0, binding = 4) readonly buffer Lights {
     Light lights[];
 } light_buffer;
 
+// The cluster grid. The compute cull divides the frustum into a tile grid over
+// depth slices, tests every point light against each cell, and writes a short
+// list of light indices for the fragment shader to loop over. A directional
+// light goes in every cell because it has no position to test.
+//
+// Must match kClusterTileCountX and friends in mesh_pass.h.
+layout(constant_id = 0) const uint kClusterTileCountX = 16;
+layout(constant_id = 1) const uint kClusterTileCountY = 12;
+layout(constant_id = 2) const uint kClusterSliceCount = 16;
+layout(constant_id = 3) const uint kMaxLightsPerCell = 64;
+const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
+
+layout(set = 0, binding = 5) readonly buffer ClusterGrid {
+    uint cells[]; // flat: counts followed by light indices per cell
+} cluster_grid;
+
 // The environment every surface reflects, which `scene::Environment` names and
 // `render::MeshPass` binds. A scene that names none binds six grey texels, so
 // this is always a valid sampler and the shader needs no branch.
@@ -301,9 +317,35 @@ void main() {
     // Set once the loop has seen a directional light, so the second one does not
     // read a map that was rendered for the first.
     bool shadowed_one = false;
-    // No clamp on the count. The buffer holds exactly what the pass wrote, and
-    // the pass grows the buffer to fit rather than dropping what does not.
-    for (uint i = 0u; i < frame.light_count.x; ++i) {
+
+    // Reconstruct NDC from the interpolated world position so the cluster cell
+    // can be found with no viewport dimensions in the frame block.
+    vec4 clip = frame.view_projection * vec4(in_world, 1.0);
+    vec3 ndc = clip.xyz / clip.w;
+
+    uint tile_x = uint((ndc.x * 0.5 + 0.5) * float(kClusterTileCountX));
+    uint tile_y = uint((ndc.y * 0.5 + 0.5) * float(kClusterTileCountY));
+    tile_x = min(tile_x, kClusterTileCountX - 1u);
+    tile_y = min(tile_y, kClusterTileCountY - 1u);
+
+    // gl_FragCoord.z is NDC depth, from 1 at near to 0 at far under reverse-Z.
+    uint slice = uint((1.0 - gl_FragCoord.z) * float(kClusterSliceCount));
+    slice = min(slice, kClusterSliceCount - 1u);
+
+    uint cell = (slice * kClusterTileCountY + tile_y) * kClusterTileCountX + tile_x;
+    uint per_cell_count = cluster_grid.cells[cell];
+    uint cell_index_base = kClusterCellCount + cell * kMaxLightsPerCell;
+
+    // Loop over the lights the cluster cull assigned to this cell. When the
+    // cluster grid is empty (no lights), the loop runs zero times and the
+    // picture is black. The loop here has the clamp from the old one, but
+    // the count a cell declares is never more than kMaxLightsPerCell.
+    uint light_count = min(per_cell_count, kMaxLightsPerCell);
+    for (uint j = 0u; j < light_count; ++j) {
+        uint i = cluster_grid.cells[cell_index_base + j];
+        if (i >= frame.light_count.x) {
+            continue;
+        }
         Light light = light_buffer.lights[i];
 
         // l points from the surface towards the light, which is the opposite of
