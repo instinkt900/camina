@@ -656,39 +656,17 @@ namespace engine::gfx {
         ENGINE_CHECK(commands != nullptr, "cmd_buffer_barrier needs a command list.");
 
         const vk::StateMapping source = vk::map_state(before);
-        vk::StateMapping destination = vk::map_state(after);
+        const vk::StateMapping destination = vk::map_state(after);
 
-        // Undefined means the contents are not worth keeping, the way it works
-        // for images. An acquire barrier on a buffer uses the destination stage.
-        if (before == ResourceState::Undefined) {
-            destination.stage = source.stage;
-            destination.access = source.access;
-            // Swapping rather than setting both from destination, because the
-            // barrier src side must name the Undefined transition correctly.
-            const vk::StateMapping tmp = source;
-            // Use the destination as source for Undefined->something transitions
-            // to properly order against the destination stage.
-            VkMemoryBarrier2 barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            // For Undefined src, treat as if transitioning from the destination
-            // stage with no prior access. This orders against the stage the
-            // resource is about to be used in.
-            barrier.srcStageMask = source.stage;
-            barrier.srcAccessMask = VK_ACCESS_2_NONE;
-            barrier.dstStageMask = destination.stage;
-            barrier.dstAccessMask = destination.access;
-            VkDependencyInfo dep{};
-            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.memoryBarrierCount = 1;
-            dep.pMemoryBarriers = &barrier;
-            vkCmdPipelineBarrier2(commands->buffer, &dep);
-            return;
-        }
+        // Undefined means no prior access is worth waiting on, the way it works
+        // for images. The destination masks still have to name the real
+        // consumer, or the barrier orders nothing.
+        const bool acquire = before == ResourceState::Undefined;
 
         VkMemoryBarrier2 barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        barrier.srcStageMask = source.stage;
-        barrier.srcAccessMask = source.access;
+        barrier.srcStageMask = acquire ? VK_PIPELINE_STAGE_2_NONE : source.stage;
+        barrier.srcAccessMask = acquire ? VK_ACCESS_2_NONE : source.access;
         barrier.dstStageMask = destination.stage;
         barrier.dstAccessMask = destination.access;
 

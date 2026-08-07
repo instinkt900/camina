@@ -44,8 +44,6 @@ bool sphere_overlaps_aabb(vec3 center, float radius, vec3 bmin, vec3 bmax) {
     float sq_dist = 0.0;
     for (int i = 0; i < 3; ++i) {
         float v = center[i];
-        float lo = bmin[i] - radius;
-        float hi = bmax[i] + radius;
         if (v < bmin[i]) {
             sq_dist += (bmin[i] - v) * (bmin[i] - v);
         } else if (v > bmax[i]) {
@@ -98,19 +96,24 @@ void main() {
     uint output_count = 0u;
     uint base_index = kCellCount + cell * kMaxLightsPerCell;
 
-    // Directional lights go in every cell. They have w=0 in position.w.
-    // We write them first so the fragment shader can skip the w check.
+    // Directional lights go in every cell because they have no position to
+    // test. They go in first, so a cell crowded with point lights never drops
+    // the key light and the shadow it casts.
+    for (uint i = 0u; i < params.grid_info.x && output_count < kMaxLightsPerCell; ++i) {
+        if (light_buffer.lights[i].position.w < 0.5) {
+            grid.cells[base_index + output_count] = i;
+            ++output_count;
+        }
+    }
+
+    // Then the point lights whose range sphere reaches this cell.
     for (uint i = 0u; i < params.grid_info.x && output_count < kMaxLightsPerCell; ++i) {
         Light l = light_buffer.lights[i];
-        if (l.position.w >= 0.5) {
-            // Point light. Test the bounding sphere against the cell's AABB.
-            float range = max(l.color.a, 1e-4);
-            if (sphere_overlaps_aabb(l.position.xyz, range, aabb_min, aabb_max)) {
-                grid.cells[base_index + output_count] = i;
-                ++output_count;
-            }
-        } else {
-            // Directional light. Always include.
+        if (l.position.w < 0.5) {
+            continue;
+        }
+        float range = max(l.color.a, 1e-4);
+        if (sphere_overlaps_aabb(l.position.xyz, range, aabb_min, aabb_max)) {
             grid.cells[base_index + output_count] = i;
             ++output_count;
         }

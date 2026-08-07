@@ -1013,7 +1013,8 @@ namespace {
         // The cluster cull must run outside a rendering scope, because a compute
         // dispatch cannot happen inside one. It reads the light buffer and writes
         // per-cell light lists for the fragment shader.
-        context.mesh_pass->cull(info.commands, clip_from_world);
+        context.mesh_pass->cull(info.commands, world, *context.game_content, clip_from_world,
+                                settings.camera_position);
 
         const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
                                             settings.clear_color.b, 1.0F };

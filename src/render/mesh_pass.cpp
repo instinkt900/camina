@@ -623,28 +623,28 @@ namespace engine::render {
     }
 
     bool MeshPass::ensure_cluster_grid() {
-        if (cluster_grids_[0].valid()) {
-            return true;
-        }
-
         const std::size_t size = kClusterCellCount * kClusterCellStride * sizeof(std::uint32_t);
         for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
-            const gfx::BufferDesc desc{ .data = nullptr,
-                                        .size = size,
-                                        .usage = gfx::BufferUsage::Storage };
-            if (!gfx::succeeded(gfx::create_buffer(device_, desc, &cluster_grids_[i]))) {
-                ENGINE_LOG_ERROR("A cluster grid buffer could not be allocated.");
-                return false;
+            if (!cluster_grids_[i].valid()) {
+                const gfx::BufferDesc desc{ .data = nullptr,
+                                            .size = size,
+                                            .usage = gfx::BufferUsage::Storage };
+                if (!gfx::succeeded(gfx::create_buffer(device_, desc, &cluster_grids_[i]))) {
+                    ENGINE_LOG_ERROR("A cluster grid buffer could not be allocated.");
+                    return false;
+                }
             }
 
-            const ClusterUniforms empty;
-            const gfx::BufferDesc uniform_desc{ .data = &empty,
-                                                .size = sizeof(empty),
-                                                .usage = gfx::BufferUsage::Uniform };
-            if (!gfx::succeeded(
-                    gfx::create_buffer(device_, uniform_desc, &cluster_uniforms_[i]))) {
-                ENGINE_LOG_ERROR("A cluster uniform buffer could not be allocated.");
-                return false;
+            if (!cluster_uniforms_[i].valid()) {
+                const ClusterUniforms empty;
+                const gfx::BufferDesc uniform_desc{ .data = &empty,
+                                                    .size = sizeof(empty),
+                                                    .usage = gfx::BufferUsage::Uniform };
+                if (!gfx::succeeded(
+                        gfx::create_buffer(device_, uniform_desc, &cluster_uniforms_[i]))) {
+                    ENGINE_LOG_ERROR("A cluster uniform buffer could not be allocated.");
+                    return false;
+                }
             }
         }
         return true;
@@ -1087,10 +1087,64 @@ namespace engine::render {
         }
     }
 
-    void MeshPass::cull(gfx::CommandList* commands, const Mat4& view_projection) {
+    void MeshPass::cull(gfx::CommandList* commands, const scene::World& world,
+                        const assets::Content& content, const Mat4& view_projection,
+                        const Vec3& camera_position) {
+        if (!layout_pipeline().valid()) {
+            return;
+        }
+
+        // Before anything is recorded, because this may rebuild the frame sets
+        // and it waits for the device to go idle when it does.
+        update_environment(world, content);
+
+        // Round the ring first, so this frame writes the slot the frame two back
+        // used. That frame has finished, because the fence for it was waited on
+        // before this one began.
+        frame_slot_ = (frame_slot_ + 1) % gfx::kFramesInFlight;
+
+        FrameUniforms frame{
+            .view_projection = view_projection,
+            .light_view_projection = shadow_views_,
+            .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
+            .cascade_splits = { shadow_splits_[0], shadow_splits_[1], shadow_splits_[2],
+                                shadow_splits_[3] },
+            .cascade_biases = { shadow_biases_[0], shadow_biases_[1], shadow_biases_[2],
+                                shadow_biases_[3] },
+        };
+
+        for (std::size_t i = 0; i < assets::kIrradianceCoefficients; ++i) {
+            frame.irradiance[i] = { irradiance_.c[i][0], irradiance_.c[i][1],
+                                    irradiance_.c[i][2], 0.0F };
+        }
+
+        const std::size_t culled =
+            gather_lights(world, frustum_from_view_projection(view_projection));
+        frame.light_count[0] = static_cast<std::uint32_t>(visible_lights_.size());
+        frame.light_count[1] = shadow_casts_ ? 1U : 0U;
+        frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
+        culled_lights_ = culled;
+
+        if (!ensure_light_capacity(visible_lights_.size())) {
+            return;
+        }
+
+        gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
+        if (!visible_lights_.empty()) {
+            gfx::update_buffer(device_, light_buffers_[frame_slot_], visible_lights_.data(),
+                               visible_lights_.size() * sizeof(GpuLight));
+        }
+
         if (!compute_pipeline_.valid() || !compute_sets_[frame_slot_].valid()) {
             return;
         }
+
+        // Every cell count starts at zero, so a cell that got no lights this
+        // frame does not keep the ones from the last frame. Clearing the count
+        // words costs a single small write.
+        const std::uint32_t zero = 0;
+        gfx::update_buffer(device_, cluster_grids_[frame_slot_], &zero, sizeof(zero));
+
         if (visible_lights_.empty()) {
             return;
         }
@@ -1104,7 +1158,7 @@ namespace engine::render {
 
         gfx::cmd_bind_compute_pipeline(commands, compute_pipeline_);
         gfx::cmd_bind_compute_descriptor_set(commands, compute_pipeline_, 0,
-                                             compute_sets_[frame_slot_]);
+                                              compute_sets_[frame_slot_]);
 
         const std::uint32_t group_count = (kClusterCellCount + 63) / 64;
         gfx::cmd_dispatch(commands, group_count, 1, 1);
@@ -1116,70 +1170,12 @@ namespace engine::render {
     }
 
     void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,
-                        const assets::Content& content, const Mat4& view_projection,
+                        const assets::Content& content, const Mat4& /*view_projection*/,
                         const Vec3& camera_position) {
         draw_count_ = 0;
         pipeline_switches_ = 0;
-        if (!layout_pipeline().valid()) {
-            return;
-        }
-
-        // Before anything is recorded, because this may rebuild the frame sets
-        // and it waits for the device to go idle when it does. Nothing of this
-        // frame has been written into the command list yet, and a command list
-        // that is being recorded has not been submitted, so the wait cannot
-        // deadlock on it.
-        update_environment(world, content);
-
         if (!frame_sets_[frame_slot_].valid()) {
             return;
-        }
-
-        // Round the ring first, so this frame writes the slot the frame two back
-        // used. That frame has finished, because the fence for it was waited on
-        // before this one began. Writing the slot the last frame used would
-        // change what the GPU is reading right now.
-        frame_slot_ = (frame_slot_ + 1) % gfx::kFramesInFlight;
-
-        FrameUniforms frame{
-            .view_projection = view_projection,
-            .light_view_projection = shadow_views_,
-            .camera_position = { camera_position.x, camera_position.y, camera_position.z, 1.0F },
-            .cascade_splits = { shadow_splits_[0], shadow_splits_[1], shadow_splits_[2],
-                                shadow_splits_[3] },
-            .cascade_biases = { shadow_biases_[0], shadow_biases_[1], shadow_biases_[2],
-                                shadow_biases_[3] },
-        };
-
-        // rgb from the cooked coefficient and w left at zero. The shader reads
-        // only rgb, so the fourth word is the padding std140 would add anyway.
-        for (std::size_t i = 0; i < assets::kIrradianceCoefficients; ++i) {
-            frame.irradiance[i] = { irradiance_.c[i][0], irradiance_.c[i][1],
-                                    irradiance_.c[i][2], 0.0F };
-        }
-
-        // Every light the camera can see, with the ones it cannot dropped. The
-        // member holds the storage between frames so the vector does not
-        // allocate on every one.
-        const std::size_t culled =
-            gather_lights(world, frustum_from_view_projection(view_projection));
-        frame.light_count[0] = static_cast<std::uint32_t>(visible_lights_.size());
-        frame.light_count[1] = shadow_casts_ ? 1U : 0U;
-        frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
-        culled_lights_ = culled;
-
-        // The buffer grows to fit rather than dropping what does not fit.
-        // Growing waits for the device and rewrites the sets, so it has to be
-        // rare. It is rare: it happens when a scene first shows more lights
-        // than any frame before it did.
-        if (!ensure_light_capacity(visible_lights_.size())) {
-            return;
-        }
-
-        gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
-        if (!visible_lights_.empty()) {
-            gfx::update_buffer(device_, light_buffers_[frame_slot_], visible_lights_.data(),
-                               visible_lights_.size() * sizeof(GpuLight));
         }
 
         // The frame set and the push constants are bound against this one

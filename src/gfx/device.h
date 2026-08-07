@@ -367,10 +367,11 @@ namespace engine::gfx {
                       std::uint32_t group_count_y, std::uint32_t group_count_z);
 
     /**
-     * @brief Moves a storage buffer from one state to another.
+     * @brief Orders memory access between two states.
      *
-     * A buffer barrier between two passes. It carries only the stage and the
-     * access masks, because a buffer has no image layout.
+     * A global memory barrier between two passes. It carries only the stage and
+     * the access masks, because a buffer has no image layout. It names no
+     * buffer, so it orders every access the two states cover.
      *
      * A compute pass that writes a cluster grid and a mesh pass that reads it
      * is the pair this exists for.
@@ -378,6 +379,9 @@ namespace engine::gfx {
      * @param commands The command list from begin_frame().
      * @param before The state the buffer is in now.
      * @param after The state the next pass needs it in.
+     *
+     * @warning Call this outside a rendering scope, for the reason
+     * cmd_frame_barrier() gives.
      */
     void cmd_buffer_barrier(CommandList* commands, ResourceState before, ResourceState after);
 

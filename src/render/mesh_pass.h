@@ -92,11 +92,9 @@ namespace engine::render {
     [[nodiscard]] const assets::Shader* pick_shader_variant(
         std::span<const assets::Shader> forms, std::span<const std::string_view> defines);
 
-    /// @brief What one pass reads and writes.
-    ///
-    /// The compute cull writes a cluster grid the mesh pass reads, so the
-    /// counts below are shared between the two halves rather than repeated.
-    ///
+    // The compute cull writes a cluster grid the mesh pass reads, so the
+    // counts below are shared between the two halves rather than repeated.
+    //
     /// @brief How many tiles across the frustum the cluster grid divides into.
     inline constexpr std::uint32_t kClusterTileCountX = 16;
     /// @brief How many tiles down the frustum the cluster grid divides into.
@@ -240,20 +238,21 @@ namespace engine::render {
         [[nodiscard]] static PassDesc declare();
 
         /**
-         * @brief Divides the frustum into tiles and dispatches the cluster cull.
+         * @brief Prepares the frame, gathers lights, and dispatches cluster cull.
          *
-         * Call this after gather_lights() has uploaded the lights and before
-         * draw() records meshes. It writes per-cell light lists into the cluster
-         * grid, and issues a buffer barrier ordering the compute writes against
-         * the fragment reads draw() will issue.
-         *
-         * It must run outside a rendering scope, because a compute dispatch and a
-         * pipeline barrier cannot happen inside one.
+         * Call this before draw() and outside a rendering scope. It advances the
+         * frame slot, uploads the frame block and the lights, and runs the
+         * compute shader that fills the per-cell light lists.
          *
          * @param commands The open command list.
-         * @param view_projection The camera, from which the inverse is worked out.
+         * @param world The world, for gathering lights.
+         * @param content The game content tree.
+         * @param view_projection The camera.
+         * @param camera_position Where the camera stands, in world space.
          */
-        void cull(gfx::CommandList* commands, const Mat4& view_projection);
+        void cull(gfx::CommandList* commands, const scene::World& world,
+                  const assets::Content& content, const Mat4& view_projection,
+                  const Vec3& camera_position);
 
         /**
          * @brief Draws every entity that has a MeshRenderer and a WorldTransform.

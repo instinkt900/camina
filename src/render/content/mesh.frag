@@ -78,7 +78,7 @@ layout(set = 0, binding = 4) readonly buffer Lights {
 layout(constant_id = 0) const uint kClusterTileCountX = 16;
 layout(constant_id = 1) const uint kClusterTileCountY = 12;
 layout(constant_id = 2) const uint kClusterSliceCount = 16;
-layout(constant_id = 3) const uint kMaxLightsPerCell = 64;
+const uint kMaxLightsPerCell = 64;
 const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
 
 layout(set = 0, binding = 5) readonly buffer ClusterGrid {
@@ -336,10 +336,9 @@ void main() {
     uint per_cell_count = cluster_grid.cells[cell];
     uint cell_index_base = kClusterCellCount + cell * kMaxLightsPerCell;
 
-    // Loop over the lights the cluster cull assigned to this cell. When the
-    // cluster grid is empty (no lights), the loop runs zero times and the
-    // picture is black. The loop here has the clamp from the old one, but
-    // the count a cell declares is never more than kMaxLightsPerCell.
+    // Loop over the lights the cluster cull assigned to this cell. The count
+    // starts at zero and the cull clears it before every dispatch, so a cell
+    // that got no lights this frame reads zero and the loop runs zero times.
     uint light_count = min(per_cell_count, kMaxLightsPerCell);
     for (uint j = 0u; j < light_count; ++j) {
         uint i = cluster_grid.cells[cell_index_base + j];
