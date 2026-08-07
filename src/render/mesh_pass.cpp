@@ -560,7 +560,16 @@ namespace engine::render {
             return false;
         }
 
-        const assets::Shader& shader = forms[0];
+        // By what the form declares rather than by where it sits. The base form
+        // is part 0 today, and a variant added to the sidecar later must not be
+        // able to move it. build_pipelines() picks the same way.
+        const assets::Shader* picked = pick_shader_variant(forms, {});
+        if (picked == nullptr) {
+            ENGINE_LOG_ERROR("{} has no form that was built with no defines.",
+                             kClusterCullSource);
+            return false;
+        }
+        const assets::Shader& shader = *picked;
         std::vector<gfx::DescriptorBinding> bindings;
         bindings.reserve(shader.bindings.size());
         for (const assets::ShaderBinding& source : shader.bindings) {

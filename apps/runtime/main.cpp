@@ -952,15 +952,17 @@ namespace {
             return;
         }
 
-        // Each pass wrote a pair, and the difference is what it cost.
+        // Each pass wrote a pair, and the difference is what it cost. The slot
+        // constant gives the index as well as the pair, so a pass added later
+        // cannot put the value in one place and read it from another.
         const double period = static_cast<double>(g_timestamp_period);
         const auto elapsed = [&ticks, period](std::uint32_t first) {
             return static_cast<double>(ticks[first + 1] - ticks[first]) * period;
         };
-        g_gpu_pass_ns[0] = elapsed(kShadowTimestamp);
-        g_gpu_pass_ns[1] = elapsed(kMeshTimestamp);
-        g_gpu_pass_ns[2] = elapsed(kTonemapTimestamp);
-        g_gpu_pass_ns[3] = elapsed(kCullTimestamp);
+        g_gpu_pass_ns[kShadowTimestamp / 2] = elapsed(kShadowTimestamp);
+        g_gpu_pass_ns[kMeshTimestamp / 2] = elapsed(kMeshTimestamp);
+        g_gpu_pass_ns[kTonemapTimestamp / 2] = elapsed(kTonemapTimestamp);
+        g_gpu_pass_ns[kCullTimestamp / 2] = elapsed(kCullTimestamp);
     }
 
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
@@ -1443,8 +1445,10 @@ namespace {
             // The cull is what says whether the cluster grid pays for itself.
             ENGINE_LOG_INFO("gpu passes | shadow {:.3f} ms | cull {:.3f} ms | mesh {:.3f} ms | "
                             "tonemap {:.3f} ms",
-                            g_gpu_pass_ns[0] * kToMilliseconds, g_gpu_pass_ns[3] * kToMilliseconds,
-                            g_gpu_pass_ns[1] * kToMilliseconds, g_gpu_pass_ns[2] * kToMilliseconds);
+                            g_gpu_pass_ns[kShadowTimestamp / 2] * kToMilliseconds,
+                            g_gpu_pass_ns[kCullTimestamp / 2] * kToMilliseconds,
+                            g_gpu_pass_ns[kMeshTimestamp / 2] * kToMilliseconds,
+                            g_gpu_pass_ns[kTonemapTimestamp / 2] * kToMilliseconds);
         }
 
         if (options.vsync) {

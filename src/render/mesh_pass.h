@@ -136,10 +136,19 @@ namespace engine::render {
     /**
      * @brief Draws the meshes a world names.
      *
+     * cull() runs first and outside any rendering scope, because it dispatches
+     * a compute shader and because it uploads the frame block that draw() binds.
+     *
      * @code
      * engine::render::MeshPass pass;
      * pass.create(device, engine_content, shadow.map());
-     * pass.draw(commands, world, game_content, view_projection, camera_position);
+     *
+     * const engine::render::ClusterView view{ .z_near = engine::kDefaultNearPlane,
+     *                                         .viewport_width = 1280.0F,
+     *                                         .viewport_height = 720.0F };
+     * pass.cull(commands, world, game_content, view_projection, camera_position, view);
+     * // Open the rendering scope here.
+     * pass.draw(commands, world, game_content, camera_position);
      * @endcode
      */
     class MeshPass {
