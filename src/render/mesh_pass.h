@@ -111,6 +111,29 @@ namespace engine::render {
     inline constexpr std::uint32_t kClusterCellStride = 1 + kMaxLightsPerCell;
 
     /**
+     * @brief How far in front of the camera the cluster slices reach, in meters.
+     *
+     * The slices grow exponentially from the near plane out to here, which puts
+     * most of them where a perspective camera puts most of its pixels. Past
+     * this distance every fragment falls in the last slice, and the cull
+     * stretches that slice to meet them, so a far light is never dropped.
+     *
+     * A larger value spends slices on distance that a scene may not use. This
+     * one covers the sandbox several times over.
+     */
+    inline constexpr float kClusterFar = 100.0F;
+
+    /// @brief What the cluster grid needs to know about the camera.
+    struct ClusterView {
+        /// @brief The near plane the projection was built with, in meters.
+        float z_near = kDefaultNearPlane;
+        /// @brief How wide the target is, in pixels.
+        float viewport_width = 0.0F;
+        /// @brief How tall the target is, in pixels.
+        float viewport_height = 0.0F;
+    };
+
+    /**
      * @brief Draws the meshes a world names.
      *
      * @code
@@ -238,21 +261,43 @@ namespace engine::render {
         [[nodiscard]] static PassDesc declare();
 
         /**
-         * @brief Prepares the frame, gathers lights, and dispatches cluster cull.
+         * @brief What the cull pass reads and writes.
          *
-         * Call this before draw() and outside a rendering scope. It advances the
-         * frame slot, uploads the frame block and the lights, and runs the
-         * compute shader that fills the per-cell light lists.
+         * The cull writes the cluster grid and the mesh pass reads it, which is
+         * the third producer and consumer pair in the frame and the first one
+         * over a buffer. It touches no image, so it declares no other resource.
+         *
+         * It is a declaration of its own rather than part of declare(), because
+         * a compute dispatch cannot happen inside a rendering scope and the two
+         * therefore run as two passes. See render_graph.h for kClusterGrid.
+         *
+         * @return The declaration.
+         */
+        [[nodiscard]] static PassDesc declare_cull();
+
+        /**
+         * @brief Gathers the lights and fills the cluster grid for this frame.
+         *
+         * It advances the frame slot, uploads the frame block and the light
+         * list, and dispatches the compute shader that writes a light list for
+         * every cell.
          *
          * @param commands The open command list.
          * @param world The world, for gathering lights.
          * @param content The game content tree.
          * @param view_projection The camera.
          * @param camera_position Where the camera stands, in world space.
+         * @param view The near plane and the viewport, which the grid needs to
+         * agree with the fragment shader about which cell a pixel is in.
+         *
+         * @warning Call this once for each frame, before draw(), and outside a
+         * rendering scope. A compute dispatch cannot happen inside one. draw()
+         * reports and draws nothing when this did not run, because the frame
+         * block it binds would be the one the frame before it wrote.
          */
         void cull(gfx::CommandList* commands, const scene::World& world,
                   const assets::Content& content, const Mat4& view_projection,
-                  const Vec3& camera_position);
+                  const Vec3& camera_position, const ClusterView& view);
 
         /**
          * @brief Draws every entity that has a MeshRenderer and a WorldTransform.
@@ -266,13 +311,15 @@ namespace engine::render {
          * @param world The world to read.
          * @param content The game content tree, which holds the meshes, the
          * materials, and the textures.
-         * @param view_projection The camera, without any model matrix.
          * @param camera_position Where the camera is, in world space. The
          * shading needs it for the view vector that every specular term uses.
+         *
+         * @warning cull() must have run for this frame. The camera reaches the
+         * shader through the frame block that cull() uploads, so this takes no
+         * view matrix of its own.
          */
         void draw(gfx::CommandList* commands, const scene::World& world,
-                  const assets::Content& content, const Mat4& view_projection,
-                  const Vec3& camera_position);
+                  const assets::Content& content, const Vec3& camera_position);
 
         /**
          * @brief The mesh cache, so another pass can draw the same geometry.
@@ -529,6 +576,20 @@ namespace engine::render {
         std::size_t draw_count_ = 0;
         /// @brief How many times the last draw() changed pipeline. See #105.
         std::size_t pipeline_switches_ = 0;
+
+        /**
+         * @brief Whether cull() has run for the frame draw() is about to record.
+         *
+         * cull() sets it and draw() clears it, so the pair has to alternate.
+         * Without it a caller that forgot cull() would draw with the frame slot
+         * and the frame block of the frame before, and the only sign would be a
+         * picture one frame stale.
+         */
+        bool culled_this_frame_ = false;
+
+        /// @brief Whether the warning above has been logged. It says the same
+        /// thing every frame once the order is wrong, and once is enough.
+        bool warned_missing_cull_ = false;
 
         /// @brief Reads and uploads the cluster cull compute shader, and builds its pipeline.
         [[nodiscard]] bool build_compute_pipeline(const assets::Content& content);

@@ -49,6 +49,11 @@ namespace engine::render {
          */
         constexpr std::size_t kInitialLightCapacity = 64;
 
+        /// How many cells one compute work group handles. Must match
+        /// local_size_x in cluster_cull.comp, which decides how many threads a
+        /// group runs and therefore how many groups the dispatch needs.
+        constexpr std::uint32_t kClusterCullGroupSize = 64;
+
         /**
          * The cluster cull uniform block, which must match ClusterParams in
          * cluster_cull.comp. It is std140 for the mat4.
@@ -56,6 +61,10 @@ namespace engine::render {
         struct ClusterUniforms {
             Mat4 inv_view_projection{ 1.0F };
             std::array<std::uint32_t, 4> grid_info{}; // x = light count
+            /// x is the near plane and y is how far the slices reach. The
+            /// fragment shader reads the same pair out of the frame block, so
+            /// this struct and FrameUniforms have to agree.
+            std::array<float, 4> depth_range{};
         };
 
         /**
@@ -84,6 +93,11 @@ namespace engine::render {
             /// use. w is padding, because std140 puts the block that follows on
             /// a 16-byte boundary anyway.
             std::array<std::uint32_t, 4> light_count{};
+            /// x is the near plane and y is how far the cluster slices reach.
+            /// zw is the viewport in pixels. The fragment shader needs all four
+            /// to work out which cell it is in, and the first two must match
+            /// what ClusterUniforms carried to the cull.
+            std::array<float, 4> cluster_view{};
             /// The irradiance of the environment. Each entry is one coefficient
             /// in rgb, and the fourth word is padding std140 would add anyway.
             std::array<std::array<float, 4>, assets::kIrradianceCoefficients> irradiance{};
@@ -251,10 +265,22 @@ namespace engine::render {
         // The shadow map, which the shadow pass wrote. This is the read that
         // makes the graph derive a real producer-consumer barrier rather than
         // only the two transitions a lone pass needs.
-        static constexpr std::array<ResourceRead, 1> kReads{ {
+        static constexpr std::array<ResourceRead, 2> kReads{ {
             { kShadowMap, gfx::ResourceState::ShaderRead },
+            // The per-cell light lists the cull pass wrote a moment ago. This
+            // is what turns the dispatch and the draws into an ordered pair.
+            { kClusterGrid, gfx::ResourceState::ShaderRead },
         } };
         return PassDesc{ .name = "mesh", .reads = kReads, .writes = kWrites };
+    }
+
+    PassDesc MeshPass::declare_cull() {
+        static constexpr std::array<ResourceWrite, 1> kWrites{ {
+            { kClusterGrid, gfx::ResourceState::ComputeWrite },
+        } };
+        // No reads. The light list it walks is a buffer the host wrote before
+        // the submit, and the submit itself makes a host write visible.
+        return PassDesc{ .name = "cluster cull", .reads = {}, .writes = kWrites };
     }
 
     void MeshPass::set_shadow_view(const std::array<Mat4, kCascadeCount>& light_view_projections,
@@ -592,33 +618,41 @@ namespace engine::render {
             return false;
         }
 
+        // Into a spare array first. A set that is half rebuilt is worse than
+        // the old one, because a failure part way through would leave some
+        // slots pointing at a layout that no longer exists. The same argument
+        // build_pipelines() makes about a half-reloaded shader.
+        std::array<gfx::DescriptorSetHandle, gfx::kFramesInFlight> rebuilt;
         for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
-            if (compute_sets_[i].valid()) {
-                gfx::destroy_descriptor_set(device_, compute_sets_[i]);
-                compute_sets_[i] = gfx::DescriptorSetHandle{};
-            }
-
             const std::array<gfx::DescriptorWrite, 3> compute_writes{ {
                 { .binding = 0,
                   .kind = gfx::DescriptorKind::UniformBuffer,
+                  .texture = {},
                   .buffer = cluster_uniforms_[i] },
                 { .binding = 1,
                   .kind = gfx::DescriptorKind::StorageBuffer,
+                  .texture = {},
                   .buffer = light_buffers_[i] },
                 { .binding = 2,
                   .kind = gfx::DescriptorKind::StorageBuffer,
+                  .texture = {},
                   .buffer = cluster_grids_[i] },
             } };
-            if (!gfx::succeeded(gfx::create_descriptor_set(device_, compute_pipeline_,
-                                                           0, compute_writes.data(),
-                                                           compute_writes.size(),
-                                                           &compute_sets_[i]))) {
-                ENGINE_LOG_ERROR("The compute descriptor set could not be built for frame {}.",
-                                 i);
+            if (!gfx::succeeded(gfx::create_descriptor_set(device_, compute_pipeline_, 0,
+                                                           compute_writes.data(),
+                                                           compute_writes.size(), &rebuilt[i]))) {
+                ENGINE_LOG_ERROR("The compute descriptor set could not be built for frame {}.", i);
+                for (gfx::DescriptorSetHandle& set : rebuilt) {
+                    gfx::destroy_descriptor_set(device_, set);
+                }
                 return false;
             }
         }
 
+        for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
+            gfx::destroy_descriptor_set(device_, compute_sets_[i]);
+            compute_sets_[i] = rebuilt[i];
+        }
         return true;
     }
 
@@ -626,9 +660,15 @@ namespace engine::render {
         const std::size_t size = kClusterCellCount * kClusterCellStride * sizeof(std::uint32_t);
         for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
             if (!cluster_grids_[i].valid()) {
+                // Device-local. The compute shader is the only writer and the
+                // fragment shader is the only reader, so the host has no reason
+                // to reach it. Left host-visible it would be system memory
+                // across PCIe on a discrete GPU, written whole every frame and
+                // then read for every pixel.
                 const gfx::BufferDesc desc{ .data = nullptr,
                                             .size = size,
-                                            .usage = gfx::BufferUsage::Storage };
+                                            .usage = gfx::BufferUsage::Storage,
+                                            .device_only = true };
                 if (!gfx::succeeded(gfx::create_buffer(device_, desc, &cluster_grids_[i]))) {
                     ENGINE_LOG_ERROR("A cluster grid buffer could not be allocated.");
                     return false;
@@ -1089,7 +1129,7 @@ namespace engine::render {
 
     void MeshPass::cull(gfx::CommandList* commands, const scene::World& world,
                         const assets::Content& content, const Mat4& view_projection,
-                        const Vec3& camera_position) {
+                        const Vec3& camera_position, const ClusterView& view) {
         if (!layout_pipeline().valid()) {
             return;
         }
@@ -1111,6 +1151,8 @@ namespace engine::render {
                                 shadow_splits_[3] },
             .cascade_biases = { shadow_biases_[0], shadow_biases_[1], shadow_biases_[2],
                                 shadow_biases_[3] },
+            .cluster_view = { view.z_near, kClusterFar, view.viewport_width,
+                              view.viewport_height },
         };
 
         for (std::size_t i = 0; i < assets::kIrradianceCoefficients; ++i) {
@@ -1139,22 +1181,10 @@ namespace engine::render {
             return;
         }
 
-        // Every cell count starts at zero, so a cell that got no lights this
-        // frame does not keep the ones from the last frame. The dispatch below
-        // overwrites every count, but the guard in mesh.frag reads the count
-        // before the dispatch lands, so the path without a dispatch needs this.
-        const std::size_t count_bytes = kClusterCellCount * sizeof(std::uint32_t);
-        const std::vector<std::uint32_t> zeros(kClusterCellCount, 0);
-        gfx::update_buffer(device_, cluster_grids_[frame_slot_], zeros.data(), count_bytes);
-
-        if (visible_lights_.empty()) {
-            return;
-        }
-
         ClusterUniforms cull_uniforms;
         cull_uniforms.inv_view_projection = glm::inverse(view_projection);
-        cull_uniforms.grid_info[0] =
-            static_cast<std::uint32_t>(visible_lights_.size());
+        cull_uniforms.grid_info[0] = static_cast<std::uint32_t>(visible_lights_.size());
+        cull_uniforms.depth_range = { view.z_near, kClusterFar, 0.0F, 0.0F };
         gfx::update_buffer(device_, cluster_uniforms_[frame_slot_], &cull_uniforms,
                            sizeof(cull_uniforms));
 
@@ -1162,23 +1192,41 @@ namespace engine::render {
         gfx::cmd_bind_compute_descriptor_set(commands, compute_pipeline_, 0,
                                              compute_sets_[frame_slot_]);
 
-        const std::uint32_t group_count = (kClusterCellCount + 63) / 64;
+        // Every frame, including one with no lights at all. The shader writes a
+        // count for every cell whatever the light count is, so a zero count is
+        // something it writes rather than something the host has to clear
+        // first. Skipping the dispatch is what would leave the frame before
+        // this one in the buffer.
+        const std::uint32_t group_count =
+            (kClusterCellCount + kClusterCullGroupSize - 1) / kClusterCullGroupSize;
         gfx::cmd_dispatch(commands, group_count, 1, 1);
 
-        // The mesh pass reads what the compute pass wrote. A buffer barrier
-        // orders the fragment reads against the compute writes.
-        gfx::cmd_buffer_barrier(commands, gfx::ResourceState::ComputeWrite,
-                                gfx::ResourceState::ShaderRead);
+        // No barrier here. The cull is a pass in the frame graph now, and the
+        // barrier between this write and the fragment reads falls out of
+        // derive_barriers() the way every other one does. See declare_cull().
+        culled_this_frame_ = true;
     }
 
     void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,
-                        const assets::Content& content, const Mat4& /*view_projection*/,
-                        const Vec3& camera_position) {
+                        const assets::Content& content, const Vec3& camera_position) {
         draw_count_ = 0;
         pipeline_switches_ = 0;
         if (!frame_sets_[frame_slot_].valid()) {
             return;
         }
+
+        // cull() owns the frame slot and the frame block, so drawing without it
+        // would bind the camera of the frame before this one. That shows up as
+        // a picture one frame stale, which is easy to miss and hard to place.
+        if (!culled_this_frame_) {
+            if (!warned_missing_cull_) {
+                ENGINE_LOG_WARN("MeshPass::draw ran without MeshPass::cull for this frame, so "
+                                "nothing drew. Call cull() first, outside a rendering scope.");
+                warned_missing_cull_ = true;
+            }
+            return;
+        }
+        culled_this_frame_ = false;
 
         // The frame set and the push constants are bound against this one
         // layout. Every form declares the same descriptors, so the layout is

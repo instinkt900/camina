@@ -90,9 +90,24 @@ namespace engine::render {
      */
     inline constexpr ResourceId kSceneColor{ 3 };
 
+    /**
+     * @brief The per-cell light list of the cluster grid. Resource 4.
+     *
+     * The first resource that is a buffer rather than an image. The cull pass
+     * writes it and the mesh pass reads it. Nothing about the derivation cares
+     * which kind it is, because a ResourceId is only an index and the states
+     * are the whole vocabulary. The caller issuing the barriers is what knows,
+     * and a buffer needs no layout.
+     *
+     * Its state carries across frames for the reason kSceneColor gives. The
+     * barrier that falls out at the top of a frame orders this frame's compute
+     * writes against the last frame's fragment reads.
+     */
+    inline constexpr ResourceId kClusterGrid{ 4 };
+
     /// @brief How many resources a frame declares, which is the length of the
     /// state list derive_barriers() takes.
-    inline constexpr std::uint32_t kFrameResourceCount = 4;
+    inline constexpr std::uint32_t kFrameResourceCount = 5;
 
     /**
      * @brief One resource a pass reads.

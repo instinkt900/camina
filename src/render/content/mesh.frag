@@ -50,6 +50,10 @@ layout(set = 0, binding = 0) uniform Frame {
     // x is how many lights are real. y is 1 when a directional light casts a
     // shadow. z is how many cascades are in use. w is padding.
     uvec4 light_count;
+    // x is the near plane the projection was built with and y is how far the
+    // cluster slices reach. zw is the viewport in pixels. C++ owns all four,
+    // and cluster_cull.comp reads the same first pair.
+    vec4 cluster_view;
     // The irradiance of the environment, as a second order spherical harmonic.
     // rgb is one coefficient and w is padding, because std140 puts an array
     // element on a sixteen byte boundary either way.
@@ -74,15 +78,14 @@ layout(set = 0, binding = 4) readonly buffer Lights {
 // list of light indices for the fragment shader to loop over. A directional
 // light goes in every cell because it has no position to test.
 //
-// Must match kClusterTileCountX and friends in mesh_pass.h.
-// Must match cluster_cull.comp for kZNear and kClusterFar.
+// The grid shape. Must match kClusterTileCountX and friends in mesh_pass.h,
+// and cluster_cull.comp declares the same four. The near plane and the reach
+// are not here, because they arrive in frame.cluster_view.
 const uint kClusterTileCountX = 16;
 const uint kClusterTileCountY = 12;
 const uint kClusterSliceCount = 16;
 const uint kMaxLightsPerCell = 64;
 const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
-const float kZNear = 0.1;
-const float kClusterFar = 100.0;
 
 layout(set = 0, binding = 5) readonly buffer ClusterGrid {
     uint cells[]; // flat: counts followed by light indices per cell
@@ -321,30 +324,31 @@ void main() {
     // read a map that was rendered for the first.
     bool shadowed_one = false;
 
-    // Reconstruct NDC from the interpolated world position so the cluster cell
-    // can be found with no viewport dimensions in the frame block.
-    vec4 clip = frame.view_projection * vec4(in_world, 1.0);
-    vec3 ndc = clip.xyz / clip.w;
+    // The tile comes from the window position the rasterizer already worked
+    // out. Multiplying the interpolated world position by the camera again
+    // would answer the same question at the cost of a matrix, and it would
+    // disagree by a tile at a boundary where the two rounded apart.
+    vec2 tile_uv = gl_FragCoord.xy / frame.cluster_view.zw;
+    uint tile_x = min(uint(tile_uv.x * float(kClusterTileCountX)), kClusterTileCountX - 1u);
+    uint tile_y = min(uint(tile_uv.y * float(kClusterTileCountY)), kClusterTileCountY - 1u);
 
-    uint tile_x = uint((ndc.x * 0.5 + 0.5) * float(kClusterTileCountX));
-    uint tile_y = uint((ndc.y * 0.5 + 0.5) * float(kClusterTileCountY));
-    tile_x = min(tile_x, kClusterTileCountX - 1u);
-    tile_y = min(tile_y, kClusterTileCountY - 1u);
-
-    // View distance, which the projection matrix puts in 1.0 / gl_FragCoord.w.
-    // The cluster cull slices exponentially in this measure, matching the NDC z
-    // the projection produces, so both sides agree on which cell a fragment is in.
+    // View distance, which the projection puts in 1.0 / gl_FragCoord.w. The
+    // cull slices exponentially in this measure, so both sides agree on the
+    // cell. A fragment past the reach clamps into the last slice, which the
+    // cull extends to meet it.
+    float z_near = frame.cluster_view.x;
+    float cluster_far = frame.cluster_view.y;
     float view_depth = 1.0 / gl_FragCoord.w;
-    float slice_f = log(view_depth / kZNear) / log(kClusterFar / kZNear) * float(kClusterSliceCount);
+    float slice_f = log(view_depth / z_near) / log(cluster_far / z_near) * float(kClusterSliceCount);
     uint slice = uint(clamp(slice_f, 0.0, float(kClusterSliceCount) - 1.0));
 
     uint cell = (slice * kClusterTileCountY + tile_y) * kClusterTileCountX + tile_x;
     uint per_cell_count = cluster_grid.cells[cell];
     uint cell_index_base = kClusterCellCount + cell * kMaxLightsPerCell;
 
-    // Loop over the lights the cluster cull assigned to this cell. The count
-    // starts at zero and the cull clears it before every dispatch, so a cell
-    // that got no lights this frame reads zero and the loop runs zero times.
+    // Loop over the lights the cull assigned to this cell. The cull dispatches
+    // on every frame and writes a count for every cell, including a zero, so
+    // this never reads what the frame before it wrote.
     uint light_count = min(per_cell_count, kMaxLightsPerCell);
     for (uint j = 0u; j < light_count; ++j) {
         uint i = cluster_grid.cells[cell_index_base + j];

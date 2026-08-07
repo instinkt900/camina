@@ -64,11 +64,12 @@ namespace engine::render {
         /**
          * Where the cascades start, in meters in front of the camera.
          *
-         * This is the camera's own near plane. It has to match `kNearPlane` in
-         * the runtime, because the split turns a distance into a clip depth with
-         * it and a mismatch would slide every cascade boundary.
+         * This is the camera's own near plane, so it reads the one constant
+         * rather than repeating the number. The split turns a distance into a
+         * clip depth with it, and a value that disagreed with the projection
+         * would slide every cascade boundary.
          */
-        constexpr float kNearDistance = 0.1F;
+        constexpr float kNearDistance = kDefaultNearPlane;
 
         /// A frustum slice is a box, and a box has eight corners.
         constexpr std::size_t kFrustumCorners = 8;

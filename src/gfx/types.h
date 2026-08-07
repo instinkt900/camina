@@ -79,7 +79,8 @@ namespace engine::gfx {
          * count that is a number rather than a constant.
          *
          * Like Uniform, this lives in host-visible memory and stays mapped, so
-         * update_buffer() writes it. See DESIGN.md section 9 and issue #98.
+         * update_buffer() writes it. Set BufferDesc::device_only when a shader
+         * is the only writer. See DESIGN.md section 9 and issue #98.
          */
         Storage,
     };
@@ -94,6 +95,23 @@ namespace engine::gfx {
         const void* data = nullptr;              ///< The bytes to upload. Required.
         std::size_t size = 0;                    ///< How many bytes to upload.
         BufferUsage usage = BufferUsage::Vertex; ///< How the buffer will be bound.
+        /**
+         * @brief Whether a shader is the only thing that writes this buffer.
+         *
+         * A uniform or a storage buffer is host-visible and mapped by default,
+         * because the common case is a block the CPU rewrites every frame. That
+         * memory is the wrong home for a buffer one shader fills and another
+         * reads. On a discrete GPU it is system memory across PCIe, and the
+         * write-combined kind is slow to read back.
+         *
+         * Set this and the buffer lands in device-local memory instead. @c data
+         * may then be null, which leaves the contents undefined until a shader
+         * writes them.
+         *
+         * @warning update_buffer() cannot write one of these, and it says so.
+         * The memory is not mapped, so a shader is the only way to fill it.
+         */
+        bool device_only = false;
     };
 
     /// @brief How a sampler picks a color between texel centers.
