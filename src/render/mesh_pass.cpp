@@ -1158,7 +1158,7 @@ namespace engine::render {
 
         gfx::cmd_bind_compute_pipeline(commands, compute_pipeline_);
         gfx::cmd_bind_compute_descriptor_set(commands, compute_pipeline_, 0,
-                                              compute_sets_[frame_slot_]);
+                                             compute_sets_[frame_slot_]);
 
         const std::uint32_t group_count = (kClusterCellCount + 63) / 64;
         gfx::cmd_dispatch(commands, group_count, 1, 1);
