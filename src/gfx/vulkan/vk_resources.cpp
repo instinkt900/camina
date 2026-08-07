@@ -633,6 +633,60 @@ namespace engine::gfx {
             return Result::Success;
         }
 
+        /**
+         * Builds a device-local buffer with no initial contents.
+         *
+         * This is for a buffer a shader fills and another shader reads, which
+         * has no reason to sit in memory the host can reach. The contents are
+         * undefined until something writes them, so the first pass to touch it
+         * must write before it reads.
+         *
+         * TRANSFER_DST is there so a later clear or copy needs no new
+         * allocation path.
+         */
+        Result create_device_buffer(Device& device, const BufferDesc& desc,
+                                    BufferHandle* out_buffer) {
+            VkBufferCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            info.size = desc.size;
+            info.usage = to_vk_buffer_usage(desc.usage) | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+            VmaAllocationCreateInfo allocation{};
+            allocation.usage = VMA_MEMORY_USAGE_AUTO;
+            allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation buffer_allocation = VK_NULL_HANDLE;
+            const VkResult created = vmaCreateBuffer(device.allocator, &info, &allocation, &buffer,
+                                                     &buffer_allocation, nullptr);
+            if (created != VK_SUCCESS) {
+                ENGINE_LOG_ERROR("A device-local buffer could not be allocated: {}",
+                                 vk::vk_result_name(created));
+                return vk::to_result(created);
+            }
+
+            std::uint32_t index = 0;
+            if (!device.free_buffers.empty()) {
+                index = device.free_buffers.back();
+                device.free_buffers.pop_back();
+            } else {
+                index = static_cast<std::uint32_t>(device.buffers.size());
+                device.buffers.emplace_back();
+            }
+
+            BufferEntry& entry = device.buffers[index];
+            entry.buffer = buffer;
+            entry.allocation = buffer_allocation;
+            // Left null on purpose. update_buffer() reads this to tell a mapped
+            // buffer from one it cannot write, and it reports rather than
+            // writing through a pointer that is not there.
+            entry.mapped = nullptr;
+            entry.size = desc.size;
+            entry.alive = true;
+            *out_buffer = BufferHandle::make(index, entry.generation);
+            return Result::Success;
+        }
+
     } // namespace
 
     Result create_buffer(Device* device, const BufferDesc& desc, BufferHandle* out_buffer) {
@@ -645,8 +699,9 @@ namespace engine::gfx {
             return Result::ErrorInit;
         }
         const bool mapped_kind =
-            desc.usage == BufferUsage::Uniform || desc.usage == BufferUsage::Storage;
-        if (desc.data == nullptr && !mapped_kind) {
+            (desc.usage == BufferUsage::Uniform || desc.usage == BufferUsage::Storage) &&
+            !desc.device_only;
+        if (desc.data == nullptr && !mapped_kind && !desc.device_only) {
             ENGINE_LOG_ERROR("create_buffer needs data for a vertex or an index buffer.");
             return Result::ErrorInit;
         }
@@ -657,6 +712,12 @@ namespace engine::gfx {
         // on every frame that moved a light.
         if (mapped_kind) {
             return create_mapped_buffer(*device, desc, out_buffer);
+        }
+
+        // Device-local and empty. A shader fills it, so there is nothing to
+        // stage and no reason for the host to reach it.
+        if (desc.data == nullptr) {
+            return create_device_buffer(*device, desc, out_buffer);
         }
 
         VkBuffer staging = VK_NULL_HANDLE;

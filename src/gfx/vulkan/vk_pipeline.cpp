@@ -199,11 +199,11 @@ namespace engine::gfx {
          * layout. A set the shader skips would shift every later set, so this
          * reports rather than building a layout the module does not match.
          */
-        Result create_set_layouts(Device& device, const GraphicsPipelineDesc& desc,
-                                  std::vector<VkDescriptorSetLayout>& out) {
+        Result create_set_layouts(Device& device, const DescriptorBinding* bindings,
+                                  std::size_t count, std::vector<VkDescriptorSetLayout>& out) {
             std::size_t at = 0;
-            while (at < desc.binding_count) {
-                const std::uint32_t set = desc.bindings[at].set;
+            while (at < count) {
+                const std::uint32_t set = bindings[at].set;
                 if (set != out.size()) {
                     ENGINE_LOG_ERROR("The shader declares set {} with set {} missing. Vulkan "
                                      "numbers set layouts by position, so no set may be skipped.",
@@ -211,23 +211,23 @@ namespace engine::gfx {
                     return Result::ErrorInit;
                 }
 
-                std::vector<VkDescriptorSetLayoutBinding> bindings;
-                while (at < desc.binding_count && desc.bindings[at].set == set) {
+                std::vector<VkDescriptorSetLayoutBinding> vk_bindings;
+                while (at < count && bindings[at].set == set) {
                     // Rule 4.2 passes a pointer and a count, so index it directly.
-                    const DescriptorBinding& source = desc.bindings[at];
+                    const DescriptorBinding& source = bindings[at];
                     VkDescriptorSetLayoutBinding binding{};
                     binding.binding = source.binding;
                     binding.descriptorType = to_vk_descriptor_type(source.kind);
                     binding.descriptorCount = source.count;
                     binding.stageFlags = to_vk_stage_flags(source.stages);
-                    bindings.push_back(binding);
+                    vk_bindings.push_back(binding);
                     ++at;
                 }
 
                 VkDescriptorSetLayoutCreateInfo info{};
                 info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                info.bindingCount = static_cast<std::uint32_t>(bindings.size());
-                info.pBindings = bindings.data();
+                info.bindingCount = static_cast<std::uint32_t>(vk_bindings.size());
+                info.pBindings = vk_bindings.data();
 
                 VkDescriptorSetLayout layout = VK_NULL_HANDLE;
                 ENGINE_VK_TRY(
@@ -238,33 +238,28 @@ namespace engine::gfx {
         }
 
         /**
-         * The camera matrix travels as a push constant, and the descriptor sets
-         * come from the shader. Both stay optional.
-         *
-         * A texture descriptor set is allocated against device.texture_layout
-         * rather than against the layout built here. Vulkan calls two set
-         * layouts compatible when their bindings match, and a shader that reads
-         * one combined image sampler at set 0 binding 0 reflects to exactly that
-         * shape, so the set binds correctly. M5.2 gives a material its own set
-         * and this stops mattering.
+         * Builds the pipeline layout from the set layouts, the push constant
+         * size, and the stages. It works for both graphics and compute pipelines.
          */
-        Result create_layout(Device& device, const GraphicsPipelineDesc& desc,
+        Result create_layout(Device& device, const DescriptorBinding* bindings,
+                             std::size_t count, std::uint32_t push_constant_size,
+                             std::uint32_t push_constant_stages,
                              std::vector<VkDescriptorSetLayout>& set_layouts,
                              VkPipelineLayout* out) {
-            const Result made = create_set_layouts(device, desc, set_layouts);
+            const Result made = create_set_layouts(device, bindings, count, set_layouts);
             if (!succeeded(made)) {
                 return made;
             }
 
             VkPushConstantRange push{};
-            push.stageFlags = to_vk_stage_flags(desc.push_constant_stages);
-            push.size = desc.push_constant_size;
+            push.stageFlags = to_vk_stage_flags(push_constant_stages);
+            push.size = push_constant_size;
 
             VkPipelineLayoutCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             info.setLayoutCount = static_cast<std::uint32_t>(set_layouts.size());
             info.pSetLayouts = set_layouts.data();
-            if (desc.push_constant_size > 0) {
+            if (push_constant_size > 0) {
                 info.pushConstantRangeCount = 1;
                 info.pPushConstantRanges = &push;
             }
@@ -362,7 +357,9 @@ namespace engine::gfx {
         VkPipelineLayout layout = VK_NULL_HANDLE;
         std::vector<VkDescriptorSetLayout> set_layouts;
         if (succeeded(result)) {
-            result = create_layout(*device, desc, set_layouts, &layout);
+            result = create_layout(*device, desc.bindings, desc.binding_count,
+                                   desc.push_constant_size, desc.push_constant_stages, set_layouts,
+                                   &layout);
         }
 
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -557,6 +554,128 @@ namespace engine::gfx {
                   std::uint32_t first_instance) {
         ENGINE_CHECK(commands != nullptr, "cmd_draw needs a command list.");
         vkCmdDraw(commands->buffer, vertex_count, instance_count, first_vertex, first_instance);
+    }
+
+    Result create_compute_pipeline(Device* device, const ComputePipelineDesc& desc,
+                                   PipelineHandle* out_pipeline) {
+        ENGINE_CHECK(device != nullptr, "create_compute_pipeline needs a device.");
+        ENGINE_CHECK(out_pipeline != nullptr,
+                     "create_compute_pipeline needs somewhere to put the handle.");
+        *out_pipeline = PipelineHandle{};
+
+        if (!has_module(desc.compute)) {
+            ENGINE_LOG_ERROR("A compute pipeline needs a compute module.");
+            return Result::ErrorInit;
+        }
+
+        VkShaderModule compute = VK_NULL_HANDLE;
+        Result result = create_module(*device, desc.compute, &compute);
+
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSetLayout> set_layouts;
+        if (succeeded(result)) {
+            result = create_layout(*device, desc.bindings, desc.binding_count,
+                                   desc.push_constant_size, desc.push_constant_stages, set_layouts,
+                                   &layout);
+        }
+
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        if (succeeded(result)) {
+            VkComputePipelineCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            info.stage.module = compute;
+            info.stage.pName = "main";
+            info.layout = layout;
+
+            const VkResult created =
+                vkCreateComputePipelines(device->device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+            if (created != VK_SUCCESS) {
+                ENGINE_LOG_ERROR("vkCreateComputePipelines failed with {} ({})",
+                                 vk::vk_result_name(created), static_cast<std::int32_t>(created));
+                result = vk::to_result(created);
+            }
+        }
+
+        if (compute != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(device->device, compute, nullptr);
+        }
+
+        if (!succeeded(result)) {
+            if (layout != VK_NULL_HANDLE) {
+                vkDestroyPipelineLayout(device->device, layout, nullptr);
+            }
+            destroy_set_layouts(*device, set_layouts);
+            return result;
+        }
+
+        *out_pipeline = claim_slot(*device, pipeline, layout, std::move(set_layouts),
+                                   desc.push_constant_size,
+                                   to_vk_stage_flags(desc.push_constant_stages));
+        return Result::Success;
+    }
+
+    void cmd_bind_compute_pipeline(CommandList* commands, PipelineHandle pipeline) {
+        ENGINE_CHECK(commands != nullptr, "cmd_bind_compute_pipeline needs a command list.");
+        ENGINE_CHECK(commands->owner != nullptr, "The command list has no device.");
+
+        const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("cmd_bind_compute_pipeline received a stale or null pipeline handle.");
+            return;
+        }
+
+        vkCmdBindPipeline(commands->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, entry->pipeline);
+    }
+
+    void cmd_bind_compute_descriptor_set(CommandList* commands, PipelineHandle pipeline,
+                                         std::uint32_t set_index, DescriptorSetHandle set) {
+        ENGINE_CHECK(commands != nullptr,
+                     "cmd_bind_compute_descriptor_set needs a command list.");
+        ENGINE_CHECK(commands->owner != nullptr, "The command list has no device.");
+
+        const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
+        const DescriptorSetEntry* bound = vk::resolve_descriptor_set(*commands->owner, set);
+        if (entry == nullptr || bound == nullptr) {
+            ENGINE_LOG_ERROR(
+                "cmd_bind_compute_descriptor_set received a stale or null handle.");
+            return;
+        }
+
+        vkCmdBindDescriptorSets(commands->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, entry->layout,
+                                set_index, 1, &bound->set, 0, nullptr);
+    }
+
+    void cmd_dispatch(CommandList* commands, std::uint32_t group_count_x,
+                      std::uint32_t group_count_y, std::uint32_t group_count_z) {
+        ENGINE_CHECK(commands != nullptr, "cmd_dispatch needs a command list.");
+        vkCmdDispatch(commands->buffer, group_count_x, group_count_y, group_count_z);
+    }
+
+    void cmd_buffer_barrier(CommandList* commands, ResourceState before, ResourceState after) {
+        ENGINE_CHECK(commands != nullptr, "cmd_buffer_barrier needs a command list.");
+
+        const vk::StateMapping source = vk::map_state(before);
+        const vk::StateMapping destination = vk::map_state(after);
+
+        // Undefined means no prior access is worth waiting on, the way it works
+        // for images. The destination masks still have to name the real
+        // consumer, or the barrier orders nothing.
+        const bool acquire = before == ResourceState::Undefined;
+
+        VkMemoryBarrier2 barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        barrier.srcStageMask = acquire ? VK_PIPELINE_STAGE_2_NONE : source.stage;
+        barrier.srcAccessMask = acquire ? VK_ACCESS_2_NONE : source.access;
+        barrier.dstStageMask = destination.stage;
+        barrier.dstAccessMask = destination.access;
+
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(commands->buffer, &dep);
     }
 
 } // namespace engine::gfx

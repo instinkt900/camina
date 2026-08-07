@@ -329,10 +329,13 @@ namespace engine::gfx {
                 // Every stage that can sample, because the state does not say
                 // which one will. Naming the three is still far short of
                 // ALL_COMMANDS, and a pass that knows better can gain a state.
+                // The storage read bit covers a readonly buffer a fragment
+                // shader indexes.
                 return { VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
             case ResourceState::ComputeWrite:
                 return { VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

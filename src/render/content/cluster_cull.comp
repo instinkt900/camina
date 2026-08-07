@@ -1,0 +1,148 @@
+#version 450
+
+// Divides the frustum into tiles and depth slices, and writes a short list of
+// light indices for each cell. mesh.frag then reads the list for the cell the
+// fragment is in, which gives each pixel far fewer lights to loop over.
+//
+// One work item for each cell, so the dispatch size is the cell count and each
+// thread works alone. The thread tests every point light against its cell and
+// writes the ones that intersect. Directional lights go in every cell because
+// they have no position to test against.
+
+// The grid shape. Must match kClusterTileCountX and friends in mesh_pass.h,
+// which is where the dispatch size and the buffer size come from.
+const uint kTileCountX = 16u;
+const uint kTileCountY = 12u;
+const uint kSliceCount = 16u;
+const uint kMaxLightsPerCell = 64u;
+
+const uint kCellCount = kTileCountX * kTileCountY * kSliceCount;
+
+// The smallest NDC depth a cell corner may unproject from. Reverse-Z puts
+// infinity at zero, and a corner there unprojects with a w of zero, which
+// gives an infinity or a NaN rather than a position. This bounds the last
+// slice at kZNear divided by it, which is 100 km for a near plane of 0.1 m.
+// That is unreachable in a scene and it keeps the arithmetic finite.
+const float kMinNdcZ = 1e-6;
+
+// The light list the CPU uploaded. Must match GpuLight in mesh_pass.h.
+struct Light {
+    vec4 position; // xyz, w=0 for directional and w=1 for point
+    vec4 color;    // rgb = color * intensity, a = range
+};
+
+layout(set = 0, binding = 0) uniform ClusterParams {
+    mat4 inv_view_projection;
+    uvec4 grid_info;      // x = light count, yzw = unused
+    // x = the near plane the projection was built with, y = how far the
+    // exponential slices reach. Both come from C++ so that one place owns
+    // them. mesh.frag reads the same pair out of the frame block.
+    vec4 depth_range;
+} params;
+
+layout(set = 0, binding = 1) readonly buffer Lights {
+    Light lights[];
+} light_buffer;
+
+// Each cell: a count and up to kMaxLightsPerCell light indices, stored flat.
+// cells[cell] is the count, and cells[kCellCount + cell * kMaxLightsPerCell + idx]
+// is the idx-th light index for that cell.
+layout(set = 0, binding = 2) buffer ClusterGrid {
+    uint cells[];
+} grid;
+
+// Whether a sphere overlaps an axis-aligned bounding box.
+bool sphere_overlaps_aabb(vec3 center, float radius, vec3 bmin, vec3 bmax) {
+    float sq_dist = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        float v = center[i];
+        if (v < bmin[i]) {
+            sq_dist += (bmin[i] - v) * (bmin[i] - v);
+        } else if (v > bmax[i]) {
+            sq_dist += (v - bmax[i]) * (v - bmax[i]);
+        }
+    }
+    return sq_dist <= radius * radius;
+}
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+void main() {
+    uint cell = gl_GlobalInvocationID.x;
+    if (cell >= kCellCount) {
+        return;
+    }
+
+    uint tile_x = cell % kTileCountX;
+    uint tile_y = (cell / kTileCountX) % kTileCountY;
+    uint slice = cell / (kTileCountX * kTileCountY);
+
+    // NDC bounds for this cell. Vulkan NDC: x in [-1,1], y in [-1,1], z in [0,1].
+    // Reverse-Z: z=1 at near, z=0 at far.
+    float ndc_min_x = (2.0 * float(tile_x) / float(kTileCountX)) - 1.0;
+    float ndc_max_x = (2.0 * float(tile_x + 1u) / float(kTileCountX)) - 1.0;
+    float ndc_min_y = (2.0 * float(tile_y) / float(kTileCountY)) - 1.0;
+    float ndc_max_y = (2.0 * float(tile_y + 1u) / float(kTileCountY)) - 1.0;
+
+    // Exponential slices in view distance, between the near plane and the
+    // distance the grid reaches. NDC depth follows reverse-Z, so z = near / d
+    // for a distance d, and a nearer surface has the larger z.
+    float z_near = params.depth_range.x;
+    float cluster_far = params.depth_range.y;
+    float log_factor = log(cluster_far / z_near);
+    float slice_near = z_near * exp(float(slice) / float(kSliceCount) * log_factor);
+    float slice_far = z_near * exp(float(slice + 1u) / float(kSliceCount) * log_factor);
+
+    // The last slice runs to kMinNdcZ rather than stopping at cluster_far.
+    // mesh.frag clamps every fragment past that distance into this slice, so a
+    // cell that stopped there would leave a far light out of the list and the
+    // surface unlit. Reaching on costs nothing, because the cull stays
+    // conservative when a cell is larger than it needs to be.
+    float ndc_min_z = (slice + 1u == kSliceCount) ? kMinNdcZ : z_near / slice_far;
+    float ndc_max_z = min(z_near / slice_near, 1.0);
+
+    // Unproject the 8 corners to world space and take the AABB.
+    vec3 corners[8];
+    for (uint i = 0u; i < 8u; ++i) {
+        float x = (i & 1u) != 0u ? ndc_max_x : ndc_min_x;
+        float y = (i & 2u) != 0u ? ndc_max_y : ndc_min_y;
+        float z = (i & 4u) != 0u ? ndc_max_z : ndc_min_z;
+        vec4 world = params.inv_view_projection * vec4(x, y, z, 1.0);
+        corners[i] = world.xyz / world.w;
+    }
+
+    vec3 aabb_min = corners[0];
+    vec3 aabb_max = corners[0];
+    for (uint i = 1u; i < 8u; ++i) {
+        aabb_min = min(aabb_min, corners[i]);
+        aabb_max = max(aabb_max, corners[i]);
+    }
+
+    // Write light indices for this cell.
+    uint output_count = 0u;
+    uint base_index = kCellCount + cell * kMaxLightsPerCell;
+
+    // Directional lights go in every cell because they have no position to
+    // test. They go in first, so a cell crowded with point lights never drops
+    // the key light and the shadow it casts.
+    for (uint i = 0u; i < params.grid_info.x && output_count < kMaxLightsPerCell; ++i) {
+        if (light_buffer.lights[i].position.w < 0.5) {
+            grid.cells[base_index + output_count] = i;
+            ++output_count;
+        }
+    }
+
+    // Then the point lights whose range sphere reaches this cell.
+    for (uint i = 0u; i < params.grid_info.x && output_count < kMaxLightsPerCell; ++i) {
+        Light l = light_buffer.lights[i];
+        if (l.position.w < 0.5) {
+            continue;
+        }
+        float range = max(l.color.a, 1e-4);
+        if (sphere_overlaps_aabb(l.position.xyz, range, aabb_min, aabb_max)) {
+            grid.cells[base_index + output_count] = i;
+            ++output_count;
+        }
+    }
+
+    grid.cells[cell] = output_count;
+}
