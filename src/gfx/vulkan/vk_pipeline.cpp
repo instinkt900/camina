@@ -633,6 +633,7 @@ namespace engine::gfx {
                                          std::uint32_t set_index, DescriptorSetHandle set) {
         ENGINE_CHECK(commands != nullptr,
                      "cmd_bind_compute_descriptor_set needs a command list.");
+        ENGINE_CHECK(commands->owner != nullptr, "The command list has no device.");
 
         const PipelineEntry* entry = vk::resolve_pipeline(*commands->owner, pipeline);
         const DescriptorSetEntry* bound = vk::resolve_descriptor_set(*commands->owner, set);

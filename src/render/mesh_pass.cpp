@@ -1140,10 +1140,12 @@ namespace engine::render {
         }
 
         // Every cell count starts at zero, so a cell that got no lights this
-        // frame does not keep the ones from the last frame. Clearing the count
-        // words costs a single small write.
-        const std::uint32_t zero = 0;
-        gfx::update_buffer(device_, cluster_grids_[frame_slot_], &zero, sizeof(zero));
+        // frame does not keep the ones from the last frame. The dispatch below
+        // overwrites every count, but the guard in mesh.frag reads the count
+        // before the dispatch lands, so the path without a dispatch needs this.
+        const std::size_t count_bytes = kClusterCellCount * sizeof(std::uint32_t);
+        const std::vector<std::uint32_t> zeros(kClusterCellCount, 0);
+        gfx::update_buffer(device_, cluster_grids_[frame_slot_], zeros.data(), count_bytes);
 
         if (visible_lights_.empty()) {
             return;

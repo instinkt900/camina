@@ -75,11 +75,14 @@ layout(set = 0, binding = 4) readonly buffer Lights {
 // light goes in every cell because it has no position to test.
 //
 // Must match kClusterTileCountX and friends in mesh_pass.h.
-layout(constant_id = 0) const uint kClusterTileCountX = 16;
-layout(constant_id = 1) const uint kClusterTileCountY = 12;
-layout(constant_id = 2) const uint kClusterSliceCount = 16;
+// Must match cluster_cull.comp for kZNear and kClusterFar.
+const uint kClusterTileCountX = 16;
+const uint kClusterTileCountY = 12;
+const uint kClusterSliceCount = 16;
 const uint kMaxLightsPerCell = 64;
 const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
+const float kZNear = 0.1;
+const float kClusterFar = 100.0;
 
 layout(set = 0, binding = 5) readonly buffer ClusterGrid {
     uint cells[]; // flat: counts followed by light indices per cell
@@ -328,9 +331,12 @@ void main() {
     tile_x = min(tile_x, kClusterTileCountX - 1u);
     tile_y = min(tile_y, kClusterTileCountY - 1u);
 
-    // gl_FragCoord.z is NDC depth, from 1 at near to 0 at far under reverse-Z.
-    uint slice = uint((1.0 - gl_FragCoord.z) * float(kClusterSliceCount));
-    slice = min(slice, kClusterSliceCount - 1u);
+    // View distance, which the projection matrix puts in 1.0 / gl_FragCoord.w.
+    // The cluster cull slices exponentially in this measure, matching the NDC z
+    // the projection produces, so both sides agree on which cell a fragment is in.
+    float view_depth = 1.0 / gl_FragCoord.w;
+    float slice_f = log(view_depth / kZNear) / log(kClusterFar / kZNear) * float(kClusterSliceCount);
+    uint slice = uint(clamp(slice_f, 0.0, float(kClusterSliceCount) - 1.0));
 
     uint cell = (slice * kClusterTileCountY + tile_y) * kClusterTileCountX + tile_x;
     uint per_cell_count = cluster_grid.cells[cell];

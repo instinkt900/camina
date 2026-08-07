@@ -15,6 +15,13 @@ const uint kTileCountY = 12u;
 const uint kSliceCount = 16u;
 const uint kMaxLightsPerCell = 64u;
 
+// The near plane the projection was built with, and the furthest distance the
+// cluster grid reaches. Exponential slices between them give far more slices
+// near the camera, where geometry is dense, and far fewer in the distance.
+// Must match mesh.frag and the call site of perspective_reverse_z.
+const float kZNear = 0.1;
+const float kClusterFar = 100.0;
+
 const uint kCellCount = kTileCountX * kTileCountY * kSliceCount;
 
 // The light list the CPU uploaded. Must match GpuLight in mesh_pass.h.
@@ -71,9 +78,13 @@ void main() {
     float ndc_min_y = (2.0 * float(tile_y) / float(kTileCountY)) - 1.0;
     float ndc_max_y = (2.0 * float(tile_y + 1u) / float(kTileCountY)) - 1.0;
 
-    // Linear slices in NDC depth.
-    float ndc_min_z = 1.0 - (float(slice + 1u) / float(kSliceCount));
-    float ndc_max_z = 1.0 - (float(slice) / float(kSliceCount));
+    // Exponential slices in view distance, between kZNear and kClusterFar.
+    // NDC depth follows reverse-Z: z = kZNear / d for distance d.
+    float log_factor = log(kClusterFar / kZNear);
+    float slice_near = kZNear * exp(float(slice) / float(kSliceCount) * log_factor);
+    float slice_far  = kZNear * exp(float(slice + 1u) / float(kSliceCount) * log_factor);
+    float ndc_min_z = kZNear / slice_far;  // far end, smaller NDC z
+    float ndc_max_z = kZNear / slice_near; // near end, larger NDC z, clamped to 1
 
     // Unproject the 8 corners to world space and take the AABB.
     vec3 corners[8];
