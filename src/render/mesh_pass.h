@@ -33,6 +33,7 @@
 #include "render/texture_cache.h"
 #include "scene/world.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -105,21 +106,81 @@ namespace engine::render {
     inline constexpr std::uint32_t kClusterCellCount =
         kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
     /**
-     * @brief How many light indices one cell holds at most.
-     *
-     * A cell that overlaps more lights than this drops the rest with no
-     * message, which is issue #175.
+     * @brief How many light indices one cell holds before the grid grows.
      *
      * The number is measured rather than chosen. A room of 837 visible point
      * lights of 1.8 m range renders identically to a shader that loops over
      * every light at this value. At 64 the same scene lost light on 36 percent
      * of the frame, by up to 228 of 255 on a channel. Raising it from 64 cost
      * 2 ms of a 100 ms saving.
+     *
+     * It is the floor rather than the ceiling. The grid grows to hold every
+     * visible light in every cell, so a cell overflows only past
+     * kMaxLightsPerCell. See cluster_cell_capacity_for().
      */
-    inline constexpr std::uint32_t kMaxLightsPerCell = 256;
+    inline constexpr std::uint32_t kMinLightsPerCell = 256;
 
-    /// @brief How many uint32 values one cell of the cluster grid occupies.
-    inline constexpr std::uint32_t kClusterCellStride = 1 + kMaxLightsPerCell;
+    /**
+     * @brief The ceiling on how many light indices one cell holds.
+     *
+     * The grid is one count and this many indices for each of
+     * kClusterCellCount cells, and there is one grid for each frame in
+     * flight. So this is a memory budget written as a light count. At 2048 the
+     * grid is 25 MiB, which is 50 MiB over two frames in flight.
+     *
+     * A scene with more visible lights than this can still overflow a cell, and
+     * MeshPass::cluster_may_drop() reports when that becomes possible. Removing
+     * the ceiling needs a compacted index list, which trades a second pass over
+     * the lights for memory that fits the scene. See issue #175.
+     */
+    inline constexpr std::uint32_t kMaxLightsPerCell = 2048;
+
+    /**
+     * @brief How many light indices each cell needs to hold @p light_count.
+     *
+     * The capacity doubles from kMinLightsPerCell until one cell can hold
+     * every visible light, and it stops at kMaxLightsPerCell. Doubling is
+     * what keeps a scene that grows one light at a time from reallocating the
+     * grid once for each, and it is the rule the light buffer already follows.
+     *
+     * A cell that can hold every visible light cannot drop one, whatever the
+     * camera does. That is the whole guarantee, and it replaces counting a drop
+     * that has already happened.
+     *
+     * @param light_count How many lights the frame can see.
+     * @param ceiling The most a cell may hold. Lower than kMinLightsPerCell is
+     * allowed and wins, which is how a run forces the overflow to measure it.
+     * @return The per-cell capacity, at most @p ceiling.
+     */
+    [[nodiscard]] std::uint32_t cluster_cell_capacity_for(
+        std::size_t light_count, std::uint32_t ceiling = kMaxLightsPerCell);
+
+    /**
+     * @brief What the per-cell capacity becomes on a frame with @p light_count.
+     *
+     * cluster_cell_capacity_for() says what a frame needs. This says what to
+     * use, which is never below what the grid already holds. A scene whose light
+     * count crosses a power of two every frame would otherwise wait for the
+     * device and reallocate the grid on each one.
+     *
+     * @p ceiling still wins over @p current, so lowering it takes effect rather
+     * than being held off by a grid that is already larger.
+     *
+     * @param current How many indices a cell holds now.
+     * @param light_count How many lights the frame can see.
+     * @param ceiling The most a cell may hold.
+     * @return The capacity to use. Equal to @p current when nothing has to move.
+     */
+    [[nodiscard]] std::uint32_t grow_cluster_cell_capacity(
+        std::uint32_t current, std::size_t light_count,
+        std::uint32_t ceiling = kMaxLightsPerCell);
+
+    /// @brief How many uint32 values one cell occupies at @p cell_capacity.
+    /// @param cell_capacity How many light indices the cell holds.
+    /// @return The stride, which is the count word plus the indices.
+    [[nodiscard]] inline std::uint32_t cluster_cell_stride(std::uint32_t cell_capacity) {
+        return 1 + cell_capacity;
+    }
 
     /**
      * @brief How far in front of the camera the cluster slices reach, in meters.
@@ -405,6 +466,50 @@ namespace engine::render {
         /// @return The capacity, which grows to fit and never shrinks.
         [[nodiscard]] std::size_t light_capacity() const { return light_capacity_; }
 
+        /// @brief How many light indices one cluster cell holds this frame.
+        /// @return The capacity, which follows the visible light count up to
+        /// ::kMaxLightsPerCell.
+        [[nodiscard]] std::uint32_t cluster_cell_capacity() const { return cluster_capacity_; }
+
+        /**
+         * @brief Lowers the ceiling on how many lights one cell holds.
+         *
+         * There to force the overflow. A cell that holds every visible light
+         * cannot drop one, so a scene that fits leaves the drop path untested.
+         * This makes a small scene reach it, which is how the loss it causes is
+         * measured rather than argued about.
+         *
+         * The next cull() rebuilds the grid when the capacity this implies is
+         * not the one in use, so it can be called at any time.
+         *
+         * @param ceiling The most a cell may hold. Zero restores
+         * ::kMaxLightsPerCell, and so does anything above it. The budget wins
+         * over the argument, because a grid larger than ::kMaxLightsPerCell
+         * describes is memory nothing promised.
+         */
+        void set_cluster_cell_ceiling(std::uint32_t ceiling) {
+            cluster_ceiling_ =
+                ceiling == 0 ? kMaxLightsPerCell : std::min(ceiling, kMaxLightsPerCell);
+        }
+
+        /**
+         * @brief Whether a crowded cell can drop a light this frame.
+         *
+         * True when the frame carries more visible lights than one cell holds,
+         * which happens only past ::kMaxLightsPerCell. Below that the capacity
+         * fits every light and no cell can drop one, so this is false and the
+         * guarantee needs no measurement.
+         *
+         * It says a drop is possible rather than that one happened. Counting the
+         * drops needs the shader to report them back, and the condition is
+         * absent in every scene the capacity fits.
+         *
+         * @return True when the per-cell capacity is below the visible count.
+         */
+        [[nodiscard]] bool cluster_may_drop() const {
+            return visible_lights_.size() > cluster_capacity_;
+        }
+
     private:
         /**
          * @brief One light, as the shader reads it. Two vec4 and nothing else.
@@ -440,19 +545,42 @@ namespace engine::render {
         [[nodiscard]] std::size_t gather_lights(const scene::World& world, const Frustum& frustum);
 
         /**
-         * @brief Makes sure each light buffer holds at least @p needed lights.
+         * @brief Makes sure the light buffer and the cluster grid fit @p needed.
          *
-         * The buffer grows to fit rather than dropping what does not fit, so a
-         * scene is never refused for carrying too many lights. Growing waits
-         * for the device and rebuilds the frame sets, because every frame in
-         * flight may be reading its own buffer. The capacity doubles for that
-         * reason, so the wait is rare.
+         * Both grow to fit rather than dropping what does not, so a scene is
+         * never refused for carrying too many lights. Growing waits for the
+         * device and rebuilds every set, because each frame in flight may be
+         * reading its own buffer. The capacity doubles for that reason, so the
+         * wait is rare.
+         *
+         * The two grow together because they answer the same number and share
+         * one wait. The light buffer holds @p needed lights, and the grid holds
+         * cluster_cell_capacity_for(@p needed) indices in each cell.
          *
          * @param needed How many lights this frame wants to write.
          * @return False when the buffers could not be rebuilt, which leaves the
          * pass unable to draw.
          */
-        [[nodiscard]] bool ensure_light_capacity(std::size_t needed);
+        [[nodiscard]] bool ensure_capacity(std::size_t needed);
+
+        /**
+         * @brief Orders ::visible_lights_ so a crowded cell keeps the best ones.
+         *
+         * A cell writes the lights it overlaps in buffer order and stops when it
+         * is full, so buffer order is what decides the survivors. This puts the
+         * brightest and furthest-reaching first, by luminance times range.
+         *
+         * It runs only when cluster_may_drop() is true, which needs more visible
+         * lights than ::kMaxLightsPerCell. Below that the order changes nothing,
+         * and reordering would move the sum of the lights by a rounding bit for
+         * no gain.
+         *
+         * @warning This is one order for every cell, not a choice for each. A
+         * dim lamp close to a cell can still lose to a bright one far from it,
+         * because the key names no cell. Ranking for each cell needs the shader
+         * to carry a priority, and nothing reaches this path yet.
+         */
+        void order_lights_for_overflow();
         /// One blended submesh, waiting for the sort.
         struct BlendedDraw {
             Mat4 model{ 1.0F };            ///< The model matrix to push.
@@ -674,6 +802,17 @@ namespace engine::render {
         std::array<gfx::BufferHandle, gfx::kFramesInFlight> cluster_grids_;
         /// @brief The uniform buffer that holds the cluster cull parameters.
         std::array<gfx::BufferHandle, gfx::kFramesInFlight> cluster_uniforms_;
+        /**
+         * @brief How many light indices each cell of the grids above holds.
+         *
+         * Both shaders read it from the uniform block they already bind, so the
+         * grid can grow without a recompile. It never shrinks, for the reason
+         * the light capacity does not: shrinking would wait for the device to
+         * give memory back that the next frame may ask for again.
+         */
+        std::uint32_t cluster_capacity_ = kMinLightsPerCell;
+        /// @brief The most a cell may hold. See set_cluster_cell_ceiling().
+        std::uint32_t cluster_ceiling_ = kMaxLightsPerCell;
     };
 
 } // namespace engine::render

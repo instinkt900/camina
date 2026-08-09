@@ -125,6 +125,15 @@ namespace {
          * loses by spending it here.
          */
         float exposure = 0.0F;
+        /**
+         * The most lights one cluster cell may hold. Zero takes the default.
+         *
+         * There to force a cell to overflow. The grid grows to hold every
+         * visible light, so no sandbox scene reaches the drop path on its own.
+         * Lowering the ceiling makes a small scene reach it, which is how the
+         * light it loses is measured. See issue #175.
+         */
+        std::uint32_t cluster_cell_lights = 0;
     };
 
     /**
@@ -199,6 +208,39 @@ namespace {
             ENGINE_LOG_WARN("--exposure wants a finite number above zero, so {} was ignored.",
                             text);
             return;
+        }
+        out = value;
+    }
+
+    /**
+     * Reads the per-cell light ceiling.
+     *
+     * `std::from_chars` on the unsigned type, for the reason parse_resolution()
+     * gives: strtoul accepts a leading sign and negates it, so `-1` would arrive
+     * as the largest unsigned value and pass a test for zero.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the ceiling. Untouched unless the whole value parsed
+     * and came out above zero.
+     */
+    void parse_cell_lights(std::string_view text, std::uint32_t& out) {
+        const char* last = text.data() + text.size();
+        std::uint32_t value = 0;
+        const std::from_chars_result parsed = std::from_chars(text.data(), last, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != last || value == 0) {
+            ENGINE_LOG_WARN("--cluster-cell-lights wants a whole number above zero, so {} was "
+                            "ignored.",
+                            text);
+            return;
+        }
+        // The flag is there to lower the ceiling. Raising it past the memory
+        // budget is clamped rather than obeyed, and saying so beats a run that
+        // reports a capacity nobody asked for.
+        if (value > engine::render::kMaxLightsPerCell) {
+            ENGINE_LOG_WARN("--cluster-cell-lights {} is above the {} the cluster grid budget "
+                            "allows, so it holds at {}.",
+                            value, engine::render::kMaxLightsPerCell,
+                            engine::render::kMaxLightsPerCell);
         }
         out = value;
     }
@@ -411,6 +453,9 @@ namespace {
                 ++i;
             } else if (arg == "--exposure" && has_value) {
                 parse_exposure(argv[i + 1], options.exposure);
+                ++i;
+            } else if (arg == "--cluster-cell-lights" && has_value) {
+                parse_cell_lights(argv[i + 1], options.cluster_cell_lights);
                 ++i;
             }
         }
@@ -1353,6 +1398,10 @@ namespace {
             return false;
         }
 
+        // Before the first cull, so the grid is allocated once at the size this
+        // asks for rather than at the default and then again.
+        runtime.mesh.set_cluster_cell_ceiling(options.cluster_cell_lights);
+
         // After the device, because the target is the size the swapchain
         // settled on rather than the size that was asked for.
         if (!runtime.tonemap.create(runtime.device, runtime.engine_content,
@@ -1420,6 +1469,14 @@ namespace {
         ENGINE_LOG_INFO("lights | {} lit the last frame | {} culled by the frustum | buffer holds {}",
                         mesh.visible_light_count(), mesh.culled_light_count(),
                         mesh.light_capacity());
+
+        // The per-cell capacity is what says whether a crowded cell can drop a
+        // light. It holds every visible light unless the scene passed the
+        // ceiling, and then the drop is possible and the message says so.
+        ENGINE_LOG_INFO("clusters | {} cells | {} lights for each cell | {}",
+                        engine::render::kClusterCellCount, mesh.cluster_cell_capacity(),
+                        mesh.cluster_may_drop() ? "a crowded cell drops the rest"
+                                                : "no cell can drop a light");
 
         ENGINE_LOG_INFO("meshes | {} draws the last frame | {} entities culled by the frustum",
                         mesh.draw_count(), mesh.culled_mesh_count());

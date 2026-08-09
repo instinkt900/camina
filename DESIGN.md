@@ -813,9 +813,36 @@ slices inside the first 1.6 metres and leaves the whole room in the last one. Th
 also reaches past where the grid stops, because a fragment beyond that distance clamps into it
 and a slice that ended there would leave a far light out of the list.
 
-A cell holds a fixed number of light indices and drops the rest. That number is measured: at 64
-the scene above lost light on 36 percent of the frame, and at 256 it matches a shader that loops
-over every light exactly. The drop is still silent, which is issue #175.
+A cell held a fixed 256 light indices and dropped the rest with no message. That number was
+measured. At 64 the scene above lost light on 36 percent of the frame. At 256 it matched a
+shader that loops over every light exactly. It moved the cliff rather than removing it, which
+was issue #175.
+
+**The per-cell capacity follows the light count now, so a cell drops nothing.** It doubles from
+256 up to 2048 and the grid grows with it. Both shaders read the number out of a uniform block
+they already bind, so nothing recompiles. A cell that holds every visible light cannot drop one,
+whatever the camera does. So the guarantee is structural and no measurement has to confirm it.
+
+The old cap was silently wrong long before 2048. Take a room of 513 point lights of 8 m range.
+Capping a cell at 256 there moves 44.6 percent of the frame. The fitted capacity is 1024, and the
+worst pixel is off by 213 of 255 on a channel. The capacity buys that back, and it costs what the light costs.
+The mesh pass goes from 59.1 ms to 85.5 ms, because those lights are now shaded rather than
+dropped. The cull itself pays 0.07 ms of it. In the sandbox nothing changes at all, because three
+lights fit either way and the pass measures 1.452 ms on both sides.
+
+Two things cover a scene past 2048. The host warns, and the frame report says whether a drop is
+possible at all rather than counting drops after the fact. And the light list is then ordered by
+luminance times range. So a crowded cell keeps the lights that put the most light into the scene
+rather than the ones the loop reached first. That ordering cuts the mean error of the capped
+frame above by 36 percent, from 1.690 to 1.084 of 255. It is one order for every cell and not a
+choice for each. A dim lamp beside a cell can still lose to a bright one far away.
+
+`--cluster-cell-lights` lowers the ceiling. No sandbox scene reaches the drop path on its own
+now, so measuring the loss needed a way to force it.
+
+Removing the ceiling needs a compacted index list, where a count pass gives each cell an offset
+into a list sized for the scene. That trades a second pass over the lights for memory that fits,
+and nothing reaches the ceiling yet.
 
 Deferred shading answers the same question and it was rejected. It was the answer when no
 compute shader could cull lights up front, and it carries four costs that clustered forward

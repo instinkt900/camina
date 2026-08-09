@@ -178,10 +178,30 @@ it, so a slice that ended there dropped a far light and left the surface unlit. 
 to 4 metres and the light range to 3 moves 4.45 percent of the frame, which is how that one was
 measured rather than argued.
 
-A cell holds 256 light indices. That number is measured: at 64 the 837-light scene lost light on
-36 percent of the frame, by up to 228 of 255 on a channel, and at 256 it matches a shader that
-loops over every light byte for byte. So the grid was exact and the cap was the whole error. The
-drop is still silent past 256, which is issue #175.
+A cell held 256 light indices. That number was measured. At 64 the 837-light scene lost light on
+36 percent of the frame, by up to 228 of 255 on a channel. At 256 it matched a shader that loops
+over every light byte for byte. So the grid was exact and the cap was the whole error. The drop
+was still silent past 256, which was issue #175.
+
+M5.7e made the capacity follow the light count, which closed #175. It doubles from 256 up to 2048
+and the grid grows with it. Both shaders read the number out of a uniform they already bind. A
+cell that holds every visible light cannot drop one, so the guarantee is structural. That is why
+there is no drop counter. A drop needs a capacity below the visible count, and the frame report
+says whether that holds.
+
+The old cap was wrong long before 2048. Take 513 point lights of 8 m range. Capping a cell at 256
+moves 44.6 percent of the frame against the fitted 1024, by up to 213 of 255. That costs what the
+light costs. The mesh pass goes from 59.1 ms to 85.5 ms, because those lights are shaded rather
+than dropped. The cull pays 0.07 ms of it. The sandbox does not move at all, and the pass
+measures 1.452 ms on both sides.
+
+Past the ceiling the light list is ordered by luminance times range. So a crowded cell keeps the
+lights that put the most light into the scene. Deleting that sort moves the mean error of the
+capped frame from 1.084 to 1.690 of 255. That is how it was measured rather than argued.
+
+`--cluster-cell-lights` lowers the ceiling. No sandbox scene reaches the drop path now, so
+measuring the loss needed a way to force it. The measurement scene is generated and not
+committed, the way the 1024-light room was.
 
 The alpha modes close it. Mask discards in the shader. Blend needs more than a shader, so
 `MeshPass` holds a second pipeline that blends and does not write depth, and it gathers every
@@ -307,11 +327,11 @@ keeps all of the old ones.
 The opaque draws sort by pipeline variant, which closed #105. `pipeline_switch_count()` is what
 measures it.
 
-M5 is down to three issues. #88 carries the done-when test and needs a Sponza-class scene, which
-#130 has to fetch from outside git because the geometry is larger than GitHub accepts. #122 is
-the aliasing half of the render graph, and its trigger condition is not met yet: the shadow map
+M5 is down to two issues. #88 carries the done-when test and needs a Sponza-class scene. Issue
+#130 has to fetch that from outside git, because the geometry is larger than GitHub accepts. #122
+is the aliasing half of the render graph, and its trigger condition is not met yet: the shadow map
 and the scene color are both live, but the mesh pass reads one and writes the other in the same
-pass, so neither can take the other's memory. #175 is the silent per-cell light drop.
+pass, so neither can take the other's memory.
 
 The mesh cull left one of its own. #177 is the tighter test, per submesh rather than per entity. It
 covers both passes, and it needs a scene that can measure the difference.

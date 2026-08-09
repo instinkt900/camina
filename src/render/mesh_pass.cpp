@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -55,13 +56,23 @@ namespace engine::render {
         /// group runs and therefore how many groups the dispatch needs.
         constexpr std::uint32_t kClusterCullGroupSize = 64;
 
+        /// How many bytes one cluster grid takes when a cell holds
+        /// @p cell_capacity light indices. There is one for each frame in flight.
+        [[nodiscard]] std::size_t cluster_grid_bytes(std::uint32_t cell_capacity) {
+            return static_cast<std::size_t>(kClusterCellCount) *
+                   cluster_cell_stride(cell_capacity) * sizeof(std::uint32_t);
+        }
+
         /**
          * The cluster cull uniform block, which must match ClusterParams in
          * cluster_cull.comp. It is std140 for the mat4.
          */
         struct ClusterUniforms {
             Mat4 inv_view_projection{ 1.0F };
-            std::array<std::uint32_t, 4> grid_info{}; // x = light count
+            /// x is the light count and y is how many indices one cell holds.
+            /// The fragment shader reads the same capacity out of the frame
+            /// block, because it has to index the grid the same way.
+            std::array<std::uint32_t, 4> grid_info{};
             /// x is the near plane and y is how far the slices reach. The
             /// fragment shader reads the same pair out of the frame block, so
             /// this struct and FrameUniforms have to agree.
@@ -91,8 +102,8 @@ namespace engine::render {
             std::array<float, 4> cascade_biases{};
             /// x is how many lights the storage buffer holds. y is 1 when a
             /// directional light casts a shadow. z is how many cascades are in
-            /// use. w is padding, because std140 puts the block that follows on
-            /// a 16-byte boundary anyway.
+            /// use. w is how many light indices one cluster cell holds, which
+            /// must match what ClusterUniforms carried to the cull.
             std::array<std::uint32_t, 4> light_count{};
             /// x is the near plane and y is how far the cluster slices reach.
             /// zw is the viewport in pixels. The fragment shader needs all four
@@ -250,6 +261,25 @@ namespace engine::render {
             }
         }
         return nullptr;
+    }
+
+    std::uint32_t cluster_cell_capacity_for(std::size_t light_count, std::uint32_t ceiling) {
+        // The budget wins over the argument. A caller that asks for more would
+        // otherwise get a grid past the size kMaxLightsPerCell promises, and the
+        // doubling below would run past a uint32 for a ceiling near its limit.
+        const std::uint32_t limit = std::min(ceiling, kMaxLightsPerCell);
+        std::uint32_t capacity = kMinLightsPerCell;
+        while (capacity < light_count && capacity < limit) {
+            capacity *= 2;
+        }
+        return std::min(capacity, limit);
+    }
+
+    std::uint32_t grow_cluster_cell_capacity(std::uint32_t current, std::size_t light_count,
+                                             std::uint32_t ceiling) {
+        const std::uint32_t limit = std::min(ceiling, kMaxLightsPerCell);
+        const std::uint32_t wanted = cluster_cell_capacity_for(light_count, limit);
+        return std::min(std::max(wanted, current), limit);
     }
 
     PassDesc MeshPass::declare() {
@@ -508,8 +538,10 @@ namespace engine::render {
         return true;
     }
 
-    bool MeshPass::ensure_light_capacity(std::size_t needed) {
-        if (needed <= light_capacity_) {
+    bool MeshPass::ensure_capacity(std::size_t needed) {
+        const std::uint32_t cells =
+            grow_cluster_cell_capacity(cluster_capacity_, needed, cluster_ceiling_);
+        if (needed <= light_capacity_ && cells == cluster_capacity_) {
             return true;
         }
 
@@ -531,6 +563,18 @@ namespace engine::render {
             buffer = gfx::BufferHandle{};
         }
 
+        // The grid only goes when its shape changes, because it is the larger of
+        // the two by far and a light buffer that doubles often leaves the
+        // per-cell capacity where it was.
+        const std::uint32_t previous_cells = cluster_capacity_;
+        if (cells != cluster_capacity_) {
+            for (gfx::BufferHandle& buffer : cluster_grids_) {
+                gfx::destroy_buffer(device_, buffer);
+                buffer = gfx::BufferHandle{};
+            }
+            cluster_capacity_ = cells;
+        }
+
         const std::size_t previous = light_capacity_;
         light_capacity_ = capacity;
         if (!build_frame_sets()) {
@@ -542,9 +586,44 @@ namespace engine::render {
             ENGINE_LOG_ERROR("The compute sets could not be rebuilt for the new light buffers.");
             return false;
         }
-        ENGINE_LOG_INFO("The light buffer grew from {} to {} to fit {} lights.", previous,
-                        capacity, needed);
+        if (capacity != previous) {
+            ENGINE_LOG_INFO("The light buffer grew from {} to {} to fit {} lights.", previous,
+                            capacity, needed);
+        }
+        if (cells != previous_cells) {
+            ENGINE_LOG_INFO("A cluster cell holds {} lights now, up from {}, which is {} MiB "
+                            "for each frame in flight.",
+                            cells, previous_cells, cluster_grid_bytes(cells) / (1024 * 1024));
+        }
+        if (needed > cells) {
+            ENGINE_LOG_WARN("A cluster cell holds {} lights and this frame has {} visible, so a "
+                            "crowded cell drops the rest. See issue #175.",
+                            cells, needed);
+        }
         return true;
+    }
+
+    void MeshPass::order_lights_for_overflow() {
+        if (!cluster_may_drop()) {
+            return;
+        }
+
+        // Rec. 709 luminance, over a color that already carries the intensity.
+        // Times the range, because a light that reaches further covers more of
+        // the cells that are crowded. A directional light sorts above every
+        // point light, which costs nothing: the cull writes them first anyway.
+        const auto rank = [](const GpuLight& light) {
+            const float luminance = (0.2126F * light.color[0]) + (0.7152F * light.color[1]) +
+                                    (0.0722F * light.color[2]);
+            const bool directional = light.position[3] < 0.5F;
+            return directional ? std::numeric_limits<float>::max() : luminance * light.color[3];
+        };
+        // Stable, so two lights of equal rank keep the order the scene gave
+        // them and the frame stays the same from one run to the next.
+        std::stable_sort(visible_lights_.begin(), visible_lights_.end(),
+                         [&rank](const GpuLight& a, const GpuLight& b) {
+                             return rank(a) > rank(b);
+                         });
     }
 
     void MeshPass::destroy_frame_sets() {
@@ -667,7 +746,7 @@ namespace engine::render {
     }
 
     bool MeshPass::ensure_cluster_grid() {
-        const std::size_t size = kClusterCellCount * kClusterCellStride * sizeof(std::uint32_t);
+        const std::size_t size = cluster_grid_bytes(cluster_capacity_);
         for (std::uint32_t i = 0; i < gfx::kFramesInFlight; ++i) {
             if (!cluster_grids_[i].valid()) {
                 // Device-local. The compute shader is the only writer and the
@@ -1175,14 +1254,19 @@ namespace engine::render {
         frustum_ = frustum_from_view_projection(view_projection);
 
         const std::size_t culled = gather_lights(world, frustum_);
+        culled_lights_ = culled;
+
+        // Before the block is written, because this decides how a cell is
+        // indexed and both shaders read the number out of a uniform.
+        if (!ensure_capacity(visible_lights_.size())) {
+            return;
+        }
+        order_lights_for_overflow();
+
         frame.light_count[0] = static_cast<std::uint32_t>(visible_lights_.size());
         frame.light_count[1] = shadow_casts_ ? 1U : 0U;
         frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
-        culled_lights_ = culled;
-
-        if (!ensure_light_capacity(visible_lights_.size())) {
-            return;
-        }
+        frame.light_count[3] = cluster_capacity_;
 
         gfx::update_buffer(device_, frame_uniforms_[frame_slot_], &frame, sizeof(frame));
         if (!visible_lights_.empty()) {
@@ -1197,6 +1281,7 @@ namespace engine::render {
         ClusterUniforms cull_uniforms;
         cull_uniforms.inv_view_projection = glm::inverse(view_projection);
         cull_uniforms.grid_info[0] = static_cast<std::uint32_t>(visible_lights_.size());
+        cull_uniforms.grid_info[1] = cluster_capacity_;
         cull_uniforms.depth_range = { view.z_near, kClusterFar, 0.0F, 0.0F };
         gfx::update_buffer(device_, cluster_uniforms_[frame_slot_], &cull_uniforms,
                            sizeof(cull_uniforms));

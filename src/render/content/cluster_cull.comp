@@ -11,10 +11,13 @@
 
 // The grid shape. Must match kClusterTileCountX and friends in mesh_pass.h,
 // which is where the dispatch size and the buffer size come from.
+//
+// How many lights one cell holds is not here. It follows the visible light
+// count, so a crowded cell grows rather than dropping what does not fit. It
+// arrives in grid_info.y, and mesh.frag reads the same number.
 const uint kTileCountX = 16u;
 const uint kTileCountY = 12u;
 const uint kSliceCount = 16u;
-const uint kMaxLightsPerCell = 256u;
 
 const uint kCellCount = kTileCountX * kTileCountY * kSliceCount;
 
@@ -33,7 +36,10 @@ struct Light {
 
 layout(set = 0, binding = 0) uniform ClusterParams {
     mat4 inv_view_projection;
-    uvec4 grid_info;      // x = light count, yzw = unused
+    // x is the light count and y is how many indices one cell holds. mesh.frag
+    // reads the same capacity out of the frame block, because it has to index
+    // the grid the same way.
+    uvec4 grid_info;
     // x = the near plane the projection was built with, y = how far the
     // exponential slices reach. Both come from C++ so that one place owns
     // them. mesh.frag reads the same pair out of the frame block.
@@ -44,8 +50,8 @@ layout(set = 0, binding = 1) readonly buffer Lights {
     Light lights[];
 } light_buffer;
 
-// Each cell: a count and up to kMaxLightsPerCell light indices, stored flat.
-// cells[cell] is the count, and cells[kCellCount + cell * kMaxLightsPerCell + idx]
+// Each cell: a count and up to grid_info.y light indices, stored flat.
+// cells[cell] is the count, and cells[kCellCount + cell * grid_info.y + idx]
 // is the idx-th light index for that cell.
 layout(set = 0, binding = 2) buffer ClusterGrid {
     uint cells[];
@@ -117,14 +123,18 @@ void main() {
         aabb_max = max(aabb_max, corners[i]);
     }
 
-    // Write light indices for this cell.
+    // Write light indices for this cell. The capacity holds every visible light
+    // unless the scene passed kMaxLightsPerCell in mesh_pass.h, so a cell drops
+    // nothing below that. Past it the host has already warned, and the list
+    // arrives ordered by how much light each one can put into the scene.
+    uint cell_capacity = params.grid_info.y;
     uint output_count = 0u;
-    uint base_index = kCellCount + cell * kMaxLightsPerCell;
+    uint base_index = kCellCount + cell * cell_capacity;
 
     // Directional lights go in every cell because they have no position to
     // test. They go in first, so a cell crowded with point lights never drops
     // the key light and the shadow it casts.
-    for (uint i = 0u; i < params.grid_info.x && output_count < kMaxLightsPerCell; ++i) {
+    for (uint i = 0u; i < params.grid_info.x && output_count < cell_capacity; ++i) {
         if (light_buffer.lights[i].position.w < 0.5) {
             grid.cells[base_index + output_count] = i;
             ++output_count;
@@ -132,7 +142,7 @@ void main() {
     }
 
     // Then the point lights whose range sphere reaches this cell.
-    for (uint i = 0u; i < params.grid_info.x && output_count < kMaxLightsPerCell; ++i) {
+    for (uint i = 0u; i < params.grid_info.x && output_count < cell_capacity; ++i) {
         Light l = light_buffer.lights[i];
         if (l.position.w < 0.5) {
             continue;

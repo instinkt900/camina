@@ -48,7 +48,8 @@ layout(set = 0, binding = 0) uniform Frame {
     // number cannot serve them all.
     vec4 cascade_biases;
     // x is how many lights are real. y is 1 when a directional light casts a
-    // shadow. z is how many cascades are in use. w is padding.
+    // shadow. z is how many cascades are in use. w is how many light indices one
+    // cluster cell holds, which is what a cell is indexed by.
     uvec4 light_count;
     // x is the near plane the projection was built with and y is how far the
     // cluster slices reach. zw is the viewport in pixels. C++ owns all four,
@@ -79,12 +80,16 @@ layout(set = 0, binding = 4) readonly buffer Lights {
 // light goes in every cell because it has no position to test.
 //
 // The grid shape. Must match kClusterTileCountX and friends in mesh_pass.h,
-// and cluster_cull.comp declares the same four. The near plane and the reach
+// and cluster_cull.comp declares the same three. The near plane and the reach
 // are not here, because they arrive in frame.cluster_view.
+//
+// How many lights one cell holds is not a constant. It follows the visible
+// light count, so a scene with more lights than a cell used to hold grows the
+// grid instead of dropping them. It arrives in light_count.w, and the cull
+// reads the same number.
 const uint kClusterTileCountX = 16;
 const uint kClusterTileCountY = 12;
 const uint kClusterSliceCount = 16;
-const uint kMaxLightsPerCell = 256;
 const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
 
 layout(set = 0, binding = 5) readonly buffer ClusterGrid {
@@ -342,14 +347,15 @@ void main() {
     float slice_f = log(view_depth / z_near) / log(cluster_far / z_near) * float(kClusterSliceCount);
     uint slice = uint(clamp(slice_f, 0.0, float(kClusterSliceCount) - 1.0));
 
+    uint cell_capacity = frame.light_count.w;
     uint cell = (slice * kClusterTileCountY + tile_y) * kClusterTileCountX + tile_x;
     uint per_cell_count = cluster_grid.cells[cell];
-    uint cell_index_base = kClusterCellCount + cell * kMaxLightsPerCell;
+    uint cell_index_base = kClusterCellCount + cell * cell_capacity;
 
     // Loop over the lights the cull assigned to this cell. The cull dispatches
     // on every frame and writes a count for every cell, including a zero, so
     // this never reads what the frame before it wrote.
-    uint light_count = min(per_cell_count, kMaxLightsPerCell);
+    uint light_count = min(per_cell_count, cell_capacity);
     for (uint j = 0u; j < light_count; ++j) {
         uint i = cluster_grid.cells[cell_index_base + j];
         if (i >= frame.light_count.x) {
