@@ -313,16 +313,31 @@ the aliasing half of the render graph, and its trigger condition is not met yet:
 and the scene color are both live, but the mesh pass reads one and writes the other in the same
 pass, so neither can take the other's memory. #175 is the silent per-cell light drop.
 
-Nothing culls a mesh against the frustum yet. `MeshPass::draw` walks every entity that names one,
-whatever the camera is pointing at, and only the lights are culled. #130 names that as the reason
-a Sponza-class scene would not be interactive, so it comes before #88 rather than after it.
+The mesh cull left two of its own. #177 is the tighter per-submesh test, which needs a scene that
+can measure it. #180 is the shadow pass, which still draws every mesh: with the camera turned away
+the mesh pass falls to 0.002 ms and the shadow pass stays at 0.41 ms, so it is now the whole cost
+of that frame. It cannot reuse the camera frustum, because a mesh behind the camera still casts.
+
+M5.7c culls a mesh as well as a light. `src/math/bounds.h` turns the local bounds of a mesh and a
+world matrix into a world-space sphere, and `MeshPass::draw` tests it against the planes `cull()`
+already extracted. One extraction serves both, so they cannot disagree about the camera. The
+radius is exact for the transformed box, because the cheap form underestimates when the matrix
+columns lean the same way and an underestimate drops a mesh that is on screen.
+
+The sandbox proves it rather than measuring it. Every entity is in view from the opening camera, so
+nothing culls and the picture does not move. Turning the camera 45 degrees drops 5 of 27 entities
+and the picture is still byte for byte identical. Turning it 180 drops 22 and takes the mesh pass
+from 1.46 ms to 0.002 ms. The test is per entity, and #177 holds the tighter per-submesh one.
 
 Verified on 2026-08-09 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. Two blended panes drew over the
 opaque scene with no validation message either. Synchronization validation reports nothing over
-300 frames offscreen and 200 windowed. The build produces no warnings under the full
-warning set.
+300 frames offscreen and 200 windowed.
+
+The build produces seven warnings, which is issue #179. Six are one line in
+`src/reflect/registry.h` counted once for each translation unit that instantiates it, and the
+seventh is a function in the cooker that lost its last caller. CI does not fail on either.
 
 ## Development flow
 
