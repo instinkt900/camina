@@ -177,6 +177,25 @@ namespace engine::render {
         /// @return The count, one for each mesh rather than each submesh.
         [[nodiscard]] std::size_t draw_count() const { return draw_count_; }
 
+        /**
+         * @brief How many entity draws the last draw() culled, over all cascades.
+         *
+         * Counted for each cascade rather than for each entity, because an
+         * entity is tested once for every cascade and may be dropped from some
+         * and kept in others.
+         *
+         * This and draw_count() do not add up to the entity count times
+         * kCascadeCount. An entity whose mesh handle is null, or whose mesh has
+         * not loaded, reaches neither counter. Neither does anything at all when
+         * the world holds no directional light, because then no cascade runs.
+         *
+         * Reported for the reason MeshPass::culled_mesh_count() gives. A cull
+         * that works changes no pixel, so the picture cannot say whether it ran.
+         *
+         * @return The count of entity and cascade pairs that missed.
+         */
+        [[nodiscard]] std::size_t culled_count() const { return culled_count_; }
+
     private:
         /// Both matrices, in the order shadow.vert declares them.
         struct Push {
@@ -213,6 +232,8 @@ namespace engine::render {
         std::array<float, kCascadeCount> biases_{};
         bool has_light_ = false;
         std::size_t draw_count_ = 0;
+        /// @brief How many entity and cascade pairs the frustum test dropped.
+        std::size_t culled_count_ = 0;
     };
 
 } // namespace engine::render

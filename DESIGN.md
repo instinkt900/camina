@@ -892,13 +892,43 @@ vertex work, and the sandbox has too little of either to show it. That is a reas
 cull to pay at Sponza scale rather than a reason to doubt it, and #88 is where it gets measured.
 
 Comparing two different cameras is the mistake to avoid here. The mesh pass costs 1.46 ms looking
-at the room and 0.002 ms looking away, and reading that pair as the effect of the cull overstates
-it by a factor of fifteen. Almost all of that difference is the camera.
+at the room and 0.002 ms looking away. Reading that pair as the effect of the cull overstates it by
+a factor of fifteen. Almost all of that difference is the camera.
 
-The 180 degree measurement exposes the next piece of work. The shadow pass stays at 0.41 ms on
+The 180 degree measurement exposes the next piece of work. The shadow pass stays at 0.36 ms on
 that view, so it is now the whole cost of a frame that draws almost nothing. It cannot reuse this
-frustum, because a mesh behind the camera still casts into a cascade, and the test therefore has to
-run against each cascade in turn. Issue #180 holds it.
+frustum, because a mesh behind the camera still casts into a cascade. The test has to run against
+each cascade in turn instead.
+
+**M5.7d does that.** `ShadowPass::draw` extracts the six planes of each cascade. It tests every
+entity against them. A mesh that misses one cascade issues no draw into that layer, and it may
+still draw into another. So the counts are for each entity and cascade pair. One entity is tested
+four times.
+
+The test cannot change the map. That is the argument for it, rather than a hope about it. Nothing
+enables depth clamp anywhere in `gfx::`, so the rasterizer already clips what falls outside those
+six planes. The cull drops the draw for geometry the GPU was going to throw away.
+
+It pays better than the camera cull does. Two reasons, and both are about the shadow pass rather
+than about the test. First, the pass runs four times over the same world, so one culled entity
+saves up to four draws. Second, a cascade volume covers a slice of the camera frustum rather than
+the whole of it. So even the opening view leaves most of the room outside most of the cascades.
+Against the same camera:
+
+| Camera | shadow draws of 92 | culled | no cull | cull |
+|---|---|---|---|---|
+| As the sandbox opens | 65 | 27 | 0.452 ms | 0.391 ms |
+| Turned 45 degrees | 64 | 28 | 0.421 ms | 0.369 ms |
+| Turned 180 degrees | 41 | 51 | 0.363 ms | 0.249 ms |
+
+The picture is byte for byte identical at the first two cameras, which is where the shadows are on
+screen to be compared.
+
+A cascade volume is orthographic, and that is where both depth planes are real. An infinite
+perspective has a degenerate far plane. So every earlier test of `frustum_from_view_projection`
+drove the one case that cannot see a wrong depth pair. `tests/test_frustum.cpp` drives an
+orthographic reverse-Z volume as well now. One of its checks fails if a perspective matrix takes
+the place of the orthographic one. An orthographic volume must not narrow with distance.
 
 **The graph derives barriers first, and aliases memory when something needs it.** A full
 aliasing allocator is a large piece of work, and today there is one pass and nothing to alias

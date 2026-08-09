@@ -3,6 +3,8 @@
 #include "assets/mesh.h"
 #include "assets/shader.h"
 #include "core/log.h"
+#include "math/bounds.h"
+#include "math/frustum.h"
 #include "scene/components.h"
 
 #include <array>
@@ -350,6 +352,7 @@ namespace engine::render {
                           const assets::Content& content, MeshCache& meshes,
                           const Mat4& camera_view_projection) {
         draw_count_ = 0;
+        culled_count_ = 0;
         has_light_ = fit_cascades(world, content, meshes, camera_view_projection);
 
         for (std::size_t cascade = 0; cascade < kCascadeCount; ++cascade) {
@@ -369,6 +372,21 @@ namespace engine::render {
             // Both faces, for the reason build_pipeline() gives.
             gfx::cmd_set_cull_mode(commands, false);
 
+            // The volume this cascade covers, in world space. It is orthographic
+            // rather than perspective, and the extraction reads the matrix rather
+            // than assuming how it was built, so the same function serves both.
+            //
+            // This test cannot change the map, and that is the whole argument for
+            // it. Nothing enables depth clamp, so the rasterizer already clips
+            // whatever falls outside these six planes. Culling here drops the
+            // draw for geometry the GPU was going to throw away.
+            //
+            // It is the cascade frustum and never the camera one. A mesh behind
+            // the camera still casts into a cascade, so reusing what MeshPass
+            // culled against would cut shadows that are on screen.
+            const Frustum light_frustum =
+                frustum_from_view_projection(light_view_projections_[cascade]);
+
             for (const auto [entity, transform, renderer] :
                  world.registry()
                      .view<const scene::WorldTransform, const scene::MeshRenderer>()
@@ -378,6 +396,13 @@ namespace engine::render {
                 }
                 const GpuMesh* mesh = meshes.get(device_, content, renderer.mesh);
                 if (mesh == nullptr) {
+                    continue;
+                }
+
+                const Sphere bounds =
+                    world_sphere_from_bounds(transform.matrix, mesh->min, mesh->max);
+                if (!frustum_contains_sphere(light_frustum, bounds.center, bounds.radius)) {
+                    ++culled_count_;
                     continue;
                 }
 
