@@ -1418,7 +1418,8 @@ namespace {
      * rather than printing 16.67 and letting a reader draw a conclusion from it.
      */
     void report_frame_time(const engine::FrameStats& stats, const Options& options,
-                           const engine::render::MeshPass& mesh) {
+                           const engine::render::MeshPass& mesh,
+                           const engine::render::ShadowPass& shadow) {
         if (stats.counted() == 0) {
             ENGINE_LOG_INFO("No frame time to report. A run needs more than {} frames.",
                             kFrameStatsWarmup);
@@ -1442,6 +1443,12 @@ namespace {
         // mesh cull that works changes no pixel either.
         ENGINE_LOG_INFO("meshes | {} draws the last frame | {} entities culled by the frustum",
                         mesh.draw_count(), mesh.culled_mesh_count());
+
+        // The shadow counts run over every cascade, so an entity appears four
+        // times and may be culled from some cascades and kept in others.
+        ENGINE_LOG_INFO("shadows | {} draws over {} cascades | {} culled by the cascade volumes",
+                        shadow.draw_count(), engine::render::kCascadeCount,
+                        shadow.culled_count());
 
         // Nanoseconds to milliseconds.
         constexpr double kToMilliseconds = 1e-6;
@@ -1583,7 +1590,7 @@ namespace {
         }
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
-        report_frame_time(stats, options, *context.mesh_pass);
+        report_frame_time(stats, options, *context.mesh_pass, *context.shadow_pass);
         return true;
     }
 

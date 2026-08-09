@@ -168,6 +168,76 @@ namespace {
               "a point behind the moved camera is inside");
     }
 
+    /**
+     * An orthographic reverse-Z volume gives six real planes.
+     *
+     * The shadow cascades are orthographic, and every test above drives a
+     * perspective matrix. The two differ in the part most likely to be wrong:
+     * under an infinite perspective the far plane is degenerate and keeps
+     * everything, and here it is a real plane that has to cull. A near or far
+     * plane that came out degenerate for the ortho case would cull nothing along
+     * depth, and the shadow map would look right while the pass did no work.
+     *
+     * The light stands 10 meters back along +Z and looks down -Z. Its volume is
+     * 4 meters across and runs from 1 meter to 20 meters in front of it.
+     */
+    [[nodiscard]] Frustum light_volume() {
+        const Mat4 projection = engine::orthographic_reverse_z(2.0F, 2.0F, 1.0F, 20.0F);
+        const Mat4 view = glm::lookAt(Vec3{ 0.0F, 0.0F, 10.0F }, Vec3{ 0.0F, 0.0F, 9.0F },
+                                      engine::world_up);
+        return frustum_from_view_projection(projection * view);
+    }
+
+    void an_orthographic_volume_has_six_real_planes() {
+        const Frustum frustum = light_volume();
+        for (std::size_t i = 0; i < kFrustumPlanes; ++i) {
+            const float length = glm::length(frustum.planes[i].normal);
+            check(std::abs(length - 1.0F) < 1.0e-4F,
+                  "an orthographic plane is degenerate, so it culls nothing");
+        }
+    }
+
+    /**
+     * The orthographic volume culls along depth and across, and keeps the middle.
+     *
+     * The depth pair is the reason this test exists. Under reverse-Z the row that
+     * gives the near plane is not the one a conventional range would use, and an
+     * orthographic matrix is where both depth planes are real, so both can be
+     * wrong here in a way the perspective tests cannot see.
+     */
+    void an_orthographic_volume_culls_outside_itself() {
+        const Frustum frustum = light_volume();
+        // The light is at z = 10 looking down -Z, so its volume covers z from 9
+        // down to -10, and x and y from -2 to 2.
+        check(frustum_contains_sphere(frustum, Vec3{ 0.0F, 0.0F, 0.0F }, 0.0F),
+              "the middle of the light volume is outside it");
+        check(!frustum_contains_sphere(frustum, Vec3{ 0.0F, 0.0F, 20.0F }, 0.0F),
+              "a point behind the light is inside its volume");
+        check(!frustum_contains_sphere(frustum, Vec3{ 0.0F, 0.0F, -50.0F }, 0.0F),
+              "a point past the far plane is inside the volume");
+        check(!frustum_contains_sphere(frustum, Vec3{ 10.0F, 0.0F, 0.0F }, 0.0F),
+              "a point wide of the volume is inside it");
+        check(!frustum_contains_sphere(frustum, Vec3{ 0.0F, 10.0F, 0.0F }, 0.0F),
+              "a point above the volume is inside it");
+    }
+
+    /**
+     * An orthographic volume does not narrow with distance.
+     *
+     * This is what separates it from a perspective one, and it is the property a
+     * cascade depends on. A perspective matrix in place of the ortho one would
+     * pass every check above and fail this.
+     */
+    void an_orthographic_volume_does_not_narrow() {
+        const Frustum frustum = light_volume();
+        // Both are 1.5 meters off the axis, which is inside the 2 meter half
+        // width, and they sit at opposite ends of the depth range.
+        check(frustum_contains_sphere(frustum, Vec3{ 1.5F, 0.0F, 8.0F }, 0.0F),
+              "a point near the front of the volume is outside it");
+        check(frustum_contains_sphere(frustum, Vec3{ 1.5F, 0.0F, -9.0F }, 0.0F),
+              "the volume narrows with distance, so it is not orthographic");
+    }
+
 } // namespace
 
 int main() {
@@ -179,5 +249,8 @@ int main() {
     a_radius_that_reaches_is_kept();
     turning_the_camera_moves_the_frustum();
     moving_the_camera_moves_the_frustum();
+    an_orthographic_volume_has_six_real_planes();
+    an_orthographic_volume_culls_outside_itself();
+    an_orthographic_volume_does_not_narrow();
     return test::report();
 }
