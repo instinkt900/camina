@@ -1438,6 +1438,11 @@ namespace {
                         mesh.visible_light_count(), mesh.culled_light_count(),
                         mesh.light_capacity());
 
+        // The mesh counts of the last frame, reported for the same reason. A
+        // mesh cull that works changes no pixel either.
+        ENGINE_LOG_INFO("meshes | {} draws the last frame | {} entities culled by the frustum",
+                        mesh.draw_count(), mesh.culled_mesh_count());
+
         // Nanoseconds to milliseconds.
         constexpr double kToMilliseconds = 1e-6;
         if (std::ranges::any_of(g_gpu_pass_ns, [](double ns) { return ns > 0.0; })) {

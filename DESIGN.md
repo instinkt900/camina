@@ -842,28 +842,63 @@ answer, and `update_buffer` refuses such a buffer rather than writing through a 
 not there.
 
 **A mesh is culled against the camera frustum before it is drawn, and that belongs to M5.** The
-light cull answers this question for lights and nothing answers it for geometry. `MeshPass` walks
-every entity that names a mesh, whatever the camera is pointing at, and issues a draw for each
-submesh. That is correct and it does not scale.
+light cull answered this question for lights and nothing answered it for geometry. `MeshPass` used
+to walk every entity that named a mesh, whatever the camera was pointing at, and issue a draw for
+each submesh. That was correct and it did not scale.
 
 It belongs to M5 rather than later because the M5 done-when test is a Sponza-class scene. That
 scene is 3.75M triangles in 405 primitives, and issue #130 names the missing cull as the reason
 it would not be interactive on the reference GPU. A done-when test that cannot run is not a test.
 
-The pieces are already here, which is why this is small. `src/math/frustum.h` extracts the six
-planes and tests a sphere, it names no Vulkan type, and it has tests that need no device. A cooked
-mesh carries its bounds, because the blended sort already reads them. So the work is to turn a
-mesh bound and a world matrix into a world-space sphere and reuse the test the lights use.
+M5.7c does it. `src/math/bounds.h` turns the local bounds of a mesh and a world matrix into a
+world-space sphere, and `MeshPass::draw` tests that sphere against the planes `cull()` already
+extracted for the lights. One extraction serves both, so the two cannot disagree about which
+camera the frame belongs to. An entity that misses issues no draw, and `culled_mesh_count()`
+reports what went.
 
-A sphere and not a box. The test is written and tested already, one test beats six plane-versus-box
-comparisons, and a sphere that a scaled matrix produced is conservative in the direction that
-keeps a visible object on screen. A box would cull more and it can wait for a case that measures
-the difference, which rule 4.6 says to wait for.
+The test is per entity and not per submesh. The bounds of the whole mesh decide whether any part
+of it can be seen, and a mesh that is in view then draws every part. A tighter per-submesh test is
+issue #177, and it needs a scene where one mesh is large enough for the difference to measure.
+
+The radius is exact for the transformed box rather than an upper bound on it. The cheap form,
+which scales the local half diagonal by the longest matrix column, looks safe and is not: three
+columns that lean the same way have a signed sum longer than any one of them. An underestimate
+drops a mesh that is on screen, and the hole appears at the edge of the frame where nobody is
+looking for it. So four of the eight corner offsets settle the radius, and the other four are
+those negated.
+
+A sphere and not a box. The test was written and tested already, one test beats six
+plane-versus-box comparisons, and a sphere that a scaled matrix produced is conservative in the
+direction that keeps a visible object on screen. A box would cull more and it can wait for a case
+that measures the difference, which rule 4.6 says to wait for.
 
 The cull runs on the CPU, one test for each entity. GPU-side culling and indirect draws answer a
 larger question, which is a scene whose draw list is too large for the CPU to walk at all. Nothing
 in M5 asks that, and the answer would be wasted before the draw list is built from something other
 than an EnTT view.
+
+The sandbox proves the correctness and it cannot measure much of a saving. Every entity is in view
+from the camera the sandbox opens with, so the cull drops nothing and the picture is byte for byte
+what it was. Turning the camera 45 degrees drops 5 of 27 entities, and that picture is byte for
+byte identical to the same view with no cull. That is the result that matters: a conservative test
+must never make a hole. Turning it 180 degrees drops 22. Five draws survive, which are the walls of
+the room, because the camera stands inside them and their spheres therefore contain it.
+
+The saving in this scene is small, and saying so is the point. Against the same camera the mesh
+pass goes from 1.536 ms to 1.510 ms at 45 degrees, and from 0.094 ms to 0.002 ms at 180. The first
+is inside the run-to-run spread. A GPU already rejects an off-screen triangle cheaply, so culling a
+handful of small meshes on the CPU buys almost nothing. What it buys is the draw call and the
+vertex work, and the sandbox has too little of either to show it. That is a reason to expect the
+cull to pay at Sponza scale rather than a reason to doubt it, and #88 is where it gets measured.
+
+Comparing two different cameras is the mistake to avoid here. The mesh pass costs 1.46 ms looking
+at the room and 0.002 ms looking away, and reading that pair as the effect of the cull overstates
+it by a factor of fifteen. Almost all of that difference is the camera.
+
+The 180 degree measurement exposes the next piece of work. The shadow pass stays at 0.41 ms on
+that view, so it is now the whole cost of a frame that draws almost nothing. It cannot reuse this
+frustum, because a mesh behind the camera still casts into a cascade, and the test therefore has to
+run against each cascade in turn. Issue #180 holds it.
 
 **The graph derives barriers first, and aliases memory when something needs it.** A full
 aliasing allocator is a large piece of work, and today there is one pass and nothing to alias
