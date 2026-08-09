@@ -1407,6 +1407,31 @@ namespace {
     }
 
     /**
+     * Reports what the last frame drew and what it culled.
+     *
+     * Separate from the frame time, and not behind the warmup guard that report
+     * needs. A cull that works changes no pixel, so these counts are the only
+     * way to see that it ran, and a short run is exactly when somebody is
+     * checking that. A run of 60 frames or fewer has no frame time to report and
+     * still drew something.
+     */
+    void report_scene_counts(const engine::render::MeshPass& mesh,
+                             const engine::render::ShadowPass& shadow) {
+        ENGINE_LOG_INFO("lights | {} lit the last frame | {} culled by the frustum | buffer holds {}",
+                        mesh.visible_light_count(), mesh.culled_light_count(),
+                        mesh.light_capacity());
+
+        ENGINE_LOG_INFO("meshes | {} draws the last frame | {} entities culled by the frustum",
+                        mesh.draw_count(), mesh.culled_mesh_count());
+
+        // The shadow counts run over every cascade, so one entity is tested four
+        // times. It can be culled from some cascades and kept in others.
+        ENGINE_LOG_INFO("shadows | {} draws over {} cascades | {} culled by the cascade volumes",
+                        shadow.draw_count(), engine::render::kCascadeCount,
+                        shadow.culled_count());
+    }
+
+    /**
      * Reports what the run cost, or says why the numbers mean nothing.
      *
      * The median is the number to compare two runs with. The mean moves with a
@@ -1417,9 +1442,7 @@ namespace {
      * Vsync makes every one of them the refresh rate, so the report says so
      * rather than printing 16.67 and letting a reader draw a conclusion from it.
      */
-    void report_frame_time(const engine::FrameStats& stats, const Options& options,
-                           const engine::render::MeshPass& mesh,
-                           const engine::render::ShadowPass& shadow) {
+    void report_frame_time(const engine::FrameStats& stats, const Options& options) {
         if (stats.counted() == 0) {
             ENGINE_LOG_INFO("No frame time to report. A run needs more than {} frames.",
                             kFrameStatsWarmup);
@@ -1432,23 +1455,6 @@ namespace {
             "p95 {:.3f} ms | p99 {:.3f} ms | low {:.3f} ms | high {:.3f} ms",
             run.count, run.median_ms, run.mean_ms, run.p95_ms, run.p99_ms, run.low_ms,
             run.high_ms);
-
-        // The light counts of the last frame. Reported because a cull that does
-        // nothing changes no pixel, so the picture cannot say whether it ran.
-        ENGINE_LOG_INFO("lights | {} lit the last frame | {} culled by the frustum | buffer holds {}",
-                        mesh.visible_light_count(), mesh.culled_light_count(),
-                        mesh.light_capacity());
-
-        // The mesh counts of the last frame, reported for the same reason. A
-        // mesh cull that works changes no pixel either.
-        ENGINE_LOG_INFO("meshes | {} draws the last frame | {} entities culled by the frustum",
-                        mesh.draw_count(), mesh.culled_mesh_count());
-
-        // The shadow counts run over every cascade, so an entity appears four
-        // times and may be culled from some cascades and kept in others.
-        ENGINE_LOG_INFO("shadows | {} draws over {} cascades | {} culled by the cascade volumes",
-                        shadow.draw_count(), engine::render::kCascadeCount,
-                        shadow.culled_count());
 
         // Nanoseconds to milliseconds.
         constexpr double kToMilliseconds = 1e-6;
@@ -1590,7 +1596,8 @@ namespace {
         }
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
-        report_frame_time(stats, options, *context.mesh_pass, *context.shadow_pass);
+        report_scene_counts(*context.mesh_pass, *context.shadow_pass);
+        report_frame_time(stats, options);
         return true;
     }
 

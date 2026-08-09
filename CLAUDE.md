@@ -313,22 +313,23 @@ the aliasing half of the render graph, and its trigger condition is not met yet:
 and the scene color are both live, but the mesh pass reads one and writes the other in the same
 pass, so neither can take the other's memory. #175 is the silent per-cell light drop.
 
-The mesh cull left one of its own. #177 is the tighter per-submesh test, which needs a scene that
-can measure it.
+The mesh cull left one of its own. #177 is the tighter test, per submesh rather than per entity. It
+covers both passes, and it needs a scene that can measure the difference.
 
 M5.7d culls the shadow pass too, which closed #180. `ShadowPass::draw` extracts the six planes of
 each cascade and tests every entity against them. It is the cascade volume and never the camera
 frustum, because a mesh behind the camera still casts into a cascade.
 
 The test cannot change the map. Nothing enables depth clamp, so the rasterizer already clips what
-falls outside those planes, and the cull drops the draw for geometry the GPU was going to throw
-away. It pays better than the camera cull because the pass runs four times over the same world and
-a cascade covers a slice rather than the whole view: 0.452 ms to 0.391 ms at the opening camera,
-and 0.363 ms to 0.249 ms with the camera turned away.
+falls outside those planes. The cull drops the draw for geometry the GPU was going to throw away.
+
+It pays better than the camera cull, for two reasons. The pass runs four times over the same world.
+And a cascade covers a slice rather than the whole view. So the opening camera goes from 0.452 ms to
+0.391 ms, and a camera turned away goes from 0.363 ms to 0.249 ms.
 
 A cascade volume is orthographic, which is where both depth planes are real. Every earlier frustum
-test drove an infinite perspective, whose far plane is degenerate, so none of them could see a
-depth pair that came out wrong. `tests/test_frustum.cpp` drives an orthographic volume now.
+test drove an infinite perspective, whose far plane is degenerate. So none of them could see a wrong
+depth pair. `tests/test_frustum.cpp` drives an orthographic volume now.
 
 M5.7c culls a mesh as well as a light. `src/math/bounds.h` turns the local bounds of a mesh and a
 world matrix into a world-space sphere, and `MeshPass::draw` tests it against the planes `cull()`

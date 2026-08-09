@@ -182,8 +182,12 @@ namespace engine::render {
          *
          * Counted for each cascade rather than for each entity, because an
          * entity is tested once for every cascade and may be dropped from some
-         * and kept in others. So this and draw_count() add up to the number of
-         * entities times kCascadeCount.
+         * and kept in others.
+         *
+         * This and draw_count() do not add up to the entity count times
+         * kCascadeCount. An entity whose mesh handle is null, or whose mesh has
+         * not loaded, reaches neither counter. Neither does anything at all when
+         * the world holds no directional light, because then no cascade runs.
          *
          * Reported for the reason MeshPass::culled_mesh_count() gives. A cull
          * that works changes no pixel, so the picture cannot say whether it ran.
