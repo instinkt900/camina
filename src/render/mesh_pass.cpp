@@ -4,6 +4,7 @@
 #include "assets/reference.h"
 #include "assets/shader.h"
 #include "core/log.h"
+#include "math/bounds.h"
 #include "render/shader_bindings.h"
 #include "scene/components.h"
 
@@ -1169,8 +1170,11 @@ namespace engine::render {
                                     irradiance_.c[i][2], 0.0F };
         }
 
-        const std::size_t culled =
-            gather_lights(world, frustum_from_view_projection(view_projection));
+        // Extracted once here. draw() culls meshes against the same planes, so
+        // the two cannot disagree about which camera the frame belongs to.
+        frustum_ = frustum_from_view_projection(view_projection);
+
+        const std::size_t culled = gather_lights(world, frustum_);
         frame.light_count[0] = static_cast<std::uint32_t>(visible_lights_.size());
         frame.light_count[1] = shadow_casts_ ? 1U : 0U;
         frame.light_count[2] = static_cast<std::uint32_t>(kCascadeCount);
@@ -1220,6 +1224,7 @@ namespace engine::render {
                         const assets::Content& content, const Vec3& camera_position) {
         draw_count_ = 0;
         pipeline_switches_ = 0;
+        culled_meshes_ = 0;
         if (!frame_sets_[frame_slot_].valid()) {
             return;
         }
@@ -1244,6 +1249,39 @@ namespace engine::render {
         gfx::cmd_bind_descriptor_set(commands, layout_pipeline(), kFrameSet,
                                      frame_sets_[frame_slot_]);
 
+        gather_draws(world, content, camera_position);
+
+        // Sort opaque draws by variant so that the pipeline is rebound only
+        // when the form changes, and not on every submesh that alternates
+        // between two materials.
+        //
+        // Depth order does not matter here: the depth test decides what wins.
+        // The blended draws are a different case, and draw_blended() keeps
+        // the back-to-front sort.
+        std::sort(opaque_.begin(), opaque_.end(),
+                  [](const OpaqueDraw& a, const OpaqueDraw& b) { return a.variant < b.variant; });
+
+        gfx::PipelineHandle bound;
+        for (const OpaqueDraw& draw : opaque_) {
+            if (!(bound == pipelines_.opaque[draw.variant])) {
+                bound = pipelines_.opaque[draw.variant];
+                gfx::cmd_bind_pipeline(commands, bound);
+                ++pipeline_switches_;
+            }
+            gfx::cmd_push_constants(commands, bound, &draw.model, sizeof(draw.model));
+            gfx::cmd_bind_vertex_buffer(commands, draw.vertices);
+            gfx::cmd_bind_index_buffer(commands, draw.indices);
+            gfx::cmd_bind_descriptor_set(commands, bound, kMaterialSet, draw.set);
+            gfx::cmd_set_cull_mode(commands, !draw.double_sided);
+            gfx::cmd_draw_indexed(commands, draw.index_count, 1, draw.first_index, 0);
+            ++draw_count_;
+        }
+
+        draw_blended(commands);
+    }
+
+    void MeshPass::gather_draws(const scene::World& world, const assets::Content& content,
+                                const Vec3& camera_position) {
         blended_.clear();
         opaque_.clear();
 
@@ -1255,6 +1293,20 @@ namespace engine::render {
             }
             const GpuMesh* mesh = meshes_.get(device_, content, renderer.mesh);
             if (mesh == nullptr) {
+                continue;
+            }
+
+            // Off screen entities issue nothing. The test is per entity and not
+            // per submesh, because the bounds of the whole mesh are what decide
+            // whether any of it can be seen. A mesh that is in view draws every
+            // part of it, and a tighter per-submesh test is issue #177.
+            //
+            // This runs before the opaque and blended split, so both kinds get
+            // it. The sphere is conservative, so a mesh it keeps may still be
+            // wholly outside. That costs a draw call and never a hole.
+            const Sphere bounds = world_sphere_from_bounds(transform.matrix, mesh->min, mesh->max);
+            if (!frustum_contains_sphere(frustum_, bounds.center, bounds.radius)) {
+                ++culled_meshes_;
                 continue;
             }
 
@@ -1312,34 +1364,6 @@ namespace engine::render {
                 });
             }
         }
-
-        // Sort opaque draws by variant so that the pipeline is rebound only
-        // when the form changes, and not on every submesh that alternates
-        // between two materials.
-        //
-        // Depth order does not matter here: the depth test decides what wins.
-        // The blended draws are a different case, and draw_blended() keeps
-        // the back-to-front sort.
-        std::sort(opaque_.begin(), opaque_.end(),
-                  [](const OpaqueDraw& a, const OpaqueDraw& b) { return a.variant < b.variant; });
-
-        gfx::PipelineHandle bound;
-        for (const OpaqueDraw& draw : opaque_) {
-            if (!(bound == pipelines_.opaque[draw.variant])) {
-                bound = pipelines_.opaque[draw.variant];
-                gfx::cmd_bind_pipeline(commands, bound);
-                ++pipeline_switches_;
-            }
-            gfx::cmd_push_constants(commands, bound, &draw.model, sizeof(draw.model));
-            gfx::cmd_bind_vertex_buffer(commands, draw.vertices);
-            gfx::cmd_bind_index_buffer(commands, draw.indices);
-            gfx::cmd_bind_descriptor_set(commands, bound, kMaterialSet, draw.set);
-            gfx::cmd_set_cull_mode(commands, !draw.double_sided);
-            gfx::cmd_draw_indexed(commands, draw.index_count, 1, draw.first_index, 0);
-            ++draw_count_;
-        }
-
-        draw_blended(commands);
     }
 
     void MeshPass::draw_blended(gfx::CommandList* commands) {

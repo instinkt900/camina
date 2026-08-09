@@ -136,6 +136,16 @@ engine_enable_clang_tidy(test_frustum)
 
 add_test(NAME frustum COMMAND test_frustum)
 
+# The world sphere a mesh bound turns into. No device either. This is the step
+# before the frustum test, and it is where a radius that comes out too small
+# drops a mesh that is on screen. See issue #176.
+add_executable(test_bounds test_bounds.cpp)
+target_link_libraries(test_bounds PRIVATE engine::core)
+engine_set_warnings(test_bounds)
+engine_enable_clang_tidy(test_bounds)
+
+add_test(NAME bounds COMMAND test_bounds)
+
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
 add_executable(test_sandbox test_sandbox.cpp)

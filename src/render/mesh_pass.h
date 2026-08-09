@@ -334,9 +334,14 @@ namespace engine::render {
          * @param camera_position Where the camera is, in world space. The
          * shading needs it for the view vector that every specular term uses.
          *
+         * An entity whose bounds miss the camera frustum issues no draw. The
+         * test is per entity rather than per submesh, so a mesh that is in view
+         * draws all of its parts. culled_mesh_count() reports what it dropped.
+         *
          * @warning cull() must have run for this frame. The camera reaches the
          * shader through the frame block that cull() uploads, so this takes no
-         * view matrix of its own.
+         * view matrix of its own. The frustum this culls against comes from
+         * there too.
          */
         void draw(gfx::CommandList* commands, const scene::World& world,
                   const assets::Content& content, const Vec3& camera_position);
@@ -384,6 +389,17 @@ namespace engine::render {
          * @return The count of point lights whose range sphere missed the view.
          */
         [[nodiscard]] std::size_t culled_light_count() const { return culled_lights_; }
+
+        /**
+         * @brief How many entities the last draw() culled against the frustum.
+         *
+         * The same argument culled_light_count() makes. A mesh cull that works
+         * changes no pixel, so the picture cannot say whether it ran. This can.
+         *
+         * @return The count of entities whose bounds sphere missed the view. An
+         * entity counts once however many submeshes it holds.
+         */
+        [[nodiscard]] std::size_t culled_mesh_count() const { return culled_meshes_; }
 
         /// @brief How many lights the storage buffer holds without growing.
         /// @return The capacity, which grows to fit and never shrinks.
@@ -492,7 +508,21 @@ namespace engine::render {
         /// on PipelineSet about why any of them would serve.
         [[nodiscard]] gfx::PipelineHandle layout_pipeline() const { return pipelines_.opaque[0]; }
 
-        /// Draws what collect() gathered, back to front.
+        /**
+         * Sorts every visible submesh into ::opaque_ and ::blended_.
+         *
+         * Separate from draw() because it records no command. It reads the
+         * world, culls each entity against ::frustum_, and builds the two
+         * lists. draw() then issues them.
+         *
+         * @param world The world to read.
+         * @param content The game content tree, for the mesh and material loads.
+         * @param camera_position Where the camera is, for the blended depth sort.
+         */
+        void gather_draws(const scene::World& world, const assets::Content& content,
+                          const Vec3& camera_position);
+
+        /// Draws what gather_draws() collected, back to front.
         void draw_blended(gfx::CommandList* commands);
 
         /// Builds the per-frame blocks and the sets that bind them.
@@ -551,6 +581,16 @@ namespace engine::render {
         std::vector<GpuLight> visible_lights_;
         /// @brief How many point lights the frustum test dropped last frame.
         std::size_t culled_lights_ = 0;
+        /// @brief How many entities the frustum test dropped last frame.
+        std::size_t culled_meshes_ = 0;
+        /**
+         * @brief The camera planes of this frame, in world space.
+         *
+         * cull() extracts them for the lights and draw() reuses them for the
+         * meshes. One extraction rather than two, and the pair cannot disagree
+         * about which camera the frame belongs to.
+         */
+        Frustum frustum_;
         /// @brief The set that binds each block above.
         std::array<gfx::DescriptorSetHandle, gfx::kFramesInFlight> frame_sets_;
         /// @brief Which slot of the ring the next draw uses.
