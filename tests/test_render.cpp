@@ -225,6 +225,7 @@ namespace {
     using engine::render::kMeshVariantCount;
     using engine::render::mesh_variant_defines;
     using engine::render::mesh_variant_index;
+    using engine::render::cluster_cell_capacity_for;
     using engine::render::pick_shader_variant;
 
     /// A cooked form that was compiled with @p defines.
@@ -305,6 +306,64 @@ namespace {
               "a sidecar that lists no such variant gives no form");
     }
 
+    // The per-cell capacity of the cluster grid. It decides whether a crowded
+    // cell can drop a light at all, so the rule is worth pinning down without a
+    // device. See issue #175.
+
+    void test_a_small_scene_gets_the_floor() {
+        check(cluster_cell_capacity_for(0) == engine::render::kMinLightsPerCell,
+              "an empty scene gets the floor rather than nothing");
+        check(cluster_cell_capacity_for(3) == engine::render::kMinLightsPerCell,
+              "the sandbox light count gets the floor");
+        check(cluster_cell_capacity_for(engine::render::kMinLightsPerCell) ==
+                  engine::render::kMinLightsPerCell,
+              "a scene that exactly fills the floor does not grow");
+    }
+
+    void test_the_capacity_holds_every_light_it_can() {
+        // This is the whole guarantee. Below the ceiling a cell holds every
+        // visible light, so no camera can make it drop one.
+        for (std::size_t count = 0; count <= engine::render::kMaxLightsPerCell; ++count) {
+            if (cluster_cell_capacity_for(count) < count) {
+                check(false, "the capacity fell below the light count");
+                return;
+            }
+        }
+        check(true, "every count up to the ceiling fits in one cell");
+    }
+
+    void test_the_capacity_doubles() {
+        // Doubling is what keeps a scene that grows one light at a time from
+        // reallocating the grid once for each light.
+        check(cluster_cell_capacity_for(engine::render::kMinLightsPerCell + 1) ==
+                  engine::render::kMinLightsPerCell * 2,
+              "one light past the floor doubles it rather than growing to fit");
+        check(cluster_cell_capacity_for(engine::render::kMinLightsPerCell * 2) ==
+                  engine::render::kMinLightsPerCell * 2,
+              "the doubled capacity is used to the end before it doubles again");
+    }
+
+    void test_the_ceiling_holds() {
+        check(cluster_cell_capacity_for(engine::render::kMaxLightsPerCell + 1) ==
+                  engine::render::kMaxLightsPerCell,
+              "one light past the ceiling stops at the ceiling");
+        check(cluster_cell_capacity_for(1'000'000) == engine::render::kMaxLightsPerCell,
+              "a scene far past the ceiling stops there rather than overflowing");
+    }
+
+    void test_a_lower_ceiling_wins_over_the_floor() {
+        // --cluster-cell-lights forces the overflow so it can be measured, and a
+        // value under the floor has to win or nothing could reach the drop path.
+        check(cluster_cell_capacity_for(3, 64) == 64, "a ceiling under the floor wins");
+        check(cluster_cell_capacity_for(1'000'000, 1) == 1,
+              "a ceiling of one holds one light for each cell");
+    }
+
+    void test_the_stride_carries_the_count_word() {
+        check(engine::render::cluster_cell_stride(256) == 257,
+              "a cell is one count word plus its indices");
+    }
+
 } // namespace
 
 int main() {
@@ -327,5 +386,12 @@ int main() {
     test_a_form_is_found_whatever_order_it_lists_its_defines();
     test_a_form_with_more_defines_is_not_a_substitute();
     test_a_missing_form_reports_rather_than_guesses();
+    test::section("the cluster grid capacity");
+    test_a_small_scene_gets_the_floor();
+    test_the_capacity_holds_every_light_it_can();
+    test_the_capacity_doubles();
+    test_the_ceiling_holds();
+    test_a_lower_ceiling_wins_over_the_floor();
+    test_the_stride_carries_the_count_word();
     return test::report();
 }
