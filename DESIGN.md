@@ -877,18 +877,28 @@ larger question, which is a scene whose draw list is too large for the CPU to wa
 in M5 asks that, and the answer would be wasted before the draw list is built from something other
 than an EnTT view.
 
-The sandbox cannot measure the saving and it can prove the correctness. Every entity is in view
+The sandbox proves the correctness and it cannot measure much of a saving. Every entity is in view
 from the camera the sandbox opens with, so the cull drops nothing and the picture is byte for byte
 what it was. Turning the camera 45 degrees drops 5 of 27 entities, and that picture is byte for
 byte identical to the same view with no cull. That is the result that matters: a conservative test
-must never make a hole. Turning it 180 degrees drops 22 and takes the mesh pass from 1.46 ms to
-0.002 ms. Five draws survive, which are the walls of the room, because the camera stands inside
-them and their spheres therefore contain it.
+must never make a hole. Turning it 180 degrees drops 22. Five draws survive, which are the walls of
+the room, because the camera stands inside them and their spheres therefore contain it.
 
-That last measurement exposes the next one. The shadow pass stays at 0.41 ms on the same view, so
-it is now the whole cost of a frame that draws almost nothing. It cannot reuse this frustum,
-because a mesh behind the camera still casts into a cascade, and the test therefore has to run
-against each cascade in turn. Issue #180 holds it.
+The saving in this scene is small, and saying so is the point. Against the same camera the mesh
+pass goes from 1.536 ms to 1.510 ms at 45 degrees, and from 0.094 ms to 0.002 ms at 180. The first
+is inside the run-to-run spread. A GPU already rejects an off-screen triangle cheaply, so culling a
+handful of small meshes on the CPU buys almost nothing. What it buys is the draw call and the
+vertex work, and the sandbox has too little of either to show it. That is a reason to expect the
+cull to pay at Sponza scale rather than a reason to doubt it, and #88 is where it gets measured.
+
+Comparing two different cameras is the mistake to avoid here. The mesh pass costs 1.46 ms looking
+at the room and 0.002 ms looking away, and reading that pair as the effect of the cull overstates
+it by a factor of fifteen. Almost all of that difference is the camera.
+
+The 180 degree measurement exposes the next piece of work. The shadow pass stays at 0.41 ms on
+that view, so it is now the whole cost of a frame that draws almost nothing. It cannot reuse this
+frustum, because a mesh behind the camera still casts into a cascade, and the test therefore has to
+run against each cascade in turn. Issue #180 holds it.
 
 **The graph derives barriers first, and aliases memory when something needs it.** A full
 aliasing allocator is a large piece of work, and today there is one pass and nothing to alias

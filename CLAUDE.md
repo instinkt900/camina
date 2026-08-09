@@ -326,8 +326,15 @@ columns lean the same way and an underestimate drops a mesh that is on screen.
 
 The sandbox proves it rather than measuring it. Every entity is in view from the opening camera, so
 nothing culls and the picture does not move. Turning the camera 45 degrees drops 5 of 27 entities
-and the picture is still byte for byte identical. Turning it 180 drops 22 and takes the mesh pass
-from 1.46 ms to 0.002 ms. The test is per entity, and #177 holds the tighter per-submesh one.
+and the picture is still byte for byte identical. Turning it 180 drops 22.
+
+The saving here is small. Against the same camera the mesh pass goes from 1.536 ms to 1.510 ms at
+45 degrees, and from 0.094 ms to 0.002 ms at 180. A GPU rejects an off-screen triangle cheaply, so
+the cull buys the draw call and the vertex work rather than fragment time, and the sandbox has too
+little of either to show it. Comparing two different cameras is what overstates it: 1.46 ms looking
+at the room against 0.002 ms looking away is mostly the camera, not the cull.
+
+The test is per entity, and #177 holds the tighter per-submesh one.
 
 Verified on 2026-08-09 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
