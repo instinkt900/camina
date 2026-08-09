@@ -106,7 +106,8 @@ The runtime watches `src/render/content` as well, so a shader edit shows up live
 not build. A cook that fails now keeps the manifest entry the last cook gave that asset,
 because losing it hides a cooked file that is still on disk and stops the next start.
 
-M5 is in progress. The first half of M5.1 landed: a descriptor set layout now comes from the
+M5 is in progress, and the paragraphs below record it in the order the parts landed rather than
+by number. The first half of M5.1 landed: a descriptor set layout now comes from the
 cooked SPIR-V rather than from hand-written C++. The cooker links SPIRV-Reflect and writes
 `src/assets/shader.h`, which carries the module, the bindings, and the members of every
 uniform block in one file. `gfx::GraphicsPipelineDesc` takes those bindings, and
@@ -149,6 +150,38 @@ mostly overhead cannot measure a change to the part that is not.
 The descriptor pool has to reserve every type a set layout names. It reserved no storage buffer
 at first, and this machine ran anyway, because that driver ignores the per-type counts. Another
 vendor answers `VK_ERROR_OUT_OF_POOL_MEMORY` instead.
+
+M5.7b closes the lighting work and closed #151. A compute pass divides the frustum into 16 tiles
+across, 12 down, and 16 depth slices, and writes a short list of light indices for each cell.
+`mesh.frag` works out which cell a fragment is in and loops over that list. Over a room of 1024
+point lights with 837 in view, the mesh pass falls from 100.7 ms to 11.2 ms and the picture does
+not move. The cull is 0.5 ms of that, and it is 0.009 ms in the sandbox.
+
+It is the first compute path in the engine. `gfx::` gained `ComputePipelineDesc`,
+`create_compute_pipeline`, `cmd_dispatch`, and `cmd_buffer_barrier`, and one pipeline handle and
+one descriptor pool serve both kinds. The cull is a pass in the frame graph, so `kClusterGrid` is
+the first graph resource that is a buffer rather than an image and the barrier falls out of
+`derive_barriers`.
+
+`BufferDesc::device_only` came from this. A uniform or a storage buffer is host-visible and
+mapped by default, which is the wrong memory for three megabytes a shader fills and another
+shader reads.
+
+The slices are exponential in view distance. Linear in NDC depth looks reasonable and is not:
+reverse-Z puts infinity at zero, so an even split of that range leaves fifteen of sixteen slices
+inside the first 1.6 metres and the whole room in the last one. The picture stayed correct
+throughout, because a cell that is too large only makes the cull conservative. That is why the
+measurement was the thing that found it, and why a screenshot could not.
+
+The last slice reaches past where the grid stops. A fragment beyond that distance clamps into
+it, so a slice that ended there dropped a far light and left the surface unlit. Cutting the reach
+to 4 metres and the light range to 3 moves 4.45 percent of the frame, which is how that one was
+measured rather than argued.
+
+A cell holds 256 light indices. That number is measured: at 64 the 837-light scene lost light on
+36 percent of the frame, by up to 228 of 255 on a channel, and at 256 it matches a shader that
+loops over every light byte for byte. So the grid was exact and the cap was the whole error. The
+drop is still silent past 256, which is issue #175.
 
 The alpha modes close it. Mask discards in the shader. Blend needs more than a shader, so
 `MeshPass` holds a second pipeline that blends and does not write depth, and it gathers every
@@ -271,15 +304,24 @@ when they disagree, because Vulkan calls that undefined rather than an error. Th
 eight pipelines, four forms times opaque and blended, and a reload rebuilds all of them or
 keeps all of the old ones.
 
-The opaque draws are not grouped by form yet, so a mixed scene rebinds more than it has to.
-`pipeline_switch_count()` measures it and issue #105 holds the work, under M5 rather than
-M5.3. M5.3 shipped without it, because the M5 done-when test is a scene that renders
-correctly rather than one that renders fast.
+The opaque draws sort by pipeline variant, which closed #105. `pipeline_switch_count()` is what
+measures it.
 
-Verified on 2026-08-04 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+M5 is down to three issues. #88 carries the done-when test and needs a Sponza-class scene, which
+#130 has to fetch from outside git because the geometry is larger than GitHub accepts. #122 is
+the aliasing half of the render graph, and its trigger condition is not met yet: the shadow map
+and the scene color are both live, but the mesh pass reads one and writes the other in the same
+pass, so neither can take the other's memory. #175 is the silent per-cell light drop.
+
+Nothing culls a mesh against the frustum yet. `MeshPass::draw` walks every entity that names one,
+whatever the camera is pointing at, and only the lights are culled. #130 names that as the reason
+a Sponza-class scene would not be interactive, so it comes before #88 rather than after it.
+
+Verified on 2026-08-09 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. Two blended panes drew over the
-opaque scene with no validation message either. The build produces no warnings under the full
+opaque scene with no validation message either. Synchronization validation reports nothing over
+300 frames offscreen and 200 windowed. The build produces no warnings under the full
 warning set.
 
 ## Development flow

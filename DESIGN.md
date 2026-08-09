@@ -796,14 +796,26 @@ fixed array of eight lights until M5.7a. That followed rule 4.6, because the san
 scene with two. The M5 done-when test is a Sponza-class scene, which carries far more, so the
 milestone needed an answer rather than a larger array.
 
-M5.7a took the first two of the three steps below. The list is a storage buffer that grows to
-fit, so the count is a number rather than a constant. A point light whose range sphere misses
-the camera frustum never reaches the buffer. That carries a few hundred lights. The cluster grid
-is M5.7b in issue #151, and it is what carries thousands.
+M5.7a took the first two of the three steps. The list is a storage buffer that grows to fit, so
+the count is a number rather than a constant. A point light whose range sphere misses the camera
+frustum never reaches the buffer. That carries a few hundred lights.
 
-A compute pass divides the frustum into a grid of tiles across depth slices, and writes a short
-list of lights for each cell. The forward pass reads the list for the cell a pixel is in. The
-cost then follows the lights near a pixel rather than the lights in the scene.
+M5.7b is the third step and it carries thousands. A compute pass divides the frustum into a grid
+of tiles across depth slices, and writes a short list of lights for each cell. The forward pass
+reads the list for the cell a pixel is in, so the cost follows the lights near a pixel rather
+than the lights in the scene. Measured over a room of 1024 point lights with 837 in view, the
+mesh pass falls from 100.7 ms to 11.2 ms and the picture does not change. The cull itself costs
+0.5 ms.
+
+The slices grow exponentially in view distance rather than linearly in depth. Reverse-Z puts
+the near plane at 1 and infinity at 0, so a linear split of that range packs fifteen of sixteen
+slices inside the first 1.6 metres and leaves the whole room in the last one. The last slice
+also reaches past where the grid stops, because a fragment beyond that distance clamps into it
+and a slice that ended there would leave a far light out of the list.
+
+A cell holds a fixed number of light indices and drops the rest. That number is measured: at 64
+the scene above lost light on 36 percent of the frame, and at 256 it matches a shader that loops
+over every light exactly. The drop is still silent, which is issue #175.
 
 Deferred shading answers the same question and it was rejected. It was the answer when no
 compute shader could cull lights up front, and it carries four costs that clustered forward
@@ -813,8 +825,21 @@ two shading paths that must agree. And it holds every material to the fields the
 carries, which fights the reflected parameter block above.
 
 The order matters. The cull pass is a compute pass that writes a resource the mesh pass reads,
-which is exactly what the frame graph in M5.3 exists to schedule. So the light grid lands after
-the graph and not before it. Issue #98 holds the decision and the work.
+which is exactly what the frame graph in M5.3 exists to schedule. So the light grid landed after
+the graph and not before it, and the cull declares its write the way every other pass declares
+one. The barrier between the dispatch and the fragment reads falls out of `derive_barriers`
+rather than being written by hand. Issue #98 holds the decision.
+
+The grid is the first graph resource that is a buffer rather than an image, and the derivation
+needed nothing new for it. A `ResourceId` is only an index and the states are the whole
+vocabulary, so the caller that issues the barriers is the only part that has to know a buffer
+has no layout to change.
+
+It is also the first buffer that only the GPU touches. A uniform or a storage buffer is
+host-visible and mapped by default, which is right for a block the CPU rewrites every frame and
+wrong for three megabytes one shader fills and another reads. `BufferDesc::device_only` is the
+answer, and `update_buffer` refuses such a buffer rather than writing through a pointer that is
+not there.
 
 **The graph derives barriers first, and aliases memory when something needs it.** A full
 aliasing allocator is a large piece of work, and today there is one pass and nothing to alias
@@ -825,8 +850,13 @@ scene.
 
 Aliasing gets a seam rather than an implementation. The graph knows every resource lifetime
 already, because it knows the reads and the writes, so the allocator is an addition and not a
-rewrite. Rule 4.6 says to build it when a shadow atlas and a tonemap target are both live and
-neither needs the other.
+rewrite. Rule 4.6 says to build it when two transients are live and neither needs the other.
+
+That second condition is not met yet, and the shadow map and the scene color are why. They are
+both live, but the mesh pass reads the shadow map and writes the scene color in the same pass, so
+their lifetimes touch and neither can take the other's memory. A depth prepass target or a second
+shadow cascade atlas would be the first genuinely disjoint pair. Issue #122 holds the work and
+names the wrong pair, which is worth fixing before somebody starts from it.
 
 **begin_frame hands over an image in no state at all, and the graph moves it.** The frame used
 to transition its own color target and its own depth target. That put the barriers in the one
