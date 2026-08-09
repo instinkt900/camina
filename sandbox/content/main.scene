@@ -3,7 +3,7 @@
   "entities": [
     {
       "parent": -1,
-      "prefab": "room",
+      "prefab": "models/room/room.gltf",
       "overrides": {
         "0": {
           "Name": {
@@ -15,7 +15,7 @@
     },
     {
       "parent": -1,
-      "prefab": "crate",
+      "prefab": "crate.prefab",
       "overrides": {
         "0": {
           "Transform": {
@@ -30,7 +30,7 @@
     },
     {
       "parent": 1,
-      "prefab": "crate",
+      "prefab": "crate.prefab",
       "overrides": {
         "0": {
           "Name": {
@@ -54,7 +54,7 @@
     },
     {
       "parent": -1,
-      "prefab": "crate",
+      "prefab": "crate.prefab",
       "overrides": {
         "0": {
           "Name": {
@@ -87,7 +87,7 @@
     },
     {
       "parent": -1,
-      "prefab": "flight helmet",
+      "prefab": "models/flight_helmet/FlightHelmet.gltf",
       "overrides": {
         "0": {
           "Name": {
@@ -111,7 +111,7 @@
     },
     {
       "parent": -1,
-      "prefab": "spheres",
+      "prefab": "models/spheres/spheres.gltf",
       "overrides": {
         "0": {
           "Name": {
@@ -130,7 +130,7 @@
     },
     {
       "parent": -1,
-      "prefab": "glass",
+      "prefab": "models/glass/glass.gltf",
       "overrides": {
         "0": {
           "Name": {

@@ -162,9 +162,7 @@ namespace {
         const std::filesystem::path content = sandbox::default_content_directory();
         check(std::filesystem::is_directory(content), "the content directory exists");
         check(std::filesystem::exists(content / sandbox::kSceneFile), "the scene file ships");
-        check(std::filesystem::exists(content /
-                                      (std::string(sandbox::kCratePrefab) + ".prefab")),
-              "the crate prefab ships");
+        check(std::filesystem::exists(content / "crate.prefab"), "the crate prefab ships");
     }
 
     void test_shipped_scene_loads() {
@@ -174,10 +172,11 @@ namespace {
         sc::World world;
         check(load_shipped(world, registry, library),
               "the shipped content loads");
-        // The hand-authored crate, and the room, the flight helmet, the glass
-        // panes, and the roughness spheres the cooker wrote from their glTF
-        // node trees.
-        check(library.size() == 5, "all five prefabs went into the library");
+        // Every prefab in the cooked tree, which is the hand-authored crate and
+        // the five the cooker wrote from a glTF node tree. The crate glTF is
+        // one of those five, and nothing instances it, because crate.prefab
+        // wraps it. Registering it anyway is what "every prefab" means.
+        check(library.size() == 6, "every prefab in the cooked tree went into the library");
 
         // The room, three crate instances of two entities each, one beacon,
         // seven for the flight helmet (the root the cooker added, and one for
