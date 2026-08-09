@@ -233,6 +233,15 @@ namespace {
                             text);
             return;
         }
+        // The flag is there to lower the ceiling. Raising it past the memory
+        // budget is clamped rather than obeyed, and saying so beats a run that
+        // reports a capacity nobody asked for.
+        if (value > engine::render::kMaxLightsPerCell) {
+            ENGINE_LOG_WARN("--cluster-cell-lights {} is above the {} the cluster grid budget "
+                            "allows, so it holds at {}.",
+                            value, engine::render::kMaxLightsPerCell,
+                            engine::render::kMaxLightsPerCell);
+        }
         out = value;
     }
 

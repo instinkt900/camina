@@ -327,9 +327,9 @@ keeps all of the old ones.
 The opaque draws sort by pipeline variant, which closed #105. `pipeline_switch_count()` is what
 measures it.
 
-M5 is down to two issues. #88 carries the done-when test and needs a Sponza-class scene, which
-#130 has to fetch from outside git because the geometry is larger than GitHub accepts. #122 is
-the aliasing half of the render graph, and its trigger condition is not met yet: the shadow map
+M5 is down to two issues. #88 carries the done-when test and needs a Sponza-class scene. Issue
+#130 has to fetch that from outside git, because the geometry is larger than GitHub accepts. #122
+is the aliasing half of the render graph, and its trigger condition is not met yet: the shadow map
 and the scene color are both live, but the mesh pass reads one and writes the other in the same
 pass, so neither can take the other's memory.
 

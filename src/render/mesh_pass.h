@@ -33,6 +33,7 @@
 #include "render/texture_cache.h"
 #include "scene/world.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -153,6 +154,26 @@ namespace engine::render {
      */
     [[nodiscard]] std::uint32_t cluster_cell_capacity_for(
         std::size_t light_count, std::uint32_t ceiling = kMaxLightsPerCell);
+
+    /**
+     * @brief What the per-cell capacity becomes on a frame with @p light_count.
+     *
+     * cluster_cell_capacity_for() says what a frame needs. This says what to
+     * use, which is never below what the grid already holds. A scene whose light
+     * count crosses a power of two every frame would otherwise wait for the
+     * device and reallocate the grid on each one.
+     *
+     * @p ceiling still wins over @p current, so lowering it takes effect rather
+     * than being held off by a grid that is already larger.
+     *
+     * @param current How many indices a cell holds now.
+     * @param light_count How many lights the frame can see.
+     * @param ceiling The most a cell may hold.
+     * @return The capacity to use. Equal to @p current when nothing has to move.
+     */
+    [[nodiscard]] std::uint32_t grow_cluster_cell_capacity(
+        std::uint32_t current, std::size_t light_count,
+        std::uint32_t ceiling = kMaxLightsPerCell);
 
     /// @brief How many uint32 values one cell occupies at @p cell_capacity.
     /// @param cell_capacity How many light indices the cell holds.
@@ -462,10 +483,13 @@ namespace engine::render {
          * not the one in use, so it can be called at any time.
          *
          * @param ceiling The most a cell may hold. Zero restores
-         * ::kMaxLightsPerCell.
+         * ::kMaxLightsPerCell, and so does anything above it. The budget wins
+         * over the argument, because a grid larger than ::kMaxLightsPerCell
+         * describes is memory nothing promised.
          */
         void set_cluster_cell_ceiling(std::uint32_t ceiling) {
-            cluster_ceiling_ = ceiling == 0 ? kMaxLightsPerCell : ceiling;
+            cluster_ceiling_ =
+                ceiling == 0 ? kMaxLightsPerCell : std::min(ceiling, kMaxLightsPerCell);
         }
 
         /**

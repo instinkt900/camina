@@ -359,6 +359,42 @@ namespace {
               "a ceiling of one holds one light for each cell");
     }
 
+    void test_the_budget_wins_over_a_raised_ceiling() {
+        using engine::render::grow_cluster_cell_capacity;
+        // The flag lowers the ceiling. A caller who raises it would otherwise get
+        // a grid larger than kMaxLightsPerCell promises, and the doubling would
+        // run past a uint32 for a ceiling near its limit.
+        check(cluster_cell_capacity_for(4000, 4096) == engine::render::kMaxLightsPerCell,
+              "a ceiling above the budget is held at the budget");
+        check(cluster_cell_capacity_for(4'000'000'000, 0xFFFFFFFFU) ==
+                  engine::render::kMaxLightsPerCell,
+              "the largest ceiling there is neither overflows nor wins");
+        check(grow_cluster_cell_capacity(256, 4000, 4096) == engine::render::kMaxLightsPerCell,
+              "the growth step holds at the budget too");
+    }
+
+    void test_the_capacity_never_shrinks() {
+        using engine::render::grow_cluster_cell_capacity;
+        // A scene whose light count crosses a power of two every frame would
+        // wait for the device and reallocate the grid on each one.
+        check(grow_cluster_cell_capacity(1024, 3) == 1024,
+              "a scene that loses its lights keeps the grid it has");
+        check(grow_cluster_cell_capacity(1024, 1025) == 2048, "it still grows when it has to");
+        check(grow_cluster_cell_capacity(512, 513) == 1024,
+              "one light past the capacity doubles it");
+        check(grow_cluster_cell_capacity(512, 512) == 512, "a frame that fits moves nothing");
+    }
+
+    void test_a_lowered_ceiling_beats_the_grid_in_hand() {
+        using engine::render::grow_cluster_cell_capacity;
+        // --cluster-cell-lights arrives after the capacity is already 256, so a
+        // ceiling that lost to "never shrink" could never take effect.
+        check(grow_cluster_cell_capacity(engine::render::kMinLightsPerCell, 3, 64) == 64,
+              "a ceiling under the capacity in hand wins");
+        check(grow_cluster_cell_capacity(2048, 4000, 256) == 256,
+              "a lowered ceiling wins over a much larger grid");
+    }
+
     void test_the_stride_carries_the_count_word() {
         check(engine::render::cluster_cell_stride(256) == 257,
               "a cell is one count word plus its indices");
@@ -392,6 +428,9 @@ int main() {
     test_the_capacity_doubles();
     test_the_ceiling_holds();
     test_a_lower_ceiling_wins_over_the_floor();
+    test_the_budget_wins_over_a_raised_ceiling();
+    test_the_capacity_never_shrinks();
+    test_a_lowered_ceiling_beats_the_grid_in_hand();
     test_the_stride_carries_the_count_word();
     return test::report();
 }

@@ -264,11 +264,22 @@ namespace engine::render {
     }
 
     std::uint32_t cluster_cell_capacity_for(std::size_t light_count, std::uint32_t ceiling) {
+        // The budget wins over the argument. A caller that asks for more would
+        // otherwise get a grid past the size kMaxLightsPerCell promises, and the
+        // doubling below would run past a uint32 for a ceiling near its limit.
+        const std::uint32_t limit = std::min(ceiling, kMaxLightsPerCell);
         std::uint32_t capacity = kMinLightsPerCell;
-        while (capacity < light_count && capacity < ceiling) {
+        while (capacity < light_count && capacity < limit) {
             capacity *= 2;
         }
-        return std::min(capacity, ceiling);
+        return std::min(capacity, limit);
+    }
+
+    std::uint32_t grow_cluster_cell_capacity(std::uint32_t current, std::size_t light_count,
+                                             std::uint32_t ceiling) {
+        const std::uint32_t limit = std::min(ceiling, kMaxLightsPerCell);
+        const std::uint32_t wanted = cluster_cell_capacity_for(light_count, limit);
+        return std::min(std::max(wanted, current), limit);
     }
 
     PassDesc MeshPass::declare() {
@@ -528,7 +539,8 @@ namespace engine::render {
     }
 
     bool MeshPass::ensure_capacity(std::size_t needed) {
-        const std::uint32_t cells = cluster_cell_capacity_for(needed, cluster_ceiling_);
+        const std::uint32_t cells =
+            grow_cluster_cell_capacity(cluster_capacity_, needed, cluster_ceiling_);
         if (needed <= light_capacity_ && cells == cluster_capacity_) {
             return true;
         }
