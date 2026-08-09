@@ -65,6 +65,17 @@ namespace engine {
     inline constexpr Vec3 world_forward{ 0.0F, 0.0F, -1.0F };
 
     /**
+     * @brief How far in front of the camera the near plane sits, in meters.
+     *
+     * Read this instead of writing 0.1 again. Three places need the same number
+     * and none of them can check the others: the camera projection, the first
+     * shadow cascade, and the depth slices of the cluster grid. A near plane
+     * that disagrees between two of them puts a surface in the wrong slice or
+     * the wrong cascade, and nothing reports it.
+     */
+    inline constexpr float kDefaultNearPlane = 0.1F;
+
+    /**
      * @brief Builds an infinite reverse-Z projection matrix for Vulkan clip space.
      *
      * The matrix maps the near plane to depth 1 and infinity to depth 0. Use it

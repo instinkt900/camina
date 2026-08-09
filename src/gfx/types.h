@@ -22,7 +22,7 @@ namespace engine::gfx {
     struct PipelineTag {};
 
     /**
-     * @brief Refers to a graphics pipeline the device owns.
+     * @brief Refers to a graphics or compute pipeline the device owns.
      *
      * The handle is 8 bytes and carries a generation, so a stale handle resolves
      * to nothing instead of to the wrong pipeline. See rule 4.2 in DESIGN.md.
@@ -79,7 +79,8 @@ namespace engine::gfx {
          * count that is a number rather than a constant.
          *
          * Like Uniform, this lives in host-visible memory and stays mapped, so
-         * update_buffer() writes it. See DESIGN.md section 9 and issue #98.
+         * update_buffer() writes it. Set BufferDesc::device_only when a shader
+         * is the only writer. See DESIGN.md section 9 and issue #98.
          */
         Storage,
     };
@@ -94,6 +95,23 @@ namespace engine::gfx {
         const void* data = nullptr;              ///< The bytes to upload. Required.
         std::size_t size = 0;                    ///< How many bytes to upload.
         BufferUsage usage = BufferUsage::Vertex; ///< How the buffer will be bound.
+        /**
+         * @brief Whether a shader is the only thing that writes this buffer.
+         *
+         * A uniform or a storage buffer is host-visible and mapped by default,
+         * because the common case is a block the CPU rewrites every frame. That
+         * memory is the wrong home for a buffer one shader fills and another
+         * reads. On a discrete GPU it is system memory across PCIe, and the
+         * write-combined kind is slow to read back.
+         *
+         * Set this and the buffer lands in device-local memory instead. @c data
+         * may then be null, which leaves the contents undefined until a shader
+         * writes them.
+         *
+         * @warning update_buffer() cannot write one of these, and it says so.
+         * The memory is not mapped, so a shader is the only way to fill it.
+         */
+        bool device_only = false;
     };
 
     /// @brief How a sampler picks a color between texel centers.
@@ -344,6 +362,40 @@ namespace engine::gfx {
         DescriptorKind kind = DescriptorKind::CombinedImageSampler;
         TextureHandle texture; ///< The texture, for a CombinedImageSampler.
         BufferHandle buffer;   ///< The buffer, for a UniformBuffer or StorageBuffer.
+    };
+
+    /// @brief Settings for create_compute_pipeline().
+    struct ComputePipelineDesc {
+        /// @brief The compute stage. Required.
+        ShaderCode compute;
+
+        /// @brief How many bytes of push constants the pipeline reads. 0 for none.
+        std::uint32_t push_constant_size = 0;
+        /**
+         * @brief Which stages read the push constants, as kStageBit values.
+         *
+         * The default is the compute stage, because that is the only stage a
+         * compute pipeline has.
+         *
+         * @warning This must name every stage that declares the block. Vulkan
+         * matches the range in the layout against the stages cmd_push_constants()
+         * writes, and a stage that reads a block nobody wrote to it reads
+         * undefined values rather than reporting anything.
+         */
+        std::uint32_t push_constant_stages = kStageBitCompute;
+
+        /**
+         * @brief The descriptors the pipeline reads, or null for none.
+         *
+         * These come from the cooked shader, which carries what SPIRV-Reflect
+         * found. A compute pipeline has one stage, so no merge is needed.
+         *
+         * @warning The entries must be sorted by set and then by binding, and no
+         * set may be skipped. Vulkan numbers set layouts by position, so a gap
+         * would silently shift every set after it.
+         */
+        const DescriptorBinding* bindings = nullptr;
+        std::size_t binding_count = 0; ///< How many entries @c bindings holds.
     };
 
     /// @brief Settings for create_graphics_pipeline().

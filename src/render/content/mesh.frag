@@ -50,6 +50,10 @@ layout(set = 0, binding = 0) uniform Frame {
     // x is how many lights are real. y is 1 when a directional light casts a
     // shadow. z is how many cascades are in use. w is padding.
     uvec4 light_count;
+    // x is the near plane the projection was built with and y is how far the
+    // cluster slices reach. zw is the viewport in pixels. C++ owns all four,
+    // and cluster_cull.comp reads the same first pair.
+    vec4 cluster_view;
     // The irradiance of the environment, as a second order spherical harmonic.
     // rgb is one coefficient and w is padding, because std140 puts an array
     // element on a sixteen byte boundary either way.
@@ -68,6 +72,24 @@ layout(set = 0, binding = 0) uniform Frame {
 layout(set = 0, binding = 4) readonly buffer Lights {
     Light lights[];
 } light_buffer;
+
+// The cluster grid. The compute cull divides the frustum into a tile grid over
+// depth slices, tests every point light against each cell, and writes a short
+// list of light indices for the fragment shader to loop over. A directional
+// light goes in every cell because it has no position to test.
+//
+// The grid shape. Must match kClusterTileCountX and friends in mesh_pass.h,
+// and cluster_cull.comp declares the same four. The near plane and the reach
+// are not here, because they arrive in frame.cluster_view.
+const uint kClusterTileCountX = 16;
+const uint kClusterTileCountY = 12;
+const uint kClusterSliceCount = 16;
+const uint kMaxLightsPerCell = 256;
+const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
+
+layout(set = 0, binding = 5) readonly buffer ClusterGrid {
+    uint cells[]; // flat: counts followed by light indices per cell
+} cluster_grid;
 
 // The environment every surface reflects, which `scene::Environment` names and
 // `render::MeshPass` binds. A scene that names none binds six grey texels, so
@@ -301,9 +323,38 @@ void main() {
     // Set once the loop has seen a directional light, so the second one does not
     // read a map that was rendered for the first.
     bool shadowed_one = false;
-    // No clamp on the count. The buffer holds exactly what the pass wrote, and
-    // the pass grows the buffer to fit rather than dropping what does not.
-    for (uint i = 0u; i < frame.light_count.x; ++i) {
+
+    // The tile comes from the window position the rasterizer already worked
+    // out. Multiplying the interpolated world position by the camera again
+    // would answer the same question at the cost of a matrix, and it would
+    // disagree by a tile at a boundary where the two rounded apart.
+    vec2 tile_uv = gl_FragCoord.xy / frame.cluster_view.zw;
+    uint tile_x = min(uint(tile_uv.x * float(kClusterTileCountX)), kClusterTileCountX - 1u);
+    uint tile_y = min(uint(tile_uv.y * float(kClusterTileCountY)), kClusterTileCountY - 1u);
+
+    // View distance, which the projection puts in 1.0 / gl_FragCoord.w. The
+    // cull slices exponentially in this measure, so both sides agree on the
+    // cell. A fragment past the reach clamps into the last slice, which the
+    // cull extends to meet it.
+    float z_near = frame.cluster_view.x;
+    float cluster_far = frame.cluster_view.y;
+    float view_depth = 1.0 / gl_FragCoord.w;
+    float slice_f = log(view_depth / z_near) / log(cluster_far / z_near) * float(kClusterSliceCount);
+    uint slice = uint(clamp(slice_f, 0.0, float(kClusterSliceCount) - 1.0));
+
+    uint cell = (slice * kClusterTileCountY + tile_y) * kClusterTileCountX + tile_x;
+    uint per_cell_count = cluster_grid.cells[cell];
+    uint cell_index_base = kClusterCellCount + cell * kMaxLightsPerCell;
+
+    // Loop over the lights the cull assigned to this cell. The cull dispatches
+    // on every frame and writes a count for every cell, including a zero, so
+    // this never reads what the frame before it wrote.
+    uint light_count = min(per_cell_count, kMaxLightsPerCell);
+    for (uint j = 0u; j < light_count; ++j) {
+        uint i = cluster_grid.cells[cell_index_base + j];
+        if (i >= frame.light_count.x) {
+            continue;
+        }
         Light light = light_buffer.lights[i];
 
         // l points from the surface towards the light, which is the opposite of

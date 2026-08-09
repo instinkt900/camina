@@ -50,7 +50,6 @@ namespace {
     /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
     constexpr int kMinimizedSleepMs = 16;
 
-    constexpr float kNearPlane = 0.1F;
 
     /// Straight up and straight down have no usable basis, so stop short of both.
     constexpr float kLowestPitch = -89.0F;
@@ -206,8 +205,12 @@ namespace {
 
     /// Which pass in the schedule is which. The order here is the order they run.
     constexpr std::size_t kShadowPassIndex = 0;
-    constexpr std::size_t kMeshPassIndex = 1;
-    constexpr std::size_t kTonemapPassIndex = 2;
+    /// The cluster cull. It sits between the shadow pass and the mesh pass
+    /// because it is a compute dispatch, and one cannot happen inside a
+    /// rendering scope.
+    constexpr std::size_t kCullPassIndex = 1;
+    constexpr std::size_t kMeshPassIndex = 2;
+    constexpr std::size_t kTonemapPassIndex = 3;
 
     /**
      * Works out every barrier this frame needs.
@@ -227,6 +230,7 @@ namespace {
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states,
         engine::render::GraphSchedule& out) {
         const std::array passes{ engine::render::ShadowPass::declare(),
+                                 engine::render::MeshPass::declare_cull(),
                                  engine::render::MeshPass::declare(),
                                  engine::render::TonemapPass::declare() };
 
@@ -235,13 +239,13 @@ namespace {
         // scratch that nothing reads across a frame boundary.
         states[engine::render::kFrameColor.index] = engine::gfx::ResourceState::Undefined;
         states[engine::render::kFrameDepth.index] = engine::gfx::ResourceState::Undefined;
-        // The shadow map and the scene color do not. Each is one image that
-        // every frame in flight shares, so the state the last frame left it in
-        // is what the barrier has to order against. Calling either Undefined
+        // The shadow map, the scene color, and the cluster grid do not. Each is
+        // shared across the frames in flight, so the state the last frame left
+        // it in is what the barrier has to order against. Calling one Undefined
         // here would derive a barrier that waits on the stage the new state
         // uses, and what it has to wait for is the previous frame's fragment
-        // shader reading the image. That is a write after read, and it is the
-        // same hazard #125 found on the shared depth image.
+        // shader reading it. That is a write after read, and it is the same
+        // hazard #125 found on the shared depth image.
 
         if (!engine::render::derive_barriers(passes, states, out)) {
             ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
@@ -269,6 +273,13 @@ namespace {
             return;
         }
         for (const engine::render::GraphBarrier& barrier : schedule.passes[pass].before) {
+            if (barrier.resource == engine::render::kClusterGrid) {
+                // A buffer, so there is no layout to change and nothing to
+                // name. gfx::cmd_buffer_barrier is a global memory barrier, and
+                // the two states carry the whole dependency.
+                engine::gfx::cmd_buffer_barrier(commands, barrier.before, barrier.after);
+                continue;
+            }
             const engine::gfx::TextureHandle texture = textures[barrier.resource.index];
             if (texture.valid()) {
                 // Not a frame target, so it is named by a handle rather than by
@@ -580,7 +591,7 @@ namespace {
                                  : static_cast<float>(extent.width) /
                                        static_cast<float>(extent.height);
         const engine::Mat4 projection = engine::perspective_reverse_z(
-            glm::radians(settings.fov_degrees), aspect, kNearPlane);
+            glm::radians(settings.fov_degrees), aspect, engine::kDefaultNearPlane);
 
         const engine::Mat4 view = glm::lookAt(settings.camera_position,
                                               settings.camera_position + camera_forward(settings),
@@ -900,9 +911,20 @@ namespace {
         std::filesystem::path source_scene;
     };
 
-    /// GPU timestamp deltas for the last frame, in nanoseconds. Index 0-1 is the
-    /// shadow pass, 2-3 the mesh pass, and 4-5 the tonemap pass.
-    std::array<double, 3> g_gpu_pass_ns{};
+    /// Where each pass writes its pair of timestamps. A pass writes the first
+    /// slot before it records and the second after, so the difference is what
+    /// it cost. The cull pair is last because it was added last, and these
+    /// number the slots rather than the order the passes run.
+    constexpr std::uint32_t kShadowTimestamp = 0;
+    constexpr std::uint32_t kMeshTimestamp = 2;
+    constexpr std::uint32_t kTonemapTimestamp = 4;
+    constexpr std::uint32_t kCullTimestamp = 6;
+    /// How many slots the four pairs take. The pool holds far more.
+    constexpr std::uint32_t kTimestampCount = 8;
+
+    /// GPU time for the last frame, in nanoseconds, one entry for each pass in
+    /// the order the constants above declare them.
+    std::array<double, kTimestampCount / 2> g_gpu_pass_ns{};
     /// The GPU timestamp period, in nanoseconds per tick.
     float g_timestamp_period = 0.0F;
     /// True after the first frame's pool reset, so reads are valid.
@@ -925,14 +947,22 @@ namespace {
             return;
         }
 
-        std::array<std::uint64_t, 8> ticks{};
-        if (!engine::gfx::read_timestamps(device, 0, 6, ticks.data())) {
+        std::array<std::uint64_t, kTimestampCount> ticks{};
+        if (!engine::gfx::read_timestamps(device, 0, kTimestampCount, ticks.data())) {
             return;
         }
 
-        g_gpu_pass_ns[0] = static_cast<double>(ticks[1] - ticks[0]) * g_timestamp_period;
-        g_gpu_pass_ns[1] = static_cast<double>(ticks[3] - ticks[2]) * g_timestamp_period;
-        g_gpu_pass_ns[2] = static_cast<double>(ticks[5] - ticks[4]) * g_timestamp_period;
+        // Each pass wrote a pair, and the difference is what it cost. The slot
+        // constant gives the index as well as the pair, so a pass added later
+        // cannot put the value in one place and read it from another.
+        const double period = static_cast<double>(g_timestamp_period);
+        const auto elapsed = [&ticks, period](std::uint32_t first) {
+            return static_cast<double>(ticks[first + 1] - ticks[first]) * period;
+        };
+        g_gpu_pass_ns[kShadowTimestamp / 2] = elapsed(kShadowTimestamp);
+        g_gpu_pass_ns[kMeshTimestamp / 2] = elapsed(kMeshTimestamp);
+        g_gpu_pass_ns[kTonemapTimestamp / 2] = elapsed(kTonemapTimestamp);
+        g_gpu_pass_ns[kCullTimestamp / 2] = elapsed(kCullTimestamp);
     }
 
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
@@ -997,17 +1027,33 @@ namespace {
         const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
 
         issue_pass_barriers(info.commands, schedule, kShadowPassIndex, textures);
-        engine::gfx::cmd_write_timestamp(info.commands, 0);
+        engine::gfx::cmd_write_timestamp(info.commands, kShadowTimestamp);
         context.shadow_pass->draw(info.commands, world, *context.game_content,
                                   context.mesh_pass->meshes(), clip_from_world);
-        engine::gfx::cmd_write_timestamp(info.commands, 1);
+        engine::gfx::cmd_write_timestamp(info.commands, kShadowTimestamp + 1);
         context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projections(),
                                            context.shadow_pass->cascade_splits(),
                                            context.shadow_pass->cascade_biases(),
                                            context.shadow_pass->has_light());
 
+        // The cluster cull, which is a pass of its own. It runs here rather than
+        // inside the mesh pass because a compute dispatch cannot happen inside a
+        // rendering scope. Its barrier moves the cluster grid from the read the
+        // last frame left it in to a compute write.
+        issue_pass_barriers(info.commands, schedule, kCullPassIndex, textures);
+        engine::gfx::cmd_write_timestamp(info.commands, kCullTimestamp);
+        const engine::render::ClusterView cluster_view{
+            .z_near = engine::kDefaultNearPlane,
+            .viewport_width = static_cast<float>(info.extent.width),
+            .viewport_height = static_cast<float>(info.extent.height),
+        };
+        context.mesh_pass->cull(info.commands, world, *context.game_content, clip_from_world,
+                                settings.camera_position, cluster_view);
+        engine::gfx::cmd_write_timestamp(info.commands, kCullTimestamp + 1);
+
         // Then the mesh pass barriers, which include moving the shadow map from
-        // a depth target to something a shader can read.
+        // a depth target to something a shader can read, and the cluster grid
+        // from the compute write to a fragment read.
         issue_pass_barriers(info.commands, schedule, kMeshPassIndex, textures);
 
         const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
@@ -1025,10 +1071,10 @@ namespace {
             // entity that draws at all. This is the pipeline made visible: the
             // geometry comes from a cooked file that a glTF produced, and
             // nothing here knows which file that was.
-            engine::gfx::cmd_write_timestamp(info.commands, 2);
-            context.mesh_pass->draw(info.commands, world, *context.game_content, clip_from_world,
+            engine::gfx::cmd_write_timestamp(info.commands, kMeshTimestamp);
+            context.mesh_pass->draw(info.commands, world, *context.game_content,
                                     settings.camera_position);
-            engine::gfx::cmd_write_timestamp(info.commands, 3);
+            engine::gfx::cmd_write_timestamp(info.commands, kMeshTimestamp + 1);
 
             engine::gfx::cmd_end_rendering(info.commands);
         }
@@ -1043,9 +1089,9 @@ namespace {
         // attaches no depth, because the triangle neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
-        engine::gfx::cmd_write_timestamp(info.commands, 4);
+        engine::gfx::cmd_write_timestamp(info.commands, kTonemapTimestamp);
         context.tonemap_pass->draw(info.commands, settings.exposure);
-        engine::gfx::cmd_write_timestamp(info.commands, 5);
+        engine::gfx::cmd_write_timestamp(info.commands, kTonemapTimestamp + 1);
 
         // The overlay goes over the tonemapped image rather than through it. It
         // is authored in display colors, so mapping it down with the scene would
@@ -1392,10 +1438,17 @@ namespace {
                         mesh.visible_light_count(), mesh.culled_light_count(),
                         mesh.light_capacity());
 
-        if (g_gpu_pass_ns[0] > 0.0 || g_gpu_pass_ns[1] > 0.0 || g_gpu_pass_ns[2] > 0.0) {
-            ENGINE_LOG_INFO("gpu passes | shadow {:.3f} ms | mesh {:.3f} ms | tonemap {:.3f} ms",
-                            g_gpu_pass_ns[0] * 1e-6, g_gpu_pass_ns[1] * 1e-6,
-                            g_gpu_pass_ns[2] * 1e-6);
+        // Nanoseconds to milliseconds.
+        constexpr double kToMilliseconds = 1e-6;
+        if (std::ranges::any_of(g_gpu_pass_ns, [](double ns) { return ns > 0.0; })) {
+            // In the order they run, which is not the order the slots number.
+            // The cull is what says whether the cluster grid pays for itself.
+            ENGINE_LOG_INFO("gpu passes | shadow {:.3f} ms | cull {:.3f} ms | mesh {:.3f} ms | "
+                            "tonemap {:.3f} ms",
+                            g_gpu_pass_ns[kShadowTimestamp / 2] * kToMilliseconds,
+                            g_gpu_pass_ns[kCullTimestamp / 2] * kToMilliseconds,
+                            g_gpu_pass_ns[kMeshTimestamp / 2] * kToMilliseconds,
+                            g_gpu_pass_ns[kTonemapTimestamp / 2] * kToMilliseconds);
         }
 
         if (options.vsync) {
