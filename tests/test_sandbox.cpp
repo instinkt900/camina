@@ -158,6 +158,49 @@ namespace {
         check(cubemaps == 1, "and the cooker wrote it as a six-face cubemap");
     }
 
+    /**
+     * A prefab name is decided by the cooked path, not by manifest order.
+     *
+     * The identity of a cooked prefab is derived from its glTF scene index, and
+     * the cooked path carries that same index. A name counted from the position
+     * in the manifest would be a second source of truth. It agrees today only
+     * because the cooker writes the scenes in ascending order, and a scene file
+     * that named the wrong prefab would build the wrong entities in silence.
+     */
+    void test_prefab_names_come_from_the_cooked_path() {
+        const std::string source = "models/room/room.gltf";
+
+        check(sandbox::prefab_name(source, source + ".0.prefab") == source,
+              "the first scene keeps the source path");
+        check(sandbox::prefab_name(source, source + ".1.prefab") == source + "#1",
+              "a later scene carries its index");
+        check(sandbox::prefab_name(source, source + ".2.prefab") == source + "#2",
+              "and the index is the one in the path");
+        check(sandbox::prefab_name("crate.prefab", "crate.prefab") == "crate.prefab",
+              "a copied prefab keeps the source path");
+
+        // The reordering the finding asked for. Reading the outputs of one
+        // source backwards has to give every prefab the same name it had
+        // forwards, because nothing in the name is counted.
+        const std::vector<std::string> forwards{ source + ".0.prefab", source + ".1.prefab",
+                                                 source + ".2.prefab" };
+        std::vector<std::string> backwards = forwards;
+        std::ranges::reverse(backwards);
+
+        for (const std::string& cooked : backwards) {
+            const std::string expected =
+                cooked == forwards[0] ? source
+                                      : source + "#" + cooked.substr(source.size() + 1, 1);
+            check(sandbox::prefab_name(source, cooked) == expected,
+                  "the name does not move when the outputs do");
+        }
+
+        // A shape the cooker does not write today. It must not collide with the
+        // source path, because two prefabs under one name lose one of them.
+        check(sandbox::prefab_name(source, source + ".later.prefab") != source,
+              "an unplanned shape does not take the source path");
+    }
+
     void test_content_is_there() {
         const std::filesystem::path content = sandbox::default_content_directory();
         check(std::filesystem::is_directory(content), "the content directory exists");
@@ -400,6 +443,8 @@ namespace {
 int main() {
     std::printf("registration\n");
     test_registration();
+    std::printf("prefab names\n");
+    test_prefab_names_come_from_the_cooked_path();
     std::printf("shipped content\n");
     test_content_is_there();
     test_shipped_scene_loads();

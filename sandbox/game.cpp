@@ -8,6 +8,7 @@
 #include "sandbox/components.h"
 #include "scene/scene_file.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -22,26 +23,6 @@ namespace sandbox {
 
         /// Below this an axis is too short to normalize without losing meaning.
         constexpr float kShortestAxis = 1.0e-6F;
-
-        /**
-         * The name a scene uses for one prefab of one source.
-         *
-         * The name is the source path, so a scene names the file a person
-         * edits. A cooked prefab has a derived identity that nobody chose, and
-         * a stem alone collides as soon as two directories hold a model of the
-         * same name. Neither is a name somebody can write down.
-         *
-         * A glTF that lists several scenes cooks one prefab for each. The first
-         * keeps the source path, because that is the common case and it reads
-         * well. The rest carry the scene index, so a scene can still name them.
-         */
-        [[nodiscard]] std::string prefab_name(std::string_view source, std::size_t index) {
-            std::string name{ source };
-            if (index > 0) {
-                name += "#" + std::to_string(index);
-            }
-            return name;
-        }
 
         /**
          * Reads every prefab the cooked tree holds, under the source path that
@@ -61,7 +42,6 @@ namespace sandbox {
             std::size_t added = 0;
 
             for (const engine::assets::ManifestEntry& entry : cooked.manifest().entries) {
-                std::size_t index = 0;
                 for (const engine::assets::ManifestOutput& output : entry.outputs) {
                     if (!std::string_view{ output.cooked }.ends_with(
                             engine::assets::kPrefabExtension)) {
@@ -81,11 +61,10 @@ namespace sandbox {
                         ENGINE_LOG_ERROR("{} will not parse as a prefab.", output.cooked);
                         return false;
                     }
-                    if (!library.add(prefab_name(entry.source, index), document)) {
+                    if (!library.add(prefab_name(entry.source, output.cooked), document)) {
                         ENGINE_LOG_ERROR("{} is not a prefab this build can use.", output.cooked);
                         return false;
                     }
-                    ++index;
                     ++added;
                 }
             }
@@ -95,6 +74,41 @@ namespace sandbox {
         }
 
     } // namespace
+
+    std::string prefab_name(std::string_view source, std::string_view cooked) {
+        // A prefab the cooker copied rather than wrote keeps the source path,
+        // extension and all, and there is no scene index to read. This is
+        // compared before the extension comes off, because the source path of a
+        // copied prefab already ends in it.
+        if (cooked == source) {
+            return std::string{ source };
+        }
+
+        std::string_view stem = cooked;
+        if (stem.ends_with(engine::assets::kPrefabExtension)) {
+            stem.remove_suffix(std::string_view{ engine::assets::kPrefabExtension }.size());
+        }
+
+        // A glTF writes "<source>.<scene>.prefab". The index is read from the
+        // path rather than counted, because the identity of the prefab is
+        // derived from that same scene index. Counting would be a second
+        // source of truth, and the two would disagree the moment the manifest
+        // held the outputs of one source in another order.
+        if (stem.size() > source.size() + 1 && stem.starts_with(source) &&
+            stem[source.size()] == '.') {
+            const std::string_view digits = stem.substr(source.size() + 1);
+            if (!digits.empty() && std::ranges::all_of(digits, [](char c) {
+                    return c >= '0' && c <= '9';
+                })) {
+                return digits == "0" ? std::string{ source }
+                                     : std::string{ source } + "#" + std::string{ digits };
+            }
+        }
+
+        // A shape nobody planned for. The cooked path is still unique, so this
+        // names the prefab rather than colliding with the source path.
+        return std::string{ stem };
+    }
 
     std::filesystem::path default_content_directory() {
         return engine::platform::cooked_content_root() / kContentName;

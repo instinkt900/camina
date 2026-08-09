@@ -19,6 +19,8 @@
 #include "scene/world.h"
 
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace sandbox {
 
@@ -32,6 +34,38 @@ namespace sandbox {
      * assets and the game's assets do not collide.
      */
     inline constexpr const char* kContentName = "game";
+
+    /**
+     * @brief The name a scene uses for one cooked prefab.
+     *
+     * The name is the source path, so a scene names the file a person edits. A
+     * cooked prefab has a derived identity that nobody chose, and a stem alone
+     * collides as soon as two directories hold a model of the same name.
+     * Neither is a name somebody can write down.
+     *
+     * A glTF that lists several scenes cooks one prefab for each, and the
+     * cooked path carries the scene index. Scene 0 keeps the source path,
+     * because that is the common case and it reads well. Every later scene is
+     * `<source>#<index>`.
+     *
+     * @warning The index comes out of the cooked path and is never counted from
+     * the position in the manifest. A prefab's identity is derived from the
+     * scene index, so counting would be a second source of truth that disagrees
+     * as soon as the outputs of one source are held in another order.
+     *
+     * @code
+     * prefab_name("models/room/room.gltf", "models/room/room.gltf.0.prefab");
+     * // "models/room/room.gltf"
+     * prefab_name("models/room/room.gltf", "models/room/room.gltf.2.prefab");
+     * // "models/room/room.gltf#2"
+     * prefab_name("crate.prefab", "crate.prefab"); // "crate.prefab"
+     * @endcode
+     *
+     * @param source The source path the cooker read, as the manifest holds it.
+     * @param cooked The cooked output path, which carries the scene index.
+     * @return The name a scene file uses to instance that prefab.
+     */
+    [[nodiscard]] std::string prefab_name(std::string_view source, std::string_view cooked);
 
     /**
      * @brief Where the game reads its content from when nobody says otherwise.
@@ -61,9 +95,10 @@ namespace sandbox {
      * The world must be empty. The prefabs go in first, because the scene names
      * them.
      *
-     * Every prefab in the cooked tree is registered, under the source path that
-     * produced it. So this reads any cooked content tree and not only the
-     * sandbox's own, which is what the large test scene of issue #130 needs.
+     * Every prefab in the cooked tree is registered, under the name
+     * prefab_name() gives it. So this reads any cooked content tree and not
+     * only the sandbox's own, which is what the large test scene of issue #130
+     * needs.
      *
      * @param content The directory holding the prefabs and the scene.
      * @param cooked The open cooked content, which holds every prefab and the
