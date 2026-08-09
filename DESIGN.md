@@ -841,6 +841,30 @@ wrong for three megabytes one shader fills and another reads. `BufferDesc::devic
 answer, and `update_buffer` refuses such a buffer rather than writing through a pointer that is
 not there.
 
+**A mesh is culled against the camera frustum before it is drawn, and that belongs to M5.** The
+light cull answers this question for lights and nothing answers it for geometry. `MeshPass` walks
+every entity that names a mesh, whatever the camera is pointing at, and issues a draw for each
+submesh. That is correct and it does not scale.
+
+It belongs to M5 rather than later because the M5 done-when test is a Sponza-class scene. That
+scene is 3.75M triangles in 405 primitives, and issue #130 names the missing cull as the reason
+it would not be interactive on the reference GPU. A done-when test that cannot run is not a test.
+
+The pieces are already here, which is why this is small. `src/math/frustum.h` extracts the six
+planes and tests a sphere, it names no Vulkan type, and it has tests that need no device. A cooked
+mesh carries its bounds, because the blended sort already reads them. So the work is to turn a
+mesh bound and a world matrix into a world-space sphere and reuse the test the lights use.
+
+A sphere and not a box. The test is written and tested already, one test beats six plane-versus-box
+comparisons, and a sphere that a scaled matrix produced is conservative in the direction that
+keeps a visible object on screen. A box would cull more and it can wait for a case that measures
+the difference, which rule 4.6 says to wait for.
+
+The cull runs on the CPU, one test for each entity. GPU-side culling and indirect draws answer a
+larger question, which is a scene whose draw list is too large for the CPU to walk at all. Nothing
+in M5 asks that, and the answer would be wasted before the draw list is built from something other
+than an EnTT view.
+
 **The graph derives barriers first, and aliases memory when something needs it.** A full
 aliasing allocator is a large piece of work, and today there is one pass and nothing to alias
 against. So M5.3 builds the half that is already owed: real stage and access masks derived from
