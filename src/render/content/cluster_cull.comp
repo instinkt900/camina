@@ -14,7 +14,7 @@
 const uint kTileCountX = 16u;
 const uint kTileCountY = 12u;
 const uint kSliceCount = 16u;
-const uint kMaxLightsPerCell = 64u;
+const uint kMaxLightsPerCell = 256u;
 
 const uint kCellCount = kTileCountX * kTileCountY * kSliceCount;
 

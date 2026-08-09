@@ -84,7 +84,7 @@ layout(set = 0, binding = 4) readonly buffer Lights {
 const uint kClusterTileCountX = 16;
 const uint kClusterTileCountY = 12;
 const uint kClusterSliceCount = 16;
-const uint kMaxLightsPerCell = 64;
+const uint kMaxLightsPerCell = 256;
 const uint kClusterCellCount = kClusterTileCountX * kClusterTileCountY * kClusterSliceCount;
 
 layout(set = 0, binding = 5) readonly buffer ClusterGrid {
