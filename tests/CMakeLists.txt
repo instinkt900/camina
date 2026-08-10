@@ -195,3 +195,16 @@ if(BASH_EXE)
 else()
     message(STATUS "bash not found, skipping the vulkan_containment test")
 endif()
+
+# M6.2. The moth_ui batching recorder. It names no Vulkan type and opens no
+# device, so the state stack and the batching decision are testable directly.
+# Only built when the game UI is on, because the target it links does not exist
+# otherwise.
+if(ENGINE_WITH_UI)
+    add_executable(test_ui_renderer test_ui_renderer.cpp)
+    target_link_libraries(test_ui_renderer PRIVATE engine::ui)
+    engine_set_warnings(test_ui_renderer)
+    engine_enable_clang_tidy(test_ui_renderer)
+
+    add_test(NAME ui_renderer COMMAND test_ui_renderer)
+endif()
