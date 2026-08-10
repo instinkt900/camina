@@ -98,18 +98,26 @@ namespace engine::render {
 
     gfx::TextureHandle TextureCache::get(gfx::Device* device, const assets::Content& content,
                                          Guid guid) {
+        return load(device, content, guid, 1).texture;
+    }
+
+    TextureInfo TextureCache::get_info(gfx::Device* device,
+                                       const assets::Content& content, Guid guid) {
         return load(device, content, guid, 1);
     }
 
     gfx::TextureHandle TextureCache::get_cube(gfx::Device* device,
                                               const assets::Content& content, Guid guid) {
-        return load(device, content, guid, assets::kCubeFaceCount);
+        return load(device, content, guid, assets::kCubeFaceCount).texture;
     }
 
-    gfx::TextureHandle TextureCache::load(gfx::Device* device, const assets::Content& content,
-                                          Guid guid, std::uint32_t faces) {
+    TextureInfo TextureCache::load(gfx::Device* device,
+                                   const assets::Content& content, Guid guid,
+                                   std::uint32_t faces) {
         const bool cube = faces == assets::kCubeFaceCount;
-        const gfx::TextureHandle fallback = cube ? fallback_cube_ : fallback_;
+        // Both fallbacks are one texel square, which is what TextureInfo
+        // defaults to.
+        const TextureInfo fallback{ .texture = cube ? fallback_cube_ : fallback_ };
 
         if (!guid.valid()) {
             return fallback;
@@ -177,8 +185,9 @@ namespace engine::render {
         ENGINE_LOG_INFO("Uploaded {} {}, {} by {} with {} levels.",
                         cube ? "cubemap" : "texture", guid.to_text(), view.width, view.height,
                         view.mip_count);
-        loaded_.emplace(request, texture);
-        return texture;
+        const TextureInfo info{ .texture = texture, .width = view.width, .height = view.height };
+        loaded_.emplace(request, info);
+        return info;
     }
 
     void TextureCache::drop(gfx::Device* device, Guid guid) {
@@ -194,7 +203,7 @@ namespace engine::render {
                 continue;
             }
             if (device != nullptr) {
-                gfx::destroy_texture(device, found->second);
+                gfx::destroy_texture(device, found->second.texture);
             }
             loaded_.erase(found);
         }
@@ -202,8 +211,8 @@ namespace engine::render {
 
     void TextureCache::destroy(gfx::Device* device) {
         if (device != nullptr) {
-            for (const auto& [request, texture] : loaded_) {
-                gfx::destroy_texture(device, texture);
+            for (const auto& [request, info] : loaded_) {
+                gfx::destroy_texture(device, info.texture);
             }
             gfx::destroy_texture(device, fallback_);
             gfx::destroy_texture(device, fallback_cube_);
