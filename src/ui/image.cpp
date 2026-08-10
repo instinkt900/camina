@@ -16,6 +16,13 @@ namespace engine::ui {
         return moth_ui::IntVec2{ width_, height_ };
     }
 
+    ImageFactory::~ImageFactory() {
+        // render::MeshPass does the same. Without it, the render::TextureCache
+        // inside asserts that somebody forgot, which reports the mistake and
+        // still leaks the textures.
+        destroy();
+    }
+
     bool ImageFactory::create(gfx::Device* device, const assets::Content* content) {
         device_ = device;
         content_ = content;

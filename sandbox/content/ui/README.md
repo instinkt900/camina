@@ -12,8 +12,8 @@ bottom left, inside a light border.
 That is what makes a wrong draw visible. A quad whose texture coordinates are mirrored moves
 the corner mark to the other side. One that is turned puts it at the bottom. A source
 rectangle read the wrong way up swaps the mark and the bar. A flat colour or a symmetric
-checker would hide every one of those, and the conventions in `DESIGN.md` section 3 exist
-because this class of error is hard to find any other way.
+checker would hide every one of those. `DESIGN.md` section 3 states the conventions for that
+reason, because nothing else finds this class of error.
 
 The border also shows tiling. `moth_ui::ImageScaleType::Tile` repeats the whole image, so a
 run of tiles reads as a grid.

@@ -99,7 +99,8 @@ namespace engine::ui {
         ImageFactory& operator=(const ImageFactory&) = delete;
         ImageFactory(ImageFactory&&) = delete;
         ImageFactory& operator=(ImageFactory&&) = delete;
-        ~ImageFactory() final = default;
+        /// @brief Frees every texture, the way render::MeshPass does.
+        ~ImageFactory() final;
 
         /**
          * @brief Opens the factory on a device and a cooked content tree.

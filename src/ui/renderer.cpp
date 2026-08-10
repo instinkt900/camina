@@ -108,7 +108,18 @@ namespace engine::ui {
     }
 
     void Renderer::break_batch() {
-        ENGINE_ASSERT(!m_batches.empty(), "A batch must be open before a break.");
+        // No open batch is a legal state rather than a mistake, so this returns
+        // and does not assert. moth_ui decides the call order, not this engine,
+        // so a push or a pop can arrive before begin() and after end(). end()
+        // also drops a trailing batch that recorded nothing, so a recording
+        // that drew nothing at all leaves the vector empty.
+        //
+        // add_quad guards the same state for the same reason. This used to
+        // assert instead, which said the caller was wrong and then read an
+        // empty vector anyway in a Release build, where the assert is gone.
+        if (m_batches.empty()) {
+            return;
+        }
 
         Batch next{};
         next.first_index = static_cast<std::uint32_t>(m_indices.size());

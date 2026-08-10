@@ -277,6 +277,31 @@ namespace {
         test::check(renderer.vertices().empty(), "a draw after end records nothing");
     }
 
+    void pushing_state_outside_a_recording_is_ignored() {
+        Renderer renderer;
+        // A push and a pop reach break_batch, which reads the open batch. There
+        // is none before begin(), and end() drops a trailing batch that
+        // recorded nothing, so a recording that drew nothing leaves none
+        // either. ENGINE_ASSERT compiles out of a Release build, so the guard
+        // has to be a real return.
+        renderer.PushClip(rect(0, 0, 10, 10));
+        renderer.PopClip();
+        renderer.PushBlendMode(moth_ui::BlendMode::Add);
+        renderer.PopBlendMode();
+        renderer.PushTextureFilter(moth_ui::TextureFilter::Nearest);
+        renderer.PopTextureFilter();
+        test::check(renderer.batches().empty(), "state before begin records no batch");
+
+        renderer.begin(100, 100);
+        renderer.end();
+        test::check(renderer.batches().empty(), "a recording that drew nothing keeps no batch");
+
+        renderer.PushClip(rect(0, 0, 10, 10));
+        renderer.PushBlendMode(moth_ui::BlendMode::Add);
+        renderer.PushTextureFilter(moth_ui::TextureFilter::Nearest);
+        test::check(renderer.batches().empty(), "and state after end records none either");
+    }
+
     void an_image_records_its_texture_and_its_source_rect() {
         Renderer renderer;
         const engine::ui::Image image = fake_image(7, 64, 32);
@@ -445,6 +470,7 @@ namespace {
 
 int main() {
     drawing_outside_a_recording_is_ignored();
+    pushing_state_outside_a_recording_is_ignored();
     a_fresh_recording_holds_nothing();
     one_rect_is_two_triangles();
     push_color_composes_rather_than_replaces();

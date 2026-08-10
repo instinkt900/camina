@@ -298,7 +298,13 @@ namespace engine::ui {
                 bound_set = gfx::DescriptorSetHandle{};
             }
 
-            report_filter_gap(batch.filter);
+            // Only a run that reads a real image can show the gap. A run of
+            // shapes binds one white texel, where every filter gives the same
+            // answer, so reporting there would name a problem the frame does
+            // not have.
+            if (batch.texture.valid()) {
+                report_filter_gap(batch.filter);
+            }
 
             const gfx::DescriptorSetHandle set = set_for(batch.texture);
             if (!set.valid()) {

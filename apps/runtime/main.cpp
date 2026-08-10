@@ -1850,6 +1850,11 @@ int main(int argc, char** argv) {
     // M6.3. After the game content opens, because the factory resolves a path
     // against that manifest. A failure here is not fatal: the probe draws its
     // shapes and no image, and the log says which path did not resolve.
+    //
+    // This resolves once and a reload never revisits it, so editing a UI image
+    // needs a restart. The handle cannot go stale, because the factory owns the
+    // only cache that holds it and nothing drops from that cache. Issue #210
+    // holds the reload path.
     if (!runtime.ui_images.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI image factory did not start. No layout image will draw.");
     } else {
