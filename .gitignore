@@ -17,3 +17,8 @@ build-docs/
 # The runtime writes this into the working directory, and the build
 # instructions run it from the repository root.
 view.json
+
+# The large test scene, which scripts/fetch-scene.py brings down. The geometry
+# is one 133 MiB file and GitHub refuses anything over 100 MiB. The scene file
+# and the notes beside it are in git, and only the model is not. See issue #130.
+scenes/*/models/

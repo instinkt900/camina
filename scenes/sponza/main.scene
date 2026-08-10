@@ -1,0 +1,56 @@
+{
+  "__version": 3,
+  "entities": [
+    {
+      "parent": -1,
+      "prefab": "models/sponza/NewSponza_Main_glTF_003.gltf",
+      "overrides": {
+        "0": {
+          "Name": {
+            "value": "sponza"
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "sun"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            12.0,
+            0.0
+          ],
+          "rotation": [
+            0.8213938,
+            -0.4304593,
+            0.3187958,
+            -0.1670652
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.95,
+            0.86
+          ],
+          "intensity": 4.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "environment"
+        },
+        "Environment": {
+          "cubemap": "asset:models/sponza/textures/kloppenheim_05_4k.hdr"
+        }
+      }
+    }
+  ]
+}
