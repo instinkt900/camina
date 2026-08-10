@@ -1129,7 +1129,7 @@ namespace {
         // shader read is the one the graph derived from the pair.
         issue_pass_barriers(info.commands, schedule, kTonemapPassIndex, textures);
 
-        // Black, because the full screen triangle covers every pixel. The clear
+        // Black, because the full-screen triangle covers every pixel. The clear
         // color a person picked belongs to the scene image above. The pass
         // attaches no depth, because the triangle neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };

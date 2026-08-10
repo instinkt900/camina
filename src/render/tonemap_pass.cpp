@@ -16,7 +16,7 @@ namespace engine::render {
         /// The set the scene image binds at, which is what tonemap.frag declares.
         constexpr std::uint32_t kSceneSet = 0;
 
-        /// A full screen triangle. See tonemap.vert for why it is not two.
+        /// A full-screen triangle. See tonemap.vert for why it is not two.
         constexpr std::uint32_t kFullScreenVertices = 3;
 
         /// The push block, which must match tonemap.frag exactly.
@@ -109,7 +109,7 @@ namespace engine::render {
             .depth_test = false,
             .depth_write = false,
             .blend = false,
-            // A full screen triangle has one winding and it is whichever the
+            // A full-screen triangle has one winding and it is whichever the
             // index arithmetic gives. Culling nothing is what keeps that from
             // mattering.
             .cull_back = false,

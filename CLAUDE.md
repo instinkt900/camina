@@ -275,6 +275,20 @@ Such a transition now waits on the stage the new state uses. A 300-frame run rep
 The screenshot path still does, and issue #124 holds it. `capture_frame` waits for the device,
 and presentation is not device work.
 
+**Dynamic state carries from one pass to the next, and `cull_back` used to be a lie.** Culling
+is dynamic on every graphics pipeline, so what a pipeline was built with counted for nothing.
+`cmd_bind_pipeline` applies it now, which closed #188. Before that, a scene of opaque geometry
+alone rendered pure black: the mesh pass left back face culling on, and the tonemap pass draws
+one full-screen triangle whose winding is whatever the index arithmetic gives, so the triangle
+was culled and the frame kept its black clear.
+
+Nothing reported it. The validation layer was happy, because every call was legal. The
+sandbox hid it for months, because the glass panes are double sided and they draw last, so
+they turned culling off before the tonemap ran. Only a scene with no blended geometry showed
+it, and the large test scene of #130 was the first one pointed at the engine.
+
+The picture is the only thing that can catch this class of bug, and CI has no GPU. See #190.
+
 The sandbox is an interior now. `sandbox/content/models/room/` is five coloured walls, generated
 the way the spheres are, and everything else stands inside it. Open space could not test a
 shadow, because nothing occluded anything, and it could not justify several lights either.
@@ -290,7 +304,7 @@ white with **every light switched off**, because the image based ambient alone i
 interior is what made that impossible to miss.
 
 M5.6 is complete and the scale is gone. M5.6a put the scene on a half float target and added a
-full screen pass that wrote it out, applying no curve, so the picture did not move. M5.6b put
+full-screen pass that wrote it out, applying no curve, so the picture did not move. M5.6b put
 the ACES fit from Stephen Hill in that pass and made exposure a reflected `ViewSettings` field
 that `view.json` saves and `--exposure` overrides. At the full Cornell values with every light
 off, clipping is now 0.0018 percent, which is 17 pixels of specular highlight on two metal

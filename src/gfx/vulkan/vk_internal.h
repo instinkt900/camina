@@ -47,6 +47,16 @@ namespace engine::gfx {
          * so the pipeline remembers them rather than assuming the vertex stage.
          */
         VkShaderStageFlags push_constant_stages = 0;
+        /**
+         * @brief The cull mode the pipeline was built with.
+         *
+         * Culling is dynamic state on every graphics pipeline, so the value in
+         * VkPipelineRasterizationStateCreateInfo is ignored and the command
+         * buffer decides. cmd_bind_pipeline() sets this, which is what makes
+         * GraphicsPipelineDesc::cull_back mean what it says. A caller that
+         * wants another mode calls cmd_set_cull_mode() after binding.
+         */
+        VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
         bool alive = false; ///< Whether the slot holds a live pipeline.
     };
 
