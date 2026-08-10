@@ -19,68 +19,13 @@
 #include "scene/world.h"
 
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace sandbox {
 
     /// @brief The scene the game opens with, inside the content directory.
     inline constexpr const char* kSceneFile = "main.scene";
-
-    /// @brief The hand-authored prefab the game ships, inside the content directory.
-    ///
-    /// The only prefab that is not cooked from a glTF node tree, so it is the
-    /// only thing that exercises PrefabLibrary::add_file at run time.
-    inline constexpr const char* kCratePrefab = "crate";
-
-    /**
-     * @brief The room every other model stands in.
-     *
-     * Five coloured walls, generated rather than modelled. Open space cannot
-     * test a shadow, because nothing occludes anything, and it cannot justify
-     * several lights in a small volume either. See issue #126, and #130 for the
-     * large scene this stands in for.
-     */
-    inline constexpr const char* kRoomSource = "models/room/room.gltf";
-
-    /// @brief The name the scene uses for the room above.
-    inline constexpr const char* kRoomPrefab = "room";
-
-    /**
-     * @brief The model whose node tree the cooker turned into a prefab.
-     *
-     * This is a source path rather than a GUID. A cooked prefab has a derived
-     * identity that nobody chose, so naming it here would mean cooking once and
-     * copying the answer out. The manifest turns the path into the identity, and
-     * that is what `Content::find` is for.
-     */
-    inline constexpr const char* kHelmetSource = "models/flight_helmet/FlightHelmet.gltf";
-
-    /// @brief The name the scene uses for the model prefab above.
-    inline constexpr const char* kHelmetPrefab = "flight helmet";
-
-    /**
-     * @brief Two blended panes, which is what the scene has that is transparent.
-     *
-     * A blended surface takes a different path through MeshPass than an opaque
-     * one. Nothing else in the sandbox is transparent, so without this the path
-     * would ship untested.
-     */
-    inline constexpr const char* kGlassSource = "models/glass/glass.gltf";
-
-    /// @brief The name the scene uses for the panes above.
-    inline constexpr const char* kGlassPrefab = "glass";
-
-    /**
-     * @brief A row of metal spheres, one for each step of roughness.
-     *
-     * Image based lighting is the difference between a smooth metal and a rough
-     * one. Every other model in the sandbox is one material at one roughness, so
-     * without this row a wrong prefiltered chain would look like a picture that
-     * is merely a bit dull, and nothing would show the error.
-     */
-    inline constexpr const char* kSpheresSource = "models/spheres/spheres.gltf";
-
-    /// @brief The name the scene uses for the row above.
-    inline constexpr const char* kSpheresPrefab = "spheres";
 
     /**
      * @brief The game's directory inside the cooked content root.
@@ -89,6 +34,38 @@ namespace sandbox {
      * assets and the game's assets do not collide.
      */
     inline constexpr const char* kContentName = "game";
+
+    /**
+     * @brief The name a scene uses for one cooked prefab.
+     *
+     * The name is the source path, so a scene names the file a person edits. A
+     * cooked prefab has a derived identity that nobody chose, and a stem alone
+     * collides as soon as two directories hold a model of the same name.
+     * Neither is a name somebody can write down.
+     *
+     * A glTF that lists several scenes cooks one prefab for each, and the
+     * cooked path carries the scene index. Scene 0 keeps the source path,
+     * because that is the common case and it reads well. Every later scene is
+     * `<source>#<index>`.
+     *
+     * @warning The index comes out of the cooked path and is never counted from
+     * the position in the manifest. A prefab's identity is derived from the
+     * scene index, so counting would be a second source of truth that disagrees
+     * as soon as the outputs of one source are held in another order.
+     *
+     * @code
+     * prefab_name("models/room/room.gltf", "models/room/room.gltf.0.prefab");
+     * // "models/room/room.gltf"
+     * prefab_name("models/room/room.gltf", "models/room/room.gltf.2.prefab");
+     * // "models/room/room.gltf#2"
+     * prefab_name("crate.prefab", "crate.prefab"); // "crate.prefab"
+     * @endcode
+     *
+     * @param source The source path the cooker read, as the manifest holds it.
+     * @param cooked The cooked output path, which carries the scene index.
+     * @return The name a scene file uses to instance that prefab.
+     */
+    [[nodiscard]] std::string prefab_name(std::string_view source, std::string_view cooked);
 
     /**
      * @brief Where the game reads its content from when nobody says otherwise.
@@ -118,10 +95,15 @@ namespace sandbox {
      * The world must be empty. The prefabs go in first, because the scene names
      * them.
      *
+     * Every prefab in the cooked tree is registered, under the name
+     * prefab_name() gives it. So this reads any cooked content tree and not
+     * only the sandbox's own, which is what the large test scene of issue #130
+     * needs.
+     *
      * @param content The directory holding the prefabs and the scene.
-     * @param cooked The open cooked content, which resolves a model prefab from
-     * its source path. Pass null to load only the hand-authored prefabs, which
-     * is what a test with no cooked tree does.
+     * @param cooked The open cooked content, which holds every prefab and the
+     * source path each one came from. Pass null to register no prefab at all,
+     * which is what a test with no cooked tree does.
      * @param world The world to fill.
      * @param registry The component types to build. Register the game types
      * first, or the scene loses them.
