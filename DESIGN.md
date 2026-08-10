@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M4 complete, M5 next
-Last updated: 2026-08-04
+Status: M5 complete, M6 next
+Last updated: 2026-08-10
 
 ---
 
@@ -1276,12 +1276,31 @@ runs, and the world builds again. The runtime is what runs that loop today, and 
 will run the same one in M9. Naming the program rather than the application keeps the test
 honest about what it measures.
 
-### M5 — PBR and render graph
+### M5 — PBR and render graph — complete
 A frame graph that handles barriers and transient resource aliasing. Cook-Torrance
 metallic-roughness. IBL: an HDR environment converted to irradiance SH, prefiltered
 specular, and a BRDF LUT. A clustered light cull, which the graph schedules. Cascaded
 shadow maps. ACES tonemap. Materials as a shader plus a reflected parameter block.
 **Done when:** a Sponza-class scene renders correctly.
+
+Intel Sponza renders correctly. It is 3.75M triangles over 115 meshes and 28 materials,
+lit by a sun with four cascades, 22 lamp point lights, and image based lighting from the
+sky it ships with. `scenes/sponza/` holds it and `scripts/fetch-scene.py` brings the model
+down, because 133 MiB of geometry in one file is more than GitHub accepts. See issue #130.
+
+At 1280x720 on the reference GPU the frame is **20.3 ms**, repeatable to 0.5 percent over
+three runs of 600 frames. The shadow pass is 8.07 ms of it, the mesh pass 7.30 ms, the
+light cull 0.025 ms, and the tonemap 0.162 ms. Synchronization validation reports nothing
+over 300 frames on that scene. Issue #194 holds the shadow cost, which the sandbox was far
+too small to show.
+
+Two pieces of the definition above did not land, and each has a reason rather than an
+excuse. **Transient resource aliasing** is issue #122, and its trigger condition is still
+not met: the shadow map, the scene colour and the cluster grid all overlap at the mesh
+pass, so no two of them have disjoint lifetimes and there is nothing to alias. Rule 4.6
+says to build it when something needs it. **Nothing draws the environment**, so open sky is
+the clear colour, which issue #193 holds. The milestone asked for IBL and got it. Drawing
+the sky is a separate pass that Sponza is simply the first scene to want.
 
 ### M6 — moth_ui spike, 2 to 3 days, timeboxed
 Write a minimal `IRenderer`, `IImage`, and `IFont` against `gfx::`. Render one static layout

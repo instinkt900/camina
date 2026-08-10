@@ -25,10 +25,10 @@
             0.0
           ],
           "rotation": [
-            0.8213938,
-            -0.4304593,
-            0.3187958,
-            -0.1670652
+            0.8256561,
+            -0.4326918,
+            0.3204482,
+            -0.1679359
           ]
         },
         "DirectionalLight": {
@@ -37,7 +37,7 @@
             0.95,
             0.86
           ],
-          "intensity": 4.0
+          "intensity": 30.0
         }
       }
     },
@@ -49,6 +49,534 @@
         },
         "Environment": {
           "cubemap": "asset:models/sponza/textures/kloppenheim_05_4k.hdr"
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_01"
+        },
+        "Transform": {
+          "position": [
+            -5.929,
+            4.171,
+            4.742
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_02"
+        },
+        "Transform": {
+          "position": [
+            -1.849,
+            4.171,
+            4.742
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_03"
+        },
+        "Transform": {
+          "position": [
+            2.194,
+            4.171,
+            4.742
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_04"
+        },
+        "Transform": {
+          "position": [
+            6.142,
+            4.171,
+            4.742
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_05"
+        },
+        "Transform": {
+          "position": [
+            10.024,
+            4.171,
+            4.757
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_06"
+        },
+        "Transform": {
+          "position": [
+            -9.825,
+            4.171,
+            -4.806
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_07"
+        },
+        "Transform": {
+          "position": [
+            -5.929,
+            4.171,
+            -4.806
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_08"
+        },
+        "Transform": {
+          "position": [
+            -1.849,
+            4.171,
+            -4.806
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_09"
+        },
+        "Transform": {
+          "position": [
+            2.194,
+            4.171,
+            -4.806
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_10"
+        },
+        "Transform": {
+          "position": [
+            6.142,
+            4.171,
+            -4.806
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_11"
+        },
+        "Transform": {
+          "position": [
+            10.024,
+            4.171,
+            -4.791
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_12"
+        },
+        "Transform": {
+          "position": [
+            15.619,
+            3.276,
+            -0.917
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_13"
+        },
+        "Transform": {
+          "position": [
+            -9.825,
+            4.171,
+            4.742
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_1st_floor_14"
+        },
+        "Transform": {
+          "position": [
+            -13.59,
+            3.868,
+            0.066
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_01"
+        },
+        "Transform": {
+          "position": [
+            -9.766,
+            9.285,
+            4.742
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_02"
+        },
+        "Transform": {
+          "position": [
+            2.161,
+            9.285,
+            4.665
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_03"
+        },
+        "Transform": {
+          "position": [
+            10.075,
+            9.285,
+            4.726
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_04"
+        },
+        "Transform": {
+          "position": [
+            10.075,
+            9.285,
+            -4.727
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_05"
+        },
+        "Transform": {
+          "position": [
+            2.094,
+            9.285,
+            -4.654
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_06"
+        },
+        "Transform": {
+          "position": [
+            -5.848,
+            9.285,
+            -4.663
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.54,
+            0.1915
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_07"
+        },
+        "Transform": {
+          "position": [
+            -9.751,
+            9.285,
+            -4.73
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "lamp_light_2nd_floor_08"
+        },
+        "Transform": {
+          "position": [
+            -5.848,
+            9.285,
+            4.665
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.456,
+            0.114
+          ],
+          "intensity": 20.0,
+          "range": 7.0
         }
       }
     }
