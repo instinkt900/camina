@@ -10,6 +10,7 @@
 // reports.
 
 #include "check.h"
+#include "ui/image.h"
 #include "ui/renderer.h"
 
 #include <cmath>
@@ -21,6 +22,13 @@ namespace {
 
     moth_ui::IntRect rect(int x0, int y0, int x1, int y1) {
         return moth_ui::IntRect{ { x0, y0 }, { x1, y1 } };
+    }
+
+    /// An image with no device behind it. The recorder never reads the texture,
+    /// it only compares handles and divides by the size, so a made up handle is
+    /// enough and the whole file still runs with no GPU.
+    engine::ui::Image fake_image(std::uint64_t handle, int width, int height) {
+        return engine::ui::Image{ engine::gfx::TextureHandle{ handle }, width, height };
     }
 
     void a_fresh_recording_holds_nothing() {
@@ -269,6 +277,170 @@ namespace {
         test::check(renderer.vertices().empty(), "a draw after end records nothing");
     }
 
+    void an_image_records_its_texture_and_its_source_rect() {
+        Renderer renderer;
+        const engine::ui::Image image = fake_image(7, 64, 32);
+
+        renderer.begin(100, 100);
+        // The bottom right quarter of the image, drawn into a bigger rectangle.
+        renderer.RenderImage(image, rect(32, 16, 64, 32), rect(0, 0, 80, 80),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.end();
+
+        test::check(renderer.batches().size() == 1, "one image is one draw");
+        test::check(renderer.batches()[0].texture.value == 7, "the batch names the texture");
+
+        // A source rectangle is in texels of the whole image, so half the width
+        // and half the height are 0.5 either way whatever the two sizes are.
+        const auto& top_left = renderer.vertices()[0];
+        const auto& bottom_right = renderer.vertices()[2];
+        test::check(std::abs(top_left.u - 0.5F) < 0.001F, "the left edge is half the width");
+        test::check(std::abs(top_left.v - 0.5F) < 0.001F, "the top edge is half the height");
+        test::check(std::abs(bottom_right.u - 1.0F) < 0.001F, "the right edge is the far side");
+        test::check(std::abs(bottom_right.v - 1.0F) < 0.001F, "and so is the bottom edge");
+    }
+
+    void a_shape_after_an_image_goes_back_to_no_texture() {
+        Renderer renderer;
+        const engine::ui::Image image = fake_image(7, 64, 64);
+
+        renderer.begin(100, 100);
+        renderer.RenderImage(image, rect(0, 0, 64, 64), rect(0, 0, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.RenderFilledRect(rect(0, 0, 10, 10));
+        renderer.end();
+
+        // Carrying the image into the rectangle would tint it with whatever
+        // texel the coordinates land on, which is a wrong picture rather than a
+        // missing one.
+        test::check(renderer.batches().size() == 2, "a shape after an image needs its own draw");
+        test::check(renderer.batches()[0].texture.value == 7, "the image run keeps the texture");
+        test::check(!renderer.batches()[1].texture.valid(), "and the shape run has none");
+    }
+
+    void two_images_of_one_texture_are_one_draw() {
+        Renderer renderer;
+        const engine::ui::Image image = fake_image(7, 64, 64);
+
+        renderer.begin(100, 100);
+        for (int i = 0; i < 4; ++i) {
+            // NodeImage pushes a filter around every image it draws. Breaking
+            // on the push rather than on a change would cost four draws here.
+            renderer.PushTextureFilter(moth_ui::TextureFilter::Linear);
+            renderer.RenderImage(image, rect(0, 0, 64, 64), rect(0, 0, 10, 10),
+                                 moth_ui::ImageScaleType::Stretch, 1.0F);
+            renderer.PopTextureFilter();
+        }
+        renderer.end();
+
+        test::check(renderer.batches().size() == 1, "four draws of one image are one batch");
+        test::check(renderer.batches()[0].index_count == 24, "and the batch holds all of them");
+    }
+
+    void a_second_texture_breaks_the_batch() {
+        Renderer renderer;
+        const engine::ui::Image first = fake_image(7, 64, 64);
+        const engine::ui::Image second = fake_image(9, 64, 64);
+
+        renderer.begin(100, 100);
+        renderer.RenderImage(first, rect(0, 0, 64, 64), rect(0, 0, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.RenderImage(second, rect(0, 0, 64, 64), rect(0, 0, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.end();
+
+        test::check(renderer.batches().size() == 2, "one draw reads one texture");
+        test::check(renderer.batches()[0].texture.value == 7, "the first run keeps the first");
+        test::check(renderer.batches()[1].texture.value == 9, "and the second takes the second");
+    }
+
+    void a_filter_change_breaks_the_batch() {
+        Renderer renderer;
+        const engine::ui::Image image = fake_image(7, 64, 64);
+
+        renderer.begin(100, 100);
+        renderer.RenderImage(image, rect(0, 0, 64, 64), rect(0, 0, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.PushTextureFilter(moth_ui::TextureFilter::Nearest);
+        renderer.RenderImage(image, rect(0, 0, 64, 64), rect(0, 0, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.end();
+
+        // Nothing applies the filter yet, because a gfx sampler belongs to its
+        // texture. See issue #209. The recorder still carries it, so the day
+        // that changes the batches already say what they wanted.
+        test::check(renderer.batches().size() == 2, "a filter change needs its own draw");
+        test::check(renderer.batches()[0].filter == moth_ui::TextureFilter::Linear,
+                    "the first run carries the default");
+        test::check(renderer.batches()[1].filter == moth_ui::TextureFilter::Nearest,
+                    "and the second carries the new one");
+    }
+
+    void an_invalid_filter_keeps_the_one_in_force() {
+        Renderer renderer;
+        renderer.begin(100, 100);
+        renderer.PushTextureFilter(moth_ui::TextureFilter::Nearest);
+        // Invalid is the moth_ui sentinel for "nothing was set", which a layout
+        // that saved no filter loads. Taking it as a filter would break the
+        // batch and record a state that is not one.
+        renderer.PushTextureFilter(moth_ui::TextureFilter::Invalid);
+        renderer.RenderFilledRect(rect(0, 0, 10, 10));
+        renderer.end();
+
+        test::check(renderer.batches().size() == 1, "a sentinel is not a state change");
+        test::check(renderer.batches()[0].filter == moth_ui::TextureFilter::Nearest,
+                    "and the filter under it still stands");
+    }
+
+    void a_tiled_image_runs_its_coordinates_past_one() {
+        Renderer renderer;
+        const engine::ui::Image image = fake_image(7, 64, 64);
+
+        renderer.begin(200, 200);
+        // A destination four tiles wide at half scale, so 128 pixels of
+        // destination over 32 pixels of tile.
+        renderer.RenderImage(image, rect(0, 0, 64, 64), rect(0, 0, 128, 64),
+                             moth_ui::ImageScaleType::Tile, 0.5F);
+        renderer.end();
+
+        const auto& bottom_right = renderer.vertices()[2];
+        test::check(std::abs(bottom_right.u - 4.0F) < 0.001F, "four tiles across");
+        test::check(std::abs(bottom_right.v - 2.0F) < 0.001F, "and two down");
+    }
+
+    void an_image_of_another_backend_draws_nothing() {
+        // moth_ui hands the renderer an IImage, and another backend's image is
+        // the wrong type behind it. Reading its texture would read a handle
+        // that was never a handle.
+        class Foreign final : public moth_ui::IImage {
+        public:
+            [[nodiscard]] int GetWidth() const override { return 8; }
+            [[nodiscard]] int GetHeight() const override { return 8; }
+            [[nodiscard]] moth_ui::IntVec2 GetDimensions() const override { return { 8, 8 }; }
+        };
+
+        Renderer renderer;
+        const Foreign foreign;
+        renderer.begin(100, 100);
+        renderer.RenderImage(foreign, rect(0, 0, 8, 8), rect(0, 0, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.end();
+
+        test::check(renderer.vertices().empty(), "another backend's image records nothing");
+    }
+
+    void an_empty_destination_records_nothing() {
+        Renderer renderer;
+        const engine::ui::Image image = fake_image(7, 64, 64);
+
+        renderer.begin(100, 100);
+        renderer.RenderImage(image, rect(0, 0, 64, 64), rect(10, 10, 10, 10),
+                             moth_ui::ImageScaleType::Stretch, 1.0F);
+        renderer.end();
+
+        test::check(renderer.vertices().empty(), "a destination with no area draws nothing");
+    }
+
 } // namespace
 
 int main() {
@@ -288,5 +460,14 @@ int main() {
     a_colour_leaves_srgb_before_it_reaches_the_vertex();
     a_gradient_runs_between_its_two_colours();
     a_gradient_angle_turns_it();
+    an_image_records_its_texture_and_its_source_rect();
+    a_shape_after_an_image_goes_back_to_no_texture();
+    two_images_of_one_texture_are_one_draw();
+    a_second_texture_breaks_the_batch();
+    a_filter_change_breaks_the_batch();
+    an_invalid_filter_keeps_the_one_in_force();
+    a_tiled_image_runs_its_coordinates_past_one();
+    an_image_of_another_backend_draws_nothing();
+    an_empty_destination_records_nothing();
     return test::report();
 }
