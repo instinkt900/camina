@@ -6,6 +6,7 @@
 #include "render/shader_bindings.h"
 
 #include <array>
+#include <cstddef>
 #include <vector>
 
 namespace engine::ui {
@@ -52,14 +53,6 @@ namespace engine::ui {
 
     } // namespace
 
-    render::PassDesc UiPass::declare() {
-        static constexpr std::array<render::ResourceWrite, 2> kWrites{ {
-            { render::kFrameColor, gfx::ResourceState::ColorTarget },
-            { render::kFrameDepth, gfx::ResourceState::DepthTarget },
-        } };
-        return render::PassDesc{ .name = "ui", .reads = {}, .writes = kWrites };
-    }
-
     bool UiPass::create(gfx::Device* device, const assets::Content& content) {
         ENGINE_ASSERT(device != nullptr, "UiPass::create needs a device.");
         device_ = device;
@@ -95,9 +88,10 @@ namespace engine::ui {
             .push_constant_stages = gfx::kStageBitVertex,
             .bindings = bindings.empty() ? nullptr : bindings.data(),
             .binding_count = bindings.size(),
-            // The UI draws over a finished frame and owes nothing to depth.
-            // The scope still attaches the depth image, which declare() says.
-            .depth_attachment = true,
+            // The tonemap scope attaches no depth, and this draws inside it.
+            // Vulkan calls a pipeline that disagrees with its scope undefined
+            // rather than an error, so this must match cmd_begin_rendering.
+            .depth_attachment = false,
             .depth_test = false,
             .depth_write = false,
             .blend = false,
@@ -126,12 +120,14 @@ namespace engine::ui {
         if (device_ == nullptr) {
             return;
         }
-        gfx::destroy_buffer(device_, vertices_);
-        vertices_ = gfx::BufferHandle{};
-        vertex_capacity_ = 0;
-        gfx::destroy_buffer(device_, indices_);
-        indices_ = gfx::BufferHandle{};
-        index_capacity_ = 0;
+        for (gfx::BufferHandle& buffer : vertices_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
+        for (gfx::BufferHandle& buffer : indices_) {
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+        }
         gfx::destroy_pipeline(device_, blended_);
         blended_ = gfx::PipelineHandle{};
         gfx::destroy_pipeline(device_, opaque_);
@@ -139,35 +135,30 @@ namespace engine::ui {
         device_ = nullptr;
     }
 
-    bool UiPass::ensure_capacity(gfx::BufferHandle& buffer, std::size_t& capacity,
-                                 std::size_t bytes, gfx::BufferUsage usage) {
-        if (capacity >= bytes && capacity > 0) {
-            return true;
-        }
-
-        // Double rather than fit exactly, so a UI that grows by one quad each
-        // frame does not reallocate each frame.
-        constexpr std::size_t kFirstCapacity = 1024;
-        std::size_t next = capacity == 0 ? kFirstCapacity : capacity;
-        while (next < bytes) {
-            next *= 2;
-        }
-
+    bool UiPass::upload(gfx::BufferHandle& buffer, const void* data, std::size_t bytes,
+                        gfx::BufferUsage usage) {
+        // gfx has no dynamic vertex or index buffer. create_buffer refuses one
+        // with no data, and update_buffer refuses a vertex or an index buffer
+        // outright, because both live in device-local memory the host cannot
+        // reach. So the only way to put new geometry on the GPU each frame is
+        // to build a new buffer from it.
+        //
+        // That is a real cost and it is not what this should do. It is the
+        // largest gap the M6 spike found in gfx, and issue #204 holds it. A UI
+        // is small, so the picture is right and the cost is bounded until then.
         gfx::destroy_buffer(device_, buffer);
         buffer = gfx::BufferHandle{};
 
         const gfx::BufferDesc desc{
-            .data = nullptr,
-            .size = next,
+            .data = data,
+            .size = bytes,
             .usage = usage,
             .device_only = false,
         };
         if (!gfx::succeeded(gfx::create_buffer(device_, desc, &buffer))) {
-            ENGINE_LOG_ERROR("A UI buffer of {} bytes was not created.", next);
-            capacity = 0;
+            ENGINE_LOG_ERROR("A UI buffer of {} bytes was not created.", bytes);
             return false;
         }
-        capacity = next;
         return true;
     }
 
@@ -184,21 +175,28 @@ namespace engine::ui {
             return;
         }
 
-        if (!ensure_capacity(vertices_, vertex_capacity_, vertex_bytes, gfx::BufferUsage::Vertex) ||
-            !ensure_capacity(indices_, index_capacity_, index_bytes, gfx::BufferUsage::Index)) {
+        // Move to the next slot first. The buffers there were last used three
+        // frames ago, so nothing in flight still reads them and destroying
+        // them is safe. Reusing one slot would destroy a buffer the frame
+        // before is still reading, which synchronization validation reports.
+        slot_ = (slot_ + 1) % kSlots;
+        gfx::BufferHandle& vertex_buffer = vertices_.at(slot_);
+        gfx::BufferHandle& index_buffer = indices_.at(slot_);
+
+        if (!upload(vertex_buffer, renderer.vertices().data(), vertex_bytes,
+                    gfx::BufferUsage::Vertex) ||
+            !upload(index_buffer, renderer.indices().data(), index_bytes,
+                    gfx::BufferUsage::Index)) {
             return;
         }
-
-        gfx::update_buffer(device_, vertices_, renderer.vertices().data(), vertex_bytes);
-        gfx::update_buffer(device_, indices_, renderer.indices().data(), index_bytes);
 
         const Push push{
             .inv_logical_width = 1.0F / static_cast<float>(renderer.logical_width()),
             .inv_logical_height = 1.0F / static_cast<float>(renderer.logical_height()),
         };
 
-        gfx::cmd_bind_vertex_buffer(commands, vertices_);
-        gfx::cmd_bind_index_buffer(commands, indices_);
+        gfx::cmd_bind_vertex_buffer(commands, vertex_buffer);
+        gfx::cmd_bind_index_buffer(commands, index_buffer);
 
         gfx::PipelineHandle bound{};
         for (const Batch& batch : renderer.batches()) {

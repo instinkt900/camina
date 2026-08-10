@@ -7,43 +7,32 @@
 
 #include "assets/content.h"
 #include "gfx/device.h"
-#include "render/render_graph.h"
 #include "ui/renderer.h"
+
+#include <array>
+#include <cstddef>
 
 namespace engine::ui {
 
     /**
      * @brief Uploads a recording and issues one draw for each batch.
      *
-     * This runs after the tonemap, straight onto the swapchain image. Game UI
-     * is not part of the scene, so it takes no exposure and no tone curve. It
-     * is authored in the colours it should appear in.
+     * This draws inside the same rendering scope as the tonemap, straight onto
+     * the swapchain image. Game UI is not part of the scene, so it takes no
+     * exposure and no tone curve. It is authored in the colours it should
+     * appear in.
      *
-     * The vertex and index buffers grow to fit and never shrink, because a UI
-     * reaches a steady size within a few frames and a free every frame would
-     * cost more than the memory does.
+     * It is not a pass in the render graph. It writes the image the tonemap
+     * already declared and shares that scope, so there is no barrier to
+     * derive. Rule 4.6 says to build the declaration when something needs it.
      *
-     * @warning The buffers are host visible, and one set of them serves every
-     *          frame in flight. draw() must therefore run inside the frame that
-     *          recorded it, which it does, because the runtime records and
-     *          draws in one place.
+     * @warning The vertex and index buffers are rebuilt every frame, because
+     *          gfx has no dynamic vertex buffer. See issue #204. That is the
+     *          largest gap the M6 spike found, and it is why this class does
+     *          not keep a capacity.
      */
     class UiPass {
     public:
-        /**
-         * @brief What the pass reads and writes, for the render graph.
-         *
-         * It writes the swapchain image and reads nothing. It also writes the
-         * frame depth for the reason TonemapPass::declare gives: the scope
-         * attaches the depth image, so a declaration that left it out would be
-         * a write the graph never ordered.
-         *
-         * The span points at storage with static lifetime.
-         *
-         * @return The declaration.
-         */
-        [[nodiscard]] static render::PassDesc declare();
-
         /**
          * @brief Builds the pipelines this pass draws with.
          *
@@ -69,9 +58,9 @@ namespace engine::ui {
         void draw(gfx::CommandList* commands, const Renderer& renderer, gfx::Extent2D extent);
 
     private:
-        /// @brief Grows a buffer to hold at least @p bytes, keeping no contents.
-        [[nodiscard]] bool ensure_capacity(gfx::BufferHandle& buffer, std::size_t& capacity,
-                                           std::size_t bytes, gfx::BufferUsage usage);
+        /// @brief Replaces a buffer with a new one holding @p bytes of @p data.
+        [[nodiscard]] bool upload(gfx::BufferHandle& buffer, const void* data, std::size_t bytes,
+                                  gfx::BufferUsage usage);
 
         gfx::Device* device_ = nullptr;
 
@@ -80,10 +69,13 @@ namespace engine::ui {
         /// @brief The pipeline for a run that blends over what is under it.
         gfx::PipelineHandle blended_;
 
-        gfx::BufferHandle vertices_;
-        gfx::BufferHandle indices_;
-        std::size_t vertex_capacity_ = 0;
-        std::size_t index_capacity_ = 0;
+        /// One buffer set for each slot, so a buffer a frame in flight still
+        /// reads is never destroyed. Two frames are in flight, and three slots
+        /// leave a margin rather than relying on that number staying two.
+        static constexpr std::size_t kSlots = 3;
+        std::array<gfx::BufferHandle, kSlots> vertices_{};
+        std::array<gfx::BufferHandle, kSlots> indices_{};
+        std::size_t slot_ = 0;
     };
 
 }
