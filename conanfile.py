@@ -99,9 +99,20 @@ class CaminaConan(ConanFile):
             self.requires("miniaudio/0.11.22")
 
         if self.options.with_ui:
-            # moth_ui is not on Conan Center. Export it to the local cache first:
+            # M6. moth_ui is not on Conan Center. Take it from the Artifactory
+            # remote, or export it to the local cache first:
             #   conan create . --version=<v>   (from the moth_ui checkout)
-            self.requires("moth_ui/[>=0.1]")
+            #
+            # 1.1.2 is the first release this engine can build against. Before
+            # it, moth_ui pinned nlohmann_json to a patch line that conflicts
+            # with the 3.12 this engine takes, and its logger failed to compile
+            # against fmt 12.2.
+            #
+            # Develop against a Conan editable when a change spans both
+            # repositories, then release moth_ui and come back to this pin. A
+            # build that needs an editable is a build nobody else can run. See
+            # DESIGN.md section 8.5.
+            self.requires("moth_ui/[>=1.1.2 <2]")
 
     def build_requirements(self):
         pass
