@@ -255,9 +255,24 @@ namespace {
         test::check(bottom_left > top_left + 0.9F, "and it does vary down y");
     }
 
+    void drawing_outside_a_recording_is_ignored() {
+        Renderer renderer;
+        // moth_ui decides the call order, so a draw can arrive before begin()
+        // and after end(). Both leave no open batch, and reading one would be
+        // an out of bounds read on an empty vector.
+        renderer.RenderFilledRect(rect(0, 0, 10, 10));
+        test::check(renderer.vertices().empty(), "a draw before begin records nothing");
+
+        renderer.begin(100, 100);
+        renderer.end();
+        renderer.RenderFilledRect(rect(0, 0, 10, 10));
+        test::check(renderer.vertices().empty(), "a draw after end records nothing");
+    }
+
 } // namespace
 
 int main() {
+    drawing_outside_a_recording_is_ignored();
     a_fresh_recording_holds_nothing();
     one_rect_is_two_triangles();
     push_color_composes_rather_than_replaces();

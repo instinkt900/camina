@@ -43,11 +43,11 @@ namespace engine::ui {
 
         /// Whether a moth_ui blend mode needs the blending pipeline.
         [[nodiscard]] bool needs_blending(moth_ui::BlendMode mode) {
-            // Replace is the only one the opaque pipeline serves. Add,
-            // Multiply and Modulate each want their own blend state, and this
-            // increment draws them with straight alpha instead. Issue #197
-            // records that, because a wrong blend is visible rather than
-            // silent.
+            // Replace takes the opaque pipeline and Alpha takes the blending
+            // one, and both are correct. Add, Multiply and Modulate each want
+            // blend state of their own and draw as straight alpha here, which
+            // is wrong rather than missing. Issue #206 holds it. No layout
+            // asks for one yet, because nothing loads a layout.
             return mode != moth_ui::BlendMode::Replace;
         }
 
@@ -55,17 +55,22 @@ namespace engine::ui {
 
     bool UiPass::create(gfx::Device* device, const assets::Content& content) {
         ENGINE_ASSERT(device != nullptr, "UiPass::create needs a device.");
+        // Every failure below clears this again. draw() takes a null device to
+        // mean the pass is not ready, so leaving it set after a failed build
+        // would let a draw bind a pipeline handle that was never created.
         device_ = device;
 
         assets::Shader vertex;
         assets::Shader fragment;
         if (!read_one_shader(content, "ui.vert", vertex) ||
             !read_one_shader(content, "ui.frag", fragment)) {
+            device_ = nullptr;
             return false;
         }
 
         std::vector<gfx::DescriptorBinding> bindings;
         if (!render::merge_bindings(vertex, fragment, bindings)) {
+            device_ = nullptr;
             return false;
         }
 
@@ -105,12 +110,16 @@ namespace engine::ui {
 
         if (!gfx::succeeded(gfx::create_graphics_pipeline(device_, desc, &opaque_))) {
             ENGINE_LOG_ERROR("The opaque UI pipeline did not build.");
+            device_ = nullptr;
             return false;
         }
 
         desc.blend = true;
         if (!gfx::succeeded(gfx::create_graphics_pipeline(device_, desc, &blended_))) {
             ENGINE_LOG_ERROR("The blended UI pipeline did not build.");
+            gfx::destroy_pipeline(device_, opaque_);
+            opaque_ = gfx::PipelineHandle{};
+            device_ = nullptr;
             return false;
         }
         return true;

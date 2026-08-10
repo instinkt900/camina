@@ -446,7 +446,7 @@ possible. The push/pop state stack maps onto batch breaks:
 | `PushClip` | Scissor rect. Forces a batch break |
 | `PushBlendMode` | Pipeline variant. Forces a batch break |
 | `PushColor` | Vertex color or push constant. No break needed |
-| `PushTextureFilter` | Sampler selection. Batch break on change |
+| `PushTextureFilter` | Sampler selection. Batch break on change. Not built yet, see below |
 
 The primitives to serve are `RenderRect`, `RenderFilledRect`, `RenderGradientRect`,
 `RenderImage` with all scale types, and `RenderText`.
@@ -456,7 +456,12 @@ table said per-draw push constant. That breaks the batch at every node, which de
 of a batching recorder. M6.2 measured it: eight transformed quads are one draw when the recorder
 applies the matrix as it records, and eight draws when a push constant carries it.
 
-So a batch breaks on a clip, a blend mode, and a texture. It never breaks on a transform.
+So a batch breaks on a clip and on a blend mode, and never on a transform.
+
+**A texture filter does not break the batch yet.** M6.2 records no texture, so the pipelines
+declare no sampler and a filter change cannot alter the picture. It has to break the batch when
+issue #198 adds images, and a batch has to carry the filter it was recorded under. Until then the
+row above describes the intent rather than the code.
 
 **Each stack rule is different, and none of them matches its name.** `PushColor` composes with
 the colour under it, `PushTransform` replaces, and `PushClip` intersects. Only `PushTransform`

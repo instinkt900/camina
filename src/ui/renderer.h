@@ -84,21 +84,47 @@ namespace engine::ui {
         /// @brief Closes the batch still open, so the recording can be read.
         void end();
 
-        /// @brief The recorded vertices. Valid until the next begin().
+        /**
+         * @brief The recorded vertices. Valid until the next begin().
+         *
+         * @return The recorded vertices. Valid until the next begin().
+         */
         [[nodiscard]] const std::vector<Vertex>& vertices() const { return m_vertices; }
 
-        /// @brief The recorded indices. Valid until the next begin().
+        /**
+         * @brief The recorded indices. Valid until the next begin().
+         *
+         * @return The recorded indices. Valid until the next begin().
+         */
         [[nodiscard]] const std::vector<std::uint32_t>& indices() const { return m_indices; }
 
-        /// @brief The recorded batches, in the order they must be drawn.
+        /**
+         * @brief The recorded batches, in the order they must be drawn.
+         *
+         * @return The recorded batches, in the order they must be drawn.
+         */
         [[nodiscard]] const std::vector<Batch>& batches() const { return m_batches; }
 
-        /// @brief The logical width the recording was made against.
+        /**
+         * @brief The logical width the recording was made against.
+         *
+         * @return The logical width the recording was made against.
+         */
         [[nodiscard]] std::uint32_t logical_width() const { return m_width; }
 
-        /// @brief The logical height the recording was made against.
+        /**
+         * @brief The logical height the recording was made against.
+         *
+         * @return The logical height the recording was made against.
+         */
         [[nodiscard]] std::uint32_t logical_height() const { return m_height; }
 
+        /// @cond
+        // These implement moth_ui::IRenderer, and moth_ui documents the
+        // contract. Doxygen reads src/ only, so it cannot see that base class
+        // and reports every override as undocumented. The rules that are not
+        // obvious are on the class above, because they are the ones a reader
+        // here needs.
         void PushBlendMode(moth_ui::BlendMode mode) override;
         void PopBlendMode() override;
         void PushColor(const moth_ui::Color& color) override;
@@ -123,6 +149,7 @@ namespace engine::ui {
                         const moth_ui::IntRect& dest_rect) override;
 
         void SetRendererLogicalSize(const moth_ui::IntVec2& size) override;
+        /// @endcond
 
     private:
         /// @brief Ends the open batch and starts one with the current state.

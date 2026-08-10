@@ -132,6 +132,14 @@ namespace engine::ui {
                             const moth_ui::Color& top_left, const moth_ui::Color& top_right,
                             const moth_ui::Color& bottom_right,
                             const moth_ui::Color& bottom_left) {
+        // moth_ui decides the call order, not this engine, so a draw can
+        // arrive before begin() or after end(). Both leave no open batch, and
+        // m_batches.back() would then read an empty vector. ENGINE_ASSERT
+        // compiles out of a Release build, so this needs a real return.
+        if (m_batches.empty()) {
+            return;
+        }
+
         const moth_ui::FloatMat4x4& transform = m_transform.back();
         const moth_ui::Color& tint = m_color.back();
 

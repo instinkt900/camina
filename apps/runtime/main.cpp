@@ -988,8 +988,9 @@ namespace {
 #if defined(ENGINE_WITH_UI)
         /// M6.2. Draws a moth_ui recording over the tonemapped frame.
         engine::ui::UiPass* ui_pass = nullptr;
-        /// The recording ui_pass draws. Recorded once for each frame.
-        const engine::ui::Renderer* ui_renderer = nullptr;
+        /// The recording ui_pass draws. Recorded inside draw_frame, because
+        /// only there is the settled swapchain size known.
+        engine::ui::Renderer* ui_renderer = nullptr;
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
@@ -1198,7 +1199,11 @@ namespace {
         // display colors like the overlay below, so it draws after the curve
         // rather than through it.
         if (context.ui_pass != nullptr && context.ui_renderer != nullptr) {
-            context.ui_pass->draw(info.commands, *context.ui_renderer, extent);
+            // info.extent, not the requested extent. The device can settle on a
+            // different size, and the scissor and the vertex normalization both
+            // have to agree with the image actually being drawn into.
+            record_ui_probe(*context.ui_renderer, info.extent);
+            context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
 
@@ -1471,16 +1476,18 @@ namespace {
         // asks for rather than at the default and then again.
         runtime.mesh.set_cluster_cell_ceiling(options.cluster_cell_lights);
 
-        // After the device, because the target is the size the swapchain
-        // settled on rather than the size that was asked for.
 #if defined(ENGINE_WITH_UI)
         // M6.2. Built after the engine content tree is read, because the
-        // pipelines come from the cooked ui shaders in it.
+        // pipelines come from the cooked ui shaders in it. A failure here is
+        // not fatal: UiPass::create clears its device on the way out, so the
+        // pass reports itself not ready and draws nothing.
         if (!runtime.ui_pass.create(runtime.device, runtime.engine_content)) {
             ENGINE_LOG_ERROR("The UI pass did not build. Game UI will not draw.");
         }
 #endif
 
+        // After the device, because the target is the size the swapchain
+        // settled on rather than the size that was asked for.
         if (!runtime.tonemap.create(runtime.device, runtime.engine_content,
                                     device_extent(runtime.device))) {
             return false;
@@ -1690,16 +1697,6 @@ namespace {
             // The game moves things, then the frame composes the matrices and
             // draws them. Reversing those two would draw a frame behind.
             sandbox::update(world, seconds);
-
-#if defined(ENGINE_WITH_UI)
-            // M6.2. A recording for this frame, before the draw reads it.
-            //
-            // There is no layout yet, so this is a placeholder that exercises
-            // every path the recorder has: a filled rect, a gradient, a clip
-            // that cuts one, and a transform that moves one. #200 replaces it
-            // with a real moth_ui layout.
-            record_ui_probe(runtime.ui_renderer, extent);
-#endif
 
             engine::gfx::Extent2D drawn_extent{};
             const FrameOutcome outcome = draw_frame(context, extent, drawn_extent);
