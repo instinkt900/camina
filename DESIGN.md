@@ -514,6 +514,39 @@ Take FreeType and HarfBuzz for that reason, and take them from the start. An ear
 this section suggested stb_truetype, with HarfBuzz added later only for CJK or Arabic. That is
 the more expensive path now, because it means writing what the reference already has.
 
+**M6.4 measured that choice rather than assuming it.** Only 13 lines of the 441 call HarfBuzz
+and 15 call FreeType. The packer, the metrics, the measurement and the wrapping are neutral, so
+the port costs about the same either way and the library choice buys shaping alone. stb_truetype
+is already a dependency and would have cost nothing to add. It was still rejected, because its
+shaping is partial: GPOS pair kerning only, with no ligatures and no complex scripts. M6 is a
+diagnostic spike, and text that measures differently from `moth_editor` would make every layout
+difference ambiguous. Matching the reference removes that variable.
+
+`conanfile.py` pins the two versions `moth_graphics` pins, for the same reason. It also sets
+`harfbuzz/*:with_glib=False`. The default pulls glib, and glib drags elfutils, gettext,
+libiconv, pcre2 and libffi behind it. glib is also LGPL, which nothing else here is. With the
+option off, `with_ui=True` adds exactly freetype, harfbuzz, libpng, brotli and bzip2.
+
+**The atlas is RGBA8, white with the coverage in alpha.** That is what the reference does and it
+is worth keeping. A coverage-only texture is a quarter of the memory and needs its own pipeline
+or a shader permutation. White with coverage in alpha makes a glyph an ordinary textured quad,
+so text draws through the same pipeline as an image and a plain shape, beside the white texel
+of section 8.1. It is correct under an sRGB swapchain as well, because Vulkan applies the
+transfer function to the color channels and leaves alpha linear.
+
+**Two parts are a rewrite rather than a port.** The reference packs every glyph in the face.
+That cannot work in general, because a CJK face carries more than 20000 glyphs and one atlas of
+them is tens of megabytes. `engine::ui::Font` packs the codepoints from U+0020 to U+00FF
+instead, which is about 190 glyphs in a 512 square atlas at 32 pixels. A string outside that
+range loses those glyphs, and packing on demand is the real answer. Issue #213 holds it, and
+issue #214 holds the cost of one atlas for each size. The reference also walks the string once
+and backtracks its loop counter to the last break it passed. Splitting the words out first says
+the same thing and cannot run an index past the start of a line.
+
+`load()` is separate from `upload()` so that none of this needs a GPU to test. The
+rasterization, the packing, the shaping, the measurement and the wrapping are all driven by
+`tests/test_ui_font.cpp` with no device, the way `tests/test_frustum.cpp` drives the frustum.
+
 **Controller navigation is architecture, not a widget feature.** A focus graph, directional
 resolution, focus wrapping, and mouse/pad input-mode switching belong in the node tree. They
 do not belong on individual widgets. Design this early if gamepad support matters. Adding it
