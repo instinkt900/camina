@@ -142,11 +142,15 @@ jobs:
       # moth_ui is not on Conan Center. conanfile.py pins it, and this remote
       # serves it. Anonymous read, so there is no secret here. A job with the
       # option off never resolves moth_ui and does not need this.
+      #
+      # HTTPS rather than plain HTTP. A package fetched here is compiled and
+      # linked into the engine, so anybody able to answer for that host could
+      # choose what this build runs.
       - name: Add the moth_ui remote
         if: matrix.with_ui
         run: |
           conan remote add --force artifactory \
-            http://artifactory.matthewcotton.net/artifactory/api/conan/conan-local
+            https://artifactory.matthewcotton.net/artifactory/api/conan/conan-local
 
       - name: Cache Conan packages
         uses: actions/cache@v4
