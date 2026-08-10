@@ -106,8 +106,10 @@ The runtime watches `src/render/content` as well, so a shader edit shows up live
 not build. A cook that fails now keeps the manifest entry the last cook gave that asset,
 because losing it hides a cooked file that is still on disk and stops the next start.
 
-M5 is in progress, and the paragraphs below record it in the order the parts landed rather than
-by number. The first half of M5.1 landed: a descriptor set layout now comes from the
+M5 is complete, and the paragraphs below record it in the order the parts landed rather than
+by number. The close of the milestone is further down, under the Sponza scene.
+
+The first half of M5.1 landed: a descriptor set layout now comes from the
 cooked SPIR-V rather than from hand-written C++. The cooker links SPIRV-Reflect and writes
 `src/assets/shader.h`, which carries the module, the bindings, and the members of every
 uniform block in one file. `gfx::GraphicsPipelineDesc` takes those bindings, and
@@ -341,11 +343,32 @@ keeps all of the old ones.
 The opaque draws sort by pipeline variant, which closed #105. `pipeline_switch_count()` is what
 measures it.
 
-M5 is down to two issues. #88 carries the done-when test and needs a Sponza-class scene. Issue
-#130 has to fetch that from outside git, because the geometry is larger than GitHub accepts. #122
-is the aliasing half of the render graph, and its trigger condition is not met yet: the shadow map
-and the scene color are both live, but the mesh pass reads one and writes the other in the same
-pass, so neither can take the other's memory.
+**M5 is complete.** #88 closed it: Intel Sponza renders correctly, at 3.75M triangles over 115
+meshes and 28 materials, lit by a sun with four cascades, 22 lamp point lights, and image based
+lighting from the sky the model ships with. `scenes/sponza/` holds the scene and
+`scripts/fetch-scene.py` brings the model down, because 133 MiB of geometry in one file is more
+than GitHub accepts. That was #130.
+
+The frame is **20.3 ms** at 1280x720 on the reference GPU, repeatable to 0.5 percent over three
+runs of 600 frames. Synchronization validation reports nothing over 300 frames of it. Measure a
+later change against that number and against the per-pass split: shadow 8.07 ms, mesh 7.30 ms,
+cull 0.025 ms, tonemap 0.162 ms.
+
+The shadow pass costs more than the mesh pass, which the sandbox could never have shown. It draws
+the world four times at 2048 square, and the cascade cull of #180 leaves 311 draws against the
+mesh pass's 292. Issue #194 holds it, with the numbers to beat.
+
+Two pieces of the M5 definition did not land. #122 is the aliasing half of the render graph, and
+its trigger condition is still not met: the shadow map, the scene color and the cluster grid all
+overlap at the mesh pass, so no two have disjoint lifetimes and there is nothing to alias.
+Nothing draws the environment either, so open sky reads as the clear color, which is #193. The
+sandbox is a closed room and never showed it.
+
+Sponza also carries its own lights, 24 of them under `KHR_lights_punctual`, and the cooker drops
+every one. The lamp positions in `scenes/sponza/main.scene` were read out of the glTF by a script
+and written in by hand. Issue #192 holds that, and the reason it is not trivial: every intensity
+in that file is 0.0, and glTF measures a point light in candela while `scene::PointLight` carries
+no unit at all.
 
 The mesh cull left one of its own. #177 is the tighter test, per submesh rather than per entity. It
 covers both passes, and it needs a scene that can measure the difference.
@@ -383,11 +406,11 @@ at the room against 0.002 ms looking away is mostly the camera, not the cull.
 
 The test is per entity, and #177 holds the tighter per-submesh one.
 
-Verified on 2026-08-09 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+Verified on 2026-08-10 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. Two blended panes drew over the
 opaque scene with no validation message either. Synchronization validation reports nothing over
-300 frames offscreen and 200 windowed.
+300 frames offscreen and 200 windowed, on the sandbox and on Intel Sponza.
 
 The build produces seven warnings, which is issue #179. Six are one line in
 `src/reflect/registry.h` counted once for each translation unit that instantiates it, and the
