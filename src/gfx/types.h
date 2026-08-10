@@ -485,6 +485,18 @@ namespace engine::gfx {
          * A front face is counter-clockwise, as glTF supplies it. Vulkan clip
          * space puts +Y down, and the projection in `math/conventions.h` negates
          * the Y row, so the two cancel and no winding change is needed.
+         *
+         * Culling is dynamic state on every graphics pipeline, so this value is
+         * applied by cmd_bind_pipeline() rather than by the pipeline itself.
+         * Binding therefore resets the cull mode to what the pipeline asked for.
+         * Call cmd_set_cull_mode() after binding to override it for one draw,
+         * which is what a double sided material needs.
+         *
+         * @warning Do not assume the mode a previous pass left behind. It used
+         * to carry over, and a pass that never set one drew with whatever the
+         * pass before it wanted. That blanked a whole frame: the tonemap pass
+         * declared no culling, inherited back face culling from the mesh pass,
+         * and its one full screen triangle was culled. See issue #188.
          */
         bool cull_back = false;
         /**

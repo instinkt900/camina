@@ -10,6 +10,17 @@ namespace engine::gfx {
 
     namespace {
 
+        /**
+         * The cull mode a description asks for, as Vulkan spells it.
+         *
+         * Culling is dynamic state on every graphics pipeline here, so this
+         * reaches the command buffer through PipelineEntry rather than through
+         * the rasterization block alone.
+         */
+        [[nodiscard]] VkCullModeFlags to_vk_cull_mode(bool cull_back) {
+            return cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+        }
+
         /// Whether a stage carries a module at all.
         bool has_module(const ShaderCode& code) {
             return code.spirv != nullptr && code.word_count != 0;
@@ -71,7 +82,7 @@ namespace engine::gfx {
             state.raster.sType =
                 VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             state.raster.polygonMode = VK_POLYGON_MODE_FILL;
-            state.raster.cullMode = desc.cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+            state.raster.cullMode = to_vk_cull_mode(desc.cull_back);
             // Vulkan clip space already puts +Y down. The projection in
             // math/conventions.h negates the Y row, which cancels that, so the
             // winding the rasterizer sees matches the winding in world space.
@@ -272,7 +283,8 @@ namespace engine::gfx {
         PipelineHandle claim_slot(Device& device, VkPipeline pipeline, VkPipelineLayout layout,
                                   std::vector<VkDescriptorSetLayout>&& set_layouts,
                                   std::uint32_t push_constant_size,
-                                  VkShaderStageFlags push_constant_stages) {
+                                  VkShaderStageFlags push_constant_stages,
+                                  VkCullModeFlags cull_mode = VK_CULL_MODE_NONE) {
             std::uint32_t index = 0;
             if (!device.free_pipelines.empty()) {
                 index = device.free_pipelines.back();
@@ -288,6 +300,7 @@ namespace engine::gfx {
             entry.set_layouts = std::move(set_layouts);
             entry.push_constant_size = push_constant_size;
             entry.push_constant_stages = push_constant_stages;
+            entry.cull_mode = cull_mode;
             entry.alive = true;
             return PipelineHandle::make(index, entry.generation);
         }
@@ -466,9 +479,14 @@ namespace engine::gfx {
             return result;
         }
 
+        // The cull mode travels with the pipeline, because culling is dynamic
+        // state and the value the rasterization block above carries is ignored.
+        // cmd_bind_pipeline() applies this, which is what makes cull_back mean
+        // what it says.
         *out_pipeline = claim_slot(*device, pipeline, layout, std::move(set_layouts),
                                    desc.push_constant_size,
-                                   to_vk_stage_flags(desc.push_constant_stages));
+                                   to_vk_stage_flags(desc.push_constant_stages),
+                                   to_vk_cull_mode(desc.cull_back));
         return Result::Success;
     }
 
@@ -504,6 +522,21 @@ namespace engine::gfx {
         }
 
         vkCmdBindPipeline(commands->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, entry->pipeline);
+
+        // Culling is dynamic state on every graphics pipeline, so what the
+        // pipeline was built with counts for nothing on its own and the command
+        // buffer decides. Setting it here means a pass gets the mode it asked
+        // for rather than the one the pass before it left behind.
+        //
+        // Without this, a pass that never calls cmd_set_cull_mode() inherits
+        // whatever the last draw of the last pass set. That blanked the whole
+        // frame once: the mesh pass left back face culling on, and the tonemap
+        // pass draws one full screen triangle whose winding is whatever the
+        // index arithmetic gives. See issue #188.
+        //
+        // A caller that wants another mode calls cmd_set_cull_mode() after
+        // binding, which is what MeshPass does for a double sided material.
+        vkCmdSetCullMode(commands->buffer, entry->cull_mode);
     }
 
     void cmd_set_cull_mode(CommandList* commands, bool cull_back) {
