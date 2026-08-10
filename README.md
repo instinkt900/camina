@@ -97,12 +97,21 @@ release asset instead:
 
 ```bash
 python3 scripts/fetch-scene.py sponza
-./build/RelWithDebInfo/bin/runtime --content scenes/sponza
+./build/RelWithDebInfo/bin/runtime --content build/RelWithDebInfo/bin/content/sponza \
+    --watch scenes/sponza
 ```
+
+The fetch downloads the archive, checks it against a SHA-256, unpacks it into
+`scenes/sponza`, and cooks it. `--content` takes the cooked tree and `--watch` takes the
+source one, which is why the run command names both.
 
 Nothing fetches it during a build and nothing fetches it in CI. A clean clone builds and
 tests with no network. `scenes/sponza/README.md` says what the archive holds, what was
 done to the source, and how the scene is licensed and cited.
+
+**The scene does not draw yet.** It loads, cooks, and reports its draws, and the viewport
+is black. That is issue #188, and it is not about this scene: a sandbox scene with no
+blended geometry goes black the same way.
 
 ## Render without a window
 

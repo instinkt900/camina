@@ -5,11 +5,27 @@ note are in git. The model is not, and `scripts/fetch-scene.py` brings it down.
 
 ```bash
 python3 scripts/fetch-scene.py sponza
-./build/RelWithDebInfo/bin/runtime --content scenes/sponza
+./build/RelWithDebInfo/bin/runtime --content build/RelWithDebInfo/bin/content/sponza \
+    --watch scenes/sponza
 ```
+
+The fetch downloads the archive, checks it against a SHA-256, unpacks it here, and cooks
+it. `--content` takes the cooked tree and `--watch` takes this source one. Pass
+`--no-cook` to unpack only, and the script says what to run.
 
 Nothing fetches this during a build and nothing fetches it in CI. A clean clone builds
 and tests with no network.
+
+## It does not draw yet
+
+The scene loads and cooks, and the viewport is black. Issue #188 holds it. The cause is
+not this scene: a sandbox scene with no blended geometry goes black the same way, and the
+clear colour does not arrive either, so it sits between the mesh pass and the tonemap.
+
+What works today is everything up to the picture. 158 entities, 115 meshes, 28 materials
+and 74 textures load, and the mesh pass reports its draws and its culls. The ImGui overlay
+draws over the tonemapped image rather than through it, so a windowed run still shows the
+whole scene tree and every component on it.
 
 ## Why it is not in git
 

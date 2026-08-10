@@ -38,7 +38,7 @@ SCENES = {
     "sponza": {
         "url": "https://github.com/instinkt900/camina/releases/download/"
                "scene-sponza-1/sponza-1024.zip",
-        "sha256": "0" * 64,
+        "sha256": "43b7505deef1700f2a010322c55374b7a441bce562fef6f93ea602a9419de41c",
         "into": "scenes/sponza",
         # One file the archive is known to hold, so a tree that is already
         # there can be recognised without unpacking it again.
