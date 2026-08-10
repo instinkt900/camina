@@ -442,14 +442,36 @@ possible. The push/pop state stack maps onto batch breaks:
 
 | moth_ui state | Implementation |
 |---|---|
-| `PushTransform` | Per-draw push constant. It replaces instead of composes, so a plain mat4 works |
+| `PushTransform` | Applied to each corner as it is recorded. No break. See below |
 | `PushClip` | Scissor rect. Forces a batch break |
 | `PushBlendMode` | Pipeline variant. Forces a batch break |
 | `PushColor` | Vertex color or push constant. No break needed |
-| `PushTextureFilter` | Sampler selection. Batch break on change |
+| `PushTextureFilter` | Sampler selection. Batch break on change. Not built yet, see below |
 
 The primitives to serve are `RenderRect`, `RenderFilledRect`, `RenderGradientRect`,
 `RenderImage` with all scale types, and `RenderText`.
+
+**The transform reaches the vertex on the CPU, not a push constant.** An earlier version of this
+table said per-draw push constant. That breaks the batch at every node, which defeats the point
+of a batching recorder. M6.2 measured it: eight transformed quads are one draw when the recorder
+applies the matrix as it records, and eight draws when a push constant carries it.
+
+So a batch breaks on a clip and on a blend mode, and never on a transform.
+
+**A texture filter does not break the batch yet.** M6.2 records no texture, so the pipelines
+declare no sampler and a filter change cannot alter the picture. It has to break the batch when
+issue #198 adds images, and a batch has to carry the filter it was recorded under. Until then the
+row above describes the intent rather than the code.
+
+**Each stack rule is different, and none of them matches its name.** `PushColor` composes with
+the colour under it, `PushTransform` replaces, and `PushClip` intersects. Only `PushTransform`
+documents that in moth_ui. Getting one wrong compiles and draws a wrong picture that reads as a
+layout bug. A pop can also arrive with no matching push, so each stack keeps a default that a pop
+cannot remove. See instinkt900/moth_ui#149.
+
+**A colour leaves sRGB at the vertex.** The swapchain is `B8G8R8A8_SRGB` and the hardware encodes
+on write, so an authored colour passed straight through gets encoded twice. Converting per vertex
+rather than per fragment also makes a gradient interpolate in linear, which §3 asks for.
 
 ### 8.2 Why this is worth doing
 

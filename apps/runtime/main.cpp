@@ -28,7 +28,9 @@
 #include "scene/world.h"
 
 #if defined(ENGINE_WITH_UI)
+#include "ui/renderer.h"
 #include "ui/ui.h"
+#include "ui/ui_pass.h"
 #endif
 
 #include <SDL3/SDL.h>
@@ -933,6 +935,49 @@ namespace {
         Failed,  ///< The device reported an error the loop cannot handle.
     };
 
+#if defined(ENGINE_WITH_UI)
+    /**
+     * Records a placeholder layout, so M6.2 has something to look at.
+     *
+     * moth_ui normally drives the recorder through its node tree. Nothing loads
+     * a layout yet, so this calls the same interface by hand and covers each
+     * recorder path: a solid rect, a gradient, a clip, and a transform.
+     *
+     * Issue #200 replaces this with a real layout, and this goes away with it.
+     */
+    void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent) {
+        renderer.begin(extent.width, extent.height);
+
+        // A solid bar across the top.
+        renderer.PushColor(moth_ui::Color{ 0.10F, 0.55F, 0.85F, 1.0F });
+        renderer.RenderFilledRect(moth_ui::IntRect{ { 16, 16 }, { 336, 56 } });
+        renderer.PopColor();
+
+        // A gradient below it, turned so the angle path is exercised.
+        moth_ui::LinearGradient gradient;
+        gradient.startColor = moth_ui::Color{ 0.9F, 0.2F, 0.1F, 1.0F };
+        gradient.endColor = moth_ui::Color{ 0.1F, 0.9F, 0.4F, 1.0F };
+        gradient.angle = 0.4F;
+        renderer.RenderGradientRect(moth_ui::IntRect{ { 16, 72 }, { 336, 152 } }, gradient);
+
+        // A clip that cuts the next rect in half, which is the scissor path.
+        renderer.PushClip(moth_ui::IntRect{ { 16, 168 }, { 176, 248 } });
+        renderer.PushColor(moth_ui::Color{ 0.95F, 0.85F, 0.2F, 1.0F });
+        renderer.RenderFilledRect(moth_ui::IntRect{ { 16, 168 }, { 336, 248 } });
+        renderer.PopColor();
+        renderer.PopClip();
+
+        // A transform on the last one, to show the matrix reaching the vertex.
+        renderer.PushTransform(moth_ui::FloatMat4x4::Translation({ 200.0F, 100.0F }));
+        renderer.PushColor(moth_ui::Color{ 0.8F, 0.8F, 0.9F, 1.0F });
+        renderer.RenderRect(moth_ui::IntRect{ { 16, 168 }, { 136, 248 } });
+        renderer.PopColor();
+        renderer.PopTransform();
+
+        renderer.end();
+    }
+#endif
+
     /// What draw_frame() needs that does not change from one frame to the next.
     struct FrameContext {
         engine::gfx::Device* device = nullptr;
@@ -940,6 +985,13 @@ namespace {
         engine::render::ShadowPass* shadow_pass = nullptr;
         /// Owns the scene color target and writes the frame out.
         engine::render::TonemapPass* tonemap_pass = nullptr;
+#if defined(ENGINE_WITH_UI)
+        /// M6.2. Draws a moth_ui recording over the tonemapped frame.
+        engine::ui::UiPass* ui_pass = nullptr;
+        /// The recording ui_pass draws. Recorded inside draw_frame, because
+        /// only there is the settled swapchain size known.
+        engine::ui::Renderer* ui_renderer = nullptr;
+#endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
         /// What state each graph resource is in. The shadow map carries its
@@ -1142,6 +1194,19 @@ namespace {
         context.tonemap_pass->draw(info.commands, settings.exposure);
         engine::gfx::cmd_write_timestamp(info.commands, kTonemapTimestamp + 1);
 
+#if defined(ENGINE_WITH_UI)
+        // M6.2. Game UI, in the same scope as the tonemap. It is authored in
+        // display colors like the overlay below, so it draws after the curve
+        // rather than through it.
+        if (context.ui_pass != nullptr && context.ui_renderer != nullptr) {
+            // info.extent, not the requested extent. The device can settle on a
+            // different size, and the scissor and the vertex normalization both
+            // have to agree with the image actually being drawn into.
+            record_ui_probe(*context.ui_renderer, info.extent);
+            context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
+        }
+#endif
+
         // The overlay goes over the tonemapped image rather than through it. It
         // is authored in display colors, so mapping it down with the scene would
         // be wrong twice over.
@@ -1183,6 +1248,11 @@ namespace {
         engine::render::ShadowPass shadow;
         /// Owns the half float image the scene renders into, and writes it out.
         engine::render::TonemapPass tonemap;
+#if defined(ENGINE_WITH_UI)
+        /// M6.2. The moth_ui drawing surface and the pass that draws it.
+        engine::ui::Renderer ui_renderer;
+        engine::ui::UiPass ui_pass;
+#endif
         /// Carried across frames, because the shadow map and the scene color are
         /// each one image that every frame in flight shares.
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
@@ -1406,6 +1476,16 @@ namespace {
         // asks for rather than at the default and then again.
         runtime.mesh.set_cluster_cell_ceiling(options.cluster_cell_lights);
 
+#if defined(ENGINE_WITH_UI)
+        // M6.2. Built after the engine content tree is read, because the
+        // pipelines come from the cooked ui shaders in it. A failure here is
+        // not fatal: UiPass::create clears its device on the way out, so the
+        // pass reports itself not ready and draws nothing.
+        if (!runtime.ui_pass.create(runtime.device, runtime.engine_content)) {
+            ENGINE_LOG_ERROR("The UI pass did not build. Game UI will not draw.");
+        }
+#endif
+
         // After the device, because the target is the size the swapchain
         // settled on rather than the size that was asked for.
         if (!runtime.tonemap.create(runtime.device, runtime.engine_content,
@@ -1452,6 +1532,9 @@ namespace {
         // goes out of scope, which is after this function returns.
         runtime.mesh.destroy();
         runtime.shadow.destroy();
+#if defined(ENGINE_WITH_UI)
+        runtime.ui_pass.destroy();
+#endif
         runtime.tonemap.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
@@ -1744,6 +1827,10 @@ int main(int argc, char** argv) {
         .mesh_pass = &runtime.mesh,
         .shadow_pass = &runtime.shadow,
         .tonemap_pass = &runtime.tonemap,
+#if defined(ENGINE_WITH_UI)
+        .ui_pass = &runtime.ui_pass,
+        .ui_renderer = &runtime.ui_renderer,
+#endif
         .overlay = runtime.overlay,
         .resource_states = &runtime.states,
         .game_content = &runtime.game_content,
