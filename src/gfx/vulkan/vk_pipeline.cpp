@@ -531,7 +531,7 @@ namespace engine::gfx {
         // Without this, a pass that never calls cmd_set_cull_mode() inherits
         // whatever the last draw of the last pass set. That blanked the whole
         // frame once: the mesh pass left back face culling on, and the tonemap
-        // pass draws one full screen triangle whose winding is whatever the
+        // pass draws one full-screen triangle whose winding is whatever the
         // index arithmetic gives. See issue #188.
         //
         // A caller that wants another mode calls cmd_set_cull_mode() after

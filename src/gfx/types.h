@@ -496,7 +496,7 @@ namespace engine::gfx {
          * to carry over, and a pass that never set one drew with whatever the
          * pass before it wanted. That blanked a whole frame: the tonemap pass
          * declared no culling, inherited back face culling from the mesh pass,
-         * and its one full screen triangle was culled. See issue #188.
+         * and its one full-screen triangle was culled. See issue #188.
          */
         bool cull_back = false;
         /**

@@ -279,7 +279,7 @@ and presentation is not device work.
 is dynamic on every graphics pipeline, so what a pipeline was built with counted for nothing.
 `cmd_bind_pipeline` applies it now, which closed #188. Before that, a scene of opaque geometry
 alone rendered pure black: the mesh pass left back face culling on, and the tonemap pass draws
-one full screen triangle whose winding is whatever the index arithmetic gives, so the triangle
+one full-screen triangle whose winding is whatever the index arithmetic gives, so the triangle
 was culled and the frame kept its black clear.
 
 Nothing reported it. The validation layer was happy, because every call was legal. The
@@ -304,7 +304,7 @@ white with **every light switched off**, because the image based ambient alone i
 interior is what made that impossible to miss.
 
 M5.6 is complete and the scale is gone. M5.6a put the scene on a half float target and added a
-full screen pass that wrote it out, applying no curve, so the picture did not move. M5.6b put
+full-screen pass that wrote it out, applying no curve, so the picture did not move. M5.6b put
 the ACES fit from Stephen Hill in that pass and made exposure a reflected `ViewSettings` field
 that `view.json` saves and `--exposure` overrides. At the full Cornell values with every light
 off, clipping is now 0.0018 percent, which is 17 pixels of specular highlight on two metal

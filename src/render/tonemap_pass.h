@@ -91,7 +91,7 @@ namespace engine::render {
         [[nodiscard]] gfx::TextureHandle target() const { return target_; }
 
         /**
-         * @brief Draws the full screen triangle that writes the frame out.
+         * @brief Draws the full-screen triangle that writes the frame out.
          *
          * @param commands The open command list.
          * @param exposure A linear scale on the scene before the curve. One is
