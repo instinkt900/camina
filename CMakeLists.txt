@@ -60,6 +60,12 @@ find_package(spirv-reflect-static REQUIRED)
 # subprocess through glslc until #43. Only the cooker links this.
 find_package(shaderc REQUIRED)
 
+# M6. Game UI. Only src/ui links this, and only when the option is on. See
+# DESIGN.md section 8.
+if(ENGINE_WITH_UI)
+    find_package(moth_ui REQUIRED)
+endif()
+
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)
@@ -79,6 +85,13 @@ set(ENGINE_COOKED_CONTENT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/content")
 add_subdirectory(third_party)
 
 add_subdirectory(src)
+
+# Game UI comes after src, because it links engine::core. It is a target of its
+# own rather than part of engine_core, so that a build with the option off
+# carries no moth_ui at all. Rule 4.6 and DESIGN.md section 8.5.
+if(ENGINE_WITH_UI)
+    add_subdirectory(src/ui)
+endif()
 
 # The cooker comes after src, because it links engine::core. It looks for
 # glslc and fails when it is missing, so it must come after the docs-only

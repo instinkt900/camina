@@ -27,6 +27,10 @@
 #include "scene/components.h"
 #include "scene/world.h"
 
+#if defined(ENGINE_WITH_UI)
+#include "ui/ui.h"
+#endif
+
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
@@ -1665,6 +1669,15 @@ int main(int argc, char** argv) {
 
     engine::log::init();
     ENGINE_LOG_INFO("Camina Engine {} starting.", engine::Version);
+
+#if defined(ENGINE_WITH_UI)
+    // M6. A Conan editable can shadow the cache, and a version range can pick a
+    // different moth_ui than the one somebody is editing. So report the version
+    // this binary actually linked rather than the one anybody expected.
+    ENGINE_LOG_INFO("Game UI is on, linked against moth_ui {}. Self test {}.",
+                    engine::ui::moth_ui_version(),
+                    engine::ui::self_test() ? "passed" : "FAILED");
+#endif
 
     engine::jobs::init();
     engine::Arena frame_arena(kFrameArenaBytes);
