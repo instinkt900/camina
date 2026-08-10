@@ -414,7 +414,17 @@ reader rejects leaves the value alone.
 retained-mode node graph, JSON layout files, Flash-style keyframe animation with
 per-property tracks and more than 30 easing curves, and animation events. It also has a
 visual authoring tool called `moth_editor`. It is already a Conan 2 package. It is already
-backend-agnostic. A Vulkan backend exists in `moth_graphics` that you can reuse.
+backend-agnostic. A Vulkan backend exists in `moth_graphics`.
+
+**We own moth_ui and moth_graphics.** Both are Conan editables on the development machine, so
+an engine build picks up a library edit with no export step. This changes what an integration
+problem is. A mismatch between the two can be fixed on either side, and the cheaper side is not
+always the engine. Say which side each fix landed on.
+
+**`moth_graphics` is a reference, not a dependency. Do not link it.** It requires
+`vulkan-loader`, and the engine never links the loader because it uses volk. It also pulls SDL,
+FreeType, and HarfBuzz. It is a second Vulkan backend, so linking it would put a parallel
+renderer inside the rule 4.1 containment boundary. Read it and port from it.
 
 ImGui is the editor UI and the debug overlay only. It is not game UI, and it never will be.
 
@@ -455,11 +465,21 @@ while the interface still costs little to change.
 
 ### 8.3 Known costs
 
-**The engine owns text rendering.** `RenderText` gives both layout and rasterization to the
-backend. So you must write glyph rasterization with stb_truetype, or FreeType if you need
-hinting. You must also write atlas packing and eviction, line breaking, and alignment. Add
-HarfBuzz if you ever need CJK or Arabic. People underestimate this work every time. Check
-what `moth_graphics` already implements before you write any of it.
+**The engine owns text rendering.** `moth_ui::IFont` declares no methods at all, and
+`RenderText` gives both layout and rasterization to the backend. So the engine owns glyph
+rasterization, atlas packing and eviction, line breaking, and alignment. People underestimate
+this work every time.
+
+**`moth_graphics` already solves it, so port rather than write.**
+`src/graphics/vulkan/vulkan_font.cpp` is 441 lines that build a glyph atlas with **FreeType and
+HarfBuzz**. It walks every codepoint in the face, packs the rects, uploads one RGBA atlas,
+reads the underline position from the face metrics, and shapes with an `hb_buffer`.
+`font.vert` and `font.frag` sit beside it. The atlas packing, the metrics, and the shaping are
+backend-neutral, so the port is mostly the texture upload.
+
+Take FreeType and HarfBuzz for that reason, and take them from the start. An earlier version of
+this section suggested stb_truetype, with HarfBuzz added later only for CJK or Arabic. That is
+the more expensive path now, because it means writing what the reference already has.
 
 **Controller navigation is architecture, not a widget feature.** A focus graph, directional
 resolution, focus wrapping, and mouse/pad input-mode switching belong in the node tree. They
@@ -476,6 +496,12 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   GUIDs, dependency tracking, and hot reload. Make `.mothui` a cooked asset type. Rewrite
   image references from file paths to asset GUIDs. This makes moth_ui part of the engine
   instead of an external addition, and layout hot reload comes at no extra cost.
+- **An asset identity, against a path.** `IImageFactory::GetImage` takes a
+  `std::filesystem::path`, and the engine names an asset by GUID. Either the engine resolves
+  the path against the cooked manifest, or moth_ui takes an identity the consumer defines. The
+  second fits both consumers, because a path is still a valid identity for `moth_graphics`.
+  Decide it rather than drift into the first. See §8.5 on keeping an editable off the critical
+  path.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
@@ -489,6 +515,10 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   engine editor later, because both use ImGui. It is not a milestone.
 - Keep moth_ui in its own repository with its own release cadence. Consume it by version
   pin. Do not vendor it.
+- **A Conan editable is for development, not for a build somebody else runs.** Develop against
+  the editable when a change spans both repositories. Then release moth_ui and move the engine
+  to the pin. A green build that only works because of a local editable is a broken build for
+  everybody else, and CI is where that surfaces.
 
 **One caution.** An engine plus a UI library is two projects, and the engine alone takes
 years. This is acceptable only because moth_ui already exists and works. The extra cost is
@@ -1307,8 +1337,13 @@ Write a minimal `IRenderer`, `IImage`, and `IFont` against `gfx::`. Render one s
 with an image and a string. **The purpose is diagnostic, not feature work.** It tells you
 whether an external consumer can use `gfx::`, while the interface still costs little to
 change. Fix what the spike exposes, then stop.
+
+We own both sides, so a finding can land in `gfx::` or in moth_ui. That makes the fix cheaper
+and the report easier to fake, because you can patch whichever side is convenient and learn
+nothing. Name the side each fix landed on. See §8.
+
 **Done when:** one moth_ui layout draws in the engine, and you have written down what the
-spike taught you about `gfx::`.
+spike taught you about `gfx::` and about moth_ui.
 
 ### M7 — Physics
 Connect Box3D to enkiTS. Add rigid body and collider components. Reflect them, so the
