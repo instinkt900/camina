@@ -398,6 +398,32 @@ namespace engine::gfx {
     void cmd_set_cull_mode(CommandList* commands, bool cull_back);
 
     /**
+     * @brief Restricts drawing to a rectangle of the render target.
+     *
+     * Every graphics pipeline declares a dynamic scissor, and each
+     * cmd_begin_*_rendering() call resets it to the whole target. So a pass
+     * that wants a smaller area sets one, and the next pass starts clean.
+     *
+     * A UI clip rectangle is what needed this. Such a rectangle can reach past
+     * the left or the top edge, and Vulkan refuses a negative offset, so this
+     * clamps the rectangle to the target rather than failing.
+     *
+     * @param commands The command list from begin_frame().
+     * @param x Left edge in pixels. A negative value clamps to zero, and the
+     * width shrinks by as much as the clamp moved the edge.
+     * @param y Top edge in pixels, clamped the same way.
+     * @param width Width in pixels. Zero draws nothing.
+     * @param height Height in pixels. Zero draws nothing.
+     *
+     * @warning The scissor is dynamic state and it carries from one draw to the
+     *          next inside a pass. Set it back when the clip ends. Issue #188
+     *          is what happens when dynamic state leaks, and it cost a whole
+     *          black frame that no validation layer reported.
+     */
+    void cmd_set_scissor(CommandList* commands, std::int32_t x, std::int32_t y,
+                         std::uint32_t width, std::uint32_t height);
+
+    /**
      * @brief Draws without an index buffer.
      * @param commands The command list from begin_frame().
      * @param vertex_count How many vertices the vertex shader runs for.

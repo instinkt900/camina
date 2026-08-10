@@ -545,6 +545,31 @@ namespace engine::gfx {
                          cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE);
     }
 
+    void cmd_set_scissor(CommandList* commands, std::int32_t x, std::int32_t y,
+                         std::uint32_t width, std::uint32_t height) {
+        ENGINE_CHECK(commands != nullptr, "cmd_set_scissor needs a command list.");
+
+        // Vulkan refuses a negative offset. A UI clip rectangle reaches past
+        // the left or the top edge whenever a panel is scrolled or animated
+        // off screen, so clamp rather than fail. The width absorbs the clamp,
+        // because moving the edge without shrinking the extent would drag the
+        // right edge along with it.
+        VkRect2D scissor{};
+        if (x < 0) {
+            const auto shift = static_cast<std::uint32_t>(-static_cast<std::int64_t>(x));
+            width = shift >= width ? 0U : width - shift;
+            x = 0;
+        }
+        if (y < 0) {
+            const auto shift = static_cast<std::uint32_t>(-static_cast<std::int64_t>(y));
+            height = shift >= height ? 0U : height - shift;
+            y = 0;
+        }
+        scissor.offset = VkOffset2D{ x, y };
+        scissor.extent = VkExtent2D{ width, height };
+        vkCmdSetScissor(commands->buffer, 0, 1, &scissor);
+    }
+
     void cmd_bind_descriptor_set(CommandList* commands, PipelineHandle pipeline,
                                  std::uint32_t set_index, DescriptorSetHandle set) {
         ENGINE_CHECK(commands != nullptr, "cmd_bind_descriptor_set needs a command list.");
