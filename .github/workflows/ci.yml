@@ -153,7 +153,14 @@ jobs:
         with:
           path: ~/.conan2/p
           key: conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-${{ hashFiles('conanfile.py') }}
-          restore-keys: conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-
+          # Fall back to the same profile with the other option state. The
+          # packages live under ~/.conan2/p keyed by package id, so sharing is
+          # safe and the unused ones simply sit there. Without this fallback a
+          # new key starts cold and builds the whole dependency tree from
+          # source, which is how the first run of this job failed.
+          restore-keys: |
+            conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-
+            conan-${{ matrix.profile }}-
 
       - name: Conan install
         run: |
