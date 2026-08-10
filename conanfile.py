@@ -33,6 +33,15 @@ class CaminaConan(ConanFile):
         "with_ui": False,       # M10, and the M6 spike
         "with_lua": False,      # M8
         "with_audio": False,    # M11
+
+        # HarfBuzz takes glib by default, and glib drags elfutils, gettext,
+        # libiconv, pcre2 and libffi in behind it. The engine calls no glib
+        # function, so this turns it off and leaves freetype, libpng, brotli,
+        # zlib and bzip2 as the whole tail. glib is also LGPL, which every
+        # other package here is not. Conan reads this line even when with_ui
+        # is False, and that costs nothing, because nothing requires HarfBuzz
+        # then.
+        "harfbuzz/*:with_glib": False,
     }
 
     def requirements(self):
@@ -115,6 +124,24 @@ class CaminaConan(ConanFile):
             # build that needs an editable is a build nobody else can run. See
             # DESIGN.md section 8.5.
             self.requires("moth_ui/[>=1.1.3 <2]")
+
+            # M6.4. moth_ui::IFont declares no methods, so the backend owns
+            # glyph rasterization, atlas packing, measurement, line breaking
+            # and both alignments. FreeType rasterizes and HarfBuzz shapes.
+            #
+            # stb_truetype was the other option, and the engine already takes
+            # stb. It was rejected because its shaping is partial: GPOS pair
+            # kerning only, no ligatures and no complex scripts. M6 is a
+            # diagnostic spike, so text that measures differently from
+            # moth_editor would make every layout difference ambiguous. See
+            # DESIGN.md section 8.3.
+            #
+            # These two versions are what moth_graphics pins, on purpose. A
+            # shaping difference between the two projects must come from our
+            # code and not from a library version. Bump this when
+            # moth_graphics bumps.
+            self.requires("freetype/[~2.13]")
+            self.requires("harfbuzz/[~8.3]")
 
     def build_requirements(self):
         pass
