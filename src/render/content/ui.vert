@@ -5,9 +5,13 @@
 // matrix at all. That is what lets a whole layout collapse into one draw:
 // a transform change costs nothing here, so it never breaks a batch.
 layout(location = 0) in vec2 in_position;
-layout(location = 1) in vec4 in_color;
+// Normalized, and zero for a shape that carries no image. Such a run binds a
+// single white texel, so the coordinate cannot matter.
+layout(location = 1) in vec2 in_uv;
+layout(location = 2) in vec4 in_color;
 
-layout(location = 0) out vec4 out_color;
+layout(location = 0) out vec2 out_uv;
+layout(location = 1) out vec4 out_color;
 
 layout(push_constant) uniform Push {
     // One over the logical size, so this stage needs one multiply rather than
@@ -16,6 +20,7 @@ layout(push_constant) uniform Push {
 } push;
 
 void main() {
+    out_uv = in_uv;
     out_color = in_color;
 
     // Screen space is pixels with the origin at the top left and y down.

@@ -28,6 +28,7 @@
 #include "scene/world.h"
 
 #if defined(ENGINE_WITH_UI)
+#include "ui/image.h"
 #include "ui/renderer.h"
 #include "ui/ui.h"
 #include "ui/ui_pass.h"
@@ -44,6 +45,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -941,11 +943,13 @@ namespace {
      *
      * moth_ui normally drives the recorder through its node tree. Nothing loads
      * a layout yet, so this calls the same interface by hand and covers each
-     * recorder path: a solid rect, a gradient, a clip, and a transform.
+     * recorder path: a solid rect, a gradient, a clip, a transform, and from
+     * M6.3 an image drawn both ways the backend serves.
      *
      * Issue #200 replaces this with a real layout, and this goes away with it.
      */
-    void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent) {
+    void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent,
+                         const moth_ui::IImage* image) {
         renderer.begin(extent.width, extent.height);
 
         // A solid bar across the top.
@@ -974,6 +978,31 @@ namespace {
         renderer.PopColor();
         renderer.PopTransform();
 
+        if (image != nullptr) {
+            const moth_ui::IntRect source{ { 0, 0 }, image->GetDimensions() };
+
+            // Stretched to twice its size, so a wrong texture coordinate shows
+            // as a shifted corner mark rather than as one texel of colour.
+            renderer.PushTextureFilter(moth_ui::TextureFilter::Linear);
+            renderer.RenderImage(*image, source, moth_ui::IntRect{ { 368, 16 }, { 496, 144 } },
+                                 moth_ui::ImageScaleType::Stretch, 1.0F);
+            renderer.PopTextureFilter();
+
+            // Tiled at half size, which puts four tiles across and three down.
+            renderer.RenderImage(*image, source, moth_ui::IntRect{ { 368, 160 }, { 496, 256 } },
+                                 moth_ui::ImageScaleType::Tile, 0.5F);
+
+            // The same image under a tint and a transform. The tint reaches the
+            // image through the vertex colour, and the transform through the
+            // corner, so this covers both against one draw that shows neither.
+            renderer.PushTransform(moth_ui::FloatMat4x4::Translation({ 144.0F, 0.0F }));
+            renderer.PushColor(moth_ui::Color{ 0.4F, 0.7F, 1.0F, 1.0F });
+            renderer.RenderImage(*image, source, moth_ui::IntRect{ { 368, 16 }, { 432, 80 } },
+                                 moth_ui::ImageScaleType::Stretch, 1.0F);
+            renderer.PopColor();
+            renderer.PopTransform();
+        }
+
         renderer.end();
     }
 #endif
@@ -991,6 +1020,8 @@ namespace {
         /// The recording ui_pass draws. Recorded inside draw_frame, because
         /// only there is the settled swapchain size known.
         engine::ui::Renderer* ui_renderer = nullptr;
+        /// M6.3. The image the probe draws, or null when it did not resolve.
+        const moth_ui::IImage* ui_image = nullptr;
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
@@ -1202,7 +1233,7 @@ namespace {
             // info.extent, not the requested extent. The device can settle on a
             // different size, and the scissor and the vertex normalization both
             // have to agree with the image actually being drawn into.
-            record_ui_probe(*context.ui_renderer, info.extent);
+            record_ui_probe(*context.ui_renderer, info.extent, context.ui_image);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -1252,6 +1283,10 @@ namespace {
         /// M6.2. The moth_ui drawing surface and the pass that draws it.
         engine::ui::Renderer ui_renderer;
         engine::ui::UiPass ui_pass;
+        /// M6.3. Turns a path in a layout into a cooked engine texture.
+        engine::ui::ImageFactory ui_images;
+        /// The one image the probe draws. Issue #200 replaces it with a layout.
+        std::unique_ptr<moth_ui::IImage> ui_image;
 #endif
         /// Carried across frames, because the shadow map and the scene color are
         /// each one image that every frame in flight shares.
@@ -1533,6 +1568,10 @@ namespace {
         runtime.mesh.destroy();
         runtime.shadow.destroy();
 #if defined(ENGINE_WITH_UI)
+        // The image before the factory, because the factory owns the texture it
+        // names and the image must not outlive it.
+        runtime.ui_image.reset();
+        runtime.ui_images.destroy();
         runtime.ui_pass.destroy();
 #endif
         runtime.tonemap.destroy();
@@ -1807,6 +1846,22 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+#if defined(ENGINE_WITH_UI)
+    // M6.3. After the game content opens, because the factory resolves a path
+    // against that manifest. A failure here is not fatal: the probe draws its
+    // shapes and no image, and the log says which path did not resolve.
+    //
+    // This resolves once and a reload never revisits it, so editing a UI image
+    // needs a restart. The handle cannot go stale, because the factory owns the
+    // only cache that holds it and nothing drops from that cache. Issue #210
+    // holds the reload path.
+    if (!runtime.ui_images.create(runtime.device, &runtime.game_content)) {
+        ENGINE_LOG_ERROR("The UI image factory did not start. No layout image will draw.");
+    } else {
+        runtime.ui_image = runtime.ui_images.GetImage("ui/panel.png");
+    }
+#endif
+
     engine::scene::World world;
     if (!sandbox::load(content, &runtime.game_content, world)) {
         ENGINE_LOG_CRITICAL("The game did not load. There is nothing to draw.");
@@ -1830,6 +1885,7 @@ int main(int argc, char** argv) {
 #if defined(ENGINE_WITH_UI)
         .ui_pass = &runtime.ui_pass,
         .ui_renderer = &runtime.ui_renderer,
+        .ui_image = runtime.ui_image.get(),
 #endif
         .overlay = runtime.overlay,
         .resource_states = &runtime.states,

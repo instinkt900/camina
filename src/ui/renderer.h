@@ -18,6 +18,8 @@ namespace engine::ui {
     struct Vertex {
         float x = 0.0F; ///< Screen x in pixels, origin at the top left.
         float y = 0.0F; ///< Screen y in pixels, y down.
+        float u = 0.0F; ///< Texture x, normalized. Zero for a shape with no image.
+        float v = 0.0F; ///< Texture y, normalized. Zero for a shape with no image.
         float r = 0.0F; ///< Red, linear.
         float g = 0.0F; ///< Green, linear.
         float b = 0.0F; ///< Blue, linear.
@@ -36,6 +38,26 @@ namespace engine::ui {
         std::uint32_t index_count = 0; ///< How many indices the run holds.
         /// @brief The blend mode the run was recorded under.
         moth_ui::BlendMode blend = moth_ui::BlendMode::Replace;
+        /**
+         * @brief The image the run draws, or a null handle for a plain shape.
+         *
+         * One draw reads one texture, so a run ends where the image changes.
+         * A null handle means the run drew rectangles, gradients or an outline,
+         * and `UiPass` binds a single white texel for it. That keeps one
+         * pipeline for both kinds, because white is the identity of the
+         * multiply the fragment stage does.
+         */
+        gfx::TextureHandle texture;
+        /**
+         * @brief The texture filter the run was recorded under.
+         *
+         * @warning Nothing reads this yet. A `gfx::` sampler belongs to the
+         *          texture it was uploaded with, so a filter cannot be chosen
+         *          at bind time. See issue #209. The recorder carries it and
+         *          breaks on it, so the day gfx grows a sampler the batch
+         *          already says which one it wanted.
+         */
+        moth_ui::TextureFilter filter = moth_ui::TextureFilter::Linear;
         bool clipped = false;          ///< Whether @c clip names a scissor rectangle.
         std::int32_t clip_x = 0;       ///< Scissor left edge in pixels.
         std::int32_t clip_y = 0;       ///< Scissor top edge in pixels.
@@ -152,8 +174,39 @@ namespace engine::ui {
         /// @endcond
 
     private:
+        /// @brief One rectangle in local space, with the texture it reads.
+        struct Quad {
+            float x0 = 0.0F; ///< Left edge in local space.
+            float y0 = 0.0F; ///< Top edge in local space.
+            float x1 = 0.0F; ///< Right edge in local space.
+            float y1 = 0.0F; ///< Bottom edge in local space.
+            float u0 = 0.0F; ///< Texture x at the left edge, normalized.
+            float v0 = 0.0F; ///< Texture y at the top edge, normalized.
+            float u1 = 0.0F; ///< Texture x at the right edge, normalized.
+            float v1 = 0.0F; ///< Texture y at the bottom edge, normalized.
+        };
+
+        /// @brief The colour of each corner, in the order add_quad writes them.
+        struct QuadColors {
+            moth_ui::Color top_left;     ///< The colour at (x0, y0).
+            moth_ui::Color top_right;    ///< The colour at (x1, y0).
+            moth_ui::Color bottom_right; ///< The colour at (x1, y1).
+            moth_ui::Color bottom_left;  ///< The colour at (x0, y1).
+        };
+
+        /// @brief The four white corners a shape with no image of its own uses.
+        [[nodiscard]] static QuadColors plain_white();
+
         /// @brief Ends the open batch and starts one with the current state.
         void break_batch();
+
+        /**
+         * @brief Makes the open batch draw @p texture, breaking it when it must.
+         *
+         * A draw call reads one texture, so a run that already recorded a quad
+         * against another one has to end here.
+         */
+        void want_texture(gfx::TextureHandle texture);
 
         /**
          * @brief Adds one transformed quad with a colour at each corner.
@@ -161,9 +214,7 @@ namespace engine::ui {
          * The corners arrive in local space and leave in screen space, because
          * the current transform is applied here.
          */
-        void add_quad(float x0, float y0, float x1, float y1,
-                      const moth_ui::Color& top_left, const moth_ui::Color& top_right,
-                      const moth_ui::Color& bottom_right, const moth_ui::Color& bottom_left);
+        void add_quad(const Quad& quad, const QuadColors& colors);
 
         std::vector<Vertex> m_vertices;
         std::vector<std::uint32_t> m_indices;

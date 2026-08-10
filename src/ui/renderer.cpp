@@ -1,6 +1,8 @@
 #include "ui/renderer.h"
 
 #include "core/assert.h"
+#include "core/log.h"
+#include "ui/image.h"
 
 #include <algorithm>
 #include <array>
@@ -88,6 +90,8 @@ namespace engine::ui {
         m_batches.push_back(Batch{ .first_index = 0,
                                    .index_count = 0,
                                    .blend = m_blend.back(),
+                                   .texture = gfx::TextureHandle{},
+                                   .filter = m_filter.back(),
                                    .clipped = false,
                                    .clip_x = 0,
                                    .clip_y = 0,
@@ -104,12 +108,28 @@ namespace engine::ui {
     }
 
     void Renderer::break_batch() {
-        ENGINE_ASSERT(!m_batches.empty(), "A batch must be open before a break.");
+        // No open batch is a legal state rather than a mistake, so this returns
+        // and does not assert. moth_ui decides the call order, not this engine,
+        // so a push or a pop can arrive before begin() and after end(). end()
+        // also drops a trailing batch that recorded nothing, so a recording
+        // that drew nothing at all leaves the vector empty.
+        //
+        // add_quad guards the same state for the same reason. This used to
+        // assert instead, which said the caller was wrong and then read an
+        // empty vector anyway in a Release build, where the assert is gone.
+        if (m_batches.empty()) {
+            return;
+        }
 
         Batch next{};
         next.first_index = static_cast<std::uint32_t>(m_indices.size());
         next.index_count = 0;
         next.blend = m_blend.back();
+        next.filter = m_filter.back();
+        // The texture is not part of the current state. A push says what the
+        // next quad may read, and only RenderImage knows which image that is,
+        // so want_texture() sets it on the batch that is open by then.
+        next.texture = m_batches.back().texture;
         if (!m_clip.empty()) {
             const moth_ui::IntRect& rect = m_clip.back();
             next.clipped = true;
@@ -128,10 +148,33 @@ namespace engine::ui {
         m_batches.push_back(next);
     }
 
-    void Renderer::add_quad(float x0, float y0, float x1, float y1,
-                            const moth_ui::Color& top_left, const moth_ui::Color& top_right,
-                            const moth_ui::Color& bottom_right,
-                            const moth_ui::Color& bottom_left) {
+    Renderer::QuadColors Renderer::plain_white() {
+        const moth_ui::Color white{ 1.0F, 1.0F, 1.0F, 1.0F };
+        return QuadColors{ .top_left = white,
+                           .top_right = white,
+                           .bottom_right = white,
+                           .bottom_left = white };
+    }
+
+    void Renderer::want_texture(gfx::TextureHandle texture) {
+        if (m_batches.empty()) {
+            return;
+        }
+        Batch& open = m_batches.back();
+        if (open.texture.value == texture.value) {
+            return;
+        }
+        // A run that drew nothing has no geometry to keep, so it takes the new
+        // texture rather than costing a draw call.
+        if (open.index_count == 0) {
+            open.texture = texture;
+            return;
+        }
+        break_batch();
+        m_batches.back().texture = texture;
+    }
+
+    void Renderer::add_quad(const Quad& quad, const QuadColors& colors) {
         // moth_ui decides the call order, not this engine, so a draw can
         // arrive before begin() or after end(). Both leave no open batch, and
         // m_batches.back() would then read an empty vector. ENGINE_ASSERT
@@ -146,21 +189,33 @@ namespace engine::ui {
         const auto base = static_cast<std::uint32_t>(m_vertices.size());
 
         const std::array<moth_ui::FloatVec2, 4> corners{ {
-            transform.TransformPoint({ x0, y0 }),
-            transform.TransformPoint({ x1, y0 }),
-            transform.TransformPoint({ x1, y1 }),
-            transform.TransformPoint({ x0, y1 }),
+            transform.TransformPoint({ quad.x0, quad.y0 }),
+            transform.TransformPoint({ quad.x1, quad.y0 }),
+            transform.TransformPoint({ quad.x1, quad.y1 }),
+            transform.TransformPoint({ quad.x0, quad.y1 }),
         } };
-        const std::array<moth_ui::Color, 4> colors{ top_left, top_right, bottom_right,
-                                                    bottom_left };
+        // The texture coordinates take the same corner order, and no transform.
+        // A node transform moves the quad across the screen and leaves the part
+        // of the image it shows alone.
+        const std::array<moth_ui::FloatVec2, 4> texcoords{ {
+            { quad.u0, quad.v0 },
+            { quad.u1, quad.v0 },
+            { quad.u1, quad.v1 },
+            { quad.u0, quad.v1 },
+        } };
+        const std::array<moth_ui::Color, 4> corner_colors{ colors.top_left, colors.top_right,
+                                                           colors.bottom_right,
+                                                           colors.bottom_left };
 
         for (std::size_t i = 0; i < corners.size(); ++i) {
             // The tint composes here as well as on the stack, because a colour
             // a caller passed to RenderGradientRect never went through
             // PushColor.
-            const moth_ui::Color c = colors[i] * tint;
+            const moth_ui::Color c = corner_colors[i] * tint;
             m_vertices.push_back(Vertex{ .x = corners[i].x,
                                          .y = corners[i].y,
+                                         .u = texcoords[i].x,
+                                         .v = texcoords[i].y,
                                          .r = srgb_to_linear(c.r),
                                          .g = srgb_to_linear(c.g),
                                          .b = srgb_to_linear(c.b),
@@ -229,12 +284,28 @@ namespace engine::ui {
     }
 
     void Renderer::PushTextureFilter(moth_ui::TextureFilter filter) {
-        m_filter.push_back(filter);
+        // Invalid is the moth_ui sentinel for "nothing was set", and a layout
+        // that saved no filter loads it. Keep the one already in force rather
+        // than reading a sentinel as a filter.
+        const moth_ui::TextureFilter wanted =
+            filter == moth_ui::TextureFilter::Invalid ? m_filter.back() : filter;
+        const bool changed = wanted != m_filter.back();
+        m_filter.push_back(wanted);
+        // Only a change breaks the run. NodeImage pushes a filter around every
+        // image it draws, so breaking on the push itself would give two images
+        // of one texture two draws for no reason.
+        if (changed) {
+            break_batch();
+        }
     }
 
     void Renderer::PopTextureFilter() {
         if (m_filter.size() > 1) {
+            const moth_ui::TextureFilter old = m_filter.back();
             m_filter.pop_back();
+            if (old != m_filter.back()) {
+                break_batch();
+            }
         }
     }
 
@@ -249,19 +320,24 @@ namespace engine::ui {
         if (x1 <= x0 || y1 <= y0) {
             return;
         }
-        const moth_ui::Color white{ 1.0F, 1.0F, 1.0F, 1.0F };
+        want_texture(gfx::TextureHandle{});
+        const QuadColors white = plain_white();
 
-        add_quad(x0, y0, x1, y0 + kBorder, white, white, white, white);
-        add_quad(x0, y1 - kBorder, x1, y1, white, white, white, white);
-        add_quad(x0, y0 + kBorder, x0 + kBorder, y1 - kBorder, white, white, white, white);
-        add_quad(x1 - kBorder, y0 + kBorder, x1, y1 - kBorder, white, white, white, white);
+        add_quad(Quad{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y0 + kBorder }, white);
+        add_quad(Quad{ .x0 = x0, .y0 = y1 - kBorder, .x1 = x1, .y1 = y1 }, white);
+        add_quad(Quad{ .x0 = x0, .y0 = y0 + kBorder, .x1 = x0 + kBorder, .y1 = y1 - kBorder },
+                 white);
+        add_quad(Quad{ .x0 = x1 - kBorder, .y0 = y0 + kBorder, .x1 = x1, .y1 = y1 - kBorder },
+                 white);
     }
 
     void Renderer::RenderFilledRect(const moth_ui::IntRect& rect) {
-        const moth_ui::Color white{ 1.0F, 1.0F, 1.0F, 1.0F };
-        add_quad(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y),
-                 static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y),
-                 white, white, white, white);
+        want_texture(gfx::TextureHandle{});
+        add_quad(Quad{ .x0 = static_cast<float>(rect.topLeft.x),
+                       .y0 = static_cast<float>(rect.topLeft.y),
+                       .x1 = static_cast<float>(rect.bottomRight.x),
+                       .y1 = static_cast<float>(rect.bottomRight.y) },
+                 plain_white());
     }
 
     void Renderer::RenderGradientRect(const moth_ui::IntRect& rect,
@@ -306,20 +382,90 @@ namespace engine::ui {
             return lerp(gradient.startColor, gradient.endColor, t);
         };
 
-        add_quad(x0, y0, x1, y1, color_at(x0, y0), color_at(x1, y0), color_at(x1, y1),
-                 color_at(x0, y1));
+        want_texture(gfx::TextureHandle{});
+        add_quad(Quad{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 },
+                 QuadColors{ .top_left = color_at(x0, y0),
+                             .top_right = color_at(x1, y0),
+                             .bottom_right = color_at(x1, y1),
+                             .bottom_left = color_at(x0, y1) });
     }
 
     void Renderer::RenderImage(const moth_ui::IImage& image, const moth_ui::IntRect& source_rect,
                                const moth_ui::IntRect& dest_rect,
                                moth_ui::ImageScaleType scale_type, float scale) {
-        // Issue #198. This increment records shapes only, and the shader that
-        // draws them declares no sampler.
-        (void)image;
-        (void)source_rect;
-        (void)dest_rect;
-        (void)scale_type;
-        (void)scale;
+        // Another backend's image would carry another backend's texture. The
+        // reference backend casts the same way and returns on a miss.
+        const auto* ours = dynamic_cast<const Image*>(&image);
+        if (ours == nullptr) {
+            ENGINE_LOG_ERROR("A layout drew an image this renderer did not make.");
+            return;
+        }
+
+        const auto width = static_cast<float>(ours->GetWidth());
+        const auto height = static_cast<float>(ours->GetHeight());
+        if (width <= 0.0F || height <= 0.0F) {
+            return;
+        }
+        if (dest_rect.w() <= 0 || dest_rect.h() <= 0) {
+            return;
+        }
+
+        const auto x0 = static_cast<float>(dest_rect.topLeft.x);
+        const auto y0 = static_cast<float>(dest_rect.topLeft.y);
+        const auto x1 = static_cast<float>(dest_rect.bottomRight.x);
+        const auto y1 = static_cast<float>(dest_rect.bottomRight.y);
+
+        // The source rectangle is in texels of the whole image, so this is the
+        // one place the size of the texture is needed.
+        const float u0 = static_cast<float>(source_rect.topLeft.x) / width;
+        const float v0 = static_cast<float>(source_rect.topLeft.y) / height;
+        float u1 = static_cast<float>(source_rect.bottomRight.x) / width;
+        float v1 = static_cast<float>(source_rect.bottomRight.y) / height;
+
+        switch (scale_type) {
+        case moth_ui::ImageScaleType::Stretch:
+            // The source region covers the destination once, whatever the two
+            // sizes are.
+            break;
+
+        case moth_ui::ImageScaleType::Tile: {
+            // One tile is the source region at `scale`, and the coordinates run
+            // past 1 for as many tiles as the destination holds. The sampler
+            // repeats, so this is still one quad.
+            //
+            // Repeat wraps the whole texture rather than the source region, so
+            // this is right only when the region is the whole image. Every
+            // engine::ui::Image is one cooked texture and never an atlas page,
+            // and NodeImage fills an unset source rectangle with the full size.
+            const bool whole_image = source_rect.topLeft.x == 0 &&
+                                     source_rect.topLeft.y == 0 &&
+                                     static_cast<float>(source_rect.bottomRight.x) == width &&
+                                     static_cast<float>(source_rect.bottomRight.y) == height;
+            ENGINE_ASSERT(whole_image,
+                          "Tile draws a part of an image wrongly, because the sampler repeats "
+                          "the whole texture. Cook the region as its own image.");
+            ENGINE_ASSERT(scale > 0.0F, "Tile needs a scale above zero.");
+            if (!whole_image || scale <= 0.0F) {
+                return;
+            }
+            u1 = u0 + ((x1 - x0) / (width * scale));
+            v1 = v0 + ((y1 - y0) / (height * scale));
+            break;
+        }
+
+        case moth_ui::ImageScaleType::NineSlice:
+            // moth_ui cuts a nine-slice into nine Stretch calls in
+            // NodeImage::DrawInternal, so this backend never sees one. Reaching
+            // here means a new caller, and drawing it stretched would show a
+            // distorted border rather than nothing.
+            ENGINE_ASSERT(false, "RenderImage has no NineSlice. moth_ui NodeImage cuts one into "
+                                 "nine Stretch calls before it reaches a backend.");
+            return;
+        }
+
+        want_texture(ours->texture());
+        add_quad(Quad{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1, .u0 = u0, .v0 = v0, .u1 = u1, .v1 = v1 },
+                 plain_white());
     }
 
     void Renderer::RenderText(std::string_view text, moth_ui::IFont& font,

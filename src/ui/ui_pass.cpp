@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace engine::ui {
@@ -74,12 +75,15 @@ namespace engine::ui {
             return false;
         }
 
-        // Position and colour. There is no uv, because this increment draws no
-        // texture. Issue #198 adds one.
-        static constexpr std::array<gfx::VertexAttribute, 2> kAttributes{ {
+        // Position, texture coordinate, and colour, in the order
+        // engine::ui::Vertex holds them.
+        static constexpr std::array<gfx::VertexAttribute, 3> kAttributes{ {
             { .location = 0, .offset = 0, .format = gfx::VertexFormat::Float2 },
             { .location = 1,
               .offset = sizeof(float) * 2,
+              .format = gfx::VertexFormat::Float2 },
+            { .location = 2,
+              .offset = sizeof(float) * 4,
               .format = gfx::VertexFormat::Float4 },
         } };
 
@@ -122,13 +126,82 @@ namespace engine::ui {
             device_ = nullptr;
             return false;
         }
+
+        // One white texel for every run that draws no image. The fragment stage
+        // multiplies by it, so white leaves the vertex colour alone. sRGB
+        // because the swapchain is, and 255 decodes to 1.0 either way.
+        constexpr std::array<std::uint8_t, 4> kWhite{ 255, 255, 255, 255 };
+        const gfx::TextureDesc white_desc{
+            .pixels = kWhite.data(),
+            .size = kWhite.size(),
+            .width = 1,
+            .height = 1,
+            .mip_count = 1,
+            .format = gfx::TextureFormat::RGBA8Srgb,
+            .sampler = { .filter = gfx::Filter::Nearest },
+        };
+        if (!gfx::succeeded(gfx::create_texture(device_, white_desc, &white_))) {
+            ENGINE_LOG_ERROR("The white UI texel was not created.");
+            gfx::destroy_pipeline(device_, blended_);
+            blended_ = gfx::PipelineHandle{};
+            gfx::destroy_pipeline(device_, opaque_);
+            opaque_ = gfx::PipelineHandle{};
+            device_ = nullptr;
+            return false;
+        }
         return true;
+    }
+
+    void UiPass::report_filter_gap(moth_ui::TextureFilter filter) {
+        // A gfx sampler belongs to the texture it was uploaded with, so the
+        // filter a run was recorded under cannot be applied at bind time. Issue
+        // #209 holds it. Say so once rather than draw a nearest filtered image
+        // blurred and report nothing.
+        if (filter != moth_ui::TextureFilter::Nearest || reported_filter_) {
+            return;
+        }
+        ENGINE_LOG_WARN("A layout asked for a nearest filter and the image draws linear. "
+                        "gfx binds a sampler with its texture. See issue #209.");
+        reported_filter_ = true;
+    }
+
+    gfx::DescriptorSetHandle UiPass::set_for(gfx::TextureHandle texture) {
+        const std::uint64_t key = texture.value;
+        if (const auto found = sets_.find(key); found != sets_.end()) {
+            return found->second;
+        }
+
+        const std::array<gfx::DescriptorWrite, 1> writes{ {
+            { .binding = 0,
+              .kind = gfx::DescriptorKind::CombinedImageSampler,
+              .texture = texture.valid() ? texture : white_,
+              .buffer = {} },
+        } };
+
+        // Both pipelines come from the same two shaders, so their set layouts
+        // are identical and a set built against one binds with the other.
+        gfx::DescriptorSetHandle set;
+        if (!gfx::succeeded(gfx::create_descriptor_set(device_, opaque_, 0, writes.data(),
+                                                       writes.size(), &set))) {
+            ENGINE_LOG_ERROR("A UI descriptor set was not built. The pool serves a fixed "
+                             "number, so a layout with many images can run out.");
+        }
+        // A failure is remembered as a null set. Retrying every frame would
+        // fill the log and would not succeed, because the pool does not grow.
+        sets_.emplace(key, set);
+        return set;
     }
 
     void UiPass::destroy() {
         if (device_ == nullptr) {
             return;
         }
+        for (const auto& [key, set] : sets_) {
+            gfx::destroy_descriptor_set(device_, set);
+        }
+        sets_.clear();
+        gfx::destroy_texture(device_, white_);
+        white_ = gfx::TextureHandle{};
         for (gfx::BufferHandle& buffer : vertices_) {
             gfx::destroy_buffer(device_, buffer);
             buffer = gfx::BufferHandle{};
@@ -208,6 +281,7 @@ namespace engine::ui {
         gfx::cmd_bind_index_buffer(commands, index_buffer);
 
         gfx::PipelineHandle bound{};
+        gfx::DescriptorSetHandle bound_set{};
         for (const Batch& batch : renderer.batches()) {
             if (batch.index_count == 0) {
                 continue;
@@ -218,6 +292,29 @@ namespace engine::ui {
                 gfx::cmd_bind_pipeline(commands, wanted);
                 gfx::cmd_push_constants(commands, wanted, &push, sizeof(push));
                 bound = wanted;
+                // A set survives a pipeline change here, because both layouts
+                // are the same. Rebinding it costs nothing and does not rely on
+                // that, so the pipeline change forgets what was bound.
+                bound_set = gfx::DescriptorSetHandle{};
+            }
+
+            // Only a run that reads a real image can show the gap. A run of
+            // shapes binds one white texel, where every filter gives the same
+            // answer, so reporting there would name a problem the frame does
+            // not have.
+            if (batch.texture.valid()) {
+                report_filter_gap(batch.filter);
+            }
+
+            const gfx::DescriptorSetHandle set = set_for(batch.texture);
+            if (!set.valid()) {
+                // Nothing to bind means the fragment stage would read an
+                // undefined descriptor, which is worse than a missing run.
+                continue;
+            }
+            if (set.value != bound_set.value) {
+                gfx::cmd_bind_descriptor_set(commands, wanted, 0, set);
+                bound_set = set;
             }
 
             if (batch.clipped) {

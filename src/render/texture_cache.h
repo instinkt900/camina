@@ -54,6 +54,23 @@ namespace engine::render {
         static_cast<float>(kFallbackCubeTexel) / 255.0F;
 
     /**
+     * @brief One loaded texture, and the size the cooker wrote it at.
+     *
+     * A material needs only the handle, because a shader reads a texture by
+     * normalized coordinates. Game UI needs the size as well: moth_ui gives a
+     * source rectangle in texels, and turning that into texture coordinates
+     * needs the size of the texture it came from.
+     *
+     * The defaults are the size of both fallbacks, so an unresolved reference
+     * reports what it actually binds.
+     */
+    struct TextureInfo {
+        gfx::TextureHandle texture; ///< The texture, or a fallback.
+        std::uint32_t width = 1;    ///< Width of mip level 0, in texels.
+        std::uint32_t height = 1;   ///< Height of mip level 0, in texels.
+    };
+
+    /**
      * @brief Holds every texture the materials asked for.
      *
      * @code
@@ -99,6 +116,22 @@ namespace engine::render {
          */
         [[nodiscard]] gfx::TextureHandle get(gfx::Device* device,
                                              const assets::Content& content, Guid guid);
+
+        /**
+         * @brief get(), with the size the texture was cooked at.
+         *
+         * A caller that has to turn texels into texture coordinates needs the
+         * size, and only the load knows it. Reading the cooked header a second
+         * time to find out would read the whole file again.
+         *
+         * @param device The device that owns the textures.
+         * @param content The cooked content to read from.
+         * @param guid The texture identity. A null GUID gives the fallback.
+         * @return The texture and its size. A miss gives the fallback, which
+         * is one texel square.
+         */
+        [[nodiscard]] TextureInfo get_info(gfx::Device* device, const assets::Content& content,
+                                           Guid guid);
 
         /**
          * @brief Finds a cubemap, and uploads it the first time it is asked for.
@@ -158,9 +191,8 @@ namespace engine::render {
 
     private:
         /// The shared body of get() and get_cube(). @p faces is 1 or 6.
-        [[nodiscard]] gfx::TextureHandle load(gfx::Device* device,
-                                              const assets::Content& content, Guid guid,
-                                              std::uint32_t faces);
+        [[nodiscard]] TextureInfo load(gfx::Device* device, const assets::Content& content,
+                                       Guid guid, std::uint32_t faces);
 
         /**
          * @brief What a caller asked for: an identity and a shape.
@@ -173,7 +205,7 @@ namespace engine::render {
          */
         using Request = std::pair<Guid, std::uint32_t>;
 
-        std::map<Request, gfx::TextureHandle> loaded_;
+        std::map<Request, TextureInfo> loaded_;
         /// The requests that failed, so one bad reference reports once.
         std::map<Request, bool> failed_;
         gfx::TextureHandle fallback_;

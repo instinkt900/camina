@@ -458,10 +458,21 @@ applies the matrix as it records, and eight draws when a push constant carries i
 
 So a batch breaks on a clip and on a blend mode, and never on a transform.
 
-**A texture filter does not break the batch yet.** M6.2 records no texture, so the pipelines
-declare no sampler and a filter change cannot alter the picture. It has to break the batch when
-issue #198 adds images, and a batch has to carry the filter it was recorded under. Until then the
-row above describes the intent rather than the code.
+**A texture filter breaks the batch and nothing applies it.** M6.3 records the filter on each
+batch and ends a run where it changes, so the recorder is honest. The bind is where it stops: a
+`gfx::` sampler belongs to the texture it was uploaded with, so a filter cannot be chosen at draw
+time. `UiPass` says so once in the log rather than drawing a nearest filtered image blurred and
+reporting nothing. Issue #209 holds the `gfx::` work.
+
+Only a change breaks the run, not the push itself. `NodeImage` pushes a filter around every image
+it draws, so breaking on the push would give two images of one texture two draws for nothing.
+`moth_ui::TextureFilter::Invalid` is the sentinel a layout that saved no filter loads, and it
+keeps the filter already in force rather than counting as a change.
+
+**A batch also ends where the texture changes**, because one draw reads one texture. A run of
+rectangles, gradients or outlines carries a null texture and `UiPass` binds one white texel for
+it. White is the identity of the multiply the fragment stage does, so a shape and an image take
+one pipeline and one set layout rather than two of each.
 
 **Each stack rule is different, and none of them matches its name.** `PushColor` composes with
 the colour under it, `PushTransform` replaces, and `PushClip` intersects. Only `PushTransform`
@@ -518,12 +529,24 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   GUIDs, dependency tracking, and hot reload. Make `.mothui` a cooked asset type. Rewrite
   image references from file paths to asset GUIDs. This makes moth_ui part of the engine
   instead of an external addition, and layout hot reload comes at no extra cost.
-- **An asset identity, against a path.** `IImageFactory::GetImage` takes a
-  `std::filesystem::path`, and the engine names an asset by GUID. Either the engine resolves
-  the path against the cooked manifest, or moth_ui takes an identity the consumer defines. The
-  second fits both consumers, because a path is still a valid identity for `moth_graphics`.
-  Decide it rather than drift into the first. See §8.5 on keeping an editable off the critical
-  path.
+- **An asset identity, against a path. The engine resolves the path, and moth_ui does not
+  change.** `IImageFactory::GetImage` takes a `std::filesystem::path`, and the engine names an
+  asset by GUID. M6.3 settled this: `engine::ui::ImageFactory` treats the path as a source path
+  relative to the game content root and looks it up in the cooked manifest, which is exactly the
+  string `assets::Content::find` already takes.
+
+  The alternative was to give moth_ui an identity the consumer defines. That is the better shape
+  in the long run and it fits `moth_graphics` too, because a path is still a valid identity
+  there. It was not taken now for two reasons. It changes `IImageFactory`, `NodeImage`,
+  `LayoutEntityImage`, `moth_graphics` and `moth_editor` together, which is a wide change to make
+  during a spike §10 says to keep timeboxed. And the engine side has to be written either way, so
+  nothing about it is wasted.
+
+  **What is given up is what a GUID is for.** A layout stores a path, so renaming a source file
+  breaks the layout, and the engine solved that everywhere else at M4. The cooked layout type
+  below is where it comes due: that rule rewrites an image reference, and it has to decide
+  whether it writes a GUID into a `std::filesystem::path` or moth_ui learns a real identity type
+  by then. Issue #211 holds it. Revisit the choice there rather than earlier.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
