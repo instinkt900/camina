@@ -103,16 +103,18 @@ class CaminaConan(ConanFile):
             # remote, or export it to the local cache first:
             #   conan create . --version=<v>   (from the moth_ui checkout)
             #
-            # 1.1.2 is the first release this engine can build against. Before
-            # it, moth_ui pinned nlohmann_json to a patch line that conflicts
-            # with the 3.12 this engine takes, and its logger failed to compile
-            # against fmt 12.2.
+            # 1.1.3 is the first release this engine can build against on both
+            # platforms. Before 1.1.2 moth_ui pinned nlohmann_json to a patch
+            # line that conflicts with the 3.12 this engine takes, and its
+            # logger failed to compile against fmt 12.2. 1.1.2 still ran
+            # clang-tidy on an MSVC build, which cannot read that command line,
+            # so building it from source failed every Windows CI job.
             #
             # Develop against a Conan editable when a change spans both
             # repositories, then release moth_ui and come back to this pin. A
             # build that needs an editable is a build nobody else can run. See
             # DESIGN.md section 8.5.
-            self.requires("moth_ui/[>=1.1.2 <2]")
+            self.requires("moth_ui/[>=1.1.3 <2]")
 
     def build_requirements(self):
         pass

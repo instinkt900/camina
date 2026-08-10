@@ -567,8 +567,9 @@ Two traps, both of which have produced a false green:
   unambiguous, and read `conclusion` only after that.
 - **A bare `length > 0` exits far too early.** The review bot registers before the workflow
   jobs do, so the loop sees one finished check and reports success before the build starts.
-  Require the expected count, which is **five**: `format`, `docs`, `vulkan-containment`, and
-  the two `build` jobs.
+  Require the expected count, which is **seven**: `format`, `docs`, `vulkan-containment`, and
+  four `build` jobs. The build matrix is two platforms times game UI off and on, and the job
+  names carry which, for example `build (linux-clang, ui=true)`.
 
 Make the loop print the per-check result it decided on, so a wrong exit is visible in the
 event rather than hidden behind the word "success". After the monitor reports, **query the
