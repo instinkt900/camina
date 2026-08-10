@@ -52,6 +52,7 @@ jobs:
   # section 2. Every step below runs under bash, including on Windows, so that
   # one script serves both legs.
   build:
+    name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -59,6 +60,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             profile: linux-clang
+            with_ui: false
             # The xorg/system recipe needs about 35 X11 and XCB development
             # packages. Conan defaults tools.system.package_manager:mode to
             # "check", so it stops and asks the user to install them. On a
@@ -70,6 +72,22 @@ jobs:
               -c tools.system.package_manager:sudo=True
           - os: windows-2022
             profile: windows-msvc
+            with_ui: false
+            conan_conf: ""
+          # Game UI on, so src/ui and moth_ui are compiled. Both platforms,
+          # because each catches something the other cannot. Linux runs
+          # clang-tidy, which the MSVC job skips. Windows is the only MSVC
+          # compile of src/ui anywhere, and no developer here has a Windows
+          # machine to try it on. See issue #201.
+          - os: ubuntu-24.04
+            profile: linux-clang
+            with_ui: true
+            conan_conf: >-
+              -c tools.system.package_manager:mode=install
+              -c tools.system.package_manager:sudo=True
+          - os: windows-2022
+            profile: windows-msvc
+            with_ui: true
             conan_conf: ""
 
     defaults:
@@ -121,17 +139,28 @@ jobs:
           pip install conan
           conan profile detect --force
 
+      # moth_ui is not on Conan Center. conanfile.py pins it, and this remote
+      # serves it. Anonymous read, so there is no secret here. A job with the
+      # option off never resolves moth_ui and does not need this.
+      - name: Add the moth_ui remote
+        if: matrix.with_ui
+        run: |
+          conan remote add --force artifactory \
+            http://artifactory.matthewcotton.net/artifactory/api/conan/conan-local
+
       - name: Cache Conan packages
         uses: actions/cache@v4
         with:
           path: ~/.conan2/p
-          key: conan-${{ matrix.profile }}-${{ hashFiles('conanfile.py') }}
-          restore-keys: conan-${{ matrix.profile }}-
+          key: conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-
 
       - name: Conan install
         run: |
           conan install . -pr:h profiles/${{ matrix.profile }} \
-            -pr:b profiles/${{ matrix.profile }} -b missing ${{ matrix.conan_conf }}
+            -pr:b profiles/${{ matrix.profile }} -b missing \
+            -o "&:with_ui=${{ matrix.with_ui && 'True' || 'False' }}" \
+            ${{ matrix.conan_conf }}
 
       - name: Configure
         run: cmake --preset conan-relwithdebinfo
