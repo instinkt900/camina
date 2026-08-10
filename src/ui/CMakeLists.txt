@@ -6,6 +6,7 @@
 add_library(engine_ui STATIC
     ui.cpp
     renderer.cpp
+    ui_pass.cpp
 )
 
 add_library(engine::ui ALIAS engine_ui)

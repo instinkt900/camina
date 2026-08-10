@@ -3,6 +3,8 @@
 #include "core/assert.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cmath>
 
 namespace engine::ui {
@@ -135,15 +137,16 @@ namespace engine::ui {
 
         const auto base = static_cast<std::uint32_t>(m_vertices.size());
 
-        const moth_ui::FloatVec2 corners[4] = {
+        const std::array<moth_ui::FloatVec2, 4> corners{ {
             transform.TransformPoint({ x0, y0 }),
             transform.TransformPoint({ x1, y0 }),
             transform.TransformPoint({ x1, y1 }),
             transform.TransformPoint({ x0, y1 }),
-        };
-        const moth_ui::Color colors[4] = { top_left, top_right, bottom_right, bottom_left };
+        } };
+        const std::array<moth_ui::Color, 4> colors{ top_left, top_right, bottom_right,
+                                                    bottom_left };
 
-        for (int i = 0; i < 4; ++i) {
+        for (std::size_t i = 0; i < corners.size(); ++i) {
             // The tint composes here as well as on the stack, because a colour
             // a caller passed to RenderGradientRect never went through
             // PushColor.
@@ -156,11 +159,12 @@ namespace engine::ui {
                                          .a = c.a });
         }
 
-        const std::uint32_t order[6] = { 0, 1, 2, 0, 2, 3 };
-        for (const std::uint32_t offset : order) {
+        // Two triangles that share the diagonal from the top left corner.
+        static constexpr std::array<std::uint32_t, 6> kQuadOrder{ 0, 1, 2, 0, 2, 3 };
+        for (const std::uint32_t offset : kQuadOrder) {
             m_indices.push_back(base + offset);
         }
-        m_batches.back().index_count += 6;
+        m_batches.back().index_count += static_cast<std::uint32_t>(kQuadOrder.size());
     }
 
     void Renderer::PushBlendMode(moth_ui::BlendMode mode) {
