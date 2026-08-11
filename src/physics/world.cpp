@@ -78,6 +78,43 @@ namespace engine::physics {
             return b3Vec3{ v.x, v.y, v.z };
         }
 
+        /**
+         * Converts a quaternion field by field, and never by copying the bytes.
+         *
+         * A b3Quat holds the vector part first and the scalar last. GLM holds w
+         * first, because GLM_FORCE_QUAT_DATA_WXYZ says so and DESIGN.md section 3
+         * settles it. So the two have the same four floats in a different order,
+         * and a memcpy between them turns every rotation into a different one.
+         */
+        [[nodiscard]] b3Quat to_box3d(const Quat& q) {
+            return b3Quat{ .v = b3Vec3{ q.x, q.y, q.z }, .s = q.w };
+        }
+
+        [[nodiscard]] Quat from_box3d(const b3Quat& q) {
+            // glm::quat takes w first in its constructor whatever its storage is.
+            return Quat{ q.s, q.v.x, q.v.y, q.v.z };
+        }
+
+        [[nodiscard]] b3BodyType to_box3d(BodyType type) {
+            switch (type) {
+            case BodyType::Static:
+                return b3_staticBody;
+            case BodyType::Kinematic:
+                return b3_kinematicBody;
+            case BodyType::Dynamic:
+                break;
+            }
+            return b3_dynamicBody;
+        }
+
+        [[nodiscard]] b3ShapeDef to_box3d(const SurfaceMaterial& material) {
+            b3ShapeDef def = b3DefaultShapeDef();
+            def.density = material.density;
+            def.baseMaterial.friction = material.friction;
+            def.baseMaterial.restitution = material.restitution;
+            return def;
+        }
+
     } // namespace
 
     std::uint64_t tasks_enqueued() {
@@ -125,36 +162,55 @@ namespace engine::physics {
         b3World_Step(unpack_world(m_world), delta_seconds, static_cast<int>(substeps));
     }
 
-    BodyId World::add_static_box(const Vec3& center, const Vec3& half_extents) {
+    BodyId World::add_body(BodyType type, const Vec3& position, const Quat& rotation) {
         b3BodyDef body_def = b3DefaultBodyDef();
-        body_def.type = b3_staticBody;
-        body_def.position = to_box3d(center);
+        body_def.type = to_box3d(type);
+        body_def.position = to_box3d(position);
+        body_def.rotation = to_box3d(rotation);
 
-        const b3BodyId body = b3CreateBody(unpack_world(m_world), &body_def);
+        ++m_body_count;
+        return pack(b3CreateBody(unpack_world(m_world), &body_def));
+    }
 
+    // Adding a shape reads no member, and clang-tidy offers to make these static
+    // for the reason body_position() carries a note about. They stay methods
+    // because a shape belongs to a body in one world.
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::add_box(BodyId body, const Vec3& half_extents, const SurfaceMaterial& material) {
         // The world clones the hull into its own database, so this stack copy can
         // go out of scope. b3AddHullToDatabase is where it happens.
         const b3BoxHull hull = b3MakeBoxHull(half_extents.x, half_extents.y, half_extents.z);
-        const b3ShapeDef shape_def = b3DefaultShapeDef();
-        b3CreateHullShape(body, &shape_def, &hull.base);
-
-        ++m_body_count;
-        return pack(body);
+        const b3ShapeDef shape_def = to_box3d(material);
+        b3CreateHullShape(unpack_body(body), &shape_def, &hull.base);
     }
 
-    BodyId World::add_dynamic_box(const Vec3& center, const Vec3& half_extents) {
-        b3BodyDef body_def = b3DefaultBodyDef();
-        body_def.type = b3_dynamicBody;
-        body_def.position = to_box3d(center);
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::add_sphere(BodyId body, float radius, const SurfaceMaterial& material) {
+        const b3Sphere sphere{ .center = b3Vec3{ 0.0F, 0.0F, 0.0F }, .radius = radius };
+        const b3ShapeDef shape_def = to_box3d(material);
+        b3CreateSphereShape(unpack_body(body), &shape_def, &sphere);
+    }
 
-        const b3BodyId body = b3CreateBody(unpack_world(m_world), &body_def);
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::set_body_transform(BodyId body, const Vec3& position, const Quat& rotation) {
+        b3Body_SetTransform(unpack_body(body), to_box3d(position), to_box3d(rotation));
+    }
 
-        const b3BoxHull hull = b3MakeBoxHull(half_extents.x, half_extents.y, half_extents.z);
-        const b3ShapeDef shape_def = b3DefaultShapeDef();
-        b3CreateHullShape(body, &shape_def, &hull.base);
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::set_body_target(BodyId body, const Vec3& position, const Quat& rotation,
+                                float delta_seconds) {
+        const b3WorldTransform target{ .p = to_box3d(position), .q = to_box3d(rotation) };
 
-        ++m_body_count;
-        return pack(body);
+        // Waking it is the point. A lift that stopped for a while has gone to
+        // sleep, and a sleeping body carries nothing that rests on it.
+        b3Body_SetTargetTransform(unpack_body(body), target, delta_seconds, true);
+    }
+
+    void World::destroy_body(BodyId body) {
+        b3DestroyBody(unpack_body(body));
+        if (m_body_count > 0) {
+            --m_body_count;
+        }
     }
 
     // A Box3D body id carries its own world, so reading a position needs no
@@ -165,6 +221,11 @@ namespace engine::physics {
     Vec3 World::body_position(BodyId body) const {
         const b3Pos position = b3Body_GetPosition(unpack_body(body));
         return Vec3{ position.x, position.y, position.z };
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    Quat World::body_rotation(BodyId body) const {
+        return from_box3d(b3Body_GetRotation(unpack_body(body)));
     }
 
     std::uint32_t World::body_count() const {

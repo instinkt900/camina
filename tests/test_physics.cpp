@@ -12,6 +12,7 @@
 #include "core/jobs.h"
 #include "physics/components.h"
 #include "physics/conventions.h"
+#include "physics/simulation.h"
 #include "physics/world.h"
 #include "reflect/json.h"
 #include "scene/component_registry.h"
@@ -25,6 +26,7 @@
 
 namespace {
 
+    using engine::Quat;
     using engine::Vec3;
     using engine::physics::default_gravity;
     using test::check;
@@ -67,11 +69,24 @@ namespace {
     constexpr std::uint32_t kSmallWidth = 2;
     constexpr std::uint32_t kSmallHeight = 3;
 
+    /// No rotation, which every body in these tests starts with.
+    constexpr Quat kUpright{ 1.0F, 0.0F, 0.0F, 0.0F };
+
+    /// Puts one box on a body at a position, and hands the body back.
+    engine::physics::BodyId add_box_body(engine::physics::World& world,
+                                         engine::physics::BodyType type, const Vec3& center,
+                                         const Vec3& half_extents) {
+        const engine::physics::BodyId body = world.add_body(type, center, kUpright);
+        world.add_box(body, half_extents, engine::physics::SurfaceMaterial{});
+        return body;
+    }
+
     /// Builds the same scene every time, so two runs differ only in the worker
     /// count they were given.
     std::vector<engine::physics::BodyId> build_stack(engine::physics::World& world,
                                                      std::uint32_t width, std::uint32_t height) {
-        world.add_static_box(Vec3{ 0.0F, -1.0F, 0.0F }, Vec3{ 50.0F, 1.0F, 50.0F });
+        add_box_body(world, engine::physics::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F },
+                     Vec3{ 50.0F, 1.0F, 50.0F });
 
         std::vector<engine::physics::BodyId> boxes;
         for (std::uint32_t y = 0; y < height; ++y) {
@@ -80,8 +95,8 @@ namespace {
                     const Vec3 center{ static_cast<float>(x) * 1.2F,
                                        (static_cast<float>(y) * 1.2F) + kBoxHalfSize,
                                        static_cast<float>(z) * 1.2F };
-                    boxes.push_back(world.add_dynamic_box(
-                        center, Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize }));
+                    boxes.push_back(add_box_body(world, engine::physics::BodyType::Dynamic, center,
+                                                 Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize }));
                 }
             }
         }
@@ -103,9 +118,10 @@ namespace {
 
         engine::physics::World world;
         const engine::physics::BodyId box =
-            world.add_dynamic_box(Vec3{ 0.0F, 8.0F, 0.0F },
-                                  Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize });
-        world.add_static_box(Vec3{ 0.0F, -1.0F, 0.0F }, Vec3{ 50.0F, 1.0F, 50.0F });
+            add_box_body(world, engine::physics::BodyType::Dynamic, Vec3{ 0.0F, 8.0F, 0.0F },
+                         Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize });
+        add_box_body(world, engine::physics::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F },
+                     Vec3{ 50.0F, 1.0F, 50.0F });
 
         const float start_height = world.body_position(box).y;
         for (std::uint32_t i = 0; i < kStepCount; ++i) {
@@ -313,6 +329,108 @@ namespace {
               "the component next to it comes from the prefab");
     }
 
+    /// Puts a body and a box on an entity, and places it.
+    entt::entity add_physics_entity(sc::World& world, ph::BodyType type, const Vec3& position) {
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = position });
+        world.registry().emplace<ph::RigidBody>(entity, ph::RigidBody{ .type = type });
+        world.registry().emplace<ph::BoxCollider>(entity);
+        return entity;
+    }
+
+    void the_transforms_follow_the_solver() {
+        section("A world steps the bodies and the transforms follow");
+
+        sc::World world;
+        const entt::entity crate = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, 6.0F, 0.0F });
+
+        const entt::entity floor = add_physics_entity(world, ph::BodyType::Static,
+                                                      Vec3{ 0.0F, -1.0F, 0.0F });
+        world.registry().get<ph::BoxCollider>(floor).half_extents = Vec3{ 50.0F, 1.0F, 50.0F };
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        check(simulation.body_count() == 2, "both entities got a body");
+
+        const float floor_start = world.local(floor).position.y;
+        for (std::uint32_t i = 0; i < kStepCount; ++i) {
+            simulation.step(world, kStep);
+        }
+
+        const engine::Transform& landed = world.local(crate);
+        check(landed.position.y < 6.0F, "the dynamic entity fell");
+        check(landed.position.y > 0.0F, "the floor stopped it");
+        check(world.local(floor).position.y == floor_start, "the static entity did not move");
+    }
+
+    void the_scale_survives_the_write_back() {
+        section("The write-back leaves the scale alone");
+
+        sc::World world;
+        const entt::entity crate = world.create();
+        world.set_local(crate, engine::Transform{ .position = { 0.0F, 4.0F, 0.0F },
+                                                  .scale = { 2.0F, 2.0F, 2.0F } });
+        world.registry().emplace<ph::RigidBody>(crate);
+        world.registry().emplace<ph::BoxCollider>(crate);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        for (std::uint32_t i = 0; i < 10; ++i) {
+            simulation.step(world, kStep);
+        }
+
+        // A rigid body has no scale to give back, so the one the scene set has
+        // to survive. Writing a whole transform back would reset it to 1.
+        check(world.local(crate).scale == Vec3{ 2.0F, 2.0F, 2.0F },
+              "the scale the scene set is still there");
+        check(world.local(crate).position.y < 4.0F, "and the body still moved it");
+    }
+
+    void a_parented_dynamic_body_is_refused() {
+        section("A dynamic body under a parent is refused");
+
+        sc::World world;
+        const entt::entity parent = world.create();
+        world.set_local(parent, engine::Transform{ .position = { 0.0F, 5.0F, 0.0F } });
+
+        const entt::entity child = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, 1.0F, 0.0F });
+        check(world.set_parent(child, parent), "the child attaches to the parent");
+
+        ph::Simulation simulation;
+        simulation.build(world);
+
+        // DESIGN.md section 9. It gets no body at all rather than a body that
+        // quietly ignores the parent link.
+        check(!simulation.has_body(child), "the parented dynamic entity got no body");
+        check(simulation.body_count() == 0, "and nothing else did either");
+    }
+
+    void a_parented_static_body_is_allowed() {
+        section("A static body under a parent is allowed");
+
+        sc::World world;
+        const entt::entity parent = world.create();
+        world.set_local(parent, engine::Transform{ .position = { 3.0F, 0.0F, 0.0F } });
+
+        const entt::entity child = add_physics_entity(world, ph::BodyType::Static,
+                                                      Vec3{ 1.0F, 0.0F, 0.0F });
+        check(world.set_parent(child, parent), "the child attaches to the parent");
+
+        ph::Simulation simulation;
+        simulation.build(world);
+
+        // The restriction covers dynamic bodies alone, because the entity owns
+        // the transform of a static or kinematic one.
+        check(simulation.has_body(child), "the parented static entity got a body");
+
+        // And it went where the hierarchy put it, not where its local transform
+        // alone would have. The body starts from the world matrix, so a build
+        // that read the local transform would put it at x = 1.
+        check(world.world_matrix(child)[3][0] == 4.0F, "the parent carried it to x = 4");
+    }
+
 } // namespace
 
 int main() {
@@ -323,6 +441,10 @@ int main() {
     the_components_reflect();
     a_body_round_trips();
     a_prefab_instance_overrides_one_field();
+    the_transforms_follow_the_solver();
+    the_scale_survives_the_write_back();
+    a_parented_dynamic_body_is_refused();
+    a_parented_static_body_is_allowed();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();

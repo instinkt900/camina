@@ -19,10 +19,17 @@
 #include "math/conventions.h"
 #include "reflect/attributes.h"
 #include "reflect/reflect.h"
-#include "scene/component_registry.h"
 
 #include <cstdint>
 #include <tuple>
+
+/// @cond
+// Forward declared rather than included. physics/world.h needs BodyType from
+// this file and has no business pulling the scene registry in behind it.
+namespace engine::scene {
+    class ComponentRegistry;
+}
+/// @endcond
 
 namespace engine::physics {
 
@@ -116,9 +123,17 @@ namespace engine::physics {
      * physics subsystem. It stays separate so that `scene/` needs no physics
      * header, the same way a game module registers its own components.
      *
-     * @param registry Where to register them. The global one by default.
+     * @param registry Where to register them.
      */
-    void register_components(scene::ComponentRegistry& registry = scene::components());
+    void register_components(scene::ComponentRegistry& registry);
+
+    /**
+     * @brief Registers the physics components with the global scene registry.
+     *
+     * This is an overload rather than a default argument, so that naming the
+     * global registry does not force this header to include it.
+     */
+    void register_components();
 
 } // namespace engine::physics
 
