@@ -221,6 +221,13 @@ namespace {
         // silent change of the data.
         const nlohmann::json out = rf::to_json(forecast);
         check(out["weather"] == 42, "a value the description leaves out writes its number");
+
+        // And the reader has to take back what this writer produced. Refusing it
+        // would fail the whole object over one field, which is a worse answer
+        // than an incomplete description deserves.
+        Forecast loaded;
+        check(rf::from_json(out, loaded), "the document this writer produced reads back");
+        check(loaded.weather == Weather::Fog, "the value survives the round trip");
     }
 
     void test_enum_survives_a_reorder() {
@@ -243,11 +250,19 @@ namespace {
         Forecast loaded;
         check(!rf::from_json(unknown, loaded), "an unknown enumerator name fails the read");
 
+        // A number is taken, because the writer produces one for a value the
+        // description leaves out. It warns rather than fails, and 3 is Snow.
         nlohmann::json a_number;
         a_number["weather"] = 3;
         a_number["quality"] = 0;
-        check(!rf::from_json(a_number, loaded),
-              "a number where a described enum wants a name fails the read");
+        check(rf::from_json(a_number, loaded), "a number reads rather than failing");
+        check(loaded.weather == Weather::Snow, "the number is the value, not the position");
+
+        nlohmann::json wrong_shape;
+        wrong_shape["weather"] = nlohmann::json::array({ 1, 2 });
+        wrong_shape["quality"] = 0;
+        check(!rf::from_json(wrong_shape, loaded),
+              "an enum that is neither a name nor a number fails the read");
     }
 
     void test_bad_documents() {

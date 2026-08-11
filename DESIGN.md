@@ -482,6 +482,11 @@ type says something else the moment somebody inserts an enumerator above it, and
 warns. A value the description leaves out still writes its number, because losing it would
 turn a description somebody forgot to update into a silent change of the data.
 
+So the reader takes a number as well, and warns. It has to: a reader that refused one would
+reject a document this writer produced, and `from_json` fails the whole object rather than
+one field. An unknown *name* still fails, because a name is a deliberate spelling and a
+wrong one is a mistake rather than a gap in the description.
+
 **This is the second way to spell an enum, and that is on purpose for now.** `ColorSpace`
 declares `to_text` and `from_text` and reaches the `TextValue` branch instead, which is why
 a sidecar already reads `"Linear"`. The two are not interchangeable. `TextValue` is for a

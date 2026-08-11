@@ -205,11 +205,29 @@ namespace engine::reflect {
         template <typename V>
         [[nodiscard]] bool read_simple(const nlohmann::json& in, V& value, const char* where) {
             if constexpr (DescribedEnum<V>) {
+                // A number is what the writer falls back to for a value the
+                // description leaves out. Refusing it here would mean this reader
+                // rejects a document this writer produced, and from_json fails the
+                // whole object rather than one field. So the number is taken, and
+                // both sides warn, because the description is what wants fixing.
+                if (in.is_number_integer()) {
+                    value = static_cast<V>(in.template get<std::underlying_type_t<V>>());
+                    // The message says what to do about it rather than guessing
+                    // why the number is there. It reads the same whether an
+                    // enumerator names that value or none does.
+                    ENGINE_LOG_WARN("{}: {} is a number rather than a {} name. Taking it as "
+                                    "written. A name is what survives a reorder, and the "
+                                    "names are {}.",
+                                    where, in.dump(), Describe<V>::name, enumerator_list<V>());
+                    return true;
+                }
                 if (!in.is_string()) {
                     return wrong_type(where, "an enumerator name", in);
                 }
                 const std::string name = in.template get<std::string>();
                 if (!enumerator_value<V>(name, value)) {
+                    // A name is a deliberate spelling, so a wrong one is a mistake
+                    // rather than a gap in the description. That still fails.
                     ENGINE_LOG_ERROR("{}: {} is not one of the {} names. Valid names are {}.",
                                      where, name, Describe<V>::name, enumerator_list<V>());
                     return false;

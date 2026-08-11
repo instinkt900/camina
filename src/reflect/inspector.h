@@ -259,6 +259,13 @@ namespace engine::reflect {
             if (!widget::edit_enum(label, names.data(), kCount, index)) {
                 return false;
             }
+
+            // edit_enum already refuses an index that names no entry. This is the
+            // subscript itself, and std::array does not check one.
+            if (index >= kCount) {
+                return false;
+            }
+
             value = values[index];
             return true;
         }

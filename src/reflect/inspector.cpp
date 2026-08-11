@@ -147,6 +147,15 @@ namespace engine::reflect {
             if (!ImGui::Combo(label, &chosen, names, static_cast<int>(count))) {
                 return false;
             }
+
+            // ImGui reports a change only when the user picked an entry, so this
+            // holds today. It is checked because the caller turns the index into
+            // an array subscript, and this is the boundary with code we do not
+            // own. A report of a change to nothing is not worth passing on.
+            if (chosen < 0 || static_cast<std::size_t>(chosen) >= count) {
+                return false;
+            }
+
             index = static_cast<std::size_t>(chosen);
             return true;
         }
