@@ -645,6 +645,35 @@ namespace {
                     "a font this renderer did not make draws nothing");
     }
 
+    // M6.5. The path a layout gives, turned back into a manifest key.
+    //
+    // moth_ui resolves a layout image path against the layout's own directory
+    // and makes it absolute, so the engine gets an absolute path and the
+    // manifest is keyed on a source path. This is the pure half of that fix.
+
+    void a_layout_path_becomes_a_source_path() {
+        const std::filesystem::path root = "/game/content";
+
+        test::check(engine::ui::source_path_for("/game/content/ui/panel.png", root) ==
+                        "ui/panel.png",
+                    "an absolute path inside the cooked tree becomes a source path");
+        test::check(engine::ui::source_path_for("ui/panel.png", root) == "ui/panel.png",
+                    "a relative path passes through");
+        test::check(engine::ui::source_path_for("/game/content/panel.png", root) == "panel.png",
+                    "a path at the root of the tree keeps its name");
+
+        // A path outside the tree is not a cooked asset. Returning it would
+        // send "../.." to the manifest as if it were a key.
+        test::check(engine::ui::source_path_for("/somewhere/else/panel.png", root).empty(),
+                    "an absolute path outside the cooked tree is refused");
+
+        // The manifest is keyed on the source, and the cooker renames a texture
+        // output. So the answer is the source name and never the cooked one.
+        test::check(engine::ui::source_path_for("/game/content/ui/panel.png", root) !=
+                        "ui/panel.png.tex",
+                    "the answer is the source name rather than the cooked one");
+    }
+
 } // namespace
 
 int main() {
@@ -680,5 +709,6 @@ int main() {
     alignment_moves_the_text_inside_the_rect();
     text_that_cannot_draw_records_nothing();
     text_of_another_backend_draws_nothing();
+    a_layout_path_becomes_a_source_path();
     return test::report();
 }

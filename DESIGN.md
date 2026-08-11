@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M5 complete, M6 next
+Status: M6 complete, M7 next
 Last updated: 2026-08-10
 
 ---
@@ -622,6 +622,111 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
 years. This is acceptable only because moth_ui already exists and works. The extra cost is
 integration plus a few widgets. If you start a UI-library refactor while the renderer is
 half finished, you have inverted the priority. Rule 4.6 applies with full force here.
+
+### 8.6 What the M6 spike found
+
+M6 exists to answer one question: **is `gfx::` ready for a consumer that is not this
+engine?** moth_ui is the only external consumer the engine has, so it is the only thing that
+can test that. This section is the answer. Section 8.2 explains why the answer matters more
+than the pixels.
+
+**We own both sides, so each finding names the side its fix landed on.** That is the part
+worth reading. It is easy to hide a bad interface by patching whichever repository is
+convenient.
+
+#### `gfx::` came through well
+
+**Nothing forced a Vulkan detail through, and rule 4.1 held.** `src/ui/` names no Vulkan type
+and includes no Vulkan header. The `vulkan-containment` CI job covers it. The whole game UI
+sits on `create_texture`, `create_graphics_pipeline`, `create_descriptor_set`, `update_buffer`
+and the command recording calls, and none of them leaked a `Vk` type.
+
+**`gfx::` would survive a C ABI today, with one exception already known.** The interface the
+UI uses is opaque handles and POD structs, which is what rule 4.2 asks for. The exception is
+`gfx::Result` and the `succeeded()` helper, which are fine, and the descriptor and pipeline
+descriptors, which are aggregates of PODs and arrays. Nothing in the UI path takes a
+`std::string` or a `std::vector` across the boundary.
+
+**One `gfx::` gap is real and it is the sampler.** A sampler belongs to the texture it was
+created with, so a consumer cannot choose a filter when it binds. moth_ui asks for one per
+image, and the recorder carries the request and breaks the batch on it, and then `UiPass`
+cannot honour it. Issue #209 holds it. The better shape is a sampler as its own handle, bound
+beside the texture, which is what Vulkan does underneath anyway.
+
+**A second gap is smaller.** The frame report times the shadow, cull, mesh and tonemap passes
+and not the UI pass, so the cost of the game UI is invisible next to everything else. That is
+an engine gap rather than a `gfx::` one.
+
+#### moth_ui interfaces that are wrong for a runtime
+
+These are the findings the milestone was really for. Each one is an interface that assumes a
+game reads loose files from a disk, which a cooked runtime does not.
+
+**`IImageFactory::GetImage` takes a filesystem path, and moth_ui makes it absolute.**
+`LayoutEntityImage::Deserialize` stores
+`std::filesystem::absolute(layout directory / stored path)`. The engine names an asset by a
+source path and the manifest is keyed on one, so an absolute path matches nothing. The engine
+undoes it in `engine::ui::source_path_for`, which is correct only because the cooked tree
+mirrors the source tree.
+
+*The fix landed on the engine side, and that is the wrong side.* The right shape is an asset
+identity that a layout carries and a backend resolves, rather than a path moth_ui rewrites on
+the way through. That is a moth_ui change and it is not a small one, so it is filed rather
+than done inside a timeboxed spike.
+
+**`IFontFactory` makes a runtime implement editor project files.** `LoadProject`,
+`SaveProject` and `GetCurrentProjectPath` exist for `moth_editor`, which keeps its font list
+in a JSON file. A runtime takes its fonts from the cooked tree, so implementing them would
+create a second source of truth. `engine::ui::FontFactory` asserts and logs in all three. The
+seam belongs one level down: an editor-only interface that extends the runtime one.
+
+**A font is named and an image is pathed, for no reason a consumer can see.** A layout stores
+a font by a registered name and an image by a path. So the game must register every font name
+before a layout loads, and must register no image. One rule for both would remove a class of
+mistake.
+
+**`moth_ui::IFont` declares no methods at all.** Section 8.3 already said this. The measured
+cost is below.
+
+**One enum in the layout format is stored differently from its neighbours.** `imageScaleType`
+is a string and `textureFilter` is a number, in the same file, written by the same
+serializer. Every layout in every moth project agrees: 25 files store `"textureFilter": 0`
+and none stores a name. Hand-authoring a layout with the name throws
+`type must be number, but is string`, which names no field. This cost real time in M6.5 and
+it is filed against moth_ui.
+
+#### What text actually cost
+
+Section 8.3 warned that people underestimate this. The warning was right, and the reference
+made it cheaper than it would have been:
+
+| Part | Lines |
+|---|---|
+| `moth_graphics` reference, for comparison | 441 |
+| `src/ui/font.h` and `font.cpp` | 981 |
+| `src/ui/font_factory.h` and `font_factory.cpp` | 322 |
+| `tests/test_ui_font.cpp` | 428 |
+
+So text is about 1300 lines of engine code and 400 of test, against a 441-line reference. The
+difference is documentation, the split of `load()` from `upload()` that makes the whole thing
+testable with no GPU, and the two parts that were rewritten rather than ported. It is roughly
+half of everything `src/ui/` holds, for one of the five things a UI draws.
+
+Text was also where every real bug lived. The alpha blend that `RenderText` forces, the blank
+line that `wrap()` used to drop, and the advance that used to truncate were all found after
+the code worked.
+
+#### What was fixed here, and what was filed
+
+Fixed in this milestone, engine side: the sampler request is carried rather than dropped, the
+layout path is resolved against the manifest, text forces its own blend mode, and the three
+editor-only factory methods assert and log.
+
+Filed: #209 the sampler, #210 UI hot reload, #213 on-demand glyph packing, #214 one atlas for
+each size, #216 shaping direction, and the moth_ui interface findings above. **None of the
+moth_ui findings were fixed here, so no moth_ui release was needed and the engine still pins
+`moth_ui/[>=1.1.3 <2]`.** The local editable is `moth_ui/1.1.1`, which that range excludes, so
+it is not load-bearing and the build takes 1.1.3 from the cache.
 
 ---
 
@@ -1442,6 +1547,18 @@ nothing. Name the side each fix landed on. See §8.
 
 **Done when:** one moth_ui layout draws in the engine, and you have written down what the
 spike taught you about `gfx::` and about moth_ui.
+
+**M6 is complete.** `sandbox/content/ui/main.mothui` draws an image and two strings, and
+`--offscreen` captures it repeatably. The findings are in §8.6, with the side each fix landed
+on. The short version: `gfx::` came through with one real gap, the sampler in #209, and rule
+4.1 and rule 4.2 both held. The interfaces that turned out to be wrong were moth_ui's, and
+they are wrong in one way: they assume a game reads loose files from a disk. None of them was
+fixed here, so no moth_ui release was needed.
+
+The spike ran long. The definition says 2 to 3 days and the work took 6, from the planning
+commit on 2026-08-04 to 2026-08-11. Two things caused it. Text is half of `src/ui/` on its own,
+which §8.6 measures. And M6.3 through M6.5 each turned up a real defect after the code already
+worked, which is the spike doing its job rather than an overrun to regret.
 
 ### M7 — Physics
 Connect Box3D to enkiTS. Add rigid body and collider components. Reflect them, so the
