@@ -176,6 +176,38 @@ namespace engine::physics {
         void set_body_target(BodyId body, const Vec3& position, const Quat& rotation,
                              float delta_seconds);
 
+        /**
+         * @brief Sets how fast a body is moving.
+         *
+         * This replaces the velocity rather than adding to it, so a body given
+         * one twice moves at the second one. Use it to launch a body that was
+         * just created, which is what throwing something is.
+         *
+         * A velocity that is not zero wakes the body, so a throw disturbs a
+         * stack that has gone to sleep.
+         *
+         * @warning **A velocity of zero on a sleeping body does nothing.** A
+         * sleeping body holds no velocity state to write, and Box3D wakes one
+         * only for a velocity that is not zero. The body is already still, so
+         * the result is what the caller wanted, but a caller expecting the
+         * write itself to happen is expecting something that did not.
+         *
+         * @param body The body to move. A static body ignores this.
+         * @param velocity Meters each second, in world space.
+         */
+        void set_linear_velocity(BodyId body, const Vec3& velocity);
+
+        /**
+         * @brief How fast a body is moving now.
+         *
+         * A sleeping body reads as zero, which is what it is doing. So this
+         * says whether a body is moving, and it never says whether it is awake.
+         *
+         * @param body The body to read.
+         * @return Meters each second, in world space.
+         */
+        [[nodiscard]] Vec3 linear_velocity(BodyId body) const;
+
         /// @brief Destroys one body and every shape on it.
         /// @param body The body to destroy.
         void destroy_body(BodyId body);

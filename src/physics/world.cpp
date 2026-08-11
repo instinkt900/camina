@@ -218,6 +218,21 @@ namespace engine::physics {
     // a body belongs to one world, and a static call would invite reading a body
     // through a world that does not hold it.
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::set_linear_velocity(BodyId body, const Vec3& velocity) {
+        // Box3D wakes the body itself when the velocity is not zero. See
+        // b3Body_SetLinearVelocity in third_party/box3d/src/body.c, which calls
+        // b3WakeBodyWithLock before it writes. Waking it here as well would
+        // cost a settled stack its sleep every time something asked it to stop.
+        b3Body_SetLinearVelocity(unpack_body(body), to_box3d(velocity));
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    Vec3 World::linear_velocity(BodyId body) const {
+        const b3Vec3 velocity = b3Body_GetLinearVelocity(unpack_body(body));
+        return Vec3{ velocity.x, velocity.y, velocity.z };
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     Vec3 World::body_position(BodyId body) const {
         const b3Pos position = b3Body_GetPosition(unpack_body(body));
         return Vec3{ position.x, position.y, position.z };

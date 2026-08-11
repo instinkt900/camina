@@ -67,59 +67,86 @@ namespace engine::physics {
         // current before any of them is read.
         world.update();
 
-        entt::registry& registry = world.registry();
-        const auto view = registry.view<const RigidBody>();
-
-        for (const entt::entity entity : view) {
-            const RigidBody& description = view.get<const RigidBody>(entity);
-
-            const auto* box = registry.try_get<const BoxCollider>(entity);
-            const auto* sphere = registry.try_get<const SphereCollider>(entity);
-            if (box == nullptr && sphere == nullptr) {
-                ENGINE_LOG_WARN("{} has a RigidBody and no collider, so it falls through "
-                                "everything. Add a BoxCollider or a SphereCollider.",
-                                describe(world, entity));
-            }
-
-            // DESIGN.md section 9. Parenting says the child goes where the parent
-            // goes, and a dynamic body goes where the solver puts it. Refusing is
-            // what keeps the hierarchy from meaning two things at once.
-            const auto& hierarchy = registry.get<scene::Hierarchy>(entity);
-            if (description.type == BodyType::Dynamic && hierarchy.parent != entt::null) {
-                ENGINE_LOG_ERROR("{} is a dynamic body under a parent, so it gets no body. "
-                                 "A dynamic body sits at the root, because the solver decides "
-                                 "where it goes. See DESIGN.md section 9.",
-                                 describe(world, entity));
-                continue;
-            }
-
-            Vec3 position{ 0.0F, 0.0F, 0.0F };
-            Quat rotation{ 1.0F, 0.0F, 0.0F, 0.0F };
-            decompose(world.world_matrix(entity), position, rotation);
-
-            const BodyId body = m_world.add_body(description.type, position, rotation);
-            const SurfaceMaterial material{ .density = description.density,
-                                            .friction = description.friction,
-                                            .restitution = description.restitution };
-
-            if (box != nullptr) {
-                m_world.add_box(body, box->half_extents, material);
-            }
-            if (sphere != nullptr) {
-                m_world.add_sphere(body, sphere->radius, material);
-            }
-
-            // Both poses start where the entity sits, so a frame drawn before
-            // the first step blends two copies of the starting pose rather than
-            // reading a rotation nobody set.
-            m_bodies.emplace(entity, Body{ .id = body,
-                                           .previous_position = position,
-                                           .previous_rotation = rotation,
-                                           .position = position,
-                                           .rotation = rotation });
+        for (const entt::entity entity : world.registry().view<const RigidBody>()) {
+            (void)create_body(world, entity);
         }
 
         ENGINE_LOG_INFO("Physics built {} bodies.", m_bodies.size());
+    }
+
+    bool Simulation::add_body(scene::World& world, entt::entity entity) {
+        if (!world.registry().valid(entity) ||
+            world.registry().try_get<const RigidBody>(entity) == nullptr) {
+            return false;
+        }
+        if (has_body(entity)) {
+            return false;
+        }
+
+        // Only this entity's matrix has to be current, but update() is what
+        // knows which ones are stale. It does nothing when nothing moved.
+        world.update();
+        return create_body(world, entity);
+    }
+
+    bool Simulation::set_linear_velocity(entt::entity entity, const Vec3& velocity) {
+        const auto found = m_bodies.find(entity);
+        if (found == m_bodies.end()) {
+            return false;
+        }
+        m_world.set_linear_velocity(found->second.id, velocity);
+        return true;
+    }
+
+    bool Simulation::create_body(scene::World& world, entt::entity entity) {
+        entt::registry& registry = world.registry();
+        const RigidBody& description = registry.get<const RigidBody>(entity);
+
+        const auto* box = registry.try_get<const BoxCollider>(entity);
+        const auto* sphere = registry.try_get<const SphereCollider>(entity);
+        if (box == nullptr && sphere == nullptr) {
+            ENGINE_LOG_WARN("{} has a RigidBody and no collider, so it falls through "
+                            "everything. Add a BoxCollider or a SphereCollider.",
+                            describe(world, entity));
+        }
+
+        // DESIGN.md section 9. Parenting says the child goes where the parent
+        // goes, and a dynamic body goes where the solver puts it. Refusing is
+        // what keeps the hierarchy from meaning two things at once.
+        const auto& hierarchy = registry.get<scene::Hierarchy>(entity);
+        if (description.type == BodyType::Dynamic && hierarchy.parent != entt::null) {
+            ENGINE_LOG_ERROR("{} is a dynamic body under a parent, so it gets no body. "
+                             "A dynamic body sits at the root, because the solver decides "
+                             "where it goes. See DESIGN.md section 9.",
+                             describe(world, entity));
+            return false;
+        }
+
+        Vec3 position{ 0.0F, 0.0F, 0.0F };
+        Quat rotation{ 1.0F, 0.0F, 0.0F, 0.0F };
+        decompose(world.world_matrix(entity), position, rotation);
+
+        const BodyId body = m_world.add_body(description.type, position, rotation);
+        const SurfaceMaterial material{ .density = description.density,
+                                        .friction = description.friction,
+                                        .restitution = description.restitution };
+
+        if (box != nullptr) {
+            m_world.add_box(body, box->half_extents, material);
+        }
+        if (sphere != nullptr) {
+            m_world.add_sphere(body, sphere->radius, material);
+        }
+
+        // Both poses start where the entity sits, so a frame drawn before the
+        // first step blends two copies of the starting pose rather than reading
+        // a rotation nobody set.
+        m_bodies.emplace(entity, Body{ .id = body,
+                                       .previous_position = position,
+                                       .previous_rotation = rotation,
+                                       .position = position,
+                                       .rotation = rotation });
+        return true;
     }
 
     void Simulation::step(scene::World& world, float delta_seconds, std::uint32_t substeps) {
