@@ -72,7 +72,7 @@ namespace engine::physics {
         float density = kDefaultDensity;
         /// @brief How hard it is to slide. 0 is ice.
         float friction = kDefaultFriction;
-        /// @brief How much it bounces. 0 keeps the energy, and 1 gives it back.
+        /// @brief How much it bounces. 0 absorbs the energy, and 1 gives it back.
         float restitution = 0.0F;
     };
 

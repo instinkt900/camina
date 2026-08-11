@@ -255,13 +255,27 @@ namespace {
               "a sphere collider survives");
     }
 
+    /// What the crate prefab carries. None of it is a default value, so a check
+    /// against one of these fails when the prefab data does not reach the
+    /// instance. Checking against a default proves nothing, because an
+    /// instantiate that dropped the data and default-constructed the components
+    /// would pass.
+    constexpr float kCrateDensity = 700.0F;
+    constexpr Vec3 kCrateHalfExtents{ 0.75F, 0.25F, 1.5F };
+
     /// A one-entity prefab carrying a body and a box.
     nlohmann::json crate_document() {
+        ph::RigidBody body;
+        body.density = kCrateDensity;
+
+        ph::BoxCollider box;
+        box.half_extents = kCrateHalfExtents;
+
         nlohmann::json root = nlohmann::json::object();
         root["parent"] = -1;
         root["components"]["Transform"] = engine::reflect::to_json(engine::Transform{});
-        root["components"]["RigidBody"] = engine::reflect::to_json(ph::RigidBody{});
-        root["components"]["BoxCollider"] = engine::reflect::to_json(ph::BoxCollider{});
+        root["components"]["RigidBody"] = engine::reflect::to_json(body);
+        root["components"]["BoxCollider"] = engine::reflect::to_json(box);
 
         nlohmann::json document = nlohmann::json::object();
         document["__version"] = sc::kPrefabVersion;
@@ -288,10 +302,14 @@ namespace {
 
         const auto& body = world.registry().get<ph::RigidBody>(entity);
         check(body.type == ph::BodyType::Static, "the overridden field took the new value");
-        check(body.density == ph::kDefaultDensity, "the field next to it comes from the prefab");
+
+        // Against the prefab value rather than the default. An instantiate that
+        // dropped the prefab data and default-constructed the component would
+        // pass a check against the default, which is what this used to do.
+        check(body.density == kCrateDensity, "the field next to it comes from the prefab");
 
         const auto& box = world.registry().get<ph::BoxCollider>(entity);
-        check(box.half_extents.x == ph::kDefaultColliderHalfSize,
+        check(box.half_extents == kCrateHalfExtents,
               "the component next to it comes from the prefab");
     }
 
