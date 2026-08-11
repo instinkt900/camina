@@ -123,7 +123,9 @@ jobs:
           sudo apt-get install -y clang-19 clang-tidy-19
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
-          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-19 100
+          # No alternative for clang-tidy. This runner already carries one that
+          # this priority does not outrank, so the line looked right and did
+          # nothing. cmake/ClangTidy.cmake asks for clang-tidy-19 by name.
 
       - name: Set up MSVC
         if: runner.os == 'Windows'

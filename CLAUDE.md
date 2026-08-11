@@ -435,12 +435,15 @@ opaque scene with no validation message either. Synchronization validation repor
 300 frames offscreen and 200 windowed, on the sandbox and on Intel Sponza, and nothing over 300
 offscreen frames with the physics wireframe drawing.
 
-The build produces sixteen warnings, which is issue #179. Fifteen are one line in
-`src/reflect/registry.h` counted once for each translation unit that instantiates it, and the
-sixteenth is a function in the cooker that lost its last caller. CI does not fail on either.
-The first number tracks how many translation units instantiate that template, so it grows
-when a milestone adds files rather than when anybody writes a new warning. It read seven at
-the close of M5 and sixteen on a clean RelWithDebInfo build at M7.1.
+The build produces no compiler warnings and no clang-tidy findings, over the whole tree with
+the gate on. It carried sixteen warnings at M7.1, which was issue #179, and the lint gate was
+reading almost nothing, which was issue #242. Both are closed.
+
+The gate is live now, which #252 closed. `cmake/ClangTidy.cmake` asks for `clang-tidy-19` by
+name and refuses to configure when that binary rejects either `.clang-tidy`. Turning it on
+needed `cook_gltf` and `run_frames` split, because both were over the cognitive complexity
+threshold. `add_primitive` in `tools/cooker/mesh.cpp` sits at exactly 25 against a threshold
+of 25, so one more branch in it fails the build.
 
 ## Development flow
 
@@ -726,13 +729,21 @@ here, consider whether moth_ui wants the same change.
   `Checks` list, and no `WarningsAsErrors`. So the build passes and the lint
   gate checked almost nothing.
 
-  Check with `clang-tidy --version` and `clang-tidy --verify-config`. The second
-  **exits 0 even when it rejects a key**, so read what it printed rather than
-  the status. CI runs both now, and fails when the config was not accepted.
+  `cmake/ClangTidy.cmake` asks `find_program` for `clang-tidy-19` first, and it
+  verifies both `.clang-tidy` files against the binary it picked. A rejected
+  config stops the configure with a message. So this cannot come back silently,
+  and it is checked in a local Debug build as well as in CI.
+
+  **`--verify-config` needs `--config-file` or it proves nothing.** The bare
+  form finds no `.clang-tidy` at all. It prints every parse error it hits and
+  then reports `No config errors detected` and exits 0 anyway, from any
+  directory. With `--config-file=<path>` the exit code is honest: 1 on a
+  rejected file and 0 on an accepted one.
 
   Ubuntu noble ships 19.1.1 as `clang-tidy-19`, and the plain `clang-tidy`
-  package points at 18. Check which one `/usr/bin/clang-tidy` resolves to
-  before trusting a local result.
+  package points at 18. The GitHub runner is the same: it carries a
+  `clang-tidy` alternative that `update-alternatives --install ... 100` does
+  not outrank, so CI ran 18.1.3 while it installed 19.
 - **An alias is a separate check, so turning one off leaves the other on.**
   `cppcoreguidelines-avoid-magic-numbers` is an alias of
   `readability-magic-numbers`. Disabling only the second left the first running
