@@ -5,13 +5,10 @@
 
 ## Why this one
 
-The license is the reason. It is the SIL Open Font License 1.1, which allows a project to
-bundle and ship a font as long as the license travels with it and a derived font does not
-reuse the reserved name. `OFL.txt` is that copy, and this project renames nothing.
-
-    Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo, Tinos
-    and Cousine.
-    Copyright (c) 2012 Red Hat, Inc. with Reserved Font Name Liberation.
+The license is the reason. It is the SIL Open Font License 1.1. That license lets a project
+bundle and ship a font. Two conditions come with it. The license and the copyright notice
+must travel with the font, and `OFL.txt` carries both. A derived font must not reuse the
+reserved name, and this project derives nothing.
 
 This matters because a font is easy to add and hard to check later. Intel Sponza was
 rejected over its license after somebody measured it, and a font carries the same risk with

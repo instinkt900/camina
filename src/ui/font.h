@@ -250,6 +250,14 @@ namespace engine::ui {
          *
          * @param text The characters, as UTF-8.
          * @return The glyphs in draw order. Empty when load() has not run.
+         *
+         * @warning **This is const and it is not safe to call on one Font from
+         *          two threads.** It fills a HarfBuzz buffer that the object
+         *          owns and reuses, so two calls at once write the same buffer
+         *          and read each other's glyphs. measure_width() and wrap()
+         *          call this, so the same holds for them. A parallel layout
+         *          pass needs one Font for each thread, or a buffer for each
+         *          call.
          */
         [[nodiscard]] std::vector<ShapedGlyph> shape(std::string_view text) const;
 
@@ -270,10 +278,16 @@ namespace engine::ui {
          * would not fit. A single word wider than the limit gets a line of its
          * own rather than being cut.
          *
+         * **Every newline-separated part gives at least one line, even when it
+         * holds nothing.** A blank line is a line the author typed, so dropping
+         * it would collapse a paragraph break and move everything below it up.
+         * Empty text is the one exception, and it gives no line at all.
+         *
          * @param text The characters, as UTF-8. The result points into it.
          * @param width The limit in pixels. A width of zero or less puts every
          * word on a line of its own.
-         * @return One entry for each line, in order. A blank line is dropped.
+         * @return One entry for each line, in order. The spaces around a line
+         * are removed, and the ones inside it stay.
          */
         [[nodiscard]] std::vector<WrappedLine> wrap(std::string_view text, int width) const;
 
@@ -309,6 +323,11 @@ namespace engine::ui {
         // the newline split, and this is the word wrap under it.
         void wrap_segment(std::string_view segment, int width,
                           std::vector<WrappedLine>& lines) const;
+
+        // Closes the face, the shaping state, and every measurement that came
+        // from them. Every failure path in load() calls this, and so does
+        // load() itself before it opens anything, so a reload starts clean.
+        void release_face();
 
         FT_FaceRec_* face_ = nullptr;
         hb_font_t* hb_font_ = nullptr;

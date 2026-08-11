@@ -90,6 +90,26 @@ namespace {
         Font orphan;
         check(!orphan.load(unopened, font_path(), kSize),
               "a library that never started is refused");
+
+        // A refusal has to leave nothing behind. A Font that failed to load but
+        // kept its face still shapes and still answers a width, which reads as
+        // a working font that draws nothing.
+        Font reused;
+        check(reused.load(library, font_path(), kSize), "a font loads");
+        check(!reused.load(library, "no/such/font.ttf", kSize),
+              "and loading a missing file over it is refused");
+        check(reused.glyph_count() == 0, "the failed load left no glyphs behind");
+        check(reused.measure_width("Hello") == 0, "and it measures nothing");
+        check(reused.line_height() == 0, "and it has no line height");
+
+        // Loading twice over is the path that used to leak the first face.
+        Font reloaded;
+        check(reloaded.load(library, font_path(), kSize), "a font loads");
+        const std::size_t first = reloaded.glyph_count();
+        check(reloaded.load(library, font_path(), kSize), "and it loads again over itself");
+        check(reloaded.glyph_count() == first, "with the same glyph count");
+        check(reloaded.measure_width("Hello") > 0, "and it still measures");
+        reloaded.destroy(nullptr);
     }
 
     /**
@@ -220,6 +240,17 @@ namespace {
         check(summed == font.measure_width("Hello world"),
               "the measured width is the sum of the shaped advances");
 
+        // HarfBuzz applying real kerning is the whole reason it was taken over
+        // stb_truetype, whose shaping covers GPOS pair kerning only. Liberation
+        // Sans kerns AV and AW negatively. Without shaping these would be equal,
+        // so this check fails if the font is ever measured glyph by glyph.
+        check(font.measure_width("AV") < font.measure_width("A") + font.measure_width("V"),
+              "AV kerns tighter than A and V measured apart");
+        check(font.measure_width("AW") < font.measure_width("A") + font.measure_width("W"),
+              "and so does AW");
+        check(font.measure_width("nn") == font.measure_width("n") * 2,
+              "a pair the font does not kern measures the same either way");
+
         font.destroy(nullptr);
     }
 
@@ -281,15 +312,20 @@ namespace {
         }
         check(widths_match, "each line reports the width of its own text");
 
-        // Runs of spaces and blank lines do not produce empty lines.
+        // A blank line is a line. Dropping it would collapse a paragraph break
+        // and move every line below it up by one line height.
         const std::string spaced = "  a   b  \n\n  c  ";
         const std::vector<WrappedLine> trimmed = font.wrap(spaced, 10000);
-        check(trimmed.size() == 2, "a blank line is dropped");
+        check(trimmed.size() == 3, "a blank line between two lines is kept");
         check(!trimmed.empty() && trimmed[0].text == "a   b",
               "the outer spaces come off and the inner ones stay");
+        check(trimmed.size() == 3 && trimmed[1].text.empty() && trimmed[1].width == 0,
+              "the blank line has no text and no width");
+        check(trimmed.size() == 3 && trimmed[2].text == "c", "the third line follows it");
 
-        check(font.wrap("", 100).empty(), "an empty string wraps to nothing");
-        check(font.wrap("   ", 100).empty(), "a string of spaces wraps to nothing");
+        check(font.wrap("a\n\n\nb", 10000).size() == 4, "two blank lines are two lines");
+        check(font.wrap("   ", 10000).size() == 1, "a line of spaces is one blank line");
+        check(font.wrap("", 100).empty(), "an empty string is the one input that gives no line");
 
         font.destroy(nullptr);
     }

@@ -39,6 +39,21 @@ namespace engine::ui {
         /// A fully opaque or fully white channel.
         constexpr std::uint8_t kFull = 0xFF;
 
+        /**
+         * Turns a 26.6 fixed point value into whole pixels, rounding to nearest.
+         *
+         * Truncating instead would bias every advance the same way, and
+         * measure_width() sums them. A 60-character line then measures about a
+         * pixel short, and wrap() breaks on that width. Integer division also
+         * truncates toward zero, so it would round a negative advance the
+         * opposite way from a positive one.
+         */
+        int round_fixed(int fixed) {
+            const int half = kFixedToPixels / 2;
+            return (fixed >= 0) ? ((fixed + half) / kFixedToPixels)
+                                : -((-fixed + half) / kFixedToPixels);
+        }
+
         /// One glyph, rasterized and waiting to be packed.
         struct PendingGlyph {
             std::uint32_t index = 0; ///< The glyph index in the face.
@@ -107,6 +122,21 @@ namespace engine::ui {
                 }
 
                 const FT_GlyphSlot slot = face->glyph;
+
+                // FT_LOAD_RENDER picks the hinting target, not the bitmap
+                // format. A bitmap-only face can answer with one bit for each
+                // pixel, and reading that as one byte for each pixel turns a
+                // glyph into noise eight times too wide. Refuse it rather than
+                // draw it wrongly. An empty bitmap is fine and normal: a space
+                // has an advance and no coverage.
+                if (slot->bitmap.width != 0 && slot->bitmap.rows != 0 &&
+                    slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
+                    ENGINE_LOG_WARN("The face answered glyph {} in pixel mode {}, and this "
+                                    "reads 8-bit gray only. The glyph is skipped.",
+                                    glyph_index, static_cast<int>(slot->bitmap.pixel_mode));
+                    continue;
+                }
+
                 PendingGlyph glyph;
                 glyph.index = glyph_index;
                 glyph.width = static_cast<int>(slot->bitmap.width);
@@ -121,13 +151,24 @@ namespace engine::ui {
 
                 glyph.coverage.resize(static_cast<std::size_t>(glyph.width) *
                                       static_cast<std::size_t>(glyph.height));
+
+                // The sign of the pitch is the row order. A positive pitch puts
+                // the top row first, and a negative one puts the bottom row
+                // first and counts backward. Taking the absolute value alone
+                // would read the right bytes in the wrong order and draw every
+                // glyph upside down, so the start row moves with the sign.
                 const int pitch = slot->bitmap.pitch;
+                const std::uint8_t* first_row = slot->bitmap.buffer;
+                if (pitch < 0) {
+                    first_row += static_cast<std::ptrdiff_t>(pitch) * (glyph.height - 1);
+                }
+                const int stride = (pitch < 0) ? -pitch : pitch;
                 for (int y = 0; y < glyph.height; ++y) {
                     for (int x = 0; x < glyph.width; ++x) {
                         glyph.coverage[(static_cast<std::size_t>(y) *
                                         static_cast<std::size_t>(glyph.width)) +
                                        static_cast<std::size_t>(x)] =
-                            slot->bitmap.buffer[x + (y * pitch)];
+                            first_row[x + (y * stride)];
                     }
                 }
                 pending.push_back(std::move(glyph));
@@ -198,7 +239,7 @@ namespace engine::ui {
         handle_ = nullptr;
     }
 
-    Font::~Font() {
+    void Font::release_face() {
         // HarfBuzz holds the face, so it goes first. hb_ft_font_create takes no
         // reference on the face, which makes the other order a use after free.
         if (hb_buffer_ != nullptr) {
@@ -213,6 +254,23 @@ namespace engine::ui {
             FT_Done_Face(face_);
             face_ = nullptr;
         }
+
+        // The measurements go with the face. Leaving them behind would let a
+        // Font that failed to load still answer a width, which reads as a
+        // working font that draws nothing.
+        glyphs_.clear();
+        glyph_index_to_atlas_.clear();
+        pixels_.clear();
+        atlas_width_ = 0;
+        atlas_height_ = 0;
+        line_height_ = 0;
+        ascent_ = 0;
+        descent_ = 0;
+        underline_ = 0;
+    }
+
+    Font::~Font() {
+        release_face();
         ENGINE_ASSERT(!texture_.valid(),
                       "A ui::Font still holds its atlas texture. Call destroy() first.");
     }
@@ -229,6 +287,10 @@ namespace engine::ui {
             return false;
         }
 
+        // A reload starts clean. Without this, loading a second file over the
+        // first leaks the first face and its HarfBuzz font.
+        release_face();
+
         const std::string path_text = path.string();
         if (FT_New_Face(library.handle(), path_text.c_str(), 0, &face_) != 0) {
             ENGINE_LOG_ERROR("The font file {} would not open.", path_text);
@@ -239,23 +301,30 @@ namespace engine::ui {
             ENGINE_LOG_ERROR("The font {} does not carry the size {}. A bitmap-only face "
                              "carries a fixed set of sizes.",
                              path_text, pixel_size);
-            FT_Done_Face(face_);
-            face_ = nullptr;
+            release_face();
             return false;
         }
 
         hb_font_ = hb_ft_font_create(face_, nullptr);
         if (hb_font_ == nullptr) {
             ENGINE_LOG_ERROR("HarfBuzz would not take the font {}.", path_text);
-            FT_Done_Face(face_);
-            face_ = nullptr;
+            release_face();
             return false;
         }
+
+        // The shaping buffer is made once here rather than on the first shape().
+        // That keeps the lazy branch out of the measuring path, and it makes
+        // shape() touch nothing that a failed load left behind.
+        hb_buffer_ = hb_buffer_create();
 
         if (!build_atlas()) {
             ENGINE_LOG_ERROR("The glyphs of {} at {} pixels would not pack into an atlas of "
                              "{} texels square.",
                              path_text, pixel_size, kMaxAtlasSize);
+            // Every other failure path releases the face, and this one used to
+            // return with it still open. That leaked on a retry and left the
+            // object able to shape and measure but not to draw.
+            release_face();
             return false;
         }
 
@@ -343,6 +412,13 @@ namespace engine::ui {
     }
 
     bool Font::upload(gfx::Device* device) {
+        if (device == nullptr) {
+            // create_texture() traps on a null device rather than reporting
+            // one, and a caller that never opened a device deserves a message
+            // instead of a stopped process.
+            ENGINE_LOG_ERROR("A font atlas was uploaded with no device.");
+            return false;
+        }
         if (pixels_.empty()) {
             ENGINE_LOG_ERROR("A font atlas was uploaded before it was loaded.");
             return false;
@@ -401,11 +477,7 @@ namespace engine::ui {
             return result;
         }
 
-        if (hb_buffer_ == nullptr) {
-            hb_buffer_ = hb_buffer_create();
-        } else {
-            hb_buffer_clear_contents(hb_buffer_);
-        }
+        hb_buffer_clear_contents(hb_buffer_);
 
         hb_buffer_add_utf8(hb_buffer_, text.data(), static_cast<int>(text.length()), 0, -1);
         // Latin, left to right, unless the text says otherwise. This is what
@@ -432,10 +504,10 @@ namespace engine::ui {
             const auto found = glyph_index_to_atlas_.find(infos[i].codepoint);
             ShapedGlyph shaped;
             shaped.glyph = (found == glyph_index_to_atlas_.end()) ? -1 : found->second;
-            shaped.advance_x = positions[i].x_advance / kFixedToPixels;
-            shaped.advance_y = positions[i].y_advance / kFixedToPixels;
-            shaped.offset_x = positions[i].x_offset / kFixedToPixels;
-            shaped.offset_y = positions[i].y_offset / kFixedToPixels;
+            shaped.advance_x = round_fixed(positions[i].x_advance);
+            shaped.advance_y = round_fixed(positions[i].y_advance);
+            shaped.offset_x = round_fixed(positions[i].x_offset);
+            shaped.offset_y = round_fixed(positions[i].y_offset);
             result.push_back(shaped);
         }
         return result;
@@ -481,13 +553,25 @@ namespace engine::ui {
             line_end = word.end;
         }
 
-        if (line_begin != std::string_view::npos) {
-            emit(segment.substr(line_begin, line_end - line_begin));
+        if (line_begin == std::string_view::npos) {
+            // The segment carried no word. It still gets a line, because a
+            // newline the author typed is a line the reader expects to see.
+            // Dropping it collapses a paragraph break and moves every line
+            // after it up by one line height.
+            lines.push_back(WrappedLine{ 0, segment.substr(0, 0) });
+            return;
         }
+        emit(segment.substr(line_begin, line_end - line_begin));
     }
 
     std::vector<WrappedLine> Font::wrap(std::string_view text, int width) const {
         std::vector<WrappedLine> lines;
+
+        // Empty text is no lines at all, rather than one empty line. Every
+        // other input gives at least one line for each newline-separated part.
+        if (text.empty()) {
+            return lines;
+        }
 
         // This is a rewrite rather than a port. The reference walks the string
         // once and backtracks the loop counter to the last break it passed.

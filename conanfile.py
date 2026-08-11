@@ -36,11 +36,11 @@ class CaminaConan(ConanFile):
 
         # HarfBuzz takes glib by default, and glib drags elfutils, gettext,
         # libiconv, pcre2 and libffi in behind it. The engine calls no glib
-        # function, so this turns it off and leaves freetype, libpng, brotli,
-        # zlib and bzip2 as the whole tail. glib is also LGPL, which every
-        # other package here is not. Conan reads this line even when with_ui
-        # is False, and that costs nothing, because nothing requires HarfBuzz
-        # then.
+        # function, so this turns it off. With it off, with_ui=True adds
+        # exactly freetype, harfbuzz, libpng, brotli and bzip2. glib is also
+        # LGPL, which every other package here is not. Conan reads this line
+        # even when with_ui is False, and that costs nothing, because nothing
+        # requires HarfBuzz then.
         "harfbuzz/*:with_glib": False,
     }
 
@@ -136,12 +136,24 @@ class CaminaConan(ConanFile):
             # moth_editor would make every layout difference ambiguous. See
             # DESIGN.md section 8.3.
             #
-            # These two versions are what moth_graphics pins, on purpose. A
-            # shaping difference between the two projects must come from our
-            # code and not from a library version. Bump this when
-            # moth_graphics bumps.
-            self.requires("freetype/[~2.13]")
+            # HarfBuzz is the version moth_graphics pins, on purpose. A shaping
+            # difference between the two projects must come from our code and
+            # not from a library version. Bump this when moth_graphics bumps.
             self.requires("harfbuzz/[~8.3]")
+
+            # FreeType is an exact pin rather than a range, because harfbuzz
+            # 8.3.0 requires exactly 2.13.2. A range here resolves to the newest
+            # 2.13 the remote carries and then conflicts with that.
+            #
+            # A warm local cache hides this. Conan resolves a range from the
+            # cache first, so a machine that already holds 2.13.2 picks it and
+            # the graph agrees. CI starts empty, finds 2.13.3, and fails the
+            # install. Check a version change here against an empty cache, or
+            # with `conan graph info --update`.
+            #
+            # Bump this together with harfbuzz, to whatever the new harfbuzz
+            # requires.
+            self.requires("freetype/2.13.2")
 
     def build_requirements(self):
         pass
