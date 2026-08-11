@@ -31,6 +31,7 @@
 #include "ui/image.h"
 #include "ui/renderer.h"
 #include "ui/ui.h"
+#include "ui/font_factory.h"
 #include "ui/ui_pass.h"
 #endif
 
@@ -948,8 +949,32 @@ namespace {
      *
      * Issue #200 replaces this with a real layout, and this goes away with it.
      */
+    /// The size the probe rasterizes at. Large enough to read in a 1280 by 720
+    /// screenshot, which is the only way this gets checked.
+    constexpr int kUiProbeFontSize = 24;
+
+    /**
+     * Draws one string in a box, with the box outlined around it.
+     *
+     * The outline is what makes the alignment readable. Text alone shows where
+     * it landed and not what it was aligned against, so a wrong alignment and a
+     * wrong destination rectangle look the same.
+     */
+    void record_text_probe(engine::ui::Renderer& renderer, moth_ui::IFont& font,
+                           const moth_ui::IntRect& box, std::string_view text,
+                           moth_ui::TextHorizAlignment horizontal,
+                           moth_ui::TextVertAlignment vertical) {
+        renderer.PushColor(moth_ui::Color{ 0.35F, 0.35F, 0.40F, 1.0F });
+        renderer.RenderRect(box);
+        renderer.PopColor();
+
+        renderer.PushColor(moth_ui::Color{ 0.95F, 0.95F, 0.90F, 1.0F });
+        renderer.RenderText(text, font, horizontal, vertical, box);
+        renderer.PopColor();
+    }
+
     void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent,
-                         const moth_ui::IImage* image) {
+                         const moth_ui::IImage* image, moth_ui::IFont* font) {
         renderer.begin(extent.width, extent.height);
 
         // A solid bar across the top.
@@ -1003,6 +1028,28 @@ namespace {
             renderer.PopTransform();
         }
 
+        if (font != nullptr) {
+            // One box for each corner of the alignment pair, so a swapped
+            // horizontal and vertical shows as text in the wrong corner rather
+            // than as text that is merely a few pixels out.
+            record_text_probe(renderer, *font, moth_ui::IntRect{ { 16, 380 }, { 300, 460 } },
+                              "Left Top", moth_ui::TextHorizAlignment::Left,
+                              moth_ui::TextVertAlignment::Top);
+            record_text_probe(renderer, *font, moth_ui::IntRect{ { 316, 380 }, { 600, 460 } },
+                              "Center Middle", moth_ui::TextHorizAlignment::Center,
+                              moth_ui::TextVertAlignment::Middle);
+            record_text_probe(renderer, *font, moth_ui::IntRect{ { 16, 476 }, { 300, 556 } },
+                              "Right Bottom", moth_ui::TextHorizAlignment::Right,
+                              moth_ui::TextVertAlignment::Bottom);
+
+            // A paragraph that has to wrap, with a blank line in it. The blank
+            // line is the part that used to collapse, so it stays in the probe.
+            record_text_probe(renderer, *font, moth_ui::IntRect{ { 316, 476 }, { 600, 660 } },
+                              "The quick brown fox jumps over the lazy dog.\n\nAV kerns.",
+                              moth_ui::TextHorizAlignment::Left,
+                              moth_ui::TextVertAlignment::Top);
+        }
+
         renderer.end();
     }
 #endif
@@ -1022,6 +1069,8 @@ namespace {
         engine::ui::Renderer* ui_renderer = nullptr;
         /// M6.3. The image the probe draws, or null when it did not resolve.
         const moth_ui::IImage* ui_image = nullptr;
+        /// The font the probe draws text with, or null when none loaded.
+        moth_ui::IFont* ui_font = nullptr;
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
@@ -1233,7 +1282,8 @@ namespace {
             // info.extent, not the requested extent. The device can settle on a
             // different size, and the scissor and the vertex normalization both
             // have to agree with the image actually being drawn into.
-            record_ui_probe(*context.ui_renderer, info.extent, context.ui_image);
+            record_ui_probe(*context.ui_renderer, info.extent, context.ui_image,
+                            context.ui_font);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -1287,6 +1337,10 @@ namespace {
         engine::ui::ImageFactory ui_images;
         /// The one image the probe draws. Issue #200 replaces it with a layout.
         std::unique_ptr<moth_ui::IImage> ui_image;
+        /// M6.4. Turns a font name in a layout into a rasterized atlas.
+        engine::ui::FontFactory ui_fonts;
+        /// The one font the probe draws. Issue #200 replaces it with a layout.
+        std::shared_ptr<moth_ui::IFont> ui_font;
 #endif
         /// Carried across frames, because the shadow map and the scene color are
         /// each one image that every frame in flight shares.
@@ -1572,6 +1626,10 @@ namespace {
         // names and the image must not outlive it.
         runtime.ui_image.reset();
         runtime.ui_images.destroy();
+        // The font before the factory, for the reason the image goes before
+        // the image factory: the factory owns the atlas the font names.
+        runtime.ui_font.reset();
+        runtime.ui_fonts.destroy();
         runtime.ui_pass.destroy();
 #endif
         runtime.tonemap.destroy();
@@ -1860,6 +1918,16 @@ int main(int argc, char** argv) {
     } else {
         runtime.ui_image = runtime.ui_images.GetImage("ui/panel.png");
     }
+
+    // The same resolution story as the image above, and the same restart rule.
+    // A layout names a font, so the runtime registers the one the sandbox
+    // ships. Issue #200 replaces this with a layout that names its own.
+    if (!runtime.ui_fonts.create(runtime.device, &runtime.game_content)) {
+        ENGINE_LOG_ERROR("The UI font factory did not start. No layout text will draw.");
+    } else {
+        runtime.ui_fonts.AddFont("body", "ui/fonts/LiberationSans-Regular.ttf");
+        runtime.ui_font = runtime.ui_fonts.GetDefaultFont(kUiProbeFontSize);
+    }
 #endif
 
     engine::scene::World world;
@@ -1886,6 +1954,7 @@ int main(int argc, char** argv) {
         .ui_pass = &runtime.ui_pass,
         .ui_renderer = &runtime.ui_renderer,
         .ui_image = runtime.ui_image.get(),
+        .ui_font = runtime.ui_font.get(),
 #endif
         .overlay = runtime.overlay,
         .resource_states = &runtime.states,

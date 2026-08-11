@@ -447,15 +447,25 @@ namespace engine::ui {
             texture_ = gfx::TextureHandle{};
             return false;
         }
+        owns_texture_ = true;
         return true;
     }
 
     void Font::destroy(gfx::Device* device) {
-        if (!texture_.valid()) {
-            return;
+        // Only what upload() made. A handle that came through borrow_texture()
+        // belongs to somebody else.
+        if (texture_.valid() && owns_texture_) {
+            gfx::destroy_texture(device, texture_);
         }
-        gfx::destroy_texture(device, texture_);
         texture_ = gfx::TextureHandle{};
+        owns_texture_ = false;
+    }
+
+    void Font::borrow_texture(gfx::TextureHandle texture) {
+        ENGINE_ASSERT(!owns_texture_,
+                      "borrow_texture() would drop an atlas this font uploaded. Call destroy() "
+                      "first.");
+        texture_ = texture;
     }
 
     const Glyph& Font::glyph(int index) const {

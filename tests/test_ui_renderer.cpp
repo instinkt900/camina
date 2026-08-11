@@ -10,6 +10,7 @@
 // reports.
 
 #include "check.h"
+#include "ui/font.h"
 #include "ui/image.h"
 #include "ui/renderer.h"
 
@@ -466,6 +467,193 @@ namespace {
         test::check(renderer.vertices().empty(), "a destination with no area draws nothing");
     }
 
+    // M6.4. RenderText. These need a real font, because the recorder asks it
+    // for the atlas, the metrics and the shaping. It still needs no device:
+    // Font::load() rasterizes and packs on the CPU, and the recorder compares
+    // the texture handle without reading it.
+
+    /// A font with no atlas uploaded. upload() is what makes the handle valid,
+    /// and the recorder refuses to draw without one.
+    bool load_probe_font(engine::ui::FontLibrary& library, engine::ui::Font& font) {
+        return library.create() && font.load(library, ENGINE_TEST_FONT_PATH, 24);
+    }
+
+    /// Gives the font a handle without a device, so the recorder will draw it.
+    /// Nothing reads the texture, so a made up handle is enough.
+    void pretend_uploaded(engine::ui::Font& font) {
+        font.borrow_texture(engine::gfx::TextureHandle{ 77 });
+    }
+
+    void text_records_one_batch_for_the_whole_string() {
+        engine::ui::FontLibrary library;
+        engine::ui::Font font;
+        if (!load_probe_font(library, font)) {
+            test::check(false, "the probe font loads");
+            return;
+        }
+        pretend_uploaded(font);
+
+        Renderer renderer;
+        renderer.begin(400, 200);
+        renderer.RenderText("Hello", font, moth_ui::TextHorizAlignment::Left,
+                            moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        renderer.end();
+
+        // Five letters, none of them a space, so five quads.
+        test::check(renderer.vertices().size() == 5 * 4, "each drawn glyph is one quad");
+        test::check(renderer.batches().size() == 1,
+                    "every glyph comes from one atlas, so the string is one draw");
+        test::check(renderer.batches()[0].texture.value == 77,
+                    "the batch reads the atlas of the font");
+
+        font.borrow_texture(engine::gfx::TextureHandle{});
+    }
+
+    void a_space_draws_no_quad() {
+        engine::ui::FontLibrary library;
+        engine::ui::Font font;
+        if (!load_probe_font(library, font)) {
+            test::check(false, "the probe font loads");
+            return;
+        }
+        pretend_uploaded(font);
+
+        Renderer renderer;
+        renderer.begin(400, 200);
+        renderer.RenderText("a a", font, moth_ui::TextHorizAlignment::Left,
+                            moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        renderer.end();
+
+        // A space carries an advance and no coverage, so it moves the pen and
+        // costs no triangle.
+        test::check(renderer.vertices().size() == 2 * 4, "a space records no quad");
+
+        font.borrow_texture(engine::gfx::TextureHandle{});
+    }
+
+    void text_forces_the_alpha_blend() {
+        engine::ui::FontLibrary library;
+        engine::ui::Font font;
+        if (!load_probe_font(library, font)) {
+            test::check(false, "the probe font loads");
+            return;
+        }
+        pretend_uploaded(font);
+
+        Renderer renderer;
+        renderer.begin(400, 200);
+        // The recorder starts at Replace and moth_ui pushes nothing around a
+        // text node. A glyph is coverage in alpha, so Replace would take the
+        // pipeline that does not blend and the letters would thicken.
+        renderer.RenderText("Hi", font, moth_ui::TextHorizAlignment::Left,
+                            moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        renderer.end();
+
+        test::check(!renderer.batches().empty() &&
+                        renderer.batches()[0].blend == moth_ui::BlendMode::Alpha,
+                    "text records under the alpha blend whatever the caller had");
+
+        // And it restores what the caller had, rather than leaving Alpha set.
+        Renderer after;
+        after.begin(400, 200);
+        after.RenderText("Hi", font, moth_ui::TextHorizAlignment::Left,
+                         moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        after.RenderFilledRect(rect(0, 100, 10, 110));
+        after.end();
+        test::check(after.batches().size() == 2, "the shape after it is a second batch");
+        test::check(after.batches().size() == 2 &&
+                        after.batches()[1].blend == moth_ui::BlendMode::Replace,
+                    "and the blend went back to what the caller had");
+
+        font.borrow_texture(engine::gfx::TextureHandle{});
+    }
+
+    void alignment_moves_the_text_inside_the_rect() {
+        engine::ui::FontLibrary library;
+        engine::ui::Font font;
+        if (!load_probe_font(library, font)) {
+            test::check(false, "the probe font loads");
+            return;
+        }
+        pretend_uploaded(font);
+
+        const auto first_x = [&font](moth_ui::TextHorizAlignment horizontal) {
+            Renderer renderer;
+            renderer.begin(400, 200);
+            renderer.RenderText("Hi", font, horizontal, moth_ui::TextVertAlignment::Top,
+                                rect(0, 0, 400, 100));
+            renderer.end();
+            return renderer.vertices().empty() ? 0.0F : renderer.vertices()[0].x;
+        };
+        const auto first_y = [&font](moth_ui::TextVertAlignment vertical) {
+            Renderer renderer;
+            renderer.begin(400, 200);
+            renderer.RenderText("Hi", font, moth_ui::TextHorizAlignment::Left, vertical,
+                                rect(0, 0, 400, 100));
+            renderer.end();
+            return renderer.vertices().empty() ? 0.0F : renderer.vertices()[0].y;
+        };
+
+        const float left = first_x(moth_ui::TextHorizAlignment::Left);
+        const float center = first_x(moth_ui::TextHorizAlignment::Center);
+        const float right = first_x(moth_ui::TextHorizAlignment::Right);
+        test::check(left < center && center < right,
+                    "centered text starts right of left aligned, and right of that again");
+
+        const float top = first_y(moth_ui::TextVertAlignment::Top);
+        const float middle = first_y(moth_ui::TextVertAlignment::Middle);
+        const float bottom = first_y(moth_ui::TextVertAlignment::Bottom);
+        test::check(top < middle && middle < bottom,
+                    "and the vertical alignment moves it down the same way");
+
+        // The text stays inside the rectangle it was given. A sign error in the
+        // alignment puts it outside, which no comparison above would catch.
+        test::check(right >= 0.0F && bottom >= 0.0F, "no alignment pushes it off the top left");
+
+        font.borrow_texture(engine::gfx::TextureHandle{});
+    }
+
+    void text_that_cannot_draw_records_nothing() {
+        engine::ui::FontLibrary library;
+        engine::ui::Font font;
+        if (!load_probe_font(library, font)) {
+            test::check(false, "the probe font loads");
+            return;
+        }
+
+        Renderer renderer;
+        renderer.begin(400, 200);
+        // No upload, so the atlas handle is null. Drawing would bind whatever
+        // the previous batch held and show another texture as letters.
+        renderer.RenderText("Hello", font, moth_ui::TextHorizAlignment::Left,
+                            moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        test::check(renderer.vertices().empty(), "a font with no uploaded atlas draws nothing");
+
+        pretend_uploaded(font);
+        renderer.RenderText("", font, moth_ui::TextHorizAlignment::Left,
+                            moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        test::check(renderer.vertices().empty(), "an empty string draws nothing");
+        renderer.end();
+
+        font.borrow_texture(engine::gfx::TextureHandle{});
+    }
+
+    /// A font from another backend. moth_ui::IFont declares no method, so this
+    /// is the whole of it.
+    class ForeignFont final : public moth_ui::IFont {};
+
+    void text_of_another_backend_draws_nothing() {
+        ForeignFont foreign;
+        Renderer renderer;
+        renderer.begin(400, 200);
+        renderer.RenderText("Hello", foreign, moth_ui::TextHorizAlignment::Left,
+                            moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
+        renderer.end();
+
+        test::check(renderer.vertices().empty(),
+                    "a font this renderer did not make draws nothing");
+    }
+
 } // namespace
 
 int main() {
@@ -495,5 +683,11 @@ int main() {
     a_tiled_image_runs_its_coordinates_past_one();
     an_image_of_another_backend_draws_nothing();
     an_empty_destination_records_nothing();
+    text_records_one_batch_for_the_whole_string();
+    a_space_draws_no_quad();
+    text_forces_the_alpha_blend();
+    alignment_moves_the_text_inside_the_rect();
+    text_that_cannot_draw_records_nothing();
+    text_of_another_backend_draws_nothing();
     return test::report();
 }

@@ -295,6 +295,21 @@ namespace engine::ui {
         /// @return The handle, which is null until upload() succeeds.
         [[nodiscard]] gfx::TextureHandle texture() const { return texture_; }
 
+        /**
+         * @brief Points the atlas at a texture this did not create.
+         *
+         * upload() is the way in for anything that draws. This exists so that
+         * `tests/test_ui_renderer.cpp` can drive `RenderText` with no device:
+         * the recorder refuses a font whose atlas handle is null, and it
+         * compares the handle without ever reading the texture.
+         *
+         * destroy() frees only what upload() made, so a handle that arrives
+         * here is never freed by this object.
+         *
+         * @param texture The handle to report. Pass a null handle to clear it.
+         */
+        void borrow_texture(gfx::TextureHandle texture);
+
         /// @brief How wide the packed atlas is.
         /// @return The width in texels. Zero before load().
         [[nodiscard]] int atlas_width() const { return atlas_width_; }
@@ -350,6 +365,9 @@ namespace engine::ui {
         int underline_ = 0;
 
         gfx::TextureHandle texture_;
+        // Whether upload() made texture_. borrow_texture() leaves this false,
+        // so destroy() cannot free a handle this did not create.
+        bool owns_texture_ = false;
     };
 
 }

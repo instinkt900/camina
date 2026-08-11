@@ -547,6 +547,26 @@ the same thing and cannot run an index past the start of a line.
 rasterization, the packing, the shaping, the measurement and the wrapping are all driven by
 `tests/test_ui_font.cpp` with no device, the way `tests/test_frustum.cpp` drives the frustum.
 
+**`RenderText` forces the alpha blend, and that is not optional.** A glyph is coverage in
+alpha. moth_ui pushes no blend mode around a text node, and the recorder starts at
+`BlendMode::Replace`, which takes the pipeline that does not blend. The coverage then stops
+shaping the edge of a letter, and text draws thickened and hard edged. It stays readable, which
+is what makes it dangerous: nothing reports it and only a screenshot shows it. The reference
+backend forces the same mode. `RenderText` pushes and pops it, so the caller gets its own mode
+back.
+
+**A font name resolves the way an image path does.** `engine::ui::FontFactory` takes the
+name-to-file map moth_ui expects, and the path in it is a source path that the cooked manifest
+resolves. The cooker has no rule for a font file, so it copies one unchanged and the manifest
+records it. Section 8.4 holds why the engine resolves the path rather than moth_ui carrying a
+GUID.
+
+The three editor-only methods on `IFontFactory` assert. `LoadProject`, `SaveProject` and
+`GetCurrentProjectPath` serve `moth_editor`, which keeps its font list in a project file. A
+runtime takes its fonts from the cooked tree, so reading a project file here would be a second
+source of truth. **An interface that makes a runtime implement editor project files is a seam in
+the wrong place, and #200 collects that.**
+
 **Controller navigation is architecture, not a widget feature.** A focus graph, directional
 resolution, focus wrapping, and mouse/pad input-mode switching belong in the node tree. They
 do not belong on individual widgets. Design this early if gamepad support matters. Adding it
