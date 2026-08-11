@@ -29,6 +29,17 @@
 #define ENGINE_PROFILE_ZONE_N(name) ZoneScopedN(name)
 
 /**
+ * @brief Attaches text to the zone the enclosing scope already opened.
+ *
+ * Use this when the name is known only at run time, which ENGINE_PROFILE_ZONE_N
+ * cannot express. Open a zone with a literal first, then hang the detail on it.
+ *
+ * @param text A string. Tracy copies it, so it does not have to outlive the call.
+ * @param size How many characters to copy, not counting a terminator.
+ */
+#define ENGINE_PROFILE_ZONE_TEXT(text, size) ZoneText(text, size)
+
+/**
  * @brief Names the calling thread in the profiler view.
  * @param name A null-terminated string. Tracy copies it.
  */

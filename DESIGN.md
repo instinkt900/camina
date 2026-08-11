@@ -258,6 +258,39 @@ across N cores, then join before the sync point." If async network or streaming 
 needed later, Asio or a small dedicated I/O thread can serve that need next to enkiTS. One
 scheduler still owns the cores.
 
+M7.2 connected Box3D to it. `jobs::enqueue` and `jobs::wait` are what that needed, because
+the solver starts several pieces of work and joins them itself, which `parallel_for` cannot
+express. The two Box3D callbacks pass a plain function pointer straight through, so a task
+costs no allocation. The pool holds 256 tasks, which is the most Box3D queues in one step,
+and it says so in its own header for this exact reason.
+
+**`jobs::worker_count()` counts the calling thread.** enkiTS creates one fewer thread than
+it reports, because `parallel_for` and `wait` both run work on the caller. Box3D counts the
+same way, so the number passes across with no adjustment. The old comment on that function
+said the opposite and was wrong.
+
+**The pool costs more than it saves below about 130 bodies.** Measured on the reference
+machine with 8 workers, over 120 steps of a box stack on a floor:
+
+| Bodies | On 8 workers | On 1 worker |
+|---|---|---|
+| 13 | 0.038 ms | 0.024 ms |
+| 65 | 0.086 ms | 0.057 ms |
+| 129 | 0.142 ms | 0.164 ms |
+| 289 | 0.216 ms | 0.367 ms |
+| 769 | 0.345 ms | 0.915 ms |
+
+So the crossover is near 129 bodies, and the sandbox will sit below it. Threading stays on
+by default anyway. The loss there is 0.014 ms in a 16.7 ms frame, which is under a tenth of
+a percent, and the win above the crossover is 2.7 times. A body-count heuristic would buy
+that tenth of a percent and cost a mode switch that changes which code path a bug lives in.
+Pass a worker count of 1 to `physics::World` when a scene wants the cheaper side of it.
+
+`tests/test_physics.cpp` prints both sides of the crossover on every run. It asserts on
+neither, because a wall-time threshold on a shared machine fails for reasons that have
+nothing to do with this code. It does assert that the two runs put the stack in the same
+place, which is what catches a finish callback that returns early.
+
 ---
 
 ## 6. Repository layout

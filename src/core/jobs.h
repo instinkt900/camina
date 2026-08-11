@@ -34,8 +34,15 @@ namespace engine::jobs {
     /// @brief Stops the workers and waits for them to finish.
     void shutdown();
 
-    /// @brief The number of worker threads, which excludes the calling thread.
-    /// @return The worker count, or 0 when the system is not running.
+    /**
+     * @brief How many threads can run tasks, counting the one that called init().
+     *
+     * The thread that starts the scheduler is one of the workers, because
+     * parallel_for() and wait() both run work on the caller rather than leaving
+     * it idle. So this is one more than the number of threads init() created.
+     *
+     * @return The worker count, or 0 when the system is not running.
+     */
     [[nodiscard]] std::uint32_t worker_count();
 
     /**
@@ -58,5 +65,57 @@ namespace engine::jobs {
     inline void parallel_for(std::uint32_t item_count, const ParallelForFn& fn) {
         parallel_for(item_count, 1, fn);
     }
+
+    /// @brief One enqueued task. The type is opaque, and only enqueue() makes one.
+    struct Task;
+
+    /// @brief The work enqueue() runs. It takes the context it was given.
+    using TaskFn = void (*)(void* context);
+
+    /**
+     * @brief Starts one task on a worker and returns without waiting.
+     *
+     * This is the half of the scheduler that parallel_for() cannot express. A
+     * caller that must start several pieces of work and only then block needs
+     * the start and the wait to be separate calls. Box3D is the first such
+     * caller, because its solver hands out tasks and joins them itself.
+     *
+     * A task takes a plain function pointer and a context rather than a
+     * std::function, so starting one allocates nothing at all.
+     *
+     * @param fn The work to run. It must not be null.
+     * @param context Passed to fn. This may be null, and the caller owns whatever
+     *                it points at until wait() returns.
+     * @param name Names the task in the profiler. The pointer must outlive the
+     *             task, so pass a string literal.
+     * @return A handle to pass to wait(), or null when the task already ran on
+     *         the calling thread. See the warning below.
+     *
+     * @warning **A null return is a success, not a failure.** The pool holds a
+     * fixed number of tasks. When every one of them is live, enqueue() runs the
+     * work on the calling thread and returns null, because refusing the work or
+     * allocating under the caller has no good failure path here. So every return
+     * value is safe to pass to wait(), and none may be ignored.
+     *
+     * @warning Do not call this from inside a task and then wait on the result
+     * from a thread that cannot run other work meanwhile. wait() does run other
+     * tasks while it blocks, which is what keeps that case from deadlocking.
+     */
+    [[nodiscard]] Task* enqueue(TaskFn fn, void* context, const char* name);
+
+    /**
+     * @brief Waits for one enqueued task and releases it.
+     *
+     * The calling thread runs other pending tasks while it waits, rather than
+     * idling. That is what lets a task wait on tasks it started itself.
+     *
+     * @param task The handle enqueue() returned. Null does nothing, because the
+     *             work already ran.
+     */
+    void wait(Task* task);
+
+    /// @brief How many tasks enqueue() can hold at once before it runs work inline.
+    /// @return The size of the task pool.
+    [[nodiscard]] std::uint32_t task_capacity();
 
 } // namespace engine::jobs
