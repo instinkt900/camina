@@ -63,7 +63,7 @@
 namespace {
 
     constexpr std::size_t kFrameArenaBytes = 4U * 1024U * 1024U;
-    constexpr int kDecimalBase = 10;
+
     /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
     constexpr int kMinimizedSleepMs = 16;
 
@@ -247,6 +247,32 @@ namespace {
      * @param out Receives the value. Untouched unless the whole value parsed
      * and came out finite and above zero.
      */
+    /**
+     * Reads an option that has to be a whole count.
+     *
+     * `std::strtoull` was here first, and it takes what it can and stops. So
+     * `3x` parsed as 3 and `abc` parsed as 0, and neither said anything. A
+     * frame number that quietly became zero turned the option off.
+     *
+     * `std::from_chars` reports where it stopped, and this refuses anything it
+     * did not read to the end.
+     *
+     * @param option The option name, for the message when the value is refused.
+     * @param text The value given on the command line.
+     * @param out Receives the count. Untouched unless the whole value parsed.
+     */
+    void parse_count(std::string_view option, std::string_view text, std::uint64_t& out) {
+        const char* first = text.data();
+        const char* last = text.data() + text.size();
+        std::uint64_t value = 0;
+        const std::from_chars_result parsed = std::from_chars(first, last, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != last) {
+            ENGINE_LOG_WARN("{} wants a whole number, so {} was ignored.", option, text);
+            return;
+        }
+        out = value;
+    }
+
     void parse_positive_float(std::string_view option, std::string_view text, float& out) {
         const char* first = text.data();
         const char* last = text.data() + text.size();
@@ -514,7 +540,7 @@ namespace {
             const std::string_view arg{ argv[i] };
             const bool has_value = i + 1 < argc;
             if (arg == "--frames" && has_value) {
-                options.max_frames = std::strtoull(argv[i + 1], nullptr, kDecimalBase);
+                parse_count("--frames", argv[i + 1], options.max_frames);
                 ++i;
             } else if (arg == "--content" && has_value) {
                 options.content = argv[i + 1];
@@ -526,7 +552,7 @@ namespace {
                 options.watch = argv[i + 1];
                 ++i;
             } else if (arg == "--throw-at-frame" && has_value) {
-                options.throw_at_frame = std::strtoull(argv[i + 1], nullptr, kDecimalBase);
+                parse_count("--throw-at-frame", argv[i + 1], options.throw_at_frame);
                 ++i;
             } else if (arg == "--physics-debug") {
                 options.physics_debug = true;
@@ -1983,25 +2009,34 @@ namespace {
         // near plane is a crate that fills the screen for one frame.
         const engine::Vec3 from = settings.camera_position + (forward * kThrowOffset);
 
-        nlohmann::json record;
-        auto& fields = record["overrides"]["0"];
-        fields["Name"]["__version"] = 1;
-        fields["Name"]["value"] = "thrown crate";
-        fields["Transform"]["position"] = { from.x, from.y, from.z };
-        fields["RigidBody"]["__version"] = 1;
-        fields["RigidBody"]["type"] = "Dynamic";
-        fields["RigidBody"]["density"] = engine::physics::kDefaultDensity;
-        fields["RigidBody"]["friction"] = engine::physics::kDefaultFriction;
-        fields["RigidBody"]["restitution"] = 0.0;
-        fields["BoxCollider"]["__version"] = 1;
-        fields["BoxCollider"]["half_extents"] = { kCrateHalfExtent, kCrateHalfExtent,
-                                                  kCrateHalfExtent };
-
-        const entt::entity crate = engine::scene::instantiate(world, *prefab, record);
+        // An empty record, and then the components are placed as components.
+        // Writing them as an override patch would spell out the field names and
+        // the schema versions that reflect/ already owns, which is the second
+        // descriptor system rule 4.5 forbids. It would also go stale in silence
+        // the day a field is renamed.
+        const entt::entity crate =
+            engine::scene::instantiate(world, *prefab, nlohmann::json::object());
         if (crate == entt::null) {
             ENGINE_LOG_ERROR("The thrown crate did not instance.");
             return entt::null;
         }
+
+        entt::registry& registry = world.registry();
+        registry.emplace_or_replace<engine::scene::Name>(crate,
+                                                         engine::scene::Name{ "thrown crate" });
+        registry.emplace_or_replace<engine::physics::RigidBody>(
+            crate, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        registry.emplace_or_replace<engine::physics::BoxCollider>(
+            crate, engine::physics::BoxCollider{ .half_extents = { kCrateHalfExtent,
+                                                                   kCrateHalfExtent,
+                                                                   kCrateHalfExtent } });
+
+        // The prefab put the crate at the origin, so this is where it is thrown
+        // from. set_local rather than the transform component, because the
+        // hierarchy has to know the world matrix went stale.
+        engine::Transform local = world.local(crate);
+        local.position = from;
+        world.set_local(crate, local);
 
         // add_body rather than build. Rebuilding would put the stack back where
         // the scene file put it, which is the opposite of hitting it.

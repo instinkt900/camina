@@ -1788,9 +1788,9 @@ The physics step costs 0.004 ms of a 3.5 ms frame in the sandbox, against a mesh
 ms. That is five bodies, so it measures the overhead rather than the solver. §5.1 holds the
 measurement that does load it.
 
-Two things the milestone did not do. A collider still ignores the scale on its entity, which is
-#237. And the game logic still runs on the frame delta rather than the fixed step, which is
-#245 and which the §9 note explains.
+Two things the milestone did not do. A collider still ignores the scale on its entity, which
+issue #237 holds. And the game logic still runs on the frame delta rather than the fixed step,
+which is issue #245 and which the §9 note explains.
 
 ### M8 — Scripting
 sol2. A `ScriptComponent` with `on_start`, `on_update`, and `on_destroy`. Reflection-driven
