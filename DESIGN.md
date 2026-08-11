@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M6 complete, M7 next
-Last updated: 2026-08-10
+Status: M7 complete, M8 next
+Last updated: 2026-08-11
 
 ---
 
@@ -113,6 +113,32 @@ private dependency, so the include directory reaches nowhere else.
 `scripts/check-box3d-containment.sh` fails CI when a header escapes anyway. This is not rule
 4.1, which protects a later ABI extraction. It protects the update path: an alpha we patch is
 a diff against one directory, not against the whole engine.
+
+**What it actually cost, now M7 has closed.** Less than the alpha label suggested. It was not
+patched once. The whole of it is one flag moved out of the root CMakeLists, and the containment
+script has never had anything to report.
+
+Four things it did cost, each of which had to be read out of the source rather than out of the
+documentation:
+
+- **Gravity is −10, not −9.8.** The documentation says one and the code says the other. §3
+  holds the check that pins it.
+- **A sleeping body ignores a velocity, silently.** `b3GetBodyState` returns null for a body
+  outside the awake set and `b3Body_SetLinearVelocity` then returns early. It wakes the body
+  first, but only when the velocity is not zero. So a zero on a sleeping body does nothing at
+  all.
+- **The debug wireframe of a shape is cached by the application.** Box3D calls a
+  `createDebugShape` callback the first time it draws a shape and hands that pointer back
+  afterwards, so a host that does not register the pair on the world definition gets no shapes
+  at all. It also culls the debug draw against a 100 metre box before it reports anything.
+- **A hull stores half-edges**, so every edge is in the array twice and a wireframe that draws
+  them all draws itself twice over.
+
+**The solver is deterministic across threads.** Three offscreen runs of the sandbox, with a
+crate thrown at a stack on a fixed frame and the solver split over eight job system workers,
+produce images that are equal byte for byte. `-ffp-contract=off` is what that rests on, which
+is why the flag moved into `third_party/CMakeLists.txt` rather than being left in a root
+nobody builds.
 
 ---
 
@@ -911,6 +937,13 @@ The drawn pose is up to one step behind the solver. That is what interpolating b
 states that have already happened costs. Extrapolating past the newest one would remove the
 lag and overshoot every collision, because the newest state is exactly where the solver has
 not yet decided what happens next.
+
+**Debug draw.** M7.5 reads the wireframe out of Box3D rather than out of the components the
+engine holds. A wireframe built from our own components agrees with the mesh even when the
+solver disagrees with both, and a collider that does not match its mesh is the thing it exists
+to find. It draws after the tonemap curve and tests no depth: after the curve so ACES cannot
+move the color that says what state a body is in, and without depth so a collider inside
+geometry still shows.
 
 **Materials.** A material is a shader plus a reflected parameter block. So §7 gives you the
 material editor at no extra cost.
@@ -1735,6 +1768,29 @@ Connect Box3D to enkiTS. Add rigid body and collider components. Reflect them, s
 inspector needs no extra work. Add debug draw. Add a fixed timestep with render
 interpolation.
 **Done when:** you hit a stack of boxes and it falls.
+
+**M7 is complete.** A stack of three crates stands in the sandbox room, and a crate thrown
+from the camera knocks it over. `--throw-at-frame` fires the same throw on a fixed frame, so
+the picture that proves it is one a person can produce again.
+
+It arrived in six parts. M7.1 vendored Box3D and confirmed it agrees about which way is up.
+M7.2 put its task callbacks on enkiTS. M7.3 added the reflected `RigidBody` and the colliders,
+and moved the transforms both ways, which needed M7.3a to describe an enum. M7.4 added
+`engine::FixedTimestep` and the pose blend. M7.5 read the wireframe out of Box3D and drew it.
+M7.6 built the stack and threw something at it.
+
+**The simulation is deterministic, and that was measured rather than assumed.** Three offscreen
+runs of the same command, with the solver split over eight job system workers and a crate
+thrown on a fixed frame, produce images equal byte for byte. §9 records why that matters: a
+later replay and a later network layer both rest on it.
+
+The physics step costs 0.004 ms of a 3.5 ms frame in the sandbox, against a mesh pass of 1.50
+ms. That is five bodies, so it measures the overhead rather than the solver. §5.1 holds the
+measurement that does load it.
+
+Two things the milestone did not do. A collider still ignores the scale on its entity, which
+issue #237 holds. And the game logic still runs on the frame delta rather than the fixed step,
+which is issue #245 and which the §9 note explains.
 
 ### M8 — Scripting
 sol2. A `ScriptComponent` with `on_start`, `on_update`, and `on_destroy`. Reflection-driven

@@ -63,7 +63,7 @@
 namespace {
 
     constexpr std::size_t kFrameArenaBytes = 4U * 1024U * 1024U;
-    constexpr int kDecimalBase = 10;
+
     /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
     constexpr int kMinimizedSleepMs = 16;
 
@@ -78,6 +78,17 @@ namespace {
     constexpr float kSprintFactor = 4.0F;
     /// The largest step one frame may apply. A stall must not teleport the camera.
     constexpr float kLongestFrame = 0.1F;
+
+    /// Meters each second. Fast enough to knock a crate off a stack rather than
+    /// nudge it, and slow enough that a person can watch it travel.
+    constexpr float kThrowSpeed = 16.0F;
+
+    /// How far in front of the camera a thrown crate starts, in meters. A body
+    /// created at the camera fills the screen for one frame before it leaves.
+    constexpr float kThrowOffset = 1.2F;
+
+    /// Half the crate, in meters. The model is a one meter cube.
+    constexpr float kCrateHalfExtent = 0.5F;
 
     /// The step an offscreen run advances the world by, in seconds.
     ///
@@ -153,6 +164,15 @@ namespace {
         /// Whether to turn the physics wireframe on. Off unless asked for.
         bool physics_debug = false;
         /**
+         * Throw a crate on this frame, or 0 to throw none.
+         *
+         * An offscreen capture has no keyboard, so the milestone test cannot be
+         * captured without this. The camera is where the settings put it and
+         * the frame number is fixed, so the throw is the same every run and the
+         * picture is reproducible.
+         */
+        std::uint64_t throw_at_frame = 0;
+        /**
          * The most lights one cluster cell may hold. Zero takes the default.
          *
          * There to force a cell to overflow. The grid grows to hold every
@@ -227,6 +247,32 @@ namespace {
      * @param out Receives the value. Untouched unless the whole value parsed
      * and came out finite and above zero.
      */
+    /**
+     * Reads an option that has to be a whole count.
+     *
+     * `std::strtoull` was here first, and it takes what it can and stops. So
+     * `3x` parsed as 3 and `abc` parsed as 0, and neither said anything. A
+     * frame number that quietly became zero turned the option off.
+     *
+     * `std::from_chars` reports where it stopped, and this refuses anything it
+     * did not read to the end.
+     *
+     * @param option The option name, for the message when the value is refused.
+     * @param text The value given on the command line.
+     * @param out Receives the count. Untouched unless the whole value parsed.
+     */
+    void parse_count(std::string_view option, std::string_view text, std::uint64_t& out) {
+        const char* first = text.data();
+        const char* last = text.data() + text.size();
+        std::uint64_t value = 0;
+        const std::from_chars_result parsed = std::from_chars(first, last, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != last) {
+            ENGINE_LOG_WARN("{} wants a whole number, so {} was ignored.", option, text);
+            return;
+        }
+        out = value;
+    }
+
     void parse_positive_float(std::string_view option, std::string_view text, float& out) {
         const char* first = text.data();
         const char* last = text.data() + text.size();
@@ -494,7 +540,7 @@ namespace {
             const std::string_view arg{ argv[i] };
             const bool has_value = i + 1 < argc;
             if (arg == "--frames" && has_value) {
-                options.max_frames = std::strtoull(argv[i + 1], nullptr, kDecimalBase);
+                parse_count("--frames", argv[i + 1], options.max_frames);
                 ++i;
             } else if (arg == "--content" && has_value) {
                 options.content = argv[i + 1];
@@ -504,6 +550,9 @@ namespace {
                 ++i;
             } else if (arg == "--watch" && has_value) {
                 options.watch = argv[i + 1];
+                ++i;
+            } else if (arg == "--throw-at-frame" && has_value) {
+                parse_count("--throw-at-frame", argv[i + 1], options.throw_at_frame);
                 ++i;
             } else if (arg == "--physics-debug") {
                 options.physics_debug = true;
@@ -1853,7 +1902,7 @@ namespace {
      */
     void report_physics(const engine::FixedTimestep& clock, const engine::FrameStats& stats) {
         const engine::FrameSummary run = stats.summarize();
-        ENGINE_LOG_INFO("physics | {:.0f} Hz | {} steps | median {:.3f} ms each frame",
+        ENGINE_LOG_INFO("physics on the cpu | {:.0f} Hz | {} steps | median {:.3f} ms each frame",
                         clock.rate_hz(), clock.steps_taken(), run.median_ms);
 
         if (clock.drop_events() == 0) {
@@ -1896,6 +1945,107 @@ namespace {
             ENGINE_LOG_INFO("Vsync is on, so that is the refresh rate. Use --no-vsync to measure "
                             "a change.");
         }
+    }
+
+    /**
+     * Whether the throw key went down since the last frame.
+     *
+     * The edge and not the state. A key that is held would throw a crate on
+     * every frame, which fills the room in a second and tells nobody anything.
+     *
+     * @param runtime The window, which has to have focus for a key to count.
+     * @param options The run options. An offscreen run has no keyboard at all.
+     * @param overlay Whether ImGui is up, because it takes the keyboard when a
+     *                person is typing in a panel.
+     * @return True on the frame the key goes down, and not while it is held.
+     */
+    bool throw_pressed(const Runtime& runtime, const Options& options, bool overlay) {
+        static bool was_down = false;
+        if (options.offscreen) {
+            return false;
+        }
+
+        bool imgui_mouse = false;
+        bool imgui_keyboard = false;
+        if (overlay) {
+            engine::gfx::imgui_wants_input(&imgui_mouse, &imgui_keyboard);
+        }
+
+        const bool* keys = SDL_GetKeyboardState(nullptr);
+        const bool down = !imgui_keyboard && keys != nullptr &&
+                          SDL_GetKeyboardFocus() == runtime.window.native() &&
+                          keys[SDL_SCANCODE_F];
+
+        const bool went_down = down && !was_down;
+        was_down = down;
+        return went_down;
+    }
+
+    /**
+     * Throws a crate from the camera, along the way it is looking.
+     *
+     * The projectile is an instance of the same prefab the scene stacks, so
+     * nothing new is authored and the thing thrown is the thing being hit. The
+     * two physics components are added by the instance record, which
+     * merge_patch allows because a prefab that does not carry a component gains
+     * it rather than being refused.
+     *
+     * @param world The world to add the crate to.
+     * @param simulation The bodies. The new one joins without rebuilding them.
+     * @param settings Where the camera is and which way it faces.
+     * @return The new entity, or entt::null when the prefab is not loaded.
+     */
+    entt::entity throw_crate(engine::scene::World& world, engine::physics::Simulation& simulation,
+                             const ViewSettings& settings) {
+        const engine::scene::Prefab* prefab = engine::scene::prefabs().find(sandbox::kCratePrefab);
+        if (prefab == nullptr) {
+            ENGINE_LOG_WARN("There is no {} to throw. The content tree did not load it.",
+                            sandbox::kCratePrefab);
+            return entt::null;
+        }
+
+        const engine::Vec3 forward = camera_forward(settings);
+        // In front of the camera rather than at it. A body created inside the
+        // near plane is a crate that fills the screen for one frame.
+        const engine::Vec3 from = settings.camera_position + (forward * kThrowOffset);
+
+        // An empty record, and then the components are placed as components.
+        // Writing them as an override patch would spell out the field names and
+        // the schema versions that reflect/ already owns, which is the second
+        // descriptor system rule 4.5 forbids. It would also go stale in silence
+        // the day a field is renamed.
+        const entt::entity crate =
+            engine::scene::instantiate(world, *prefab, nlohmann::json::object());
+        if (crate == entt::null) {
+            ENGINE_LOG_ERROR("The thrown crate did not instance.");
+            return entt::null;
+        }
+
+        entt::registry& registry = world.registry();
+        registry.emplace_or_replace<engine::scene::Name>(crate,
+                                                         engine::scene::Name{ "thrown crate" });
+        registry.emplace_or_replace<engine::physics::RigidBody>(
+            crate, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        registry.emplace_or_replace<engine::physics::BoxCollider>(
+            crate, engine::physics::BoxCollider{ .half_extents = { kCrateHalfExtent,
+                                                                   kCrateHalfExtent,
+                                                                   kCrateHalfExtent } });
+
+        // The prefab put the crate at the origin, so this is where it is thrown
+        // from. set_local rather than the transform component, because the
+        // hierarchy has to know the world matrix went stale.
+        engine::Transform local = world.local(crate);
+        local.position = from;
+        world.set_local(crate, local);
+
+        // add_body rather than build. Rebuilding would put the stack back where
+        // the scene file put it, which is the opposite of hitting it.
+        if (!simulation.add_body(world, crate)) {
+            ENGINE_LOG_ERROR("The thrown crate got no body, so it will not fall.");
+            return crate;
+        }
+        (void)simulation.set_linear_velocity(crate, forward * kThrowSpeed);
+        return crate;
     }
 
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
@@ -1980,6 +2130,15 @@ namespace {
 
             update_camera(settings, delta);
 
+            // The key edge rather than the key being down, or holding it would
+            // fill the room with crates in one second.
+            const bool throw_now = throw_pressed(runtime, options, context.overlay);
+            const bool throw_this_frame =
+                options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame;
+            if (throw_now || throw_this_frame) {
+                (void)throw_crate(world, simulation, settings);
+            }
+
             // The game moves things, then the frame composes the matrices and
             // draws them. Reversing those two would draw a frame behind.
             sandbox::update(world, seconds);
@@ -2047,8 +2206,11 @@ namespace {
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
         report_scene_counts(*context.mesh_pass, *context.shadow_pass);
-        report_physics(clock, physics_stats);
+        // After the frame time, so the physics cost reads beside the per-pass
+        // GPU split that report_frame_time prints. The two are different
+        // domains and the labels say so: the solver runs on the CPU.
         report_frame_time(stats, options);
+        report_physics(clock, physics_stats);
         return true;
     }
 

@@ -112,12 +112,12 @@ namespace {
             }
         }
 
-        // The room, eight from the four crate instances, which carry a mesh on
-        // the box and on the lid, six from the flight helmet, the beacon, the
-        // two glass panes, and the seven roughness spheres. A prefab root the
-        // cooker added draws nothing, so it names no mesh, and neither does the
-        // floor body, which the room already draws.
-        check(named == 25, "every entity that draws names a mesh");
+        // The room, fourteen from the seven crate instances, which carry a mesh
+        // on the box and on the lid, six from the flight helmet, the beacon,
+        // the two glass panes, and the seven roughness spheres. A prefab root
+        // the cooker added draws nothing, so it names no mesh, and neither does
+        // the floor body, which the room already draws.
+        check(named == 31, "every entity that draws names a mesh");
         check(resolved == named, "and the cooker wrote every one of them");
     }
 
@@ -222,15 +222,15 @@ namespace {
         // wraps it. Registering it anyway is what "every prefab" means.
         check(library.size() == 6, "every prefab in the cooked tree went into the library");
 
-        // The room, four crate instances of two entities each, one beacon,
+        // The room, seven crate instances of two entities each, one beacon,
         // seven for the flight helmet (the root the cooker added, and one for
         // each of the six nodes the model holds), the three lights, three for
         // the glass (a cooker-added root and the two panes), eight for the
         // spheres (a cooker-added root and one for each roughness step), the
-        // one that carries the environment, and the floor body. The fourth
-        // crate and the floor body are M7.4: one thing the solver drops and one
-        // thing for it to land on.
-        check(world.size() == 33, "the scene holds thirty three entities");
+        // one that carries the environment, and the floor body. Three of the
+        // crates are the M7.6 stack and one is the M7.4 crate that drops onto
+        // the floor body beside it.
+        check(world.size() == 39, "the scene holds thirty nine entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
@@ -244,10 +244,10 @@ namespace {
             (void)entity;
             ++instances;
         }
-        // The room, the four crates, the flight helmet, the glass, and the
+        // The room, the seven crates, the flight helmet, the glass, and the
         // spheres. The helmet is one instance rather than six hand-written
         // entities, which is what the node tree becoming a prefab bought.
-        check(instances == 8, "eight entities are prefab instances");
+        check(instances == 11, "eleven entities are prefab instances");
     }
 
     void test_scene_round_trips() {

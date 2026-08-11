@@ -96,7 +96,7 @@
           },
           "Transform": {
             "position": [
-              0.0,
+              -2.7,
               0.0,
               -0.6
             ],
@@ -338,6 +338,108 @@
               -1.4,
               5.0,
               -2.0
+            ]
+          },
+          "RigidBody": {
+            "__version": 1,
+            "type": "Dynamic",
+            "density": 1000.0,
+            "friction": 0.6,
+            "restitution": 0.0
+          },
+          "BoxCollider": {
+            "__version": 1,
+            "half_extents": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate.prefab",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "stack crate 0"
+          },
+          "Transform": {
+            "position": [
+              0.0,
+              0.5,
+              -2.2
+            ]
+          },
+          "RigidBody": {
+            "__version": 1,
+            "type": "Dynamic",
+            "density": 1000.0,
+            "friction": 0.6,
+            "restitution": 0.0
+          },
+          "BoxCollider": {
+            "__version": 1,
+            "half_extents": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate.prefab",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "stack crate 1"
+          },
+          "Transform": {
+            "position": [
+              0.0,
+              1.501,
+              -2.2
+            ]
+          },
+          "RigidBody": {
+            "__version": 1,
+            "type": "Dynamic",
+            "density": 1000.0,
+            "friction": 0.6,
+            "restitution": 0.0
+          },
+          "BoxCollider": {
+            "__version": 1,
+            "half_extents": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate.prefab",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "stack crate 2"
+          },
+          "Transform": {
+            "position": [
+              0.0,
+              2.502,
+              -2.2
             ]
           },
           "RigidBody": {
