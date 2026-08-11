@@ -21,8 +21,10 @@
 
 #include "math/conventions.h"
 #include "physics/components.h"
+#include "physics/debug_draw.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace engine::physics {
 
@@ -225,6 +227,29 @@ namespace engine::physics {
          * @return Its rotation, in world space.
          */
         [[nodiscard]] Quat body_rotation(BodyId body) const;
+
+        /**
+         * @brief Collects the wireframe of every collider in the world.
+         *
+         * The shapes come from Box3D, so this draws what the solver is actually
+         * simulating. A collider that does not match its mesh shows up here as
+         * a wireframe in the wrong place, which is the whole reason to have it.
+         *
+         * **A sleeping body draws too, and in its own color.** Box3D reads the
+         * broad phase rather than the list of moving bodies, and it picks the
+         * color from the body state. A body that settled in the wrong place is
+         * the one most worth seeing, so this would be worth little without it.
+         *
+         * The wireframe of each shape is built once, the first time that shape
+         * is drawn, and kept until the shape changes or goes away. So a frame
+         * that draws costs the transform of points that already exist.
+         *
+         * @param out Receives the lines. Cleared first, so a caller can hand
+         *            the same vector back each frame and keep its memory.
+         *
+         * @warning Nothing outside kDebugDrawReach of the origin is reported.
+         */
+        void debug_lines(std::vector<DebugLine>& out) const;
 
         /// @brief How many bodies the world holds.
         /// @return The count of static and dynamic bodies together.
