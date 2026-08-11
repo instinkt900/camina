@@ -1555,10 +1555,13 @@ on. The short version: `gfx::` came through with one real gap, the sampler in #2
 they are wrong in one way: they assume a game reads loose files from a disk. None of them was
 fixed here, so no moth_ui release was needed.
 
-The spike ran long. The definition says 2 to 3 days and the work took 6, from the planning
-commit on 2026-08-04 to 2026-08-11. Two things caused it. Text is half of `src/ui/` on its own,
-which §8.6 measures. And M6.3 through M6.5 each turned up a real defect after the code already
-worked, which is the spike doing its job rather than an overrun to regret.
+The spike stayed inside its timebox. The definition says 2 to 3 days. The M6 issues were
+filed on 2026-08-10, the first M6 commit landed the same day, and M6.5 closed on 2026-08-11.
+That is about one day.
+
+Text was still half the work, which §8.6 measures. It fit because `moth_graphics` had already
+solved the hard part and the port was mostly the texture upload, which is exactly what §8.3
+predicted.
 
 ### M7 — Physics
 Connect Box3D to enkiTS. Add rigid body and collider components. Reflect them, so the
