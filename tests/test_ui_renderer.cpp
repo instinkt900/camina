@@ -15,6 +15,7 @@
 #include "ui/renderer.h"
 
 #include <cmath>
+#include <filesystem>
 #include <cstdlib>
 
 namespace {
@@ -652,24 +653,54 @@ namespace {
     // manifest is keyed on a source path. This is the pure half of that fix.
 
     void a_layout_path_becomes_a_source_path() {
-        const std::filesystem::path root = "/game/content";
+        // A real absolute path rather than a written one. "/game/content" is
+        // absolute on Linux and not on Windows, where a path needs a drive, so
+        // a hardcoded POSIX path makes this test pass on one platform and fail
+        // on the other. current_path() is absolute on both.
+        const std::filesystem::path base = std::filesystem::current_path();
+        const std::filesystem::path root = base / "content";
 
-        test::check(engine::ui::source_path_for("/game/content/ui/panel.png", root) ==
+        test::check(engine::ui::source_path_for(root / "ui" / "panel.png", root) ==
                         "ui/panel.png",
                     "an absolute path inside the cooked tree becomes a source path");
         test::check(engine::ui::source_path_for("ui/panel.png", root) == "ui/panel.png",
                     "a relative path passes through");
-        test::check(engine::ui::source_path_for("/game/content/panel.png", root) == "panel.png",
+        test::check(engine::ui::source_path_for(root / "panel.png", root) == "panel.png",
                     "a path at the root of the tree keeps its name");
 
         // A path outside the tree is not a cooked asset. Returning it would
         // send "../.." to the manifest as if it were a key.
-        test::check(engine::ui::source_path_for("/somewhere/else/panel.png", root).empty(),
+        test::check(engine::ui::source_path_for(base / "elsewhere" / "panel.png", root).empty(),
                     "an absolute path outside the cooked tree is refused");
+
+        // The separator is always a forward slash, whatever the platform uses.
+        // The manifest is written with forward slashes, so a backslash here
+        // would miss every key on Windows and nothing would draw.
+        const std::string nested =
+            engine::ui::source_path_for(root / "ui" / "fonts" / "body.ttf", root);
+        test::check(nested == "ui/fonts/body.ttf", "the answer uses forward slashes");
+
+        // A relative path is normalized, because the manifest holds the path
+        // the cooker walked and that never carries a "." or a "..".
+        test::check(engine::ui::source_path_for("ui/../panel.png", root) == "panel.png",
+                    "a relative path is normalized before it becomes a key");
+        test::check(engine::ui::source_path_for(root / "ui" / ".." / "panel.png", root) ==
+                        "panel.png",
+                    "and so is an absolute one");
+
+        // A relative path that climbs out of the tree is refused as well. The
+        // API takes a path relative to the content root, so "../" is not one.
+        test::check(engine::ui::source_path_for("../panel.png", root).empty(),
+                    "a relative path that climbs out of the tree is refused");
+
+        // The refusal tests the first component and not the first two
+        // characters, so a file that is really called "..panel.png" survives.
+        test::check(engine::ui::source_path_for("..panel.png", root) == "..panel.png",
+                    "a name that starts with two dots is not a climb out");
 
         // The manifest is keyed on the source, and the cooker renames a texture
         // output. So the answer is the source name and never the cooked one.
-        test::check(engine::ui::source_path_for("/game/content/ui/panel.png", root) !=
+        test::check(engine::ui::source_path_for(root / "ui" / "panel.png", root) !=
                         "ui/panel.png.tex",
                     "the answer is the source name rather than the cooked one");
     }

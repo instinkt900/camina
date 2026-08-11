@@ -1687,16 +1687,15 @@ namespace {
         runtime.mesh.destroy();
         runtime.shadow.destroy();
 #if defined(ENGINE_WITH_UI)
-        // The image before the factory, because the factory owns the texture it
-        // names and the image must not outlive it.
-        runtime.ui_image.reset();
-        runtime.ui_images.destroy();
-        // The font before the factory, for the reason the image goes before
-        // the image factory: the factory owns the atlas the font names.
-        // The node tree first. It holds an IImage and an IFont that the two
-        // factories own, so it must not outlive either.
+        // Outermost first. The node tree holds an IImage and an IFont, those
+        // hold texture handles, and the two factories own the textures. So the
+        // order is tree, then the things it points at, then the factories that
+        // own those.
         runtime.ui_layout.reset();
         runtime.ui_context.reset();
+
+        runtime.ui_image.reset();
+        runtime.ui_images.destroy();
         runtime.ui_font.reset();
         runtime.ui_fonts.destroy();
         runtime.ui_pass.destroy();

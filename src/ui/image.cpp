@@ -9,26 +9,37 @@ namespace engine::ui {
 
     std::string source_path_for(const std::filesystem::path& path,
                                 const std::filesystem::path& cooked_root) {
-        if (!path.is_absolute()) {
+        // A path that climbs out of the cooked tree is not a cooked asset, and
+        // returning it would send "../.." to the manifest as if it were a key.
+        //
+        // The test is the first component and not the first two characters. A
+        // file may legitimately be called "..panel.png", and a string compare
+        // would refuse it.
+        const auto escapes = [](const std::filesystem::path& candidate) {
+            return !candidate.empty() && *candidate.begin() == std::filesystem::path{ ".." };
+        };
+
+        // Normalize first, so "ui/../panel.png" reaches the manifest as
+        // "panel.png". The manifest holds the path the cooker walked, which
+        // never has a "." or a ".." in it.
+        const std::filesystem::path normalized = path.lexically_normal();
+
+        if (!normalized.is_absolute()) {
+            if (escapes(normalized)) {
+                return {};
+            }
             // generic_string() is what makes a layout authored on Windows find
             // the same asset on Linux.
-            return path.generic_string();
+            return normalized.generic_string();
         }
 
         std::error_code error;
         const std::filesystem::path relative =
-            std::filesystem::relative(path, cooked_root, error);
-        if (error || relative.empty()) {
+            std::filesystem::relative(normalized, cooked_root.lexically_normal(), error);
+        if (error || relative.empty() || escapes(relative)) {
             return {};
         }
-
-        const std::string source = relative.generic_string();
-        // A path that climbs out of the cooked tree is not a cooked asset, and
-        // returning it would send "../.." to the manifest as if it were a key.
-        if (source.rfind("..", 0) == 0) {
-            return {};
-        }
-        return source;
+        return relative.generic_string();
     }
 
     Image::Image(gfx::TextureHandle texture, int width, int height)
