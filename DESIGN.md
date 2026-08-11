@@ -835,6 +835,33 @@ they cost. The rest do not.
 child links, local and world transforms, dirty propagation, correct update order, and
 reparenting with no visual jump. It is more complex than it looks.
 
+**Physics and the transform: `BodyType` decides which way the data moves.** A rigid body
+integrates a position and the M3.1 hierarchy holds one, so something has to say which is
+authoritative. Both, at once, gives a body that fights its parent or snaps back every frame.
+
+The rule is one direction for each body, chosen by what moves it:
+
+- **Dynamic.** The solver owns it. After the step, the body transform is written back to the
+  entity. Nothing pushes a transform into a dynamic body during a step.
+- **Static and kinematic.** The entity owns it. Before the step, the entity world transform
+  is pushed into the body. The solver never moves one, so nothing is written back.
+
+That falls out of what the three types mean. A dynamic body ends up somewhere only the
+solver knows. A static body never moves. A kinematic body is moved by game code or by an
+animation, and the solver reads it so that dynamic bodies get pushed aside correctly.
+
+**The write-back converts world to local, because the two sides do not speak the same
+space.** Box3D works in world space and `Transform` is local to the parent, so a dynamic body
+under a parent needs the inverse of the parent world matrix. A dynamic body at the root
+needs no inverse, which is the common case and costs nothing.
+
+Two things the write-back deliberately leaves alone. It does not touch scale, because a rigid
+body has none to give. And a collider does not read the entity scale at all, which is #237.
+
+**Time model.** Use a fixed timestep for physics and game logic, and interpolate for
+rendering. See the note at the top of this section. The write-back lands after the step and
+before the interpolation M7.4 adds.
+
 **Materials.** A material is a shader plus a reflected parameter block. So §7 gives you the
 material editor at no extra cost.
 

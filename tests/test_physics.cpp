@@ -10,8 +10,13 @@
 
 #include "check.h"
 #include "core/jobs.h"
+#include "physics/components.h"
 #include "physics/conventions.h"
 #include "physics/world.h"
+#include "reflect/json.h"
+#include "scene/component_registry.h"
+#include "scene/prefab.h"
+#include "scene/world.h"
 
 #include <chrono>
 #include <cmath>
@@ -183,6 +188,131 @@ namespace {
         check(moved == 0, "the threaded run and the single-threaded run agree");
     }
 
+    namespace sc = engine::scene;
+    namespace ph = engine::physics;
+
+    /// A registry that knows the engine components and the physics ones.
+    sc::ComponentRegistry make_registry() {
+        sc::ComponentRegistry registry;
+        sc::register_builtin_components(registry);
+        ph::register_components(registry);
+        return registry;
+    }
+
+    void the_components_reflect() {
+        section("The physics components describe themselves");
+
+        // Nothing was written for this. The descriptors are the whole of it,
+        // which is hard rule 4.5.
+        check(engine::reflect::field_count<ph::RigidBody>() == 4, "RigidBody describes 4 fields");
+        check(engine::reflect::field_count<ph::BoxCollider>() == 1, "BoxCollider describes 1");
+        check(engine::reflect::field_count<ph::SphereCollider>() == 1, "SphereCollider describes 1");
+
+        check(engine::reflect::DescribedEnum<ph::BodyType>, "BodyType is a described enum");
+        check(engine::reflect::enumerator_count<ph::BodyType>() == 3,
+              "static, dynamic and kinematic are each expressible");
+
+        const sc::ComponentRegistry registry = make_registry();
+        check(registry.find("RigidBody") != nullptr, "a scene file can carry a RigidBody");
+        check(registry.find("BoxCollider") != nullptr, "and a BoxCollider");
+        check(registry.find("SphereCollider") != nullptr, "and a SphereCollider");
+    }
+
+    void a_body_round_trips() {
+        section("A component survives a write and a read");
+
+        ph::RigidBody body;
+        body.type = ph::BodyType::Kinematic;
+        body.density = 700.0F;
+        body.friction = 0.25F;
+        body.restitution = 0.5F;
+
+        const nlohmann::json out = engine::reflect::to_json(body);
+
+        // The name rather than the number, so inserting an enumerator above
+        // Kinematic does not turn every lift in every scene into a wall.
+        check(out["type"] == "Kinematic", "the body type writes its name");
+
+        ph::RigidBody loaded;
+        check(engine::reflect::from_json(out, loaded), "the document reads back");
+        check(loaded.type == ph::BodyType::Kinematic, "the type survives");
+        check(loaded.density == 700.0F, "the density survives");
+        check(loaded.friction == 0.25F, "the friction survives");
+        check(loaded.restitution == 0.5F, "the restitution survives");
+
+        ph::BoxCollider box;
+        box.half_extents = Vec3{ 1.0F, 2.0F, 3.0F };
+        ph::BoxCollider loaded_box;
+        check(engine::reflect::from_json(engine::reflect::to_json(box), loaded_box) &&
+                  loaded_box.half_extents == box.half_extents,
+              "a box collider survives");
+
+        ph::SphereCollider sphere;
+        sphere.radius = 2.5F;
+        ph::SphereCollider loaded_sphere;
+        check(engine::reflect::from_json(engine::reflect::to_json(sphere), loaded_sphere) &&
+                  loaded_sphere.radius == sphere.radius,
+              "a sphere collider survives");
+    }
+
+    /// What the crate prefab carries. None of it is a default value, so a check
+    /// against one of these fails when the prefab data does not reach the
+    /// instance. Checking against a default proves nothing, because an
+    /// instantiate that dropped the data and default-constructed the components
+    /// would pass.
+    constexpr float kCrateDensity = 700.0F;
+    constexpr Vec3 kCrateHalfExtents{ 0.75F, 0.25F, 1.5F };
+
+    /// A one-entity prefab carrying a body and a box.
+    nlohmann::json crate_document() {
+        ph::RigidBody body;
+        body.density = kCrateDensity;
+
+        ph::BoxCollider box;
+        box.half_extents = kCrateHalfExtents;
+
+        nlohmann::json root = nlohmann::json::object();
+        root["parent"] = -1;
+        root["components"]["Transform"] = engine::reflect::to_json(engine::Transform{});
+        root["components"]["RigidBody"] = engine::reflect::to_json(body);
+        root["components"]["BoxCollider"] = engine::reflect::to_json(box);
+
+        nlohmann::json document = nlohmann::json::object();
+        document["__version"] = sc::kPrefabVersion;
+        document["entities"] = nlohmann::json::array({ root });
+        return document;
+    }
+
+    void a_prefab_instance_overrides_one_field() {
+        section("A prefab instance overrides one physics field");
+
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::Prefab crate;
+        check(sc::Prefab::parse("crate", crate_document(), crate), "the crate prefab parses");
+
+        // One field of one component. Everything else has to come from the
+        // prefab, which is what makes an override an override.
+        nlohmann::json record = nlohmann::json::object();
+        record["overrides"]["0"]["RigidBody"]["type"] = "Static";
+
+        sc::World world;
+        const entt::entity entity = sc::instantiate(world, crate, record, registry);
+        check(entity != entt::null, "the instance builds");
+
+        const auto& body = world.registry().get<ph::RigidBody>(entity);
+        check(body.type == ph::BodyType::Static, "the overridden field took the new value");
+
+        // Against the prefab value rather than the default. An instantiate that
+        // dropped the prefab data and default-constructed the component would
+        // pass a check against the default, which is what this used to do.
+        check(body.density == kCrateDensity, "the field next to it comes from the prefab");
+
+        const auto& box = world.registry().get<ph::BoxCollider>(entity);
+        check(box.half_extents == kCrateHalfExtents,
+              "the component next to it comes from the prefab");
+    }
+
 } // namespace
 
 int main() {
@@ -190,6 +320,9 @@ int main() {
     engine::jobs::init();
 
     gravity_points_down_y();
+    the_components_reflect();
+    a_body_round_trips();
+    a_prefab_instance_overrides_one_field();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();
