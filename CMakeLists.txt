@@ -64,6 +64,10 @@ find_package(shaderc REQUIRED)
 # DESIGN.md section 8.
 if(ENGINE_WITH_UI)
     find_package(moth_ui REQUIRED)
+    # M6.4. moth_ui::IFont declares no methods, so the backend rasterizes and
+    # shapes the text itself. Both stay inside src/ui/font.cpp.
+    find_package(Freetype REQUIRED)
+    find_package(harfbuzz REQUIRED)
 endif()
 
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)

@@ -208,6 +208,21 @@ if(ENGINE_WITH_UI)
 
     add_test(NAME ui_renderer COMMAND test_ui_renderer)
 
+    # M6.4. The font rasterizes, packs, shapes, measures and wraps with no
+    # device, which is why load() is separate from upload(). The path of the
+    # sandbox font comes from CMake, so the test does not guess where anything
+    # is. It reads the source tree rather than the cooked tree, because the
+    # cooker copies a font unchanged and a test should not need a cook first.
+    add_executable(test_ui_font test_ui_font.cpp)
+    target_link_libraries(test_ui_font PRIVATE engine::ui)
+    target_compile_definitions(test_ui_font PRIVATE
+        ENGINE_TEST_FONT_PATH="${CMAKE_SOURCE_DIR}/sandbox/content/ui/fonts/LiberationSans-Regular.ttf"
+    )
+    engine_set_warnings(test_ui_font)
+    engine_enable_clang_tidy(test_ui_font)
+
+    add_test(NAME ui_font COMMAND test_ui_font)
+
     # M6.3. RenderImage refuses a nine-sliced image rather than stretching it.
     # The refusal is an assertion, so the program is expected to die and the
     # message is the whole test. See the entt_assert entry above.
