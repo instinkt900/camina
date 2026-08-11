@@ -72,7 +72,9 @@ namespace engine::gfx {
 
             state.assembly.sType =
                 VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-            state.assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            state.assembly.topology = desc.topology == PrimitiveTopology::LineList
+                                          ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+                                          : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
             // The counts must be set even though both are dynamic.
             state.viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;

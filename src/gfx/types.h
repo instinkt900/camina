@@ -192,6 +192,27 @@ namespace engine::gfx {
     };
 
     /**
+     * @brief What the vertices of a draw make.
+     *
+     * Every pass before the physics wireframe drew triangles, so this had no
+     * reason to exist. A wireframe is lines, and the alternative was to build
+     * two triangles for each line on the CPU. That costs six vertices where two
+     * do, and it needs a screen-space width, a normal, and a rule for what a
+     * line does when it points at the camera. A line list needs none of that.
+     *
+     * The cost of a line list is that its width is one pixel and cannot change.
+     * `VK_DYNAMIC_STATE_LINE_WIDTH` exists, and a width above 1 needs the
+     * `wideLines` device feature, which the engine does not ask for. A debug
+     * wireframe at one pixel is what every other engine draws.
+     */
+    enum class PrimitiveTopology : std::uint32_t {
+        /// @brief Three vertices make a triangle. What every other pass draws.
+        TriangleList = 0,
+        /// @brief Two vertices make a line, one pixel wide.
+        LineList = 1,
+    };
+
+    /**
      * @brief The format of a color attachment.
      *
      * This is a separate enum from TextureFormat, for two reasons. A render
@@ -396,6 +417,9 @@ namespace engine::gfx {
          */
         const DescriptorBinding* bindings = nullptr;
         std::size_t binding_count = 0; ///< How many entries @c bindings holds.
+
+        /// @brief What the vertices make. Triangles unless a pass says otherwise.
+        PrimitiveTopology topology = PrimitiveTopology::TriangleList;
     };
 
     /// @brief Settings for create_graphics_pipeline().
@@ -438,6 +462,9 @@ namespace engine::gfx {
          */
         const DescriptorBinding* bindings = nullptr;
         std::size_t binding_count = 0; ///< How many entries @c bindings holds.
+
+        /// @brief What the vertices make. Triangles unless a pass says otherwise.
+        PrimitiveTopology topology = PrimitiveTopology::TriangleList;
         /**
          * @brief Whether the rendering scope must attach a depth image.
          *
