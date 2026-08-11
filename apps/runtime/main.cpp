@@ -24,6 +24,7 @@
 #include "sandbox/game.h"
 #include "physics/components.h"
 #include "physics/simulation.h"
+#include "render/debug_line_pass.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
@@ -149,6 +150,8 @@ namespace {
          * from one nobody did.
          */
         float physics_hz = 0.0F;
+        /// Whether to turn the physics wireframe on. Off unless asked for.
+        bool physics_debug = false;
         /**
          * The most lights one cluster cell may hold. Zero takes the default.
          *
@@ -416,6 +419,14 @@ namespace {
          */
         std::uint32_t max_physics_steps = engine::kDefaultMaxStepsPerFrame;
 
+        /**
+         * Whether to draw the physics wireframe over the frame.
+         *
+         * Off by default. A collider is invisible, and this is what makes one
+         * that does not match its mesh a five second answer.
+         */
+        bool physics_debug = false;
+
         std::uint64_t frames_drawn = 0;
     };
 
@@ -457,6 +468,8 @@ struct engine::reflect::Describe<ViewSettings> {
             ENGINE_FIELD(ViewSettings, max_physics_steps, Range{ 1.0, 32.0, 1.0 },
                          Category{ "Physics" },
                          Tooltip{ "Steps one frame runs before it drops the time it owes" }),
+            ENGINE_FIELD(ViewSettings, physics_debug, Category{ "Physics" },
+                         Tooltip{ "Draw every collider as a wireframe, from what Box3D reports" }),
             // ReadOnly keeps the editor from changing it. Transient keeps it out
             // of the file. The two attributes are read by different consumers,
             // and neither consumer knows about the other.
@@ -492,6 +505,8 @@ namespace {
             } else if (arg == "--watch" && has_value) {
                 options.watch = argv[i + 1];
                 ++i;
+            } else if (arg == "--physics-debug") {
+                options.physics_debug = true;
             } else if (arg == "--no-watch") {
                 options.hot_reload = false;
             } else if (arg == "--no-validation") {
@@ -1150,6 +1165,8 @@ namespace {
         engine::scene::World* world = nullptr;
         /// The bodies of the scene. A scene reload builds them again.
         engine::physics::Simulation* simulation = nullptr;
+        /// M7.5. Draws the wireframe of those bodies when the toggle is on.
+        engine::render::DebugLinePass* debug_lines = nullptr;
         /// The entity the inspector edits, or entt::null for none.
         entt::entity* selected = nullptr;
         /// The cooked game content directory, which holds the scene and the prefabs.
@@ -1172,6 +1189,12 @@ namespace {
     /// GPU time for the last frame, in nanoseconds, one entry for each pass in
     /// the order the constants above declare them.
     std::array<double, kTimestampCount / 2> g_gpu_pass_ns{};
+
+    /// The physics wireframe of the current frame. Kept here rather than in the
+    /// frame arena because it holds its memory between frames, so a frame with
+    /// the toggle on allocates nothing after the first one. A frame with it off
+    /// never touches this at all.
+    std::vector<engine::physics::DebugLine> g_debug_lines;
     /// The GPU timestamp period, in nanoseconds per tick.
     float g_timestamp_period = 0.0F;
     /// True after the first frame's pool reset, so reads are valid.
@@ -1340,6 +1363,16 @@ namespace {
         context.tonemap_pass->draw(info.commands, settings.exposure);
         engine::gfx::cmd_write_timestamp(info.commands, kTonemapTimestamp + 1);
 
+        // M7.5. The physics wireframe, after the curve so the color Box3D chose
+        // is the color on screen, and under the UI so a panel is never hidden
+        // by it. It tests no depth, so a collider inside geometry still shows,
+        // which is the case somebody is usually hunting.
+        if (settings.physics_debug && context.simulation != nullptr &&
+            context.debug_lines != nullptr) {
+            context.simulation->world().debug_lines(g_debug_lines);
+            context.debug_lines->draw(info.commands, clip_from_world, g_debug_lines);
+        }
+
 #if defined(ENGINE_WITH_UI)
         // M6.2. Game UI, in the same scope as the tonemap. It is authored in
         // display colors like the overlay below, so it draws after the curve
@@ -1418,6 +1451,8 @@ namespace {
         /// Carried across frames, because the shadow map and the scene color are
         /// each one image that every frame in flight shares.
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
+        /// M7.5. Draws the physics wireframe. Costs nothing while it is off.
+        engine::render::DebugLinePass debug_lines;
         /// The game's cooked assets, which today means the meshes a scene names.
         engine::assets::Content game_content;
         /// M4.5. Watches the game source tree and cooks what a person edits.
@@ -1699,6 +1734,11 @@ namespace {
             return false;
         }
 
+        // M7.5. It draws inside the tonemap scope, so it is built beside it.
+        if (!runtime.debug_lines.create(runtime.device, runtime.engine_content)) {
+            return false;
+        }
+
         if (options.offscreen) {
             // The ImGui SDL backend needs the window. A capture with no panels
             // over it is also the more useful one to compare.
@@ -1752,6 +1792,7 @@ namespace {
         runtime.ui_fonts.destroy();
         runtime.ui_pass.destroy();
 #endif
+        runtime.debug_lines.destroy();
         runtime.tonemap.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
@@ -2050,6 +2091,10 @@ int main(int argc, char** argv) {
     // After the file, because a flag on the command line is the more specific
     // of the two. A run that has to produce one exposure every time cannot rely
     // on whatever the last session happened to save.
+    if (options.physics_debug) {
+        settings.physics_debug = true;
+        ENGINE_LOG_INFO("The physics wireframe is on, from --physics-debug.");
+    }
     if (options.physics_hz > 0.0F) {
         settings.physics_hz = options.physics_hz;
         ENGINE_LOG_INFO("Physics steps at {} Hz, from --physics-hz.", settings.physics_hz);
@@ -2156,6 +2201,7 @@ int main(int argc, char** argv) {
         .settings = &settings,
         .world = &world,
         .simulation = &simulation,
+        .debug_lines = &runtime.debug_lines,
         .selected = &selected,
         .content = content,
         .source_scene = source.empty() ? std::filesystem::path{} : source / sandbox::kSceneFile,
