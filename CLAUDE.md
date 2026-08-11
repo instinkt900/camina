@@ -412,9 +412,12 @@ together in a running program, with no validation message. Two blended panes dre
 opaque scene with no validation message either. Synchronization validation reports nothing over
 300 frames offscreen and 200 windowed, on the sandbox and on Intel Sponza.
 
-The build produces seven warnings, which is issue #179. Six are one line in
+The build produces sixteen warnings, which is issue #179. Fifteen are one line in
 `src/reflect/registry.h` counted once for each translation unit that instantiates it, and the
-seventh is a function in the cooker that lost its last caller. CI does not fail on either.
+sixteenth is a function in the cooker that lost its last caller. CI does not fail on either.
+The first number tracks how many translation units instantiate that template, so it grows
+when a milestone adds files rather than when anybody writes a new warning. It read seven at
+the close of M5 and sixteen on a clean RelWithDebInfo build at M7.1.
 
 ## Development flow
 
@@ -708,9 +711,9 @@ here, consider whether moth_ui wants the same change.
   ones in `third_party/`. `ExcludeHeaderFilterRegex` drops both. `SKIP_LINTING` on a
   source file does not help here, because a third-party header arrives through our own
   translation unit. `WarningsAsErrors` is `*`, so this fails the build rather than
-  printing. The ImGui Vulkan backend header is the case that needed the Conan half, and
-  Box3D needed the other: `box3d/collision.h` alone reports 3305 findings, mostly
-  C-style casts in inline accessors.
+  printing. The ImGui Vulkan backend header is the case that needed the Conan half.
+  Box3D needed the other one. `box3d/collision.h` alone reports 3305 findings, and most
+  of them are C-style casts in inline accessors.
 - **clangd.** `.clangd` points at `build/RelWithDebInfo`. There is no
   `compile_commands.json` symlink and none is needed.
 - **clang-format** is not in apt on this machine. It lives in the Conan virtual
@@ -739,15 +742,15 @@ here, consider whether moth_ui wants the same change.
   install builds shaderc, glslang, and SPIRV-Tools from source. That takes several minutes
   once, then the cache serves it. Issue #43 holds the reasons to link `libshaderc` instead.
 - **Submodules.** `third_party/bc7enc_rdo` is the first one and `third_party/box3d` is the
-  second. A fresh clone needs `git submodule update --init --recursive`, and both
+  second. A fresh clone needs `git submodule update --init --recursive`. Both
   `third_party/bc7enc/CMakeLists.txt` and `third_party/CMakeLists.txt` fail the build with
   that command in the message when the directory is empty. Only `bc7enc.cpp` is compiled
   out of bc7enc_rdo. The rest of that repository holds an ISPC kernel, a PNG reader, and a
   DDS writer that we do not use.
 - **Box3D builds from `third_party/box3d/src`, not from the Box3D root.** The root
   CMakeLists is written for a top-level build. It sets the static MSVC runtime, and
-  `profiles/windows-msvc` asks Conan for the dynamic one, and MSVC does not link objects
-  that disagree about the runtime. The root also turns on verbose makefiles and pulls in
+  `profiles/windows-msvc` asks Conan for the dynamic one. MSVC does not link objects that
+  disagree about the runtime. The root also turns on verbose makefiles and pulls in
   FetchContent. `third_party/CMakeLists.txt` carries the one flag the root sets that the
   library needs. See `DESIGN.md` §5.
 - **Third-party sources we compile.** `SKIP_LINTING` is a source file property, not a

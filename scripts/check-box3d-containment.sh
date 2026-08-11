@@ -2,13 +2,13 @@
 #
 # Keeps Box3D inside src/physics/.
 #
-# Box3D is an alpha at a pinned commit, and DESIGN.md section 5 says we will
-# read, patch, and update it more than any other dependency. Every such update
-# is a diff against one directory, not against the whole engine, and that only
-# holds while one directory includes it.
+# Box3D is an alpha at a pinned commit. DESIGN.md section 5 says we will read,
+# patch, and update it more than any other dependency. Every such update is a
+# diff against one directory rather than against the whole engine, and that
+# only holds while one directory includes it.
 #
 # This is the same shape as check-vulkan-containment.sh, which enforces rule
-# 4.1. The Box3D rule is narrower: it protects an update path rather than a
+# 4.1. The Box3D rule is narrower. It protects an update path rather than a
 # later ABI extraction.
 
 set -euo pipefail
@@ -28,14 +28,30 @@ if [ ${#search_dirs[@]} -eq 0 ]; then
     exit 0
 fi
 
-pattern='#[[:space:]]*include[[:space:]]*[<"]box3d/'
+# The directive is anchored to the start of a line. Without the anchor, a line
+# that only writes about an include, in a comment or in a string, reads as a
+# violation.
+pattern='^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]box3d/'
 
-violations="$(grep -rnE "${pattern}" "${search_dirs[@]}" 2>/dev/null | grep -v "${allowed}" || true)"
+# Decide by file name, not by the whole grep record. A record carries the path,
+# the line number, and the line. Filtering the record lets a violation outside
+# src/physics/ pass whenever the line itself mentions that directory. That
+# failure is silent, which is the worse direction for a check to fail in.
+violations=""
+while IFS= read -r record; do
+    [ -n "${record}" ] || continue
+    file="${record%%:*}"
+    relative="${file#"${root}/"}"
+    case "${relative}" in
+        "${allowed}"*) continue ;;
+    esac
+    violations="${violations}${record}"$'\n'
+done < <(grep -rnE "${pattern}" "${search_dirs[@]}" 2>/dev/null || true)
 
 if [ -n "${violations}" ]; then
     echo "A Box3D header is included outside ${allowed}"
     echo
-    echo "${violations}"
+    printf '%s' "${violations}"
     echo
     echo "Move the code under ${allowed}, or express it with engine types."
     echo "See DESIGN.md section 5."

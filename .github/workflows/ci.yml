@@ -40,9 +40,8 @@ jobs:
           cmake --build build-docs --target docs
 
   # Rule 4.1 in DESIGN.md, and the Box3D rule in section 5. This runs on its own
-  # so that a violation is obvious in the checks list, and so that it reports
-  # even when the build fails. Both steps run, because one violation must not
-  # hide the other.
+  # so that a violation is obvious in the checks list. It also reports when the
+  # build fails. Both steps run, because one violation must not hide the other.
   containment:
     runs-on: ubuntu-24.04
     steps:

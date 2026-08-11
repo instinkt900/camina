@@ -58,9 +58,9 @@ HeaderFilterRegex: '.*'
 # build rather than printing.
 #
 # Two places hold that code. Conan is rule 4.4, which says we vendor only what we
-# patch. third_party/ is what we do patch, and the tidy checks still do not
-# apply: Box3D is C, and box3d/collision.h alone reports 3305 findings, mostly
-# C-style casts in inline accessors.
+# patch. third_party/ is what we do patch, and the tidy checks still do not apply
+# to it, because Box3D is C. box3d/collision.h alone reports 3305 findings, and
+# most of them are C-style casts in inline accessors.
 #
 # This is engine-specific and moth_ui does not need it today.
 ExcludeHeaderFilterRegex: '.*/(\.conan2|third_party)/.*'

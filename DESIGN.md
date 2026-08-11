@@ -99,17 +99,17 @@ This has four results:
 
 **The pin is `3fc20f5b453ba9e14cdf54ecafa87a2a4bcdf53c`, taken on 2026-08-11.** That commit is
 dated 2026-07-29 and it was the upstream head. Record the new commit and the date here when
-you move the pin, because the reason to move it is what makes the next update readable.
+you move the pin. The reason to move it is what makes the next update readable.
 
-`third_party/CMakeLists.txt` builds it. It adds `box3d/src` and not the Box3D root, which is
-written for a top-level build: the root sets the static MSVC runtime, `profiles/windows-msvc`
-asks Conan for the dynamic one, and MSVC does not link objects that disagree about the
-runtime. The root also carries the `-ffp-contract=off` that the solver needs for determinism,
-so that flag moves to the library here. Issue #229 holds the part of it that does not reach
-engine code.
+`third_party/CMakeLists.txt` builds it. It adds `box3d/src` and not the Box3D root, because
+the root is written for a top-level build. The root sets the static MSVC runtime, and
+`profiles/windows-msvc` asks Conan for the dynamic one. MSVC does not link objects that
+disagree about the runtime. The root also carries the `-ffp-contract=off` that the solver
+needs for determinism, so that flag moves to the library here. Issue #229 holds the part of
+it that does not reach engine code.
 
 **Only files under `src/physics/` include a Box3D header.** `engine_core` links `box3d` as a
-private dependency, so the include directory reaches nowhere else, and
+private dependency, so the include directory reaches nowhere else.
 `scripts/check-box3d-containment.sh` fails CI when a header escapes anyway. This is not rule
 4.1, which protects a later ABI extraction. It protects the update path: an alpha we patch is
 a diff against one directory, not against the whole engine.

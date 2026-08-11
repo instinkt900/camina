@@ -1,13 +1,12 @@
 // M7.1 tests for the Box3D conventions.
 //
 // DESIGN.md section 3 carried an open item from the day the conventions were
-// settled: confirm that Box3D agrees about which way is up before trusting it.
-// This is that check, written so it runs again on every build rather than once
-// in a chat.
+// settled. It asked somebody to confirm that Box3D agrees about which way is
+// up. This is that check, written so it runs on every build rather than once.
 //
-// A physics library that disagrees with the renderer about up produces
-// mirrored or inverted motion, and the symptom points at the gameplay code
-// rather than at the library. That is why this is a test and not a comment.
+// A physics library that disagrees with the renderer about up produces mirrored
+// or inverted motion. The symptom points at the gameplay code rather than at
+// the library. That is why this is a test and not a comment.
 
 #include "check.h"
 #include "physics/conventions.h"
@@ -35,7 +34,7 @@ namespace {
 
         // The engine is +Y up, so the default gravity has to be -Y. The two
         // checks either side of it are what tell a wrong axis from a wrong
-        // sign: a library that used +Z up would pass neither.
+        // sign. A library that used +Z up would pass neither.
         check(gravity.y < 0.0F, "default gravity points down -Y");
         check(gravity.x == 0.0F, "default gravity has no X");
         check(gravity.z == 0.0F, "default gravity has no Z");

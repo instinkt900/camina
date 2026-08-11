@@ -5,7 +5,7 @@
 add_subdirectory(bc7enc)
 
 # Box3D. DESIGN.md section 5 gives the reasons it is a submodule at a pinned
-# commit rather than a Conan package: it is an alpha, we will read and patch it
+# commit rather than a Conan package. It is an alpha, we will read and patch it
 # more than any other dependency, and its C API removes every ABI concern.
 #
 # bc7enc has a wrapper directory beside its submodule, and this has none. That
@@ -38,6 +38,16 @@ add_subdirectory(box3d/src)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(box3d PRIVATE -ffp-contract=off)
 endif()
+
+# The Box3D CMakeLists declares its include directory PUBLIC rather than SYSTEM,
+# so the engine warning set applies to Box3D headers that reach engine code.
+# math_functions.h alone is 88 -Wold-style-cast warnings in the one file under
+# src/physics/ that includes it. Mark the interface SYSTEM, the way the bc7enc
+# wrapper does, so the compiler stays quiet about code we did not write.
+get_target_property(box3d_includes box3d INTERFACE_INCLUDE_DIRECTORIES)
+set_target_properties(box3d PROPERTIES
+    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${box3d_includes}"
+)
 
 # Third-party code, so the warning set and clang-tidy stay off it, the same way
 # bc7enc.cpp and vk_vma.cpp carry it. Both report problems in code we did not
