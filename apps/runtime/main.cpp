@@ -2107,6 +2107,115 @@ namespace {
                 .count());
     }
 
+    /// What the start of a frame decided. A frame that cannot draw yet says so,
+    /// rather than falling through to a draw that has nothing to draw into.
+    enum class FrameStart {
+        Draw,   ///< The window is up and the swapchain matches it.
+        Skip,   ///< Nothing to draw this time around.
+        Failed, ///< The swapchain would not rebuild.
+    };
+
+    /// Runs everything a frame needs before it draws: the minimized wait, any
+    /// pending hot reload, and the swapchain rebuild after a resize.
+    ///
+    /// @param runtime The window, the device, and the passes.
+    /// @param context What a frame draws with.
+    /// @param options The command line.
+    /// @param world The scene a reload rebuilds.
+    /// @param last_extent The size the swapchain was built for. A rebuild
+    ///                    replaces it.
+    /// @param last_frame The time the last frame ran. A wait moves it, so the
+    ///                   next delta does not count the idle time.
+    /// @return What the caller should do with this frame.
+    FrameStart begin_frame(Runtime& runtime, const FrameContext& context, const Options& options,
+                           engine::scene::World& world, engine::gfx::Extent2D& last_extent,
+                           std::chrono::steady_clock::time_point& last_frame) {
+        if (!options.offscreen && runtime.window.minimized()) {
+            // poll() does not block, so without this the loop pins one core
+            // while the window is minimized and there is nothing to draw.
+            std::this_thread::sleep_for(std::chrono::milliseconds(kMinimizedSleepMs));
+            last_frame = std::chrono::steady_clock::now();
+            return FrameStart::Skip;
+        }
+
+        // Between frames, because freeing a resource waits for the frames
+        // in flight and a frame cannot wait for itself.
+        apply_hot_reload(runtime, context, world);
+
+        // Offscreen the size is fixed for the whole run, which is the point of
+        // it. Nothing resizes, so nothing rebuilds. The window reports its new
+        // size before the swapchain knows about it.
+        const engine::gfx::Extent2D extent =
+            options.offscreen ? last_extent : window_extent(runtime.window);
+        if (extent.width == last_extent.width && extent.height == last_extent.height) {
+            return FrameStart::Draw;
+        }
+
+        if (!rebuild_swapchain(runtime.device, extent, runtime.tonemap, runtime.states)) {
+            return FrameStart::Failed;
+        }
+        last_extent = extent;
+        // The swapchain was just rebuilt, so this frame has no image to draw
+        // into. draw_frame would see OutOfDate from the old extent and rebuild
+        // again, which is the double rebuild issue #145.
+        return FrameStart::Skip;
+    }
+
+    /// The two times a frame runs on. They are read together because offscreen
+    /// takes both from the frame number rather than from the clock.
+    struct FrameTime {
+        float seconds = 0.0F; ///< Since the run began. The game animates from it.
+        float delta = 0.0F;   ///< Since the last frame.
+    };
+
+    /// Works out how much time this frame covers.
+    ///
+    /// @param options The command line.
+    /// @param frame The number of frames drawn so far.
+    /// @param started When the run began.
+    /// @param last_frame When the last frame ran.
+    /// @param now The time this frame began.
+    /// @return The seconds elapsed and the delta.
+    [[nodiscard]] FrameTime frame_time(const Options& options, std::uint64_t frame,
+                                       std::chrono::steady_clock::time_point started,
+                                       std::chrono::steady_clock::time_point last_frame,
+                                       std::chrono::steady_clock::time_point now) {
+        if (options.offscreen) {
+            // Offscreen counts frames rather than reading the clock, so the
+            // same command produces the same image. See kOffscreenStep.
+            return FrameTime{ .seconds = static_cast<float>(frame) * kOffscreenStep,
+                              .delta = kOffscreenStep };
+        }
+        // A long stall, a debugger break, or a driver hitch would otherwise
+        // multiply move_speed by the whole gap and throw the camera across
+        // the scene in one step.
+        return FrameTime{
+            .seconds = std::chrono::duration<float>(now - started).count(),
+            .delta = std::min(std::chrono::duration<float>(now - last_frame).count(), kLongestFrame)
+        };
+    }
+
+    /// Says whether the frame limit has landed, and writes the screenshot when
+    /// it has. The frame just presented is the one to capture, and the loop has
+    /// not started another, so this is the only place a capture is certain of
+    /// what it will read.
+    ///
+    /// @param runtime The device the capture reads.
+    /// @param options The command line.
+    /// @param frame The number of frames drawn so far.
+    /// @return True when the loop should stop.
+    [[nodiscard]] bool frame_limit_reached(Runtime& runtime, const Options& options,
+                                           std::uint64_t frame) {
+        if (options.max_frames == 0 || frame < options.max_frames) {
+            return false;
+        }
+        ENGINE_LOG_INFO("Frame limit of {} reached. Exiting.", options.max_frames);
+        if (!options.screenshot.empty()) {
+            (void)runtime::write_screenshot(runtime.device, options.screenshot);
+        }
+        return true;
+    }
+
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
@@ -2119,8 +2228,8 @@ namespace {
         auto started = std::chrono::steady_clock::now();
         auto last_report = started;
         auto last_frame = started;
-        // Offscreen the size is fixed for the whole run, which is the point of
-        // it. Nothing resizes, so nothing rebuilds.
+        // The size the swapchain is built for. begin_frame replaces it when the
+        // window moves, and offscreen it never changes.
         engine::gfx::Extent2D last_extent =
             options.offscreen ? device_extent(runtime.device) : window_extent(runtime.window);
 
@@ -2142,52 +2251,23 @@ namespace {
             ENGINE_PROFILE_ZONE_N("frame");
             frame_arena.reset();
 
-            if (!options.offscreen && runtime.window.minimized()) {
-                // poll() does not block, so without this the loop pins one core
-                // while the window is minimized and there is nothing to draw.
-                std::this_thread::sleep_for(std::chrono::milliseconds(kMinimizedSleepMs));
-                // No frame ran, so the next delta must not count the idle time.
-                last_frame = std::chrono::steady_clock::now();
-                have_drawn = false;
-                continue;
+            const FrameStart start =
+                begin_frame(runtime, context, options, world, last_extent, last_frame);
+            if (start == FrameStart::Failed) {
+                return false;
             }
-
-            // Between frames, because freeing a resource waits for the frames
-            // in flight and a frame cannot wait for itself.
-            apply_hot_reload(runtime, context, world);
-
-            // The window reports its new size before the swapchain knows about it.
-            const engine::gfx::Extent2D extent =
-                options.offscreen ? last_extent : window_extent(runtime.window);
-            if (extent.width != last_extent.width || extent.height != last_extent.height) {
-                if (!rebuild_swapchain(runtime.device, extent, runtime.tonemap,
-                                       runtime.states)) {
-                    return false;
-                }
-                last_extent = extent;
-                // The swapchain was just rebuilt, so this frame has no image to
-                // draw into. draw_frame would see OutOfDate from the old extent
-                // and rebuild again, which is the double rebuild issue #145.
+            if (start == FrameStart::Skip) {
+                // No frame ran, so the next period must not start from one the
+                // loop did not draw.
                 have_drawn = false;
                 continue;
             }
 
             const auto now = std::chrono::steady_clock::now();
-            // Offscreen counts frames rather than reading the clock, so the same
-            // command produces the same image. See kOffscreenStep.
-            const float seconds = options.offscreen
-                                      ? static_cast<float>(frame) * kOffscreenStep
-                                      : std::chrono::duration<float>(now - started).count();
-            // A long stall, a debugger break, or a driver hitch would otherwise
-            // multiply move_speed by the whole gap and throw the camera across
-            // the scene in one step.
-            const float delta =
-                options.offscreen ? kOffscreenStep
-                                  : std::min(std::chrono::duration<float>(now - last_frame).count(),
-                                             kLongestFrame);
+            const FrameTime time = frame_time(options, frame, started, last_frame, now);
             last_frame = now;
 
-            update_camera(settings, delta);
+            update_camera(settings, time.delta);
 
             // The key edge rather than the key being down, or holding it would
             // fill the room with crates in one second.
@@ -2200,12 +2280,12 @@ namespace {
 
             // The game moves things, then the frame composes the matrices and
             // draws them. Reversing those two would draw a frame behind.
-            sandbox::update(world, seconds);
+            sandbox::update(world, time.seconds);
 
-            advance_physics(clock, settings, simulation, world, delta, physics_stats);
+            advance_physics(clock, settings, simulation, world, time.delta, physics_stats);
 
             engine::gfx::Extent2D drawn_extent{};
-            const FrameOutcome outcome = draw_frame(context, extent, drawn_extent);
+            const FrameOutcome outcome = draw_frame(context, last_extent, drawn_extent);
             if (outcome == FrameOutcome::Failed) {
                 return false;
             }
@@ -2231,14 +2311,7 @@ namespace {
                 last_report = now;
             }
 
-            if (options.max_frames != 0 && frame >= options.max_frames) {
-                ENGINE_LOG_INFO("Frame limit of {} reached. Exiting.", options.max_frames);
-                // The frame just presented is the one to capture, and the loop
-                // has not started another. So this is the only place a capture
-                // is certain of what it will read.
-                if (!options.screenshot.empty()) {
-                    (void)runtime::write_screenshot(runtime.device, options.screenshot);
-                }
+            if (frame_limit_reached(runtime, options, frame)) {
                 break;
             }
 
