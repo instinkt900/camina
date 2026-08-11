@@ -141,9 +141,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           clang-tidy --version
-          # --verify-config exits 0 even when it rejects a key, so read what it
-          # printed rather than trusting the status.
-          output=$(clang-tidy --verify-config --config-file=.clang-tidy 2>&1)
+          # The `|| true` matters. Every step runs under `bash -e`, and
+          # clang-tidy exits non-zero when --config-file names a file it
+          # rejects, so the assignment alone would end the step before the
+          # message below could say why.
+          #
+          # A bare --verify-config, with no --config-file, exits 0 whatever it
+          # finds. So neither the status nor the output can be trusted on its
+          # own, and this reads both.
+          output=$(clang-tidy --verify-config --config-file=.clang-tidy 2>&1) || true
           echo "$output"
           if ! grep -q "No config errors detected" <<<"$output"; then
             # A notice rather than a failure, for now. This runner resolves
