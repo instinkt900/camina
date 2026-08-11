@@ -58,8 +58,15 @@ function(engine_enable_clang_tidy target)
     # The versioned name first. Unversioned resolves to clang-tidy 18 on a stock
     # Ubuntu noble and on the CI runner, which already carries an alternative
     # that update-alternatives does not outrank.
-    find_program(CLANG_TIDY_EXE NAMES clang-tidy-19 clang-tidy)
-    if(NOT CLANG_TIDY_EXE)
+    #
+    # The variable is named for the engine rather than called CLANG_TIDY_EXE,
+    # which is what it used to be. find_program keeps a cache entry that already
+    # holds a path and ignores NAMES entirely, so a build directory configured
+    # before this change would hold on to the clang-tidy 18 it found then. A new
+    # name cannot collide with that. Override it with
+    # -DENGINE_CLANG_TIDY_EXE=<path>.
+    find_program(ENGINE_CLANG_TIDY_EXE NAMES clang-tidy-19 clang-tidy)
+    if(NOT ENGINE_CLANG_TIDY_EXE)
         if(DEFINED ENV{CI})
             message(FATAL_ERROR "clang-tidy not found but required in CI")
         endif()
@@ -67,7 +74,7 @@ function(engine_enable_clang_tidy target)
         return()
     endif()
 
-    engine_verify_clang_tidy_config("${CLANG_TIDY_EXE}")
-    set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
+    engine_verify_clang_tidy_config("${ENGINE_CLANG_TIDY_EXE}")
+    set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${ENGINE_CLANG_TIDY_EXE}")
     message(STATUS "clang-tidy enabled for ${target}")
 endfunction()
