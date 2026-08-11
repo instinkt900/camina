@@ -28,6 +28,14 @@ namespace sandbox {
     inline constexpr const char* kSceneFile = "main.scene";
 
     /**
+     * @brief The crate the scene stacks, and the one the runtime throws.
+     *
+     * Named here because two places instance it now. The scene names it in a
+     * file, and the runtime looks it up to throw one at the stack.
+     */
+    inline constexpr const char* kCratePrefab = "crate.prefab";
+
+    /**
      * @brief The game's directory inside the cooked content root.
      *
      * The cooker writes each source tree under its own name, so the engine's

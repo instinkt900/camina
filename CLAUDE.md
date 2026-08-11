@@ -406,11 +406,34 @@ at the room against 0.002 ms looking away is mostly the camera, not the cull.
 
 The test is per entity, and #177 holds the tighter per-submesh one.
 
-Verified on 2026-08-10 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+**M7 is complete.** Box3D runs on the enkiTS pool, `RigidBody` and the colliders are reflected
+components, and `physics::Simulation` turns them into bodies and moves the entities that follow.
+`engine::FixedTimestep` in `src/core/timestep.h` steps the solver at a fixed rate whatever the
+frame rate, and `Simulation::interpolate` blends the last two steps into the pose a frame draws.
+`physics::World::debug_lines` reads the wireframe out of Box3D and `render::DebugLinePass` draws
+it, behind `--physics-debug` and a reflected `ViewSettings` field.
+
+The milestone test passes: a stack of three crates stands in the sandbox room and a crate thrown
+from the camera knocks it over. `--throw-at-frame <n>` fires the same throw on a fixed frame, so
+an offscreen capture of it is reproducible.
+
+**The simulation is deterministic.** Three offscreen runs of the same command, with the solver on
+eight workers and a crate thrown on a fixed frame, produce byte-identical images. Working the
+step count out by dividing rather than subtracting cost a step of every second, because 1/60 is
+not a number a float holds: one second divided by it gives 59.99998 and truncates to 59.
+
+Box3D turned out to need nothing patched. What it did cost is four things that had to be read
+out of its source: gravity is -10 rather than -9.8, a sleeping body ignores a velocity of zero
+silently, the debug wireframe of a shape is cached by the application through a callback on the
+world definition, and a hull stores half-edges so every edge is in the array twice. `DESIGN.md`
+section 5 holds all four.
+
+Verified on 2026-08-11 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. Two blended panes drew over the
 opaque scene with no validation message either. Synchronization validation reports nothing over
-300 frames offscreen and 200 windowed, on the sandbox and on Intel Sponza.
+300 frames offscreen and 200 windowed, on the sandbox and on Intel Sponza, and nothing over 300
+offscreen frames with the physics wireframe drawing.
 
 The build produces sixteen warnings, which is issue #179. Fifteen are one line in
 `src/reflect/registry.h` counted once for each translation unit that instantiates it, and the
