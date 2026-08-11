@@ -2,6 +2,7 @@
 
 #include "core/assert.h"
 #include "core/log.h"
+#include "ui/font.h"
 #include "ui/image.h"
 
 #include <algorithm>
@@ -12,6 +13,9 @@
 namespace engine::ui {
 
     namespace {
+
+        /// What share of the leftover space sits before centered text.
+        constexpr float kCenterShare = 0.5F;
 
         // The swapchain is B8G8R8A8_SRGB, so the hardware encodes linear to
         // sRGB when it writes. A moth_ui colour is authored as sRGB, so it has
@@ -472,14 +476,99 @@ namespace engine::ui {
                               moth_ui::TextHorizAlignment horizontal,
                               moth_ui::TextVertAlignment vertical,
                               const moth_ui::IntRect& dest_rect) {
-        // Issue #199, and the heaviest part of the milestone. moth_ui::IFont
-        // declares no method at all, so the engine owns rasterization, the
-        // atlas, measurement and both alignments.
-        (void)text;
-        (void)font;
-        (void)horizontal;
-        (void)vertical;
-        (void)dest_rect;
+        // Another backend's font would carry another backend's atlas. The
+        // reference backend casts the same way and returns on a miss.
+        auto* ours = dynamic_cast<Font*>(&font);
+        if (ours == nullptr) {
+            ENGINE_LOG_ERROR("A layout drew text with a font this renderer did not make.");
+            return;
+        }
+        if (text.empty() || !ours->texture().valid()) {
+            return;
+        }
+
+        const std::vector<WrappedLine> lines = ours->wrap(text, dest_rect.w());
+        if (lines.empty()) {
+            return;
+        }
+
+        // A glyph is coverage in alpha, so it has to blend. moth_ui pushes no
+        // blend mode around a text node, and the recorder starts at Replace,
+        // which takes the pipeline that does not blend. The coverage then stops
+        // shaping the edge of a letter, and the text draws thickened and hard
+        // edged. That was captured rather than assumed: deleting this line
+        // moves the picture and leaves the text readable but wrong, which is
+        // the kind of error a screenshot has to catch because nothing reports
+        // it. The reference backend forces the same mode. Pushing it rather
+        // than setting it restores whatever the caller had.
+        PushBlendMode(moth_ui::BlendMode::Alpha);
+
+        const int line_height = ours->line_height();
+        const auto stack_height = static_cast<int>(lines.size()) * line_height;
+
+        auto pen_y = static_cast<float>(dest_rect.topLeft.y);
+        switch (vertical) {
+        case moth_ui::TextVertAlignment::Top:
+            break;
+        case moth_ui::TextVertAlignment::Middle:
+            pen_y += static_cast<float>(dest_rect.h() - stack_height) * kCenterShare;
+            break;
+        case moth_ui::TextVertAlignment::Bottom:
+            pen_y += static_cast<float>(dest_rect.h() - stack_height);
+            break;
+        }
+
+        // Down to the baseline of the first line. The descent is negative, so
+        // this sits the line inside its own height rather than letting a
+        // descender hang past the bottom of it.
+        pen_y += static_cast<float>(line_height + ours->descent());
+
+        // Every glyph comes from one atlas, so the whole string is one run.
+        want_texture(ours->texture());
+
+        for (const WrappedLine& line : lines) {
+            auto pen_x = static_cast<float>(dest_rect.topLeft.x);
+            switch (horizontal) {
+            case moth_ui::TextHorizAlignment::Left:
+                break;
+            case moth_ui::TextHorizAlignment::Center:
+                pen_x += static_cast<float>(dest_rect.w() - line.width) * kCenterShare;
+                break;
+            case moth_ui::TextHorizAlignment::Right:
+                pen_x += static_cast<float>(dest_rect.w() - line.width);
+                break;
+            }
+
+            for (const ShapedGlyph& shaped : ours->shape(line.text)) {
+                if (shaped.glyph >= 0) {
+                    const Glyph& glyph = ours->glyph(shaped.glyph);
+                    // A space carries an advance and no coverage, and a quad of
+                    // no area would still cost two triangles.
+                    if (glyph.width > 0 && glyph.height > 0) {
+                        const float x0 = pen_x + static_cast<float>(glyph.bearing_x) +
+                                         static_cast<float>(shaped.offset_x);
+                        // The shaping offset is positive upward and the screen
+                        // is positive downward, so this one subtracts. The
+                        // bearing is already stored the screen way round.
+                        const float y0 = pen_y + static_cast<float>(glyph.bearing_y) -
+                                         static_cast<float>(shaped.offset_y);
+                        add_quad(Quad{ .x0 = x0,
+                                       .y0 = y0,
+                                       .x1 = x0 + static_cast<float>(glyph.width),
+                                       .y1 = y0 + static_cast<float>(glyph.height),
+                                       .u0 = glyph.u0,
+                                       .v0 = glyph.v0,
+                                       .u1 = glyph.u1,
+                                       .v1 = glyph.v1 },
+                                 plain_white());
+                    }
+                }
+                pen_x += static_cast<float>(shaped.advance_x);
+            }
+            pen_y += static_cast<float>(line_height);
+        }
+
+        PopBlendMode();
     }
 
     void Renderer::SetRendererLogicalSize(const moth_ui::IntVec2& size) {

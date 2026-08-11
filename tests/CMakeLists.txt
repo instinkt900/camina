@@ -206,6 +206,11 @@ if(ENGINE_WITH_UI)
     engine_set_warnings(test_ui_renderer)
     engine_enable_clang_tidy(test_ui_renderer)
 
+    # M6.4 draws text through the recorder, so this needs the sandbox font too.
+    target_compile_definitions(test_ui_renderer PRIVATE
+        ENGINE_TEST_FONT_PATH="${CMAKE_SOURCE_DIR}/sandbox/content/ui/fonts/LiberationSans-Regular.ttf"
+    )
+
     add_test(NAME ui_renderer COMMAND test_ui_renderer)
 
     # M6.4. The font rasterizes, packs, shapes, measures and wraps with no

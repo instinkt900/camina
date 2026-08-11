@@ -6,6 +6,7 @@
 add_library(engine_ui STATIC
     ui.cpp
     font.cpp
+    font_factory.cpp
     image.cpp
     renderer.cpp
     stb_rect_pack_impl.cpp
