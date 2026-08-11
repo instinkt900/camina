@@ -73,6 +73,48 @@ namespace {
     /// and one that is shaking on the spot moves far more.
     constexpr float kRestTolerance = 1e-4F;
 
+    /// Tall enough to fall over and be seen doing it, short enough to settle
+    /// quickly. This is the stack the sandbox carries.
+    constexpr std::uint32_t kStackHeight = 4;
+
+    /// A millimeter between crates at the start, so the stack settles under
+    /// gravity rather than resolving an overlap it began with.
+    constexpr float kStackGap = 1e-3F;
+
+    /// Two centimeters. A settled stack sinks a little into its contacts,
+    /// because a solver resolves penetration rather than forbidding it.
+    constexpr float kStackTolerance = 2e-2F;
+
+    /**
+     * Meters each second, along +X.
+     *
+     * Fast enough that the drop over the flight is small. A throw is a velocity
+     * set once, so gravity bends the path for as long as it is in the air. At
+     * 25 metres each second it crosses the three metres to the stack in an
+     * eighth of a second and falls under eight centimeters doing it, so it
+     * arrives where it was aimed.
+     */
+    constexpr float kThrowSpeed = 25.0F;
+
+    /**
+     * Where the throw starts, and what it is aimed at.
+     *
+     * **The height is the whole test.** A first attempt threw at 1.2 metres and
+     * the ball dropped to the floor before it arrived, so it struck the bottom
+     * crate at its base and bounced off. The stack shifted 11 centimeters and
+     * stood. Toppling a stack is leverage: a hit near the top turns the crates
+     * above the contact over, and a hit at the bottom just shoves the whole
+     * mass along.
+     */
+    constexpr Vec3 kThrowFrom{ -4.0F, 2.6F, 0.0F };
+
+    /// A quarter of a crate. Less than this is a stack that shifted, and more
+    /// is one that came apart.
+    constexpr float kKnockedTolerance = 0.25F;
+
+    /// Two seconds at the fixed rate, which settles this stack with room over.
+    constexpr std::uint32_t kSettleSteps = 120;
+
     /// A stack big enough that the solver has real work to split.
     constexpr std::uint32_t kLargeWidth = 8;
     constexpr std::uint32_t kLargeHeight = 12;
@@ -679,6 +721,139 @@ namespace {
         check(widest < kRestTolerance, "and it is still over the last half second");
     }
 
+    /// Builds a tower of crates on a floor, and hands back the crate entities.
+    std::vector<entt::entity> stack_scene(sc::World& world, std::uint32_t height) {
+        const entt::entity floor = add_physics_entity(world, ph::BodyType::Static,
+                                                      Vec3{ 0.0F, -1.0F, 0.0F });
+        world.registry().get<ph::BoxCollider>(floor).half_extents = Vec3{ 50.0F, 1.0F, 50.0F };
+
+        std::vector<entt::entity> crates;
+        for (std::uint32_t level = 0; level < height; ++level) {
+            // A hair of a gap, so the stack starts apart and settles under
+            // gravity rather than starting inside itself. A stack built already
+            // overlapping resolves that overlap by pushing, which looks like an
+            // explosion and is not what this measures.
+            const float y = (static_cast<float>(level) * (kBoxHalfSize * 2.0F + kStackGap)) +
+                            kBoxHalfSize;
+            crates.push_back(
+                add_physics_entity(world, ph::BodyType::Dynamic, Vec3{ 0.0F, y, 0.0F }));
+        }
+        return crates;
+    }
+
+    /// Steps a settled scene at the fixed rate and writes the drawn pose out.
+    void settle(sc::World& world, ph::Simulation& simulation, std::uint32_t steps) {
+        for (std::uint32_t i = 0; i < steps; ++i) {
+            simulation.step(world, kStep);
+        }
+        simulation.interpolate(world, 1.0F);
+    }
+
+    void a_stack_stands_and_settles() {
+        section("A stack of crates stands and comes to rest");
+
+        sc::World world;
+        const std::vector<entt::entity> crates = stack_scene(world, kStackHeight);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, kSettleSteps);
+
+        // Each crate ends up about its own height above the one below. A stack
+        // that sank into the floor, or exploded, fails this rather than needing
+        // somebody to look at it.
+        for (std::size_t level = 0; level < crates.size(); ++level) {
+            const float expected = (static_cast<float>(level) * kBoxHalfSize * 2.0F) + kBoxHalfSize;
+            const float actual = world.local(crates[level]).position.y;
+            check(std::fabs(actual - expected) < kStackTolerance,
+                  "the crate rests where the one below it puts it");
+        }
+
+        // And it is still. A stack that never settles keeps shivering, which
+        // reads as a rendering fault and is a solver one.
+        const float before = world.local(crates.back()).position.y;
+        settle(world, simulation, 60);
+        check(std::fabs(world.local(crates.back()).position.y - before) < kRestTolerance,
+              "and it does not move over the second after that");
+    }
+
+    void something_thrown_knocks_the_stack_over() {
+        section("Something thrown at the stack knocks it over");
+
+        sc::World world;
+        const std::vector<entt::entity> crates = stack_scene(world, kStackHeight);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, kSettleSteps);
+
+        const float top_before = world.local(crates.back()).position.y;
+        const float top_x_before = world.local(crates.back()).position.x;
+
+        // The projectile joins a world that is already running. build() would
+        // answer this by rebuilding every body, which puts the settled stack
+        // back where the scene file put it and loses what this test is about.
+        const entt::entity ball = world.create();
+        world.set_local(ball, engine::Transform{ .position = kThrowFrom });
+        world.registry().emplace<ph::RigidBody>(ball);
+        world.registry().emplace<ph::SphereCollider>(ball, ph::SphereCollider{ .radius = 0.4F });
+
+        check(simulation.add_body(world, ball), "the thrown body joins the running world");
+        check(simulation.body_count() == crates.size() + 2, "and every other body is still there");
+        check(simulation.set_linear_velocity(ball, Vec3{ kThrowSpeed, 0.0F, 0.0F }),
+              "and it was given a velocity");
+
+        settle(world, simulation, kSettleSteps);
+
+        // The stack is a stack no longer. Either the top crate came down, or it
+        // was carried sideways off the one below. Both are it falling over, and
+        // demanding one of them in particular would be describing this throw
+        // rather than the milestone.
+        const float top_after = world.local(crates.back()).position.y;
+        const float moved_sideways = std::fabs(world.local(crates.back()).position.x - top_x_before);
+        check(top_after < top_before - kKnockedTolerance || moved_sideways > kKnockedTolerance,
+              "the top crate is no longer where the stack left it");
+    }
+
+    void a_body_added_late_leaves_the_others_alone() {
+        section("Adding one body does not disturb the bodies already there");
+
+        sc::World world;
+        const std::vector<entt::entity> crates = stack_scene(world, kStackHeight);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, kSettleSteps);
+
+        std::vector<float> before;
+        before.reserve(crates.size());
+        for (const entt::entity crate : crates) {
+            before.push_back(world.local(crate).position.y);
+        }
+
+        // Far enough away that it touches nothing. Anything that moves in the
+        // stack moved because the add disturbed it, which is what build()
+        // would do and what add_body() exists not to do.
+        const entt::entity spare = world.create();
+        world.set_local(spare, engine::Transform{ .position = { 20.0F, 0.5F, 0.0F } });
+        world.registry().emplace<ph::RigidBody>(spare);
+        world.registry().emplace<ph::BoxCollider>(spare);
+        check(simulation.add_body(world, spare), "the spare body is added");
+
+        settle(world, simulation, 1);
+
+        bool unmoved = true;
+        for (std::size_t i = 0; i < crates.size(); ++i) {
+            unmoved = unmoved && std::fabs(world.local(crates[i]).position.y - before[i]) <
+                                     kRestTolerance;
+        }
+        check(unmoved, "every crate in the stack is where it was");
+
+        check(!simulation.add_body(world, spare), "adding the same entity twice is refused");
+        check(!simulation.set_linear_velocity(world.create(), Vec3{ 1.0F, 0.0F, 0.0F }),
+              "an entity with no body cannot be given a velocity");
+    }
+
 } // namespace
 
 int main() {
@@ -699,6 +874,9 @@ int main() {
     a_blended_rotation_stays_a_rotation();
     a_faster_display_than_the_step_rate_does_not_judder();
     a_crate_comes_to_rest();
+    a_stack_stands_and_settles();
+    something_thrown_knocks_the_stack_over();
+    a_body_added_late_leaves_the_others_alone();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();

@@ -77,6 +77,39 @@ namespace engine::physics {
         void build(scene::World& world);
 
         /**
+         * @brief Gives one entity a body, leaving every other body alone.
+         *
+         * This is what adds something to a world that is already running, such
+         * as a projectile somebody threw. build() would answer the same
+         * question by destroying every body and reading the scene again, which
+         * loses the velocity of everything already moving and puts a settled
+         * stack back where the scene file put it.
+         *
+         * The entity needs a RigidBody, and it follows the same rules build()
+         * follows. A dynamic body under a parent is refused here too.
+         *
+         * @param world The scene holding the entity.
+         * @param entity The entity to give a body to.
+         * @return True when it got one. False when the entity is not valid, has
+         *         no RigidBody, already has a body, or is a parented dynamic
+         *         body. The last one logs why.
+         */
+        bool add_body(scene::World& world, entt::entity entity);
+
+        /**
+         * @brief Sets how fast one entity's body is moving.
+         *
+         * A throw is this and nothing else: create the body where the thrower
+         * is, then give it a velocity. A velocity that is not zero also wakes
+         * the body, so it disturbs a stack that has settled.
+         *
+         * @param entity The entity to move. One with no body is ignored.
+         * @param velocity Meters each second, in world space.
+         * @return True when the entity had a body to move.
+         */
+        bool set_linear_velocity(entt::entity entity, const Vec3& velocity);
+
+        /**
          * @brief Advances the simulation by one fixed step.
          *
          * Three things happen in order. Every static and kinematic body takes
@@ -152,6 +185,20 @@ namespace engine::physics {
             Vec3 position{ 0.0F, 0.0F, 0.0F };                ///< Where the last step left it.
             Quat rotation{ 1.0F, 0.0F, 0.0F, 0.0F };          ///< How the last step left it turned.
         };
+
+        /**
+         * Builds one body from what an entity describes.
+         *
+         * build() and add_body() share this, so the rules about colliders and
+         * about a parented dynamic body are written once. Two copies would
+         * drift, and the one that drifted would be the incremental path that
+         * runs less often.
+         *
+         * @param world The scene to read. Its matrices must be current.
+         * @param entity The entity to read, which must have a RigidBody.
+         * @return True when a body was created.
+         */
+        bool create_body(scene::World& world, entt::entity entity);
 
         World m_world;
         std::unordered_map<entt::entity, Body> m_bodies;
