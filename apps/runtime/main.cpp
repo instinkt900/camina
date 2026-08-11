@@ -33,6 +33,10 @@
 #include "ui/ui.h"
 #include "ui/font_factory.h"
 #include "ui/ui_pass.h"
+
+#include <moth_ui/context.h>
+#include <moth_ui/layout/layout.h>
+#include <moth_ui/nodes/node.h>
 #endif
 
 #include <SDL3/SDL.h>
@@ -974,8 +978,22 @@ namespace {
     }
 
     void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent,
-                         const moth_ui::IImage* image, moth_ui::IFont* font) {
+                         const moth_ui::IImage* image, moth_ui::IFont* font,
+                         moth_ui::Node* layout) {
         renderer.begin(extent.width, extent.height);
+
+        // M6.5. The layout first, so the probe below draws over it and a
+        // regression in either one stays readable against the other.
+        //
+        // The screen rectangle is set on every frame rather than once, because
+        // the device can settle on a size the window never asked for and a
+        // resize has to reach the tree. moth_ui lays the children out from it.
+        if (layout != nullptr) {
+            layout->SetScreenRect(moth_ui::IntRect{
+                { 0, 0 },
+                { static_cast<int>(extent.width), static_cast<int>(extent.height) } });
+            layout->Draw();
+        }
 
         // A solid bar across the top.
         renderer.PushColor(moth_ui::Color{ 0.10F, 0.55F, 0.85F, 1.0F });
@@ -1071,6 +1089,8 @@ namespace {
         const moth_ui::IImage* ui_image = nullptr;
         /// The font the probe draws text with, or null when none loaded.
         moth_ui::IFont* ui_font = nullptr;
+        /// The instantiated layout, or null when none loaded.
+        moth_ui::Node* ui_layout = nullptr;
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
@@ -1283,7 +1303,7 @@ namespace {
             // different size, and the scissor and the vertex normalization both
             // have to agree with the image actually being drawn into.
             record_ui_probe(*context.ui_renderer, info.extent, context.ui_image,
-                            context.ui_font);
+                            context.ui_font, context.ui_layout);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -1339,8 +1359,15 @@ namespace {
         std::unique_ptr<moth_ui::IImage> ui_image;
         /// M6.4. Turns a font name in a layout into a rasterized atlas.
         engine::ui::FontFactory ui_fonts;
-        /// The one font the probe draws. Issue #200 replaces it with a layout.
+        /// The one font the probe draws, and the one a layout names.
         std::shared_ptr<moth_ui::IFont> ui_font;
+        /// M6.5. What moth_ui needs to build a node tree: the two factories and
+        /// the renderer. Held by pointer because Context takes them by pointer
+        /// and has no default constructor.
+        std::unique_ptr<moth_ui::Context> ui_context;
+        /// The instantiated layout. Null when none loaded, and the probe then
+        /// draws on its own.
+        std::shared_ptr<moth_ui::Node> ui_layout;
 #endif
         /// Carried across frames, because the shadow map and the scene color are
         /// each one image that every frame in flight shares.
@@ -1371,6 +1398,44 @@ namespace {
      * that is not an error. The program runs on with the assets it already
      * has, which is what a shipped build does.
      */
+#if defined(ENGINE_WITH_UI)
+    /**
+     * Builds the moth_ui node tree for the sandbox layout.
+     *
+     * The layout is a cooked asset, so it is read out of the cooked tree rather
+     * than out of `sandbox/content`. That matters for more than tidiness:
+     * `moth_ui::Layout::Load` resolves an image path against the directory the
+     * layout was read from, so a layout read from the source tree would name
+     * source images and none of them would be in the manifest.
+     *
+     * A failure here is not fatal. The layout is one part of the frame, and a
+     * scene that draws without it is more useful than a runtime that refuses to
+     * start.
+     */
+    void load_ui_layout(Runtime& runtime) {
+        const std::filesystem::path path = runtime.game_content.root() / "ui/main.mothui";
+
+        auto [layout, result] = moth_ui::Layout::Load(path);
+        if (result != moth_ui::Layout::LoadResult::Success || !layout) {
+            ENGINE_LOG_ERROR("The UI layout {} did not load, and nothing will draw from it.",
+                             path.generic_string());
+            return;
+        }
+
+        runtime.ui_context = std::make_unique<moth_ui::Context>(
+            &runtime.ui_images, &runtime.ui_fonts, &runtime.ui_renderer);
+
+        runtime.ui_layout = layout->Instantiate(*runtime.ui_context);
+        if (!runtime.ui_layout) {
+            ENGINE_LOG_ERROR("The UI layout {} loaded and would not instantiate.",
+                             path.generic_string());
+            runtime.ui_context.reset();
+            return;
+        }
+        ENGINE_LOG_INFO("The UI layout {} loaded.", path.filename().generic_string());
+    }
+#endif
+
     void start_hot_reload(Runtime& runtime, const Options& options) {
         if (!options.hot_reload) {
             ENGINE_LOG_INFO("Hot reload is off, because --no-watch was given.");
@@ -1622,12 +1687,15 @@ namespace {
         runtime.mesh.destroy();
         runtime.shadow.destroy();
 #if defined(ENGINE_WITH_UI)
-        // The image before the factory, because the factory owns the texture it
-        // names and the image must not outlive it.
+        // Outermost first. The node tree holds an IImage and an IFont, those
+        // hold texture handles, and the two factories own the textures. So the
+        // order is tree, then the things it points at, then the factories that
+        // own those.
+        runtime.ui_layout.reset();
+        runtime.ui_context.reset();
+
         runtime.ui_image.reset();
         runtime.ui_images.destroy();
-        // The font before the factory, for the reason the image goes before
-        // the image factory: the factory owns the atlas the font names.
         runtime.ui_font.reset();
         runtime.ui_fonts.destroy();
         runtime.ui_pass.destroy();
@@ -1920,14 +1988,25 @@ int main(int argc, char** argv) {
     }
 
     // The same resolution story as the image above, and the same restart rule.
-    // A layout names a font, so the runtime registers the one the sandbox
-    // ships. Issue #200 replaces this with a layout that names its own.
+    //
+    // A layout names a font by a registered name rather than by a path, so the
+    // runtime registers the one the sandbox ships. That is the game telling the
+    // engine what its fonts are called, and it has no equivalent for an image:
+    // moth_ui names an image by a path and a font by a name. See DESIGN.md
+    // section 8.4.
     if (!runtime.ui_fonts.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI font factory did not start. No layout text will draw.");
     } else {
         runtime.ui_fonts.AddFont("body", "ui/fonts/LiberationSans-Regular.ttf");
         runtime.ui_font = runtime.ui_fonts.GetDefaultFont(kUiProbeFontSize);
     }
+
+    // M6.5. One layout, which is the done-when test for M6.
+    //
+    // The tree is built once and never animated. Update() would advance the
+    // keyframe tracks, and every track here holds one frame, so a static layout
+    // needs no tick. Animation, input and widgets are all M10.
+    load_ui_layout(runtime);
 #endif
 
     engine::scene::World world;
@@ -1955,6 +2034,7 @@ int main(int argc, char** argv) {
         .ui_renderer = &runtime.ui_renderer,
         .ui_image = runtime.ui_image.get(),
         .ui_font = runtime.ui_font.get(),
+        .ui_layout = runtime.ui_layout.get(),
 #endif
         .overlay = runtime.overlay,
         .resource_states = &runtime.states,

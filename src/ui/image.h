@@ -18,6 +18,35 @@
 namespace engine::ui {
 
     /**
+     * @brief Turns the path a layout gave into the source path the manifest holds.
+     *
+     * **moth_ui hands a backend an absolute path.** `LayoutEntityImage`
+     * deserializes `imagePath` as
+     * `std::filesystem::absolute(layout directory / stored path)`, so a layout
+     * that stores `panel.png` produces an absolute path into the cooked tree.
+     * The engine names an asset by a source path, and the manifest is keyed on
+     * one, so an absolute path matches nothing.
+     *
+     * This undoes that. The cooked tree mirrors the source tree, so a cooked
+     * path made relative to the cooked root is the source path again. That
+     * holds even when the cooker renames the output, because the manifest is
+     * keyed on the source and `ui/panel.png` cooks to `ui/panel.png.tex`.
+     *
+     * A path that is already relative passes through, which is what a caller
+     * outside a layout gives.
+     *
+     * `DESIGN.md` section 8.4 records which side this belongs on and why the
+     * fix landed here rather than in moth_ui.
+     *
+     * @param path The path from the layout. Absolute or relative.
+     * @param cooked_root The directory `assets::Content` was opened on.
+     * @return A path with forward slashes, relative to the content root. Empty
+     * when an absolute path falls outside the cooked tree.
+     */
+    [[nodiscard]] std::string source_path_for(const std::filesystem::path& path,
+                                              const std::filesystem::path& cooked_root);
+
+    /**
      * @brief One cooked texture, as moth_ui sees it.
      *
      * moth_ui asks an image for its size and passes it back to the renderer.

@@ -3,8 +3,44 @@
 #include "core/log.h"
 
 #include <string>
+#include <system_error>
 
 namespace engine::ui {
+
+    std::string source_path_for(const std::filesystem::path& path,
+                                const std::filesystem::path& cooked_root) {
+        // A path that climbs out of the cooked tree is not a cooked asset, and
+        // returning it would send "../.." to the manifest as if it were a key.
+        //
+        // The test is the first component and not the first two characters. A
+        // file may legitimately be called "..panel.png", and a string compare
+        // would refuse it.
+        const auto escapes = [](const std::filesystem::path& candidate) {
+            return !candidate.empty() && *candidate.begin() == std::filesystem::path{ ".." };
+        };
+
+        // Normalize first, so "ui/../panel.png" reaches the manifest as
+        // "panel.png". The manifest holds the path the cooker walked, which
+        // never has a "." or a ".." in it.
+        const std::filesystem::path normalized = path.lexically_normal();
+
+        if (!normalized.is_absolute()) {
+            if (escapes(normalized)) {
+                return {};
+            }
+            // generic_string() is what makes a layout authored on Windows find
+            // the same asset on Linux.
+            return normalized.generic_string();
+        }
+
+        std::error_code error;
+        const std::filesystem::path relative =
+            std::filesystem::relative(normalized, cooked_root.lexically_normal(), error);
+        if (error || relative.empty() || escapes(relative)) {
+            return {};
+        }
+        return relative.generic_string();
+    }
 
     Image::Image(gfx::TextureHandle texture, int width, int height)
         : texture_(texture)
@@ -46,10 +82,15 @@ namespace engine::ui {
             return nullptr;
         }
 
-        // The layout stores a source path and the manifest is keyed on one, so
-        // this is the whole of the resolution. generic_string() is what makes a
-        // layout authored on Windows find the same asset on Linux.
-        const std::string source = path.generic_string();
+        // moth_ui absolutizes the path a layout stores, so this undoes that
+        // before the manifest sees it. See source_path_for().
+        const std::string source = source_path_for(path, content_->root());
+        if (source.empty()) {
+            ENGINE_LOG_ERROR("The layout names the image {}, which is not inside the cooked "
+                             "content tree at {}.",
+                             path.generic_string(), content_->root().generic_string());
+            return nullptr;
+        }
         const assets::ManifestEntry* entry = content_->find(source);
         if (entry == nullptr) {
             ENGINE_LOG_ERROR("The layout names the image {}, which the cooked content tree "
