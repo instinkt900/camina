@@ -80,8 +80,14 @@ namespace engine::reflect {
                                       void* user) {
                     T& object = *static_cast<T*>(instance);
                     for_each_field(object, [&](const auto& field, const auto& value) {
-                        const std::size_t offset = reinterpret_cast<const char*>(&value) -
-                                                   reinterpret_cast<const char*>(&object);
+                        // A pointer difference is signed. This one cannot be
+                        // negative, because value is a member of object, so the
+                        // cast says so rather than leaving the conversion
+                        // implicit. That warning was counted once for every
+                        // translation unit and was most of issue #179.
+                        const auto offset = static_cast<std::size_t>(
+                            reinterpret_cast<const char*>(&value) -
+                            reinterpret_cast<const char*>(&object));
                         visit(field.name(), "", offset, sizeof(value), user);
                     });
                 };

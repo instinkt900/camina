@@ -17,6 +17,10 @@ function(engine_enable_clang_tidy target)
         return()
     endif()
 
+    # Unversioned, which is what CI resolves today. Preferring clang-tidy-19
+    # here is the right answer and it is not taken yet, because switching turns
+    # the gate on and two functions are over the complexity threshold behind it.
+    # See issue #242.
     find_program(CLANG_TIDY_EXE NAMES clang-tidy)
     if(CLANG_TIDY_EXE)
         set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")

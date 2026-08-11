@@ -374,9 +374,9 @@ namespace cooker {
             header.max = { built.max.x, built.max.y, built.max.z };
 
             const std::size_t total = sizeof(header) +
-                                      built.vertices.size() * sizeof(as::MeshVertex) +
-                                      built.indices.size() * sizeof(std::uint32_t) +
-                                      built.submeshes.size() * sizeof(as::MeshSubmesh);
+                                      (built.vertices.size() * sizeof(as::MeshVertex)) +
+                                      (built.indices.size() * sizeof(std::uint32_t)) +
+                                      (built.submeshes.size() * sizeof(as::MeshSubmesh));
             std::vector<std::byte> out(total);
             std::byte* cursor = out.data();
 
@@ -407,12 +407,6 @@ namespace cooker {
                 return false;
             }
             return true;
-        }
-
-        [[nodiscard]] bool write_mesh(const std::filesystem::path& destination,
-                                      const Built& built) {
-            const std::vector<std::byte> bytes = build_mesh_bytes(built);
-            return write_bytes(destination, bytes);
         }
 
     } // namespace
