@@ -6,10 +6,14 @@
 #include "core/profile.h"
 
 #include <box3d/box3d.h>
+#include <glm/gtc/constants.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cmath>
+#include <cstddef>
+#include <vector>
 
 namespace engine::physics {
 
@@ -95,6 +99,154 @@ namespace engine::physics {
             return Quat{ q.s, q.v.x, q.v.y, q.v.z };
         }
 
+        /// How many segments make one circle of a sphere wireframe. Twelve reads
+        /// as round at the size a collider is normally looked at, and it keeps a
+        /// sphere to 36 lines across its three rings.
+        constexpr int kCircleSegments = 12;
+
+        /// The sRGB transfer exponent. The exact curve has a linear toe near
+        /// zero, and this is the approximation everything uses for a color that
+        /// somebody picked by eye rather than measured.
+        constexpr float kSrgbGamma = 2.2F;
+
+        /**
+         * The wireframe of one shape, in the local space of its body.
+         *
+         * Box3D calls for this once, the first time it draws a shape, and hands
+         * the pointer back on every draw after that. So the edges of a hull are
+         * walked once rather than once for each frame.
+         *
+         * The points are pairs. Points 0 and 1 are a line, 2 and 3 are the next.
+         */
+        struct Wireframe {
+            std::vector<Vec3> points;
+        };
+
+        /// Turns a Box3D debug color into the linear working space of section 3.
+        [[nodiscard]] Vec3 from_box3d(b3HexColor color) {
+            constexpr float kByte = 255.0F;
+            const auto value = static_cast<std::uint32_t>(color);
+            const Vec3 encoded{ static_cast<float>((value >> 16U) & 0xFFU) / kByte,
+                                static_cast<float>((value >> 8U) & 0xFFU) / kByte,
+                                static_cast<float>(value & 0xFFU) / kByte };
+
+            // Box3D names its colors the way CSS does, so they are sRGB. The
+            // engine works in linear light and converts at the write, so a color
+            // handed over encoded arrives at the display twice encoded and far
+            // too bright. See DESIGN.md section 3.
+            return glm::pow(encoded, Vec3{ kSrgbGamma, kSrgbGamma, kSrgbGamma });
+        }
+
+        /// Appends one circle around `axis`, in the local space of the shape.
+        void add_circle(std::vector<Vec3>& points, const Vec3& center, float radius,
+                        const Vec3& first, const Vec3& second) {
+            for (int i = 0; i < kCircleSegments; ++i) {
+                const auto angle = [](int step) {
+                    return glm::two_pi<float>() * static_cast<float>(step) /
+                           static_cast<float>(kCircleSegments);
+                };
+                const float from = angle(i);
+                const float to = angle(i + 1);
+                points.push_back(center + (first * std::cos(from) * radius) +
+                                 (second * std::sin(from) * radius));
+                points.push_back(center + (first * std::cos(to) * radius) +
+                                 (second * std::sin(to) * radius));
+            }
+        }
+
+        /**
+         * Walks the half-edges of a hull and writes each edge once.
+         *
+         * A hull stores half-edges, so every edge is in the array twice, once
+         * from each end. Emitting both would draw the whole wireframe twice.
+         * Taking only the half whose index is below its twin's is what picks
+         * exactly one of each pair.
+         *
+         * The arrays are reached through byte offsets from the struct itself
+         * rather than by pointer members, which is how Box3D keeps a hull one
+         * contiguous block it can hash and share.
+         */
+        void add_hull(std::vector<Vec3>& points, const b3HullData* hull) {
+            const auto* base = reinterpret_cast<const std::byte*>(hull);
+            const auto* vertices = reinterpret_cast<const b3Vec3*>(base + hull->pointOffset);
+            const auto* edges = reinterpret_cast<const b3HullHalfEdge*>(base + hull->edgeOffset);
+
+            for (int i = 0; i < hull->edgeCount; ++i) {
+                const b3HullHalfEdge& edge = edges[i];
+                if (i >= static_cast<int>(edge.twin)) {
+                    continue;
+                }
+                const b3Vec3 from = vertices[edge.origin];
+                const b3Vec3 to = vertices[edges[edge.twin].origin];
+                points.push_back(Vec3{ from.x, from.y, from.z });
+                points.push_back(Vec3{ to.x, to.y, to.z });
+            }
+        }
+
+        /// Builds the wireframe Box3D will hand back on every later draw.
+        void* create_debug_shape(const b3DebugShape* shape, void* context) {
+            (void)context;
+            // Raw new, because Box3D owns this pointer from here and hands it to
+            // destroy_debug_shape when the shape changes or goes away. That is
+            // exactly the lifetime, and no smart pointer can cross a void*.
+            auto* frame = new Wireframe{};
+
+            switch (shape->type) {
+            case b3_hullShape:
+                add_hull(frame->points, shape->hull);
+                break;
+            case b3_sphereShape: {
+                const Vec3 center{ shape->sphere->center.x, shape->sphere->center.y,
+                                   shape->sphere->center.z };
+                const float radius = shape->sphere->radius;
+                add_circle(frame->points, center, radius, Vec3{ 1, 0, 0 }, Vec3{ 0, 1, 0 });
+                add_circle(frame->points, center, radius, Vec3{ 0, 1, 0 }, Vec3{ 0, 0, 1 });
+                add_circle(frame->points, center, radius, Vec3{ 1, 0, 0 }, Vec3{ 0, 0, 1 });
+                break;
+            }
+            default:
+                // A capsule, a mesh, a height field or a compound. Nothing adds
+                // one today, and an empty wireframe draws nothing rather than
+                // drawing something wrong.
+                ENGINE_LOG_WARN("Physics debug draw has no wireframe for shape type {}, so that "
+                                "collider draws nothing.",
+                                static_cast<int>(shape->type));
+                break;
+            }
+            return frame;
+        }
+
+        void destroy_debug_shape(void* user_shape, void* context) {
+            (void)context;
+            delete static_cast<Wireframe*>(user_shape);
+        }
+
+        /// Where the lines land while Box3D walks the world.
+        struct LineSink {
+            std::vector<DebugLine>* out = nullptr;
+        };
+
+        /// Puts one shape's cached wireframe into world space.
+        void draw_shape(void* user_shape, b3WorldTransform transform, b3HexColor color,
+                        void* context) {
+            const auto* frame = static_cast<const Wireframe*>(user_shape);
+            auto* sink = static_cast<LineSink*>(context);
+            if (frame == nullptr || sink == nullptr) {
+                return;
+            }
+
+            const Vec3 origin{ transform.p.x, transform.p.y, transform.p.z };
+            const Quat rotation = from_box3d(transform.q);
+            const Vec3 linear = from_box3d(color);
+
+            for (std::size_t i = 0; i + 1 < frame->points.size(); i += 2) {
+                sink->out->push_back(DebugLine{
+                    .from = origin + (rotation * frame->points[i]),
+                    .to = origin + (rotation * frame->points[i + 1]),
+                    .color = linear });
+            }
+        }
+
         [[nodiscard]] b3BodyType to_box3d(BodyType type) {
             switch (type) {
             case BodyType::Static:
@@ -140,6 +292,14 @@ namespace engine::physics {
         // callbacks reach it by name. Box3D still passes the pointer back, so a
         // later world that needs its own scheduler can fill this in.
         def.userTaskContext = nullptr;
+
+        // Box3D asks for the wireframe of a shape once and hands the pointer
+        // back on every draw. Registering the pair here rather than at the first
+        // draw is what lets it destroy them when a shape changes, which is the
+        // only thing that knows a cached wireframe went stale.
+        def.createDebugShape = create_debug_shape;
+        def.destroyDebugShape = destroy_debug_shape;
+        def.userDebugShapeContext = nullptr;
 
         m_world = pack(b3CreateWorld(&def));
 
@@ -224,6 +384,23 @@ namespace engine::physics {
         // b3WakeBodyWithLock before it writes. Waking it here as well would
         // cost a settled stack its sleep every time something asked it to stop.
         b3Body_SetLinearVelocity(unpack_body(body), to_box3d(velocity));
+    }
+
+    void World::debug_lines(std::vector<DebugLine>& out) const {
+        ENGINE_PROFILE_ZONE_N("physics debug lines");
+
+        out.clear();
+
+        LineSink sink{ .out = &out };
+        b3DebugDraw draw = b3DefaultDebugDraw();
+        draw.DrawShapeFcn = draw_shape;
+        draw.drawShapes = true;
+        draw.context = &sink;
+
+        // Every mask bit, so a shape that was given a category of its own is
+        // still reported. A collider nobody can see is the thing this exists to
+        // find, and filtering it out here would hide exactly that.
+        b3World_Draw(unpack_world(m_world), &draw, UINT64_MAX);
     }
 
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

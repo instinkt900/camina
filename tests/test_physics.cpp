@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -114,6 +115,10 @@ namespace {
 
     /// Two seconds at the fixed rate, which settles this stack with room over.
     constexpr std::uint32_t kSettleSteps = 120;
+
+    /// Five seconds. Box3D puts a body away after it has been slow for a while,
+    /// so this is well past the point where a settled crate is asleep.
+    constexpr std::uint32_t kSleepSteps = 300;
 
     /// A stack big enough that the solver has real work to split.
     constexpr std::uint32_t kLargeWidth = 8;
@@ -863,6 +868,132 @@ namespace {
               "an entity with no body cannot be given a velocity");
     }
 
+    /// The extent of a set of lines along one axis, which is what says whether
+    /// a wireframe is the size and in the place its collider is.
+    struct Extent {
+        float low = 0.0F;
+        float high = 0.0F;
+    };
+
+    [[nodiscard]] Extent extent_y(const std::vector<ph::DebugLine>& lines) {
+        Extent found{ .low = std::numeric_limits<float>::max(),
+                      .high = std::numeric_limits<float>::lowest() };
+        for (const ph::DebugLine& line : lines) {
+            found.low = std::min({ found.low, line.from.y, line.to.y });
+            found.high = std::max({ found.high, line.from.y, line.to.y });
+        }
+        return found;
+    }
+
+    void a_box_draws_its_twelve_edges() {
+        section("A box collider draws as a wireframe box");
+
+        engine::physics::World world;
+        add_box_body(world, ph::BodyType::Static, Vec3{ 0.0F, 0.0F, 0.0F },
+                     Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize });
+
+        std::vector<ph::DebugLine> lines;
+        world.debug_lines(lines);
+
+        // A box has twelve edges. Box3D stores half-edges, so the wireframe is
+        // twenty four of them unless exactly one of each pair is taken. Twenty
+        // four here would mean every line is drawn twice, on top of itself,
+        // which no picture could show.
+        check(lines.size() == 12, "a box draws twelve lines and not twenty four");
+
+        const Extent height = extent_y(lines);
+        check(std::fabs(height.low + kBoxHalfSize) < kBlendTolerance,
+              "the wireframe reaches the bottom of the collider");
+        check(std::fabs(height.high - kBoxHalfSize) < kBlendTolerance,
+              "and the top of it");
+    }
+
+    void a_wireframe_follows_its_body() {
+        section("A wireframe is where the solver has put the body");
+
+        sc::World scene;
+        const entt::entity crate = drop_scene(scene, 6.0F);
+
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        // The highest point rather than the lowest. The floor is in this list
+        // too, and its underside is below everything for the whole run, so the
+        // lowest point never moves however far the crate falls. The crate starts
+        // above the floor and lands above it, so the top is always the crate.
+        std::vector<ph::DebugLine> lines;
+        simulation.world().debug_lines(lines);
+        const float before = extent_y(lines).high;
+
+        settle(scene, simulation, kSettleSteps);
+        simulation.world().debug_lines(lines);
+        const float after = extent_y(lines).high;
+
+        check(after < before, "the wireframe came down with the body");
+
+        // Against the entity rather than against itself. A wireframe drawn from
+        // the components rather than from the solver would agree with the mesh
+        // even when the solver disagreed with both, which is the bug this whole
+        // feature exists to make visible.
+        const float crate_top = scene.local(crate).position.y + kBoxHalfSize;
+        check(std::fabs(after - crate_top) < kStackTolerance,
+              "and it sits where the entity the renderer draws sits");
+    }
+
+    void a_sleeping_body_still_draws() {
+        section("A body that has gone to sleep still draws");
+
+        sc::World scene;
+        drop_scene(scene, 1.0F);
+
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        // Long enough that Box3D has certainly put it away. A settled body
+        // leaves the awake set, and a wireframe that walked the moving bodies
+        // would stop drawing it at exactly that moment. A body asleep in the
+        // wrong place is the one most worth seeing.
+        settle(scene, simulation, kSleepSteps);
+
+        std::vector<ph::DebugLine> lines;
+        simulation.world().debug_lines(lines);
+
+        // The crate and the floor, twelve lines each.
+        check(lines.size() == 24, "both the sleeping crate and the floor still draw");
+
+        // The floor is static and the crate is asleep, and Box3D gives those two
+        // states different colors. So a wireframe that reported one color for
+        // everything would have lost the state, which is half of what makes a
+        // body in the wrong place recognizable.
+        const Vec3 first = lines.front().color;
+        const auto different = std::count_if(
+            lines.begin(), lines.end(),
+            [&first](const ph::DebugLine& line) { return line.color != first; });
+        check(different > 0, "and the sleeping body has a color of its own");
+    }
+
+    void a_sphere_draws_three_rings() {
+        section("A sphere collider draws as three rings");
+
+        engine::physics::World world;
+        const ph::BodyId body =
+            world.add_body(ph::BodyType::Static, Vec3{ 0.0F, 0.0F, 0.0F }, kUpright);
+        world.add_sphere(body, 1.0F, ph::SurfaceMaterial{});
+
+        std::vector<ph::DebugLine> lines;
+        world.debug_lines(lines);
+
+        check(!lines.empty(), "a sphere draws something");
+
+        // Every point is on the surface. A ring built on the wrong pair of axes
+        // still passes a count, and it fails this.
+        bool on_surface = true;
+        for (const ph::DebugLine& line : lines) {
+            on_surface = on_surface && std::fabs(glm::length(line.from) - 1.0F) < kBlendTolerance;
+        }
+        check(on_surface, "and every point of it is on the surface of the sphere");
+    }
+
 } // namespace
 
 int main() {
@@ -886,6 +1017,10 @@ int main() {
     a_stack_stands_and_settles();
     something_thrown_knocks_the_stack_over();
     a_body_added_late_leaves_the_others_alone();
+    a_box_draws_its_twelve_edges();
+    a_sphere_draws_three_rings();
+    a_wireframe_follows_its_body();
+    a_sleeping_body_still_draws();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();
