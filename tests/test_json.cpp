@@ -34,7 +34,48 @@ namespace {
         float shield = 50.0F;    ///< Added in schema version 2.
     };
 
+    /// A described enum, with a gap and an out-of-order value so a document that
+    /// stored the position rather than the value would be caught. Fog is left out
+    /// of the description, the way an enumerator somebody forgot would be.
+    enum class Weather : std::uint8_t {
+        Clear = 0,
+        Rain = 7,
+        Snow = 3,
+        Fog = 42,
+    };
+
+    /// An enum that describes itself no way at all, so this holds the line that
+    /// such a type keeps writing its number and nothing that works today stops.
+    enum class Quality : std::uint8_t { Low = 0,
+                                        High = 1 };
+
+    /// Carries both kinds, so one round trip covers both paths.
+    struct Forecast {
+        Weather weather = Weather::Clear;
+        Quality quality = Quality::Low;
+    };
+
 } // namespace
+
+/// @brief An enum describes itself with enumerators() where a struct uses fields().
+template <>
+struct engine::reflect::Describe<Weather> {
+    static constexpr const char* name = "Weather";
+    static constexpr auto enumerators() {
+        return std::make_tuple(ENGINE_ENUMERATOR(Weather, Clear),
+                               ENGINE_ENUMERATOR(Weather, Rain),
+                               ENGINE_ENUMERATOR(Weather, Snow));
+    }
+};
+
+template <>
+struct engine::reflect::Describe<Forecast> {
+    static constexpr const char* name = "Forecast";
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(Forecast, weather),
+                               ENGINE_FIELD(Forecast, quality));
+    }
+};
 
 template <>
 struct engine::reflect::Describe<Transform> {
@@ -153,6 +194,62 @@ namespace {
         check(loaded.shield == default_shield, "no version key counts as the oldest schema");
     }
 
+    void test_enum_round_trip() {
+        Forecast forecast;
+        forecast.weather = Weather::Snow;
+        forecast.quality = Quality::High;
+
+        const nlohmann::json out = rf::to_json(forecast);
+
+        // The name, not the number. A document that stored 3 for Snow would say
+        // Rain the moment somebody reordered the enumerators.
+        check(out["weather"] == "Snow", "a described enum writes its name");
+        check(out["quality"] == 1, "an undescribed enum still writes its number");
+
+        Forecast loaded;
+        check(rf::from_json(out, loaded), "the document reads back");
+        check(loaded.weather == Weather::Snow, "the described enum survives the trip");
+        check(loaded.quality == Quality::High, "so does the undescribed one");
+    }
+
+    void test_enum_value_with_no_name() {
+        Forecast forecast;
+        forecast.weather = Weather::Fog;
+
+        // Writing the number keeps the value. Writing nothing, or writing a
+        // default, would turn a description somebody forgot to update into a
+        // silent change of the data.
+        const nlohmann::json out = rf::to_json(forecast);
+        check(out["weather"] == 42, "a value the description leaves out writes its number");
+    }
+
+    void test_enum_survives_a_reorder() {
+        // The reason for names. Snow is 3 and Rain is 7, so a reader that took
+        // the position would answer Rain for this document.
+        nlohmann::json document;
+        document["weather"] = "Snow";
+        document["quality"] = 0;
+
+        Forecast loaded;
+        check(rf::from_json(document, loaded), "a hand-written document reads");
+        check(loaded.weather == Weather::Snow, "the name picks the value, not the position");
+    }
+
+    void test_bad_enum_names() {
+        nlohmann::json unknown;
+        unknown["weather"] = "Hail";
+        unknown["quality"] = 0;
+
+        Forecast loaded;
+        check(!rf::from_json(unknown, loaded), "an unknown enumerator name fails the read");
+
+        nlohmann::json a_number;
+        a_number["weather"] = 3;
+        a_number["quality"] = 0;
+        check(!rf::from_json(a_number, loaded),
+              "a number where a described enum wants a name fails the read");
+    }
+
     void test_bad_documents() {
         Entity loaded;
         check(!rf::from_json(nlohmann::json::array(), loaded), "an array is not an object");
@@ -231,6 +328,11 @@ int main() {
     test_transient();
     test_version_migration();
     test_no_version_key();
+    std::printf("enums\n");
+    test_enum_round_trip();
+    test_enum_value_with_no_name();
+    test_enum_survives_a_reorder();
+    test_bad_enum_names();
     std::printf("bad input\n");
     test_bad_documents();
     std::printf("conventions\n");

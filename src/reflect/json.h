@@ -99,7 +99,27 @@ namespace engine::reflect {
                     write_value(item, element);
                     out.push_back(std::move(item));
                 }
+            } else if constexpr (DescribedEnum<Value>) {
+                // The name rather than the number. A document that stores 2 for a
+                // body type says something else the moment somebody inserts an
+                // enumerator above it, and nothing warns. A name survives that,
+                // and it is what a person reads when they open the file.
+                const char* name = enumerator_name(value);
+                if (name != nullptr) {
+                    out = name;
+                } else {
+                    // A value no enumerator names. Keep the number, because
+                    // losing it turns a broken value into a silently default one.
+                    ENGINE_LOG_WARN("{} has no enumerator for value {}. Writing the number.",
+                                    Describe<Value>::name,
+                                    static_cast<std::int64_t>(
+                                        static_cast<std::underlying_type_t<Value>>(value)));
+                    out = static_cast<std::underlying_type_t<Value>>(value);
+                }
             } else if constexpr (std::is_enum_v<Value>) {
+                // An enum that describes itself no way at all. The number is all
+                // there is to write. An enum that declares to_text took the
+                // TextValue branch further up and never arrives here.
                 out = static_cast<std::underlying_type_t<Value>>(value);
             } else {
                 // Arithmetic types and std::string. nlohmann handles these.
@@ -168,10 +188,33 @@ namespace engine::reflect {
             return true;
         }
 
+        /// Lists what a described enum accepts, for an error message.
+        template <DescribedEnum E>
+        [[nodiscard]] inline std::string enumerator_list() {
+            std::string names;
+            for_each_enumerator<E>([&names](const auto& entry) {
+                if (!names.empty()) {
+                    names += ", ";
+                }
+                names += entry.name();
+            });
+            return names;
+        }
+
         /// Reads a plain number, a boolean, a string, or an enumerator.
         template <typename V>
         [[nodiscard]] bool read_simple(const nlohmann::json& in, V& value, const char* where) {
-            if constexpr (std::is_enum_v<V>) {
+            if constexpr (DescribedEnum<V>) {
+                if (!in.is_string()) {
+                    return wrong_type(where, "an enumerator name", in);
+                }
+                const std::string name = in.template get<std::string>();
+                if (!enumerator_value<V>(name, value)) {
+                    ENGINE_LOG_ERROR("{}: {} is not one of the {} names. Valid names are {}.",
+                                     where, name, Describe<V>::name, enumerator_list<V>());
+                    return false;
+                }
+            } else if constexpr (std::is_enum_v<V>) {
                 if (!in.is_number_integer()) {
                     return wrong_type(where, "an integer", in);
                 }

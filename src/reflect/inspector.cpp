@@ -138,6 +138,19 @@ namespace engine::reflect {
 
         bool edit_bool(const char* label, bool& value) { return ImGui::Checkbox(label, &value); }
 
+        bool edit_enum(const char* label, const char* const* names, std::size_t count,
+                       std::size_t& index) {
+            // ImGui::Combo takes a signed index and shows an empty box for one
+            // that is out of range, which is what a value no enumerator names
+            // should look like. So an index of count passes straight through.
+            int chosen = static_cast<int>(index);
+            if (!ImGui::Combo(label, &chosen, names, static_cast<int>(count))) {
+                return false;
+            }
+            index = static_cast<std::size_t>(chosen);
+            return true;
+        }
+
         bool edit_string(const char* label, std::string& value) {
             return ImGui::InputText(label, &value);
         }

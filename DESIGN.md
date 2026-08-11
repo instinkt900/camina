@@ -470,6 +470,27 @@ be written back on each keystroke, because a half-typed GUID is not a GUID. So
 `widget::edit_text_value()` reports a change when the user leaves the field, and text the
 reader rejects leaves the value alone.
 
+**What an enum needed.** M7.3 wanted a body type of static, dynamic or kinematic, which is
+one axis with three values. Such a field drew as "unhandled" and wrote as a bare number, so
+M7.3a described the enum itself. `Describe<E>` gains an `enumerators()` where a struct has a
+`fields()`, and `ENGINE_ENUMERATOR` names each value once. The concepts do not overlap:
+`Described` asks for `fields()` and `DescribedEnum` asks for `enumerators()`, so a consumer
+that walks fields can never pick up an enum by accident.
+
+The serializer writes the name and reads the name. A document that stores `2` for a body
+type says something else the moment somebody inserts an enumerator above it, and nothing
+warns. A value the description leaves out still writes its number, because losing it would
+turn a description somebody forgot to update into a silent change of the data.
+
+**This is the second way to spell an enum, and that is on purpose for now.** `ColorSpace`
+declares `to_text` and `from_text` and reaches the `TextValue` branch instead, which is why
+a sidecar already reads `"Linear"`. The two are not interchangeable. `TextValue` is for a
+value with an unbounded space that has to parse, like a GUID, and it draws a text box.
+`DescribedEnum` is for a fixed set of names, and it draws a drop-down of exactly those names.
+An enum should use the second one. `ColorSpace` predates it and is issue #235, because the
+enumerator names and the `to_text` strings do not match today and changing them changes every
+sidecar in the content tree.
+
 ---
 
 ## 8. Game UI — moth_ui
