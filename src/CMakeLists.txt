@@ -36,6 +36,7 @@ add_library(engine_core STATIC
     render/shader_bindings.cpp
     render/texture_cache.cpp
     render/tonemap_pass.cpp
+    physics/components.cpp
     physics/conventions.cpp
     physics/world.cpp
     scene/world.cpp

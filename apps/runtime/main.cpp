@@ -21,6 +21,7 @@
 #include "render/tonemap_pass.h"
 #include "screenshot.h"
 #include "sandbox/game.h"
+#include "physics/components.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
@@ -1955,7 +1956,9 @@ int main(int argc, char** argv) {
 
     // The engine registers what it defines, then the game registers what it
     // defines. A scene loaded before this loses every component nobody claimed.
+    // Physics registers its own, so scene/ needs no physics header.
     engine::scene::register_builtin_components();
+    engine::physics::register_components();
     sandbox::register_components();
 
     const std::filesystem::path content = options.content.empty()
