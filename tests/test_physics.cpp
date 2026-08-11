@@ -825,10 +825,13 @@ namespace {
         simulation.build(world);
         settle(world, simulation, kSettleSteps);
 
-        std::vector<float> before;
+        // The whole pose rather than the height. A crate that slid sideways or
+        // turned on the spot has been disturbed just as much as one that
+        // dropped, and comparing the height alone would call that undisturbed.
+        std::vector<engine::Transform> before;
         before.reserve(crates.size());
         for (const entt::entity crate : crates) {
-            before.push_back(world.local(crate).position.y);
+            before.push_back(world.local(crate));
         }
 
         // Far enough away that it touches nothing. Anything that moves in the
@@ -844,10 +847,16 @@ namespace {
 
         bool unmoved = true;
         for (std::size_t i = 0; i < crates.size(); ++i) {
-            unmoved = unmoved && std::fabs(world.local(crates[i]).position.y - before[i]) <
-                                     kRestTolerance;
+            const engine::Transform& now = world.local(crates[i]);
+            unmoved = unmoved && glm::length(now.position - before[i].position) < kRestTolerance;
+
+            // The absolute value of the dot product, because a quaternion and
+            // its negation are the same rotation. Comparing the four numbers
+            // one by one would report a sign flip as a body that spun round.
+            const float alignment = std::fabs(glm::dot(now.rotation, before[i].rotation));
+            unmoved = unmoved && std::fabs(alignment - 1.0F) < kRestTolerance;
         }
-        check(unmoved, "every crate in the stack is where it was");
+        check(unmoved, "every crate in the stack is where it was, and still faces the same way");
 
         check(!simulation.add_body(world, spare), "adding the same entity twice is refused");
         check(!simulation.set_linear_velocity(world.create(), Vec3{ 1.0F, 0.0F, 0.0F }),
