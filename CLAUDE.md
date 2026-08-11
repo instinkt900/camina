@@ -506,19 +506,11 @@ Rules:
 **When you push again to an open pull request, say only what changed and why.** Do not
 restate the branch.
 
-**`gh pr edit` cannot change a body here.** It asks for `projectCards`, which GitHub has
-retired, and the call fails with a deprecation notice that reads like a warning. The edit
-does not happen. Patch the body through REST instead, and read it back to check:
-
-```bash
-python3 -c "
-import json, subprocess
-body = open('body.md').read()
-subprocess.run(['gh','api','-X','PATCH','repos/<owner>/<repo>/pulls/<N>','--input','-'],
-               input=json.dumps({'body': body}), text=True)
-"
-gh pr view <N> --json body --jq '.body[0:200]'
-```
+**Keep `gh` current.** An old `gh` asks GitHub for `projectCards`, which GitHub retired in
+2024. `gh pr edit` and `gh issue view` then fail with a deprecation notice that reads like a
+warning, and the edit does not happen. 2.45 fails this way and 2.97 does not. Ubuntu ships
+2.45 and never moves it, so install `gh` from the GitHub apt repository rather than from the
+distribution.
 
 ### Collect every change before you push again
 
