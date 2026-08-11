@@ -884,8 +884,33 @@ Two things the write-back deliberately leaves alone. It does not touch scale, be
 body has none to give. And a collider does not read the entity scale at all, which is #237.
 
 **Time model.** Use a fixed timestep for physics and game logic, and interpolate for
-rendering. See the note at the top of this section. The write-back lands after the step and
-before the interpolation M7.4 adds.
+rendering. See the note at the top of this section.
+
+M7.4 built it. `engine::FixedTimestep` in `src/core/timestep.h` turns a frame delta into whole
+steps and reports how far the frame sits into the step that has not run. `Simulation::step`
+records the pose of each dynamic body at the last two steps, and `Simulation::interpolate`
+writes the blend of them. So the step no longer moves an entity, because a frame runs zero,
+one, or several steps and then draws once.
+
+**The accumulator has a ceiling, and a frame that hits it throws the rest away.** A frame
+longer than one step leaves time owed, and paying it back makes the next frame run several
+steps, which takes longer still. That is the spiral of death. The default is five steps, and
+`dropped_seconds()` reports the simulated time the run will never make up, so a machine that
+cannot keep up says so rather than quietly running slow.
+
+**Only physics is on the fixed step.** `sandbox::update` still takes the elapsed time, because
+the entities it turns are not physics bodies and nothing interpolates them. Putting them on a
+60 Hz step would make them judder on a faster display. Determinism for a replay needs the game
+logic on the step as well, and that is #245.
+
+Working the step count out by dividing the accumulator was wrong. A step of 1/60 is not a
+number a float holds, so one whole second divided by it gives 59.99998 and truncates to 59. A
+simulation would lose a step of every second it ran. It subtracts in a bounded loop instead.
+
+The drawn pose is up to one step behind the solver. That is what interpolating between two
+states that have already happened costs. Extrapolating past the newest one would remove the
+lag and overshoot every collision, because the newest state is exactly where the solver has
+not yet decided what happens next.
 
 **Materials.** A material is a shader plus a reflected parameter block. So §7 gives you the
 material editor at no extra cost.

@@ -6,6 +6,7 @@
 #include "core/jobs.h"
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/timestep.h"
 #include "core/version.h"
 #include "gfx/device.h"
 #include "gfx/imgui.h"
@@ -22,6 +23,7 @@
 #include "screenshot.h"
 #include "sandbox/game.h"
 #include "physics/components.h"
+#include "physics/simulation.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
@@ -140,6 +142,14 @@ namespace {
          */
         float exposure = 0.0F;
         /**
+         * The step rate to use, or zero to keep whatever view.json holds.
+         *
+         * Zero rather than 60 as the "not given" value, for the reason the
+         * exposure above gives. A rate somebody asks for has to be tellable
+         * from one nobody did.
+         */
+        float physics_hz = 0.0F;
+        /**
          * The most lights one cluster cell may hold. Zero takes the default.
          *
          * There to force a cell to overflow. The grid grows to hold every
@@ -195,23 +205,26 @@ namespace {
     }
 
     /**
-     * Reads the exposure.
+     * Reads an option that has to be a finite number above zero.
      *
      * `std::from_chars` for a float needs a whole value and no trailing text,
      * which is what refuses "1.0x" and "abc".
      *
      * It does parse "inf" and "nan", so those have to be refused by value
-     * rather than by a parse failure. Both reach the shader as a scale that
-     * makes the curve produce something no display can show: infinity divided
-     * by infinity is not a number, and a frame of those is undefined rather
-     * than black. `std::isfinite` is what rejects the pair, and the comparison
-     * against zero alone would let infinity through.
+     * rather than by a parse failure. An exposure of either reaches the shader
+     * as a scale that makes the curve produce something no display can show:
+     * infinity divided by infinity is not a number, and a frame of those is
+     * undefined rather than black. A step rate of either is worse, because a
+     * NaN stops the simulation with no message at all. `std::isfinite` is what
+     * rejects the pair, and the comparison against zero alone would let
+     * infinity through.
      *
+     * @param option The option name, for the message when the value is refused.
      * @param text The value given on the command line.
-     * @param out Receives the exposure. Untouched unless the whole value parsed
+     * @param out Receives the value. Untouched unless the whole value parsed
      * and came out finite and above zero.
      */
-    void parse_exposure(std::string_view text, float& out) {
+    void parse_positive_float(std::string_view option, std::string_view text, float& out) {
         const char* first = text.data();
         const char* last = text.data() + text.size();
         float value = 0.0F;
@@ -219,7 +232,7 @@ namespace {
         const bool usable = parsed.ec == std::errc{} && parsed.ptr == last &&
                             std::isfinite(value) && value > 0.0F;
         if (!usable) {
-            ENGINE_LOG_WARN("--exposure wants a finite number above zero, so {} was ignored.",
+            ENGINE_LOG_WARN("{} wants a finite number above zero, so {} was ignored.", option,
                             text);
             return;
         }
@@ -385,6 +398,24 @@ namespace {
          */
         float exposure = 1.0F;
 
+        /**
+         * How many physics steps make one second.
+         *
+         * The simulation advances at this rate whatever the frame rate is, so
+         * the same scene behaves the same way on two machines. See
+         * engine::FixedTimestep and DESIGN.md section 9.
+         */
+        float physics_hz = engine::kDefaultStepHz;
+
+        /**
+         * How many steps one frame runs before it drops the time it owes.
+         *
+         * A frame slower than one step leaves time owed, and paying all of it
+         * back makes the next frame slower still. This is the ceiling that
+         * stops that. The frame report says how much time it discarded.
+         */
+        std::uint32_t max_physics_steps = engine::kDefaultMaxStepsPerFrame;
+
         std::uint64_t frames_drawn = 0;
     };
 
@@ -417,6 +448,15 @@ struct engine::reflect::Describe<ViewSettings> {
                          Category{ "Camera" }, Tooltip{ "Degrees for each mouse count" }),
             ENGINE_FIELD(ViewSettings, exposure, Range{ 0.05, 8.0, 0.01 },
                          Tooltip{ "Scales the scene before the ACES curve. One is neutral" }),
+            // Live, so a person can drag the rate down and watch the blend hold
+            // the motion together. That is the fastest way to see what the
+            // interpolation is for.
+            ENGINE_FIELD(ViewSettings, physics_hz, Range{ 1.0, 240.0, 1.0 },
+                         Category{ "Physics" },
+                         Tooltip{ "Simulation steps each second, whatever the frame rate" }),
+            ENGINE_FIELD(ViewSettings, max_physics_steps, Range{ 1.0, 32.0, 1.0 },
+                         Category{ "Physics" },
+                         Tooltip{ "Steps one frame runs before it drops the time it owes" }),
             // ReadOnly keeps the editor from changing it. Transient keeps it out
             // of the file. The two attributes are read by different consumers,
             // and neither consumer knows about the other.
@@ -466,7 +506,10 @@ namespace {
                 parse_resolution(argv[i + 1], options.resolution);
                 ++i;
             } else if (arg == "--exposure" && has_value) {
-                parse_exposure(argv[i + 1], options.exposure);
+                parse_positive_float("--exposure", argv[i + 1], options.exposure);
+                ++i;
+            } else if (arg == "--physics-hz" && has_value) {
+                parse_positive_float("--physics-hz", argv[i + 1], options.physics_hz);
                 ++i;
             } else if (arg == "--cluster-cell-lights" && has_value) {
                 parse_cell_lights(argv[i + 1], options.cluster_cell_lights);
@@ -1105,6 +1148,8 @@ namespace {
         const engine::assets::Content* engine_content = nullptr;
         ViewSettings* settings = nullptr;
         engine::scene::World* world = nullptr;
+        /// The bodies of the scene. A scene reload builds them again.
+        engine::physics::Simulation* simulation = nullptr;
         /// The entity the inspector edits, or entt::null for none.
         entt::entity* selected = nullptr;
         /// The cooked game content directory, which holds the scene and the prefabs.
@@ -1572,8 +1617,14 @@ namespace {
             // this never ends the process.
             ENGINE_LOG_ERROR("The scene did not load, so the world is empty. Fix the file "
                              "and save it again.");
+            // The bodies of the scene that just went away, so nothing steps a
+            // body whose entity no longer exists.
+            context.simulation->build(world);
             return;
         }
+        // The entities are new, so every body is stale. build() throws the old
+        // ones away and reads the scene again.
+        context.simulation->build(world);
         ENGINE_LOG_INFO("The scene was read again. The world holds {} entities.", world.size());
     }
 
@@ -1752,6 +1803,27 @@ namespace {
      * Vsync makes every one of them the refresh rate, so the report says so
      * rather than printing 16.67 and letting a reader draw a conclusion from it.
      */
+    /**
+     * Reports what the simulation did, and what it gave up.
+     *
+     * The dropped time is the part worth reading. It is simulated time the run
+     * will never make up, so anything above zero says the machine could not
+     * keep up with the step rate that was asked for.
+     */
+    void report_physics(const engine::FixedTimestep& clock, const engine::FrameStats& stats) {
+        const engine::FrameSummary run = stats.summarize();
+        ENGINE_LOG_INFO("physics | {:.0f} Hz | {} steps | median {:.3f} ms each frame",
+                        clock.rate_hz(), clock.steps_taken(), run.median_ms);
+
+        if (clock.drop_events() == 0) {
+            return;
+        }
+        ENGINE_LOG_WARN("physics dropped {:.3f} s of simulated time over {} frames that hit the "
+                        "{} step ceiling. The simulation is behind by that much and does not "
+                        "make it up. Lower --physics-hz, or find what made those frames slow.",
+                        clock.dropped_seconds(), clock.drop_events(), clock.max_steps());
+    }
+
     void report_frame_time(const engine::FrameStats& stats, const Options& options) {
         if (stats.counted() == 0) {
             ENGINE_LOG_INFO("No frame time to report. A run needs more than {} frames.",
@@ -1788,7 +1860,11 @@ namespace {
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
-                    engine::scene::World& world) {
+                    engine::scene::World& world, engine::physics::Simulation& simulation) {
+        // The settings own the rate. This reads them here and again each frame,
+        // because the inspector can move either one while the program runs.
+        engine::FixedTimestep clock(settings.physics_hz, settings.max_physics_steps);
+
         std::uint64_t frame = 0;
         auto started = std::chrono::steady_clock::now();
         auto last_report = started;
@@ -1799,6 +1875,9 @@ namespace {
             options.offscreen ? device_extent(runtime.device) : window_extent(runtime.window);
 
         engine::FrameStats stats(kFrameStatsWarmup);
+        // The same warm-up, for the same reason. The first frames build the
+        // bodies and touch every page of the solver's memory for the first time.
+        engine::FrameStats physics_stats(kFrameStatsWarmup);
         // A period runs from the start of one drawn frame to the start of the
         // next. A frame the loop did not draw leaves no period to close, so the
         // paths that skip one clear this and the next frame starts a new
@@ -1864,6 +1943,26 @@ namespace {
             // draws them. Reversing those two would draw a frame behind.
             sandbox::update(world, seconds);
 
+            // The inspector can move both of these while the program runs, so
+            // they are read each frame rather than at startup. Neither call
+            // throws away the time already accumulated.
+            clock.set_rate_hz(settings.physics_hz);
+            clock.set_max_steps(settings.max_physics_steps);
+
+            // Physics after the game, because the game moves the kinematic
+            // bodies and the solver has to see this frame's positions. The
+            // steps are whole and fixed, and how far the frame sits into the
+            // next one is what the blend below uses.
+            const auto physics_started = std::chrono::steady_clock::now();
+            for (std::uint32_t left = clock.advance(delta); left > 0; --left) {
+                ENGINE_PROFILE_ZONE_N("physics step");
+                simulation.step(world, clock.step_seconds());
+            }
+            simulation.interpolate(world, clock.alpha());
+            physics_stats.add(std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - physics_started)
+                                  .count());
+
             engine::gfx::Extent2D drawn_extent{};
             const FrameOutcome outcome = draw_frame(context, extent, drawn_extent);
             if (outcome == FrameOutcome::Failed) {
@@ -1907,6 +2006,7 @@ namespace {
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
         report_scene_counts(*context.mesh_pass, *context.shadow_pass);
+        report_physics(clock, physics_stats);
         report_frame_time(stats, options);
         return true;
     }
@@ -1950,6 +2050,10 @@ int main(int argc, char** argv) {
     // After the file, because a flag on the command line is the more specific
     // of the two. A run that has to produce one exposure every time cannot rely
     // on whatever the last session happened to save.
+    if (options.physics_hz > 0.0F) {
+        settings.physics_hz = options.physics_hz;
+        ENGINE_LOG_INFO("Physics steps at {} Hz, from --physics-hz.", settings.physics_hz);
+    }
     if (options.exposure > 0.0F) {
         settings.exposure = options.exposure;
     }
@@ -2026,6 +2130,12 @@ int main(int argc, char** argv) {
     start_hot_reload(runtime, options);
     const std::filesystem::path source = game_source_directory(options);
 
+    // After the world loads, because a body starts where its entity sits. It is
+    // also after jobs::init(), because the solver runs on the job system and
+    // the world asks it how many workers there are.
+    engine::physics::Simulation simulation;
+    simulation.build(world);
+
     entt::entity selected = entt::null;
     const FrameContext context{
         .device = runtime.device,
@@ -2045,12 +2155,13 @@ int main(int argc, char** argv) {
         .engine_content = &runtime.engine_content,
         .settings = &settings,
         .world = &world,
+        .simulation = &simulation,
         .selected = &selected,
         .content = content,
         .source_scene = source.empty() ? std::filesystem::path{} : source / sandbox::kSceneFile,
     };
 
-    const bool ok = run_frames(runtime, context, options, frame_arena, settings, world);
+    const bool ok = run_frames(runtime, context, options, frame_arena, settings, world, simulation);
 
     stop(runtime);
     engine::jobs::shutdown();

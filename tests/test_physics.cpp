@@ -10,6 +10,7 @@
 
 #include "check.h"
 #include "core/jobs.h"
+#include "core/timestep.h"
 #include "physics/components.h"
 #include "physics/conventions.h"
 #include "physics/simulation.h"
@@ -21,6 +22,7 @@
 
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -66,6 +68,10 @@ namespace {
 
     /// About 23 degrees. Enough that the box tips rather than lands flat.
     constexpr float kTiltRadians = 0.4F;
+
+    /// A tenth of a millimeter. A body that has settled moves less than this,
+    /// and one that is shaking on the spot moves far more.
+    constexpr float kRestTolerance = 1e-4F;
 
     /// A stack big enough that the solver has real work to split.
     constexpr std::uint32_t kLargeWidth = 8;
@@ -559,6 +565,120 @@ namespace {
         check(std::fabs(length - 1.0F) < kBlendTolerance, "the blended quaternion is unit length");
     }
 
+    /// A crate above a floor, which is the smallest scene that falls and lands.
+    entt::entity drop_scene(sc::World& world, float height) {
+        const entt::entity crate = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, height, 0.0F });
+        const entt::entity floor = add_physics_entity(world, ph::BodyType::Static,
+                                                      Vec3{ 0.0F, -1.0F, 0.0F });
+        world.registry().get<ph::BoxCollider>(floor).half_extents = Vec3{ 50.0F, 1.0F, 50.0F };
+        return crate;
+    }
+
+    /**
+     * Runs the frame loop the runtime runs, and records the drawn height.
+     *
+     * This is the whole of M7.4 joined up: a clock at one rate, a frame at
+     * another, whole steps, and a blend for what is left over. It needs no GPU,
+     * because the drawn pose is the entity transform and that is what the
+     * renderer reads.
+     */
+    std::vector<float> drawn_heights(float step_hz, float frame_seconds, std::uint32_t frames) {
+        sc::World world;
+        const entt::entity crate = drop_scene(world, 6.0F);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+
+        engine::FixedTimestep clock(step_hz);
+        std::vector<float> heights;
+        heights.reserve(frames);
+
+        for (std::uint32_t frame = 0; frame < frames; ++frame) {
+            for (std::uint32_t left = clock.advance(frame_seconds); left > 0; --left) {
+                simulation.step(world, clock.step_seconds());
+            }
+            simulation.interpolate(world, clock.alpha());
+            heights.push_back(world.local(crate).position.y);
+        }
+        return heights;
+    }
+
+    void a_faster_display_than_the_step_rate_does_not_judder() {
+        section("A frame rate that is not a multiple of the step rate is smooth");
+
+        // 60 frames each second against 24 steps each second. That is 2.5 frames
+        // for each step, so it never lines up and every kind of frame happens:
+        // one that runs no step, one that runs one, and one that runs two.
+        constexpr float kStepHz = 24.0F;
+        constexpr float kFrameSeconds = 1.0F / 60.0F;
+        constexpr std::uint32_t kFrames = 60;
+
+        const std::vector<float> heights = drawn_heights(kStepHz, kFrameSeconds, kFrames);
+
+        // The frames before the first step are not judder, and they have to be
+        // skipped rather than counted. A step is 1/24 of a second and a frame is
+        // 1/60, so the first step does not run until the third frame. Until then
+        // the two recorded poses are both the pose the scene started in, and
+        // every blend of them is that pose. The body has not moved, so drawing
+        // it twice in the same place is right.
+        std::size_t moving = 1;
+        while (moving < heights.size() && heights[moving] == heights[0]) {
+            ++moving;
+        }
+        check(moving < heights.size(), "the crate starts moving");
+
+        // Judder is a pose drawn twice and then a jump. Without the blend the
+        // height would hold for two or three frames at a time, and about 60
+        // percent of the frames would repeat the one before.
+        std::uint32_t repeated = 0;
+        for (std::size_t i = moving + 1; i < heights.size(); ++i) {
+            if (heights[i] == heights[i - 1]) {
+                ++repeated;
+            }
+        }
+        check(repeated == 0, "no moving frame draws the pose the frame before it drew");
+
+        // And the motion is even. A jump after a repeat shows up as one step
+        // much larger than the rest, so the largest is compared against the
+        // middle one. Gravity makes each step a little larger than the last, so
+        // this is a loose bound rather than a tight one.
+        // From the same frame, because a leading zero delta would drag the
+        // median down and make the bound below far looser than it reads.
+        std::vector<float> deltas;
+        deltas.reserve(heights.size());
+        for (std::size_t i = moving + 1; i < heights.size(); ++i) {
+            deltas.push_back(heights[i - 1] - heights[i]);
+        }
+        std::vector<float> sorted = deltas;
+        std::sort(sorted.begin(), sorted.end());
+        const float median = sorted[sorted.size() / 2];
+        const float largest = sorted.back();
+
+        check(median > 0.0F, "the crate is falling throughout");
+        check(largest < median * 3.0F, "no frame moves it much further than the usual frame");
+    }
+
+    void a_crate_comes_to_rest() {
+        section("A crate lands and stops");
+
+        // Long enough to fall 5.5 metres and settle. Falling that far under the
+        // Box3D gravity takes about a second, so this is well past it.
+        const std::vector<float> heights = drawn_heights(60.0F, 1.0F / 60.0F, 240);
+
+        check(heights.back() < 6.0F, "the crate fell");
+        check(heights.back() > 0.0F, "the floor stopped it");
+
+        // A solver that cannot settle a body leaves it shaking on the spot, and
+        // that reads as a fault in the interpolation rather than in the solver.
+        // The last half second is where it has to be still.
+        float widest = 0.0F;
+        for (std::size_t i = heights.size() - 30; i < heights.size(); ++i) {
+            widest = std::max(widest, std::fabs(heights[i] - heights.back()));
+        }
+        check(widest < kRestTolerance, "and it is still over the last half second");
+    }
+
 } // namespace
 
 int main() {
@@ -577,6 +697,8 @@ int main() {
     a_frame_between_two_steps_blends();
     interpolating_twice_gives_one_answer();
     a_blended_rotation_stays_a_rotation();
+    a_faster_display_than_the_step_rate_does_not_judder();
+    a_crate_comes_to_rest();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();
