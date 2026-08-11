@@ -36,6 +36,7 @@ add_library(engine_core STATIC
     render/shader_bindings.cpp
     render/texture_cache.cpp
     render/tonemap_pass.cpp
+    physics/conventions.cpp
     scene/world.cpp
     scene/component_registry.cpp
     scene/scene_file.cpp
@@ -75,6 +76,10 @@ target_link_libraries(engine_core
         nlohmann_json::nlohmann_json
     PRIVATE
         SDL3::SDL3
+        # Box3D stays private, so its include directory reaches src/physics/ and
+        # nothing else. That is the first half of the containment rule, and
+        # scripts/check-box3d-containment.sh is the other half.
+        box3d
         volk::volk
         GPUOpen::VulkanMemoryAllocator
         # reflect/inspector.h names no ImGui type, so this stays private. An

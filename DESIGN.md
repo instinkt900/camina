@@ -97,6 +97,23 @@ This has four results:
 3. Link it direct. The C API removes all C++ ABI concerns.
 4. Connect its `enqueueTask` and `finishTask` callbacks to the engine job system.
 
+**The pin is `3fc20f5b453ba9e14cdf54ecafa87a2a4bcdf53c`, taken on 2026-08-11.** That commit is
+dated 2026-07-29 and it was the upstream head. Record the new commit and the date here when
+you move the pin. The reason to move it is what makes the next update readable.
+
+`third_party/CMakeLists.txt` builds it. It adds `box3d/src` and not the Box3D root, because
+the root is written for a top-level build. The root sets the static MSVC runtime, and
+`profiles/windows-msvc` asks Conan for the dynamic one. MSVC does not link objects that
+disagree about the runtime. The root also carries the `-ffp-contract=off` that the solver
+needs for determinism, so that flag moves to the library here. Issue #229 holds the part of
+it that does not reach engine code.
+
+**Only files under `src/physics/` include a Box3D header.** `engine_core` links `box3d` as a
+private dependency, so the include directory reaches nowhere else.
+`scripts/check-box3d-containment.sh` fails CI when a header escapes anyway. This is not rule
+4.1, which protects a later ABI extraction. It protects the update path: an alpha we patch is
+a diff against one directory, not against the whole engine.
+
 ---
 
 ## 3. Conventions
@@ -118,8 +135,22 @@ are mirrored, inverted, or inside-out geometry, and they are hard to trace.
 
 These live in `src/math/conventions.h`. Record the reason for each one in a comment.
 
-**Open item.** Check the default gravity vector and heightfield orientation in the Box3D
-samples before you commit to +Y up. It almost certainly agrees. Confirm it anyway.
+**Box3D agrees.** M7.1 checked it at the pinned commit, and all three answers point the same
+way:
+
+- `b3DefaultWorldDef()` in `src/types.c` returns a gravity of `{0, -10, 0}`, which is down
+  −Y.
+- `b3HeightFieldDef` counts its grid lines with `countX` and `countZ`, so a height field lies
+  in the XZ plane and its heights run along Y.
+- `docs/loose_ends.md` says "Box3D uses a right-handed coordinate system. Positive Y is up by
+  default", and it asks for meters, kilograms, seconds and radians.
+
+So nothing converts at the boundary. `physics::default_gravity()` reads that vector out of the
+library rather than repeating it, and `tests/test_physics.cpp` checks the axis and the sign. A
+Box3D update that turns the world over then fails a test instead of turning the game over.
+
+Two smaller findings. The magnitude is 10 rather than 9.81, which is a game number. And the
+Box3D documentation says −9.8 while its code says −10, so read the code.
 
 ---
 
@@ -1631,8 +1662,8 @@ feedback, not the pixels.
 
 ## 13. Open questions
 
-1. Does Box3D use +Y up? Check its default gravity vector and heightfield orientation in the
-   samples. See §3.
+1. ~~Does Box3D use +Y up?~~ Answered in M7.1. It does, and it is right-handed and MKS as
+   well. See §3.
 2. What does the `moth_graphics` Vulkan backend already implement for font atlasing and text
    layout, and how much can you reuse? See §8.3.
 3. Does `moth_editor` become a panel in the engine editor, or stay standalone? Not urgent.
