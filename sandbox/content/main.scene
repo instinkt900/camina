@@ -280,6 +280,83 @@
           "cubemap": "89a25488-04ab-401d-8fd5-3b7c78c13336"
         }
       }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "__version": 1,
+          "value": "floor body"
+        },
+        "Transform": {
+          "__version": 1,
+          "position": [
+            0.0,
+            -0.5,
+            0.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "RigidBody": {
+          "__version": 1,
+          "type": "Static",
+          "density": 1000.0,
+          "friction": 0.6,
+          "restitution": 0.0
+        },
+        "BoxCollider": {
+          "__version": 1,
+          "half_extents": [
+            6.0,
+            0.5,
+            8.0
+          ]
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate.prefab",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "falling crate"
+          },
+          "Transform": {
+            "position": [
+              -1.4,
+              5.0,
+              -2.0
+            ]
+          },
+          "RigidBody": {
+            "__version": 1,
+            "type": "Dynamic",
+            "density": 1000.0,
+            "friction": 0.6,
+            "restitution": 0.0
+          },
+          "BoxCollider": {
+            "__version": 1,
+            "half_extents": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      }
     }
   ]
 }
