@@ -39,17 +39,9 @@ namespace engine::ui {
         content_ = nullptr;
     }
 
-    void FontFactory::AddFont(const std::string& name, const std::filesystem::path& path) {
-        // generic_string() is what makes a layout authored on Windows find the
-        // same asset on Linux, the same way engine::ui::ImageFactory does.
-        paths_[name] = path.generic_string();
-    }
-
-    void FontFactory::RemoveFont(const std::string& name) {
-        paths_.erase(name);
-
-        // Every size loaded under this name goes with it. Leaving them behind
-        // would keep an atlas alive that nothing can name any more.
+    void FontFactory::drop_loaded(const std::string& name) {
+        // Every size loaded under this name goes together, because the cache is
+        // keyed on the name and the size.
         for (auto it = loaded_.begin(); it != loaded_.end();) {
             if (it->first.name == name) {
                 if (it->second) {
@@ -60,6 +52,28 @@ namespace engine::ui {
                 ++it;
             }
         }
+    }
+
+    void FontFactory::AddFont(const std::string& name, const std::filesystem::path& path) {
+        // generic_string() is what makes a layout authored on Windows find the
+        // same asset on Linux, the same way engine::ui::ImageFactory does.
+        const std::string source = path.generic_string();
+
+        // A name that now points at another file must not keep answering with
+        // the face loaded from the old one, at any size. Registering the same
+        // path again is not a change and keeps the cache.
+        const auto existing = paths_.find(name);
+        if (existing != paths_.end() && existing->second != source) {
+            drop_loaded(name);
+        }
+        paths_[name] = source;
+    }
+
+    void FontFactory::RemoveFont(const std::string& name) {
+        paths_.erase(name);
+        // Leaving the loaded sizes behind would keep an atlas alive that
+        // nothing can name any more.
+        drop_loaded(name);
     }
 
     void FontFactory::ClearFonts() {
@@ -160,6 +174,10 @@ namespace engine::ui {
 
     void FontFactory::LoadProject(const std::filesystem::path& path) {
         (void)path;
+        // The log as well as the assert. ENGINE_ASSERT compiles out of a
+        // Release build, and these would then do nothing and say nothing, which
+        // is the quiet failure the assert is here to prevent.
+        ENGINE_LOG_ERROR("A runtime font factory has no project file to load. See issue #200.");
         ENGINE_ASSERT(false, "A runtime font factory has no project file. It takes its fonts "
                              "from the cooked content tree, and a project file would be a "
                              "second source of truth. See issue #200.");
@@ -167,11 +185,13 @@ namespace engine::ui {
 
     void FontFactory::SaveProject(const std::filesystem::path& path) {
         (void)path;
+        ENGINE_LOG_ERROR("A runtime font factory has no project file to save. See issue #200.");
         ENGINE_ASSERT(false, "A runtime font factory has no project file to save. See issue "
                              "#200.");
     }
 
     std::filesystem::path FontFactory::GetCurrentProjectPath() const {
+        ENGINE_LOG_ERROR("A runtime font factory has no project file. See issue #200.");
         ENGINE_ASSERT(false, "A runtime font factory has no project file. See issue #200.");
         return {};
     }

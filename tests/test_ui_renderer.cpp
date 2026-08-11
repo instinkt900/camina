@@ -479,7 +479,8 @@ namespace {
     }
 
     /// Gives the font a handle without a device, so the recorder will draw it.
-    /// Nothing reads the texture, so a made up handle is enough.
+    /// Nothing reads the texture, so a made up handle is enough, and ~Font()
+    /// asserts only on an atlas the font uploaded itself.
     void pretend_uploaded(engine::ui::Font& font) {
         font.borrow_texture(engine::gfx::TextureHandle{ 77 });
     }
@@ -505,8 +506,6 @@ namespace {
                     "every glyph comes from one atlas, so the string is one draw");
         test::check(renderer.batches()[0].texture.value == 77,
                     "the batch reads the atlas of the font");
-
-        font.borrow_texture(engine::gfx::TextureHandle{});
     }
 
     void a_space_draws_no_quad() {
@@ -527,8 +526,6 @@ namespace {
         // A space carries an advance and no coverage, so it moves the pen and
         // costs no triangle.
         test::check(renderer.vertices().size() == 2 * 4, "a space records no quad");
-
-        font.borrow_texture(engine::gfx::TextureHandle{});
     }
 
     void text_forces_the_alpha_blend() {
@@ -564,8 +561,6 @@ namespace {
         test::check(after.batches().size() == 2 &&
                         after.batches()[1].blend == moth_ui::BlendMode::Replace,
                     "and the blend went back to what the caller had");
-
-        font.borrow_texture(engine::gfx::TextureHandle{});
     }
 
     void alignment_moves_the_text_inside_the_rect() {
@@ -609,8 +604,6 @@ namespace {
         // The text stays inside the rectangle it was given. A sign error in the
         // alignment puts it outside, which no comparison above would catch.
         test::check(right >= 0.0F && bottom >= 0.0F, "no alignment pushes it off the top left");
-
-        font.borrow_texture(engine::gfx::TextureHandle{});
     }
 
     void text_that_cannot_draw_records_nothing() {
@@ -634,8 +627,6 @@ namespace {
                             moth_ui::TextVertAlignment::Top, rect(0, 0, 400, 100));
         test::check(renderer.vertices().empty(), "an empty string draws nothing");
         renderer.end();
-
-        font.borrow_texture(engine::gfx::TextureHandle{});
     }
 
     /// A font from another backend. moth_ui::IFont declares no method, so this

@@ -98,6 +98,9 @@ namespace engine::ui {
         /// @endcond
 
     private:
+        // Frees every size loaded under one name and forgets them.
+        void drop_loaded(const std::string& name);
+
         // One loaded face at one size. The name and the size together are the
         // key, because an atlas holds glyphs rasterized at one size.
         struct Key {

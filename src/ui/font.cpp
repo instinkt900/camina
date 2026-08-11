@@ -271,8 +271,13 @@ namespace engine::ui {
 
     Font::~Font() {
         release_face();
-        ENGINE_ASSERT(!texture_.valid(),
-                      "A ui::Font still holds its atlas texture. Call destroy() first.");
+        // Only an atlas this uploaded. The assert is here to catch a device
+        // resource that nothing freed, and a handle that came through
+        // borrow_texture() is not one: it belongs to somebody else and this
+        // never had anything to free.
+        ENGINE_ASSERT(!owns_texture_,
+                      "A ui::Font still holds the atlas texture it uploaded. Call destroy() "
+                      "first.");
     }
 
     bool Font::load(const FontLibrary& library, const std::filesystem::path& path,
