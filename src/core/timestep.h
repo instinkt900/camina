@@ -107,6 +107,11 @@ namespace engine {
          * The leftover is kept as seconds rather than as a fraction of a step,
          * so a rate change moves alpha() but loses no time.
          *
+         * @note A faster rate can leave more than one new step in the
+         * accumulator, and then alpha() reads 1 until the next advance() drains
+         * it. That is the leftover being measured against a shorter step rather
+         * than a fault. One frame draws the newest pose and the next is normal.
+         *
          * @param rate_hz The new rate. Clamped the way the constructor clamps.
          */
         void set_rate_hz(float rate_hz);

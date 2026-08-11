@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace {
 
@@ -134,6 +135,15 @@ namespace {
         clock.reset();
         check(clock.alpha() == 0.0F, "the leftover is gone");
         check(clock.dropped_seconds() == 0.0, "and so is the drop record");
+
+        // A reset forgets a pause. It does not forget how the clock is set up,
+        // and it does not forget what the run has already done. The one second
+        // frame above hit the ceiling, so the count is the ceiling.
+        check(clock.steps_taken() == engine::kDefaultMaxStepsPerFrame,
+              "the lifetime step count survives the reset");
+        check(clock.max_steps() == engine::kDefaultMaxStepsPerFrame, "and so does the ceiling");
+        check(std::fabs(clock.rate_hz() - kSixty) < kTolerance, "and so does the rate");
+
         check(clock.advance(kStep) == 1, "the clock still runs");
     }
 
@@ -170,6 +180,35 @@ namespace {
         check(no_ceiling.advance(1.0F) == 1, "so the simulation still advances");
     }
 
+    void a_non_finite_value_does_not_stop_the_clock() {
+        section("A rate or a delta that is not a number is refused");
+
+        const float not_a_number = std::numeric_limits<float>::quiet_NaN();
+        const float infinity = std::numeric_limits<float>::infinity();
+
+        // std::clamp compares, and every comparison against a NaN is false, so
+        // it hands a NaN straight back. A NaN step, or a NaN in the
+        // accumulator, then fails the "is a step owed" test for ever, and the
+        // simulation stops with no message at all.
+        //
+        // The two guards catch different values. A NaN delta already fails the
+        // "greater than zero" test, so the one in advance() is what refuses an
+        // infinite delta. Deleting either guard fails a check below.
+        FixedTimestep bad_rate(not_a_number);
+        check(std::fabs(bad_rate.rate_hz() - engine::kDefaultStepHz) < kTolerance,
+              "a rate that is not a number falls back to the default");
+        check(bad_rate.advance(1.0F) >= 1, "and that clock advances");
+
+        FixedTimestep clock(kSixty);
+        (void)clock.advance(kStep * 0.5F);
+        const float before = clock.alpha();
+
+        check(clock.advance(not_a_number) == 0, "a delta that is not a number runs no step");
+        check(clock.advance(infinity) == 0, "and neither does an infinite one");
+        check(clock.alpha() == before, "the accumulator did not move");
+        check(clock.advance(kStep * 0.5F) == 1, "and the clock still runs afterwards");
+    }
+
     void a_backwards_clock_owes_nothing() {
         section("A delta at or below zero adds nothing");
 
@@ -194,6 +233,7 @@ int main() {
     a_reset_forgets_the_pause();
     a_rate_change_keeps_the_time();
     a_bad_setting_is_clamped_rather_than_fatal();
+    a_non_finite_value_does_not_stop_the_clock();
     a_backwards_clock_owes_nothing();
 
     return test::report();

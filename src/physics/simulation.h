@@ -42,6 +42,7 @@ namespace engine::physics {
      * physics::Simulation simulation;
      * simulation.build(scene_world);
      *
+     * engine::FixedTimestep clock(60.0F);
      * for (std::uint32_t left = clock.advance(frame_delta); left > 0; --left) {
      *     simulation.step(scene_world, clock.step_seconds());
      * }
