@@ -18,6 +18,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 
@@ -175,6 +176,12 @@ namespace engine::reflect {
 
     /**
      * @brief Whether a type has a Describe specialization.
+     *
+     * This asks for `fields()`, so it covers a struct and never an enum. An enum
+     * describes itself with `enumerators()` instead, and DescribedEnum asks for
+     * that. A consumer that walks fields therefore cannot pick up an enum by
+     * accident.
+     *
      * @tparam T The type to test.
      */
     template <typename T>
@@ -184,11 +191,160 @@ namespace engine::reflect {
     };
 
     /**
+     * @brief One enumerator, with its name and its value.
+     *
+     * Build one with ENGINE_ENUMERATOR rather than by hand.
+     *
+     * @tparam E The enum type.
+     */
+    template <typename E>
+    class Enumerator {
+    public:
+        /// @brief The enum this enumerator belongs to.
+        using EnumType = E;
+
+        /**
+         * @brief Builds one. Prefer ENGINE_ENUMERATOR, which spells the name once.
+         * @param name The enumerator name, as a static string.
+         * @param value The value it stands for.
+         */
+        constexpr Enumerator(const char* name, E value)
+            : name_(name)
+            , value_(value) {}
+
+        /// @brief The enumerator name.
+        /// @return A static string. The descriptor does not own it.
+        [[nodiscard]] constexpr const char* name() const { return name_; }
+
+        /// @brief The value.
+        /// @return The enumerator itself.
+        [[nodiscard]] constexpr E value() const { return value_; }
+
+    private:
+        const char* name_;
+        E value_;
+    };
+
+    /**
+     * @brief Builds an enumerator descriptor with the type deduced.
+     * @tparam E The enum type, deduced.
+     * @param name The enumerator name, as a static string.
+     * @param value The value it stands for.
+     * @return The descriptor.
+     */
+    template <typename E>
+    [[nodiscard]] constexpr auto enumerator(const char* name, E value) {
+        return Enumerator<E>(name, value);
+    }
+
+    /**
+     * @brief Whether an enum has a Describe specialization that lists its values.
+     * @tparam T The type to test.
+     */
+    template <typename T>
+    concept DescribedEnum = std::is_enum_v<T> && requires {
+        { Describe<T>::name } -> std::convertible_to<const char*>;
+        Describe<T>::enumerators();
+    };
+
+    /**
+     * @brief How many enumerators an enum describes.
+     * @tparam E A described enum.
+     * @return The enumerator count.
+     */
+    template <DescribedEnum E>
+    [[nodiscard]] constexpr std::size_t enumerator_count() {
+        return std::tuple_size_v<decltype(Describe<E>::enumerators())>;
+    }
+
+    /**
+     * @brief Calls a function once for each enumerator of an enum.
+     *
+     * This is the whole consumer interface, the way for_each_field() is for a
+     * struct. A consumer that only uses this keeps working when the descriptors
+     * move from hand-written to generated.
+     *
+     * @tparam E A described enum.
+     * @tparam Fn The visitor type, deduced. It is taken by value, because it runs
+     * once for each enumerator and so cannot be forwarded.
+     * @param visit Called as `visit(enumerator)` for each one.
+     *
+     * @code
+     * for_each_enumerator<BodyType>([](const auto& e) {
+     *     printf("%s = %d\n", e.name(), static_cast<int>(e.value()));
+     * });
+     * @endcode
+     */
+    template <DescribedEnum E, typename Fn>
+    constexpr void for_each_enumerator(Fn visit) {
+        std::apply([&visit](const auto&... entries) { (visit(entries), ...); },
+                   Describe<E>::enumerators());
+    }
+
+    /**
+     * @brief The name of one enum value.
+     *
+     * @tparam E A described enum.
+     * @param value The value to name.
+     * @return The enumerator name, or nullptr when no enumerator has that value.
+     * A caller that reached a value outside the description has a bug, or read a
+     * file that a newer build wrote.
+     */
+    template <DescribedEnum E>
+    [[nodiscard]] constexpr const char* enumerator_name(E value) {
+        const char* found = nullptr;
+        for_each_enumerator<E>([&](const auto& entry) {
+            if (entry.value() == value) {
+                found = entry.name();
+            }
+        });
+        return found;
+    }
+
+    /**
+     * @brief The value one enumerator name stands for.
+     *
+     * The comparison is exact, because these names come from a file or from a
+     * script and a near miss is a mistake worth reporting rather than guessing at.
+     *
+     * @tparam E A described enum.
+     * @param name The name to look up.
+     * @param value Set to the value when the name matches one. Left alone
+     *              otherwise, so a caller keeps whatever default it started with.
+     * @return True when the name named an enumerator.
+     */
+    template <DescribedEnum E>
+    [[nodiscard]] constexpr bool enumerator_value(std::string_view name, E& value) {
+        bool found = false;
+        for_each_enumerator<E>([&](const auto& entry) {
+            if (!found && name == entry.name()) {
+                value = entry.value();
+                found = true;
+            }
+        });
+        return found;
+    }
+
+    /**
      * @brief The name a type was described with.
      * @tparam T A described type.
      * @return A static string.
      */
     template <Described T>
+    [[nodiscard]] constexpr const char* type_name() {
+        return Describe<T>::name;
+    }
+
+    /**
+     * @brief The name an enum was described with.
+     *
+     * This is the same call as the one above. The two concepts do not overlap, so
+     * a caller writes type_name<T>() without caring which kind of type T is.
+     *
+     * @tparam T A described enum.
+     * @return A static string.
+     */
+    template <DescribedEnum T>
     [[nodiscard]] constexpr const char* type_name() {
         return Describe<T>::name;
     }
@@ -255,3 +411,22 @@ namespace engine::reflect {
  */
 #define ENGINE_FIELD(Type, member, ...) \
     ::engine::reflect::field(#member, &Type::member __VA_OPT__(, ) __VA_ARGS__)
+
+/**
+ * @brief Names an enumerator once instead of twice, the way ENGINE_FIELD does.
+ *
+ * The name reaches a scene file and the inspector, so a typo here is a typo a
+ * person reads. Deriving it from the enumerator removes that.
+ *
+ * @param Type The enum type.
+ * @param value The enumerator name.
+ *
+ * @code
+ * static constexpr auto enumerators() {
+ *     return std::make_tuple(
+ *         ENGINE_ENUMERATOR(BodyType, Static),
+ *         ENGINE_ENUMERATOR(BodyType, Dynamic));
+ * }
+ * @endcode
+ */
+#define ENGINE_ENUMERATOR(Type, value) ::engine::reflect::enumerator(#value, Type::value)

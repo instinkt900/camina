@@ -25,6 +25,8 @@
 #include "reflect/reflect.h"
 #include "reflect/traits.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <type_traits>
@@ -105,6 +107,24 @@ namespace engine::reflect {
         /// @param value The value to show and change.
         /// @return True when the user changed the value.
         [[nodiscard]] bool edit_bool(const char* label, bool& value);
+
+        /**
+         * @brief Draws a drop-down of the names an enum describes.
+         *
+         * The caller works in positions rather than in enum values, because this
+         * function knows nothing about the enum type. inspect_value() turns the
+         * chosen position back into a value.
+         *
+         * @param label The field name.
+         * @param names One name for each choice, in order.
+         * @param count How many names @p names holds.
+         * @param index Which one is chosen now. Set to the new position on a
+         *              change. A value outside the list shows as empty, which is
+         *              what a value no enumerator names looks like.
+         * @return True when the user chose a different one.
+         */
+        [[nodiscard]] bool edit_enum(const char* label, const char* const* names,
+                                     std::size_t count, std::size_t& index);
 
         /// @brief Draws a text box that grows with what the user types.
         /// @param label The field name.
@@ -195,6 +215,61 @@ namespace engine::reflect {
             }
         }
 
+        /**
+         * Draws a described enum as a drop-down of its names.
+         *
+         * The widget layer knows nothing about enums, so it works in positions.
+         * This turns the chosen position back into a value.
+         */
+        template <DescribedEnum Value>
+        [[nodiscard]] bool inspect_enum(const char* label, Value& value) {
+            // The description is fixed at compile time, so the two arrays are
+            // built once and outlive every frame that draws them.
+            static constexpr std::size_t kCount = enumerator_count<Value>();
+
+            static const std::array<const char*, kCount> names = [] {
+                std::array<const char*, kCount> list{};
+                std::size_t at = 0;
+                for_each_enumerator<Value>([&list, &at](const auto& entry) {
+                    list[at] = entry.name();
+                    ++at;
+                });
+                return list;
+            }();
+
+            static const std::array<Value, kCount> values = [] {
+                std::array<Value, kCount> list{};
+                std::size_t at = 0;
+                for_each_enumerator<Value>([&list, &at](const auto& entry) {
+                    list[at] = entry.value();
+                    ++at;
+                });
+                return list;
+            }();
+
+            // A value no enumerator names lands past the end. That draws as an
+            // empty box rather than as the wrong name.
+            std::size_t index = kCount;
+            for (std::size_t i = 0; i < kCount; ++i) {
+                if (values[i] == value) {
+                    index = i;
+                }
+            }
+
+            if (!widget::edit_enum(label, names.data(), kCount, index)) {
+                return false;
+            }
+
+            // edit_enum already refuses an index that names no entry. This is the
+            // subscript itself, and std::array does not check one.
+            if (index >= kCount) {
+                return false;
+            }
+
+            value = values[index];
+            return true;
+        }
+
         template <typename V>
         [[nodiscard]] bool inspect_value(const char* label, V& value, const Range* range) {
             using Value = std::remove_cvref_t<V>;
@@ -231,6 +306,8 @@ namespace engine::reflect {
                 constexpr int kQuatLength = 4;
                 return widget::edit_scalar(label, scalar_of<Element>(), &value.w, kQuatLength,
                                            range);
+            } else if constexpr (DescribedEnum<Value>) {
+                return inspect_enum(label, value);
             } else if constexpr (StdVector<Value>::value) {
                 if (!widget::begin_node(label)) {
                     return false;

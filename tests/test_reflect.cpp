@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -29,6 +30,23 @@ namespace {
         float fov = 60.0F;
         float near_plane = 0.1F;
     };
+
+    /// An enum with a gap and an out-of-order value, because a description that
+    /// only ever sees 0, 1, 2 would pass while assuming the position is the value.
+    ///
+    /// Fog is deliberately left out of the description below. Somebody adding an
+    /// enumerator and forgetting to describe it is the realistic way a value
+    /// arrives that no name covers.
+    enum class Weather : std::uint8_t {
+        Clear = 0,
+        Rain = 7,
+        Snow = 3,
+        Fog = 42,
+    };
+
+    /// An enum nobody describes, to hold the line that such a type still works.
+    enum class Undescribed : std::uint8_t { One,
+                                            Two };
 
 } // namespace
 
@@ -53,6 +71,17 @@ struct engine::reflect::Describe<Camera> {
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(Camera, fov, Range{ 1.0, 179.0, 1.0 }),
                                ENGINE_FIELD(Camera, near_plane));
+    }
+};
+
+/// @brief An enum describes itself with enumerators() where a struct uses fields().
+template <>
+struct engine::reflect::Describe<Weather> {
+    static constexpr const char* name = "Weather";
+    static constexpr auto enumerators() {
+        return std::make_tuple(ENGINE_ENUMERATOR(Weather, Clear),
+                               ENGINE_ENUMERATOR(Weather, Rain),
+                               ENGINE_ENUMERATOR(Weather, Snow));
     }
 };
 
@@ -174,6 +203,50 @@ namespace {
         check(true, "descriptors are usable in a constant expression");
     }
 
+    void test_enum_description() {
+        check(rf::DescribedEnum<Weather>, "a described enum satisfies DescribedEnum");
+        check(!rf::DescribedEnum<Undescribed>, "an undescribed enum does not");
+
+        // A struct concept and an enum concept must not overlap. A consumer that
+        // walks fields would otherwise pick up an enum and fail to compile.
+        check(!rf::Described<Weather>, "a described enum is not Described");
+        check(rf::Described<Camera>, "a described struct still is");
+
+        check(rf::enumerator_count<Weather>() == 3, "the count comes from the description");
+        check(std::string_view(rf::type_name<Weather>()) == "Weather", "an enum carries a name");
+    }
+
+    void test_enum_lookup() {
+        check(std::string_view(rf::enumerator_name(Weather::Rain)) == "Rain",
+              "a value gives its name");
+
+        // Rain is 7 and Snow is 3, so a lookup that returned the position rather
+        // than the value would answer Snow here.
+        check(std::string_view(rf::enumerator_name(Weather::Snow)) == "Snow",
+              "an out-of-order value gives its own name");
+        check(rf::enumerator_name(Weather::Fog) == nullptr,
+              "a value the description leaves out has no name");
+
+        Weather value = Weather::Clear;
+        check(rf::enumerator_value<Weather>("Snow", value) && value == Weather::Snow,
+              "a name gives its value");
+
+        Weather untouched = Weather::Rain;
+        check(!rf::enumerator_value<Weather>("Hail", untouched) && untouched == Weather::Rain,
+              "an unknown name changes nothing and says so");
+
+        // The names reach a file and a script, so a near miss is a mistake worth
+        // reporting rather than guessing at.
+        check(!rf::enumerator_value<Weather>("snow", untouched), "the match is exact");
+    }
+
+    void test_enum_constexpr() {
+        // The whole point of describing an enum here rather than at run time.
+        static_assert(rf::enumerator_count<Weather>() == 3);
+        static_assert(std::string_view(rf::enumerator_name(Weather::Clear)) == "Clear");
+        check(true, "an enum description is usable in a constant expression");
+    }
+
 } // namespace
 
 int main() {
@@ -189,5 +262,9 @@ int main() {
     test_registry();
     std::printf("constexpr\n");
     test_constexpr();
+    std::printf("enums\n");
+    test_enum_description();
+    test_enum_lookup();
+    test_enum_constexpr();
     return test::report();
 }
