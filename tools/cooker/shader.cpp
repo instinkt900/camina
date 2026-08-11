@@ -399,7 +399,8 @@ namespace cooker {
         const std::size_t byte_count = shaderc_result_get_length(result);
         const auto* words_begin =
             reinterpret_cast<const std::uint32_t*>(shaderc_result_get_bytes(result));
-        std::vector<std::uint32_t> words(words_begin, words_begin + byte_count / sizeof(std::uint32_t));
+        std::vector<std::uint32_t> words(words_begin,
+                                         words_begin + (byte_count / sizeof(std::uint32_t)));
 
         shaderc_result_release(result);
 

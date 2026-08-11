@@ -26,6 +26,16 @@
 #   pro-bounds-array-to-pointer-decay, pro-type-vararg
 #       argv and the C APIs in SDL, Vulkan, and Box3D decay arrays to pointers
 #       and take varargs. The engine itself does neither.
+#   avoid-magic-numbers
+#       This is an alias of readability-magic-numbers, which is off above. An
+#       alias is a separate entry in the check registry, so turning one off
+#       leaves the other running. Both names have to appear or the intent is
+#       only half expressed.
+#
+#       This one is not cosmetic. clang-tidy 19.1.1, which is what Ubuntu noble
+#       ships, runs the alias and reports about thirty findings that CI never
+#       saw. CI installs 19.1.7 from apt.llvm.org, which does not. So a local
+#       Debug build failed on code that CI accepted. Issue #242.
 
 Checks: >
   cppcoreguidelines-*,
@@ -34,6 +44,7 @@ Checks: >
   -readability-identifier-length,
   -readability-use-anyofallof,
   -readability-magic-numbers,
+  -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-non-private-member-variables-in-classes,
   -cppcoreguidelines-avoid-const-or-ref-data-members,
   -cppcoreguidelines-avoid-non-const-global-variables,

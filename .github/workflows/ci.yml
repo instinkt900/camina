@@ -127,6 +127,39 @@ jobs:
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
           sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-19 100
 
+      # The lint gate is only worth what clang-tidy actually reads. A version
+      # that does not know a key in .clang-tidy rejects the whole file and
+      # falls back to its own defaults, which check almost nothing, and it says
+      # so on stderr and carries on. That is silent from the build log.
+      # ExcludeHeaderFilterRegex needs clang-tidy 19, and clang-tidy 18 rejects
+      # it. See issue #242.
+      #
+      # --config-file is what makes this a real test. A bare --verify-config
+      # discovers no .clang-tidy at all and reports clean from any directory,
+      # including one that holds a file it would reject.
+      - name: Check clang-tidy reads the configuration
+        if: runner.os == 'Linux'
+        run: |
+          clang-tidy --version
+          # The `|| true` matters. Every step runs under `bash -e`, and
+          # clang-tidy exits non-zero when --config-file names a file it
+          # rejects, so the assignment alone would end the step before the
+          # message below could say why.
+          #
+          # A bare --verify-config, with no --config-file, exits 0 whatever it
+          # finds. So neither the status nor the output can be trusted on its
+          # own, and this reads both.
+          output=$(clang-tidy --verify-config --config-file=.clang-tidy 2>&1) || true
+          echo "$output"
+          if ! grep -q "No config errors detected" <<<"$output"; then
+            # A notice rather than a failure, for now. This runner resolves
+            # clang-tidy 18, which rejects the config and lints with its own
+            # defaults, so failing here would only turn the build red without
+            # making the check any stronger. Issue #242 turns it into an error
+            # once the findings behind the gate are fixed.
+            echo "::warning::clang-tidy did not accept .clang-tidy, so it is checking almost nothing. See issue #242."
+          fi
+
       # The windows profile asks for the Ninja generator, so cl.exe and the
       # Windows SDK must be on PATH before CMake runs. This action calls
       # vcvars64.bat and exports the result to the later steps.

@@ -348,6 +348,105 @@ namespace engine::gfx {
 
     } // namespace vk
 
+    /**
+     * Builds the pipeline object itself, once every part it needs exists.
+     *
+     * This is the body of create_graphics_pipeline's last step, lifted out.
+     * The parent is a chain of steps that each run only while the one before
+     * succeeded, and holding this one inline pushed its cognitive complexity
+     * past what clang-tidy accepts. Every local here holds storage that
+     * VkGraphicsPipelineCreateInfo points at, so they have to live together in
+     * one scope until the create call returns.
+     */
+    [[nodiscard]] Result build_pipeline(Device& device, const GraphicsPipelineDesc& desc,
+                                        VkShaderModule vertex, VkShaderModule fragment,
+                                        bool has_fragment, VkPipelineLayout layout,
+                                        VkPipeline* out_pipeline) {
+        const std::array<VkPipelineShaderStageCreateInfo, 2> stages{
+            VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vertex,
+                .pName = "main",
+                .pSpecializationInfo = nullptr,
+            },
+            VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragment,
+                .pName = "main",
+                .pSpecializationInfo = nullptr,
+            },
+        };
+        // One stage when there is no fragment module. The array holds two
+        // entries either way, and the count is what leaves the second out.
+        const std::uint32_t stage_count = has_fragment ? 2U : 1U;
+
+        FixedState state;
+        fill_fixed_state(state, desc);
+
+        VertexInput vertex_input;
+        fill_vertex_input(vertex_input, state, desc);
+
+        const std::array<VkDynamicState, 3> dynamic_states{ VK_DYNAMIC_STATE_VIEWPORT,
+                                                            VK_DYNAMIC_STATE_SCISSOR,
+                                                            VK_DYNAMIC_STATE_CULL_MODE };
+        VkPipelineDynamicStateCreateInfo dynamic{};
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size());
+        dynamic.pDynamicStates = dynamic_states.data();
+
+        // Dynamic rendering replaces the render pass, so the formats come from
+        // here. See DESIGN.md section 2.
+        VkPipelineRenderingCreateInfo rendering{};
+        rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        // A depth-only pass attaches no color image, and a pipeline whose
+        // attachments disagree with the scope is undefined rather than an
+        // error. See GraphicsPipelineDesc::depth_only.
+        rendering.colorAttachmentCount = desc.depth_only ? 0 : 1;
+        // The pipeline names its own color format, because the frame no
+        // longer draws into one image. A scene pass renders half float and
+        // the tonemap pass renders the swapchain, and the two cannot share a
+        // format. See GraphicsPipelineDesc::color_format.
+        const VkFormat color_format = vk::color_target_format(device, desc.color_format);
+        rendering.pColorAttachmentFormats = desc.depth_only ? nullptr : &color_format;
+        // Every frame attaches the depth image, so every pipeline must name
+        // its format or the draw is invalid. depth_test decides only whether
+        // the pipeline reads and writes depth, not whether it is attached.
+        // A pass that neither reads nor writes depth may leave it off
+        // entirely to skip the clear. See GraphicsPipelineDesc::depth_attachment.
+        rendering.depthAttachmentFormat =
+            desc.depth_attachment ? device.depth_format : VK_FORMAT_UNDEFINED;
+
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.pNext = &rendering;
+        info.stageCount = stage_count;
+        info.pStages = stages.data();
+        info.pVertexInputState = &state.vertex_input;
+        info.pInputAssemblyState = &state.assembly;
+        info.pViewportState = &state.viewport;
+        info.pRasterizationState = &state.raster;
+        info.pMultisampleState = &state.multisample;
+        info.pDepthStencilState = &state.depth;
+        info.pColorBlendState = &state.blend;
+        info.pDynamicState = &dynamic;
+        info.layout = layout;
+
+        const VkResult created = vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1,
+                                                           &info, nullptr, out_pipeline);
+        if (created != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("vkCreateGraphicsPipelines failed with {} ({})",
+                             vk::vk_result_name(created), static_cast<std::int32_t>(created));
+            return vk::to_result(created);
+        }
+        return Result::Success;
+    }
+
     Result create_graphics_pipeline(Device* device, const GraphicsPipelineDesc& desc,
                                     PipelineHandle* out_pipeline) {
         ENGINE_CHECK(device != nullptr, "create_graphics_pipeline needs a device.");
@@ -379,88 +478,8 @@ namespace engine::gfx {
 
         VkPipeline pipeline = VK_NULL_HANDLE;
         if (succeeded(result)) {
-            const std::array<VkPipelineShaderStageCreateInfo, 2> stages{
-                VkPipelineShaderStageCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                    .pNext = nullptr,
-                    .flags = 0,
-                    .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                    .module = vertex,
-                    .pName = "main",
-                    .pSpecializationInfo = nullptr,
-                },
-                VkPipelineShaderStageCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                    .pNext = nullptr,
-                    .flags = 0,
-                    .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                    .module = fragment,
-                    .pName = "main",
-                    .pSpecializationInfo = nullptr,
-                },
-            };
-            // One stage when there is no fragment module. The array holds two
-            // entries either way, and the count is what leaves the second out.
-            const std::uint32_t stage_count = has_fragment ? 2U : 1U;
-
-            FixedState state;
-            fill_fixed_state(state, desc);
-
-            VertexInput vertex_input;
-            fill_vertex_input(vertex_input, state, desc);
-
-            const std::array<VkDynamicState, 3> dynamic_states{ VK_DYNAMIC_STATE_VIEWPORT,
-                                                                VK_DYNAMIC_STATE_SCISSOR,
-                                                                VK_DYNAMIC_STATE_CULL_MODE };
-            VkPipelineDynamicStateCreateInfo dynamic{};
-            dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size());
-            dynamic.pDynamicStates = dynamic_states.data();
-
-            // Dynamic rendering replaces the render pass, so the formats come from
-            // here. See DESIGN.md section 2.
-            VkPipelineRenderingCreateInfo rendering{};
-            rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            // A depth-only pass attaches no color image, and a pipeline whose
-            // attachments disagree with the scope is undefined rather than an
-            // error. See GraphicsPipelineDesc::depth_only.
-            rendering.colorAttachmentCount = desc.depth_only ? 0 : 1;
-            // The pipeline names its own color format, because the frame no
-            // longer draws into one image. A scene pass renders half float and
-            // the tonemap pass renders the swapchain, and the two cannot share a
-            // format. See GraphicsPipelineDesc::color_format.
-            const VkFormat color_format = vk::color_target_format(*device, desc.color_format);
-            rendering.pColorAttachmentFormats = desc.depth_only ? nullptr : &color_format;
-            // Every frame attaches the depth image, so every pipeline must name
-            // its format or the draw is invalid. depth_test decides only whether
-            // the pipeline reads and writes depth, not whether it is attached.
-            // A pass that neither reads nor writes depth may leave it off
-            // entirely to skip the clear. See GraphicsPipelineDesc::depth_attachment.
-            rendering.depthAttachmentFormat =
-                desc.depth_attachment ? device->depth_format : VK_FORMAT_UNDEFINED;
-
-            VkGraphicsPipelineCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            info.pNext = &rendering;
-            info.stageCount = stage_count;
-            info.pStages = stages.data();
-            info.pVertexInputState = &state.vertex_input;
-            info.pInputAssemblyState = &state.assembly;
-            info.pViewportState = &state.viewport;
-            info.pRasterizationState = &state.raster;
-            info.pMultisampleState = &state.multisample;
-            info.pDepthStencilState = &state.depth;
-            info.pColorBlendState = &state.blend;
-            info.pDynamicState = &dynamic;
-            info.layout = layout;
-
-            const VkResult created = vkCreateGraphicsPipelines(device->device, VK_NULL_HANDLE, 1,
-                                                               &info, nullptr, &pipeline);
-            if (created != VK_SUCCESS) {
-                ENGINE_LOG_ERROR("vkCreateGraphicsPipelines failed with {} ({})",
-                                 vk::vk_result_name(created), static_cast<std::int32_t>(created));
-                result = vk::to_result(created);
-            }
+            result = build_pipeline(*device, desc, vertex, fragment, has_fragment, layout,
+                                    &pipeline);
         }
 
         // The modules are only needed while the pipeline builds.
