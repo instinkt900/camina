@@ -38,6 +38,7 @@ add_library(engine_core STATIC
     render/tonemap_pass.cpp
     physics/components.cpp
     physics/conventions.cpp
+    physics/simulation.cpp
     physics/world.cpp
     scene/world.cpp
     scene/component_registry.cpp

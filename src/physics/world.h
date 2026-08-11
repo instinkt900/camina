@@ -20,14 +20,30 @@
  */
 
 #include "math/conventions.h"
+#include "physics/components.h"
 
 #include <cstdint>
 
-/// @brief Rigid body simulation, and what the simulation library assumes.
 namespace engine::physics {
 
     /// @brief Identifies one body inside a World. Zero is no body.
     using BodyId = std::uint64_t;
+
+    /**
+     * @brief What a shape is made of.
+     *
+     * These sit on the shape rather than on the body, which is how Box3D works.
+     * A body with two shapes can be wood on one side and steel on the other,
+     * and its mass is the sum of what each shape encloses.
+     */
+    struct SurfaceMaterial {
+        /// @brief Kilograms per cubic meter. The mass follows from this.
+        float density = kDefaultDensity;
+        /// @brief How hard it is to slide. 0 is ice.
+        float friction = kDefaultFriction;
+        /// @brief How much it bounces. 0 absorbs the energy, and 1 gives it back.
+        float restitution = 0.0F;
+    };
 
     /**
      * @brief How many tasks Box3D has handed to the job system since the start.
@@ -104,20 +120,65 @@ namespace engine::physics {
         void step(float delta_seconds, std::uint32_t substeps = 4);
 
         /**
-         * @brief Adds a box that never moves.
-         * @param center Where the middle of the box sits, in world space.
-         * @param half_extents Half the size along each axis, in meters.
+         * @brief Adds a body with no shape on it yet.
+         *
+         * A body with no shape still falls, and nothing stops it. Add a shape
+         * with add_box() or add_sphere().
+         *
+         * @param type What moves it. See BodyType.
+         * @param position Where it starts, in world space.
+         * @param rotation How it is turned, in world space.
          * @return The new body.
          */
-        BodyId add_static_box(const Vec3& center, const Vec3& half_extents);
+        BodyId add_body(BodyType type, const Vec3& position, const Quat& rotation);
 
         /**
-         * @brief Adds a box that gravity moves.
-         * @param center Where the middle of the box starts, in world space.
+         * @brief Puts a box on a body, centered on it.
+         * @param body The body to add it to.
          * @param half_extents Half the size along each axis, in meters.
-         * @return The new body.
+         * @param material The density, the friction, and the restitution.
          */
-        BodyId add_dynamic_box(const Vec3& center, const Vec3& half_extents);
+        void add_box(BodyId body, const Vec3& half_extents, const SurfaceMaterial& material);
+
+        /**
+         * @brief Puts a sphere on a body, centered on it.
+         * @param body The body to add it to.
+         * @param radius How far it reaches, in meters.
+         * @param material The density, the friction, and the restitution.
+         */
+        void add_sphere(BodyId body, float radius, const SurfaceMaterial& material);
+
+        /**
+         * @brief Moves a body, whatever its type.
+         *
+         * This teleports rather than pushes. Contacts are worked out afresh
+         * where the body lands, so a body moved into another one resolves the
+         * overlap rather than sweeping through what lies between.
+         *
+         * @param body The body to move.
+         * @param position Where to put it, in world space.
+         * @param rotation How to turn it, in world space.
+         */
+        void set_body_transform(BodyId body, const Vec3& position, const Quat& rotation);
+
+        /**
+         * @brief Gives a kinematic body the velocity that reaches a transform.
+         *
+         * A kinematic body pushes dynamic bodies aside, and it needs a velocity
+         * to do that with. Teleporting one leaves it with no velocity, so a
+         * crate resting on a lift would be left behind rather than carried.
+         *
+         * @param body The body to move.
+         * @param position Where it should arrive, in world space.
+         * @param rotation How it should be turned on arrival.
+         * @param delta_seconds The step it has to get there in.
+         */
+        void set_body_target(BodyId body, const Vec3& position, const Quat& rotation,
+                             float delta_seconds);
+
+        /// @brief Destroys one body and every shape on it.
+        /// @param body The body to destroy.
+        void destroy_body(BodyId body);
 
         /**
          * @brief Where a body is now.
@@ -125,6 +186,13 @@ namespace engine::physics {
          * @return Its center, in world space.
          */
         [[nodiscard]] Vec3 body_position(BodyId body) const;
+
+        /**
+         * @brief How a body is turned now.
+         * @param body The body to read.
+         * @return Its rotation, in world space.
+         */
+        [[nodiscard]] Quat body_rotation(BodyId body) const;
 
         /// @brief How many bodies the world holds.
         /// @return The count of static and dynamic bodies together.
