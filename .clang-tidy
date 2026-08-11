@@ -51,10 +51,16 @@ Checks: >
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*'
 
-# Rule 4.4 says we vendor only what we patch, so a Conan header is code we will
-# never change. Linting it stops the build over a style choice upstream made.
-# The .cpp files carry SKIP_LINTING, but a header reaches us through our own
-# translation unit and the header filter above would still take it.
+# A dependency header is code we do not write, so linting it stops the build
+# over a style choice upstream made. The .cpp files carry SKIP_LINTING, but a
+# header reaches us through our own translation unit and the header filter above
+# would still take it. WarningsAsErrors is '*', so one such header fails the
+# build rather than printing.
+#
+# Two places hold that code. Conan is rule 4.4, which says we vendor only what we
+# patch. third_party/ is what we do patch, and the tidy checks still do not
+# apply: Box3D is C, and box3d/collision.h alone reports 3305 findings, mostly
+# C-style casts in inline accessors.
 #
 # This is engine-specific and moth_ui does not need it today.
-ExcludeHeaderFilterRegex: '.*/\.conan2/.*'
+ExcludeHeaderFilterRegex: '.*/(\.conan2|third_party)/.*'

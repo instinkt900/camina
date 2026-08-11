@@ -146,6 +146,16 @@ engine_enable_clang_tidy(test_bounds)
 
 add_test(NAME bounds COMMAND test_bounds)
 
+# M7.1. Box3D builds, links, and agrees with the engine about which way is up.
+# The value comes out of the library at run time, so a Box3D update that turns
+# the world over fails here rather than in the game. See DESIGN.md section 3.
+add_executable(test_physics test_physics.cpp)
+target_link_libraries(test_physics PRIVATE engine::core)
+engine_set_warnings(test_physics)
+engine_enable_clang_tidy(test_physics)
+
+add_test(NAME physics COMMAND test_physics)
+
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
 add_executable(test_sandbox test_sandbox.cpp)

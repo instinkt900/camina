@@ -39,14 +39,19 @@ jobs:
           cmake -S . -B build-docs -DCAMINA_DOCS_ONLY=ON
           cmake --build build-docs --target docs
 
-  # Rule 4.1 in DESIGN.md. This runs on its own so that a violation is obvious in
-  # the checks list, and so that it reports even when the build fails.
-  vulkan-containment:
+  # Rule 4.1 in DESIGN.md, and the Box3D rule in section 5. This runs on its own
+  # so that a violation is obvious in the checks list, and so that it reports
+  # even when the build fails. Both steps run, because one violation must not
+  # hide the other.
+  containment:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Check Vulkan containment
         run: bash scripts/check-vulkan-containment.sh .
+      - name: Check Box3D containment
+        if: ${{ !cancelled() }}
+        run: bash scripts/check-box3d-containment.sh .
 
   # The engine targets Clang on Linux and MSVC on Windows. See DESIGN.md
   # section 2. Every step below runs under bash, including on Windows, so that

@@ -1,3 +1,6 @@
 [submodule "third_party/bc7enc_rdo"]
 	path = third_party/bc7enc_rdo
 	url = https://github.com/richgel999/bc7enc_rdo
+[submodule "third_party/box3d"]
+	path = third_party/box3d
+	url = https://github.com/erincatto/box3d
