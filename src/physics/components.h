@@ -36,11 +36,17 @@ namespace engine::physics {
      * takes its transform from the solver, and a static or kinematic one gives
      * its transform to the solver. DESIGN.md section 9 holds the rule and the
      * reason.
+     *
+     * @warning **A dynamic body has to sit at the root of the hierarchy, and the
+     * engine refuses one that does not.** Parenting means the child goes where
+     * the parent goes, and a dynamic body goes where the solver puts it. A
+     * static or kinematic body under a parent is correct, because the entity
+     * owns its transform in both cases.
      */
     enum class BodyType : std::uint8_t {
         /// @brief Never moves. The floor and the walls. It costs no solver time.
         Static = 0,
-        /// @brief Gravity and contacts move it. A crate in a stack.
+        /// @brief Gravity and contacts move it. A crate in a stack. It sits at the root.
         Dynamic = 1,
         /// @brief The game moves it, and it pushes dynamic bodies aside. A lift.
         Kinematic = 2,

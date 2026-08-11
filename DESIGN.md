@@ -850,10 +850,35 @@ That falls out of what the three types mean. A dynamic body ends up somewhere on
 solver knows. A static body never moves. A kinematic body is moved by game code or by an
 animation, and the solver reads it so that dynamic bodies get pushed aside correctly.
 
-**The write-back converts world to local, because the two sides do not speak the same
-space.** Box3D works in world space and `Transform` is local to the parent, so a dynamic body
-under a parent needs the inverse of the parent world matrix. A dynamic body at the root
-needs no inverse, which is the common case and costs nothing.
+**A dynamic body sits at the root of the hierarchy, and the engine refuses one that does
+not.** Box3D works in world space and `Transform` is local to the parent. A dynamic body at
+the root makes those the same thing, so the write-back stores what the solver produced and
+converts nothing.
+
+The refusal is the point rather than a shortcut. Parenting means "this goes where that goes",
+and a dynamic body goes where the solver puts it. The two cannot both hold. Allowing the
+parent link would leave it in place meaning nothing: moving the parent would change the
+numbers stored in the child and not where it appears, because the next step overwrites them.
+
+Converting world to local instead was considered and rejected. It costs one matrix inverse,
+which is nothing, and one invariant that nothing enforces, which is not. The write-back would
+have to walk parents before children and rebuild each world matrix as it went, because a
+child needs the parent position from this step and not from the last one. Get that order
+wrong in a stack and each level is a little further out than the one below. The picture looks
+like an unstable solver rather than like a bug in a loop, which is the failure `DESIGN.md`
+§3 exists to warn about.
+
+**This restricts dynamic bodies alone.** A static or kinematic body under a parent is correct
+and useful, because the entity owns its transform in both cases. A platform that is part of a
+lift assembly is exactly that.
+
+A jointed assembly does not need the hierarchy either. A ragdoll or a hinge is physics joints
+between bodies that are each at the root, which is what Box3D provides and what stays correct
+under the solver.
+
+Going the other way later is cheap, and this direction is not. A build that allows a parented
+dynamic body can start converting whenever a real case turns up. A build that already has
+content relying on it cannot take that back.
 
 Two things the write-back deliberately leaves alone. It does not touch scale, because a rigid
 body has none to give. And a collider does not read the entity scale at all, which is #237.
