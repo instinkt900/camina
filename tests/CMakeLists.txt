@@ -8,6 +8,13 @@ engine_enable_clang_tidy(test_core)
 
 add_test(NAME core COMMAND test_core)
 
+add_executable(test_timestep test_timestep.cpp)
+target_link_libraries(test_timestep PRIVATE engine::core)
+engine_set_warnings(test_timestep)
+engine_enable_clang_tidy(test_timestep)
+
+add_test(NAME timestep COMMAND test_timestep)
+
 add_executable(test_reflect test_reflect.cpp)
 target_link_libraries(test_reflect PRIVATE engine::core)
 engine_set_warnings(test_reflect)

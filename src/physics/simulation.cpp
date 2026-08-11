@@ -8,8 +8,10 @@
 
 #include <entt/entity/registry.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include <algorithm>
 #include <string>
 
 namespace engine::physics {
@@ -57,7 +59,7 @@ namespace engine::physics {
         ENGINE_PROFILE_ZONE_N("physics build");
 
         for (const auto& [entity, body] : m_bodies) {
-            m_world.destroy_body(body);
+            m_world.destroy_body(body.id);
         }
         m_bodies.clear();
 
@@ -107,7 +109,14 @@ namespace engine::physics {
                 m_world.add_sphere(body, sphere->radius, material);
             }
 
-            m_bodies.emplace(entity, body);
+            // Both poses start where the entity sits, so a frame drawn before
+            // the first step blends two copies of the starting pose rather than
+            // reading a rotation nobody set.
+            m_bodies.emplace(entity, Body{ .id = body,
+                                           .previous_position = position,
+                                           .previous_rotation = rotation,
+                                           .position = position,
+                                           .rotation = rotation });
         }
 
         ENGINE_LOG_INFO("Physics built {} bodies.", m_bodies.size());
@@ -122,9 +131,14 @@ namespace engine::physics {
         // before the solver runs. update() first, because an entity moved this
         // frame has a world matrix that is still the one from last frame.
         world.update();
-        for (const auto& [entity, body] : m_bodies) {
+        for (auto& [entity, body] : m_bodies) {
             const BodyType type = registry.get<const RigidBody>(entity).type;
             if (type == BodyType::Dynamic) {
+                // The pose the last step produced becomes the older half of the
+                // pair, and the solver is about to write the newer half. This
+                // is what a frame between two steps blends.
+                body.previous_position = body.position;
+                body.previous_rotation = body.rotation;
                 continue;
             }
 
@@ -135,25 +149,46 @@ namespace engine::physics {
             if (type == BodyType::Kinematic) {
                 // A velocity rather than a teleport, so what rests on it is
                 // carried rather than left behind.
-                m_world.set_body_target(body, position, rotation, delta_seconds);
+                m_world.set_body_target(body.id, position, rotation, delta_seconds);
             } else {
-                m_world.set_body_transform(body, position, rotation);
+                m_world.set_body_transform(body.id, position, rotation);
             }
         }
 
         m_world.step(delta_seconds, substeps);
 
-        // The solver owns a dynamic body, so its transform comes back out. A
-        // dynamic body is at the root, which is what makes this a store rather
-        // than a conversion out of world space.
+        // The solver owns a dynamic body, so its transform comes back out. It
+        // is recorded rather than written to the entity, because the frame that
+        // draws may sit between this step and the next. interpolate() writes.
+        for (auto& [entity, body] : m_bodies) {
+            if (registry.get<const RigidBody>(entity).type != BodyType::Dynamic) {
+                continue;
+            }
+            body.position = m_world.body_position(body.id);
+            body.rotation = m_world.body_rotation(body.id);
+        }
+    }
+
+    void Simulation::interpolate(scene::World& world, float alpha) {
+        ENGINE_PROFILE_ZONE_N("physics interpolate");
+
+        const float weight = std::clamp(alpha, 0.0F, 1.0F);
+        entt::registry& registry = world.registry();
+
+        // A dynamic body is at the root, which is what makes this a store
+        // rather than a conversion out of world space.
         for (const auto& [entity, body] : m_bodies) {
             if (registry.get<const RigidBody>(entity).type != BodyType::Dynamic) {
                 continue;
             }
 
             Transform local = world.local(entity);
-            local.position = m_world.body_position(body);
-            local.rotation = m_world.body_rotation(body);
+            local.position = glm::mix(body.previous_position, body.position, weight);
+            // slerp rather than a straight blend. Two quaternions read as two
+            // points on a sphere, and mixing them moves at an uneven rate and
+            // leaves a length that is not one. glm::slerp also flips the sign
+            // when the pair points apart, so a turn takes the short way round.
+            local.rotation = glm::slerp(body.previous_rotation, body.rotation, weight);
 
             // The scale is left as the scene set it. A rigid body has none to
             // give back.

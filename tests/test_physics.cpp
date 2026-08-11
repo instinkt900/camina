@@ -19,6 +19,8 @@
 #include "scene/prefab.h"
 #include "scene/world.h"
 
+#include <glm/gtc/quaternion.hpp>
+
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -58,6 +60,12 @@ namespace {
     constexpr float kBoxHalfSize = 0.5F;
     constexpr float kStep = 1.0F / 60.0F;
     constexpr std::uint32_t kStepCount = 120;
+
+    /// A millimeter, which is far below anything a wrong blend would produce.
+    constexpr float kBlendTolerance = 1e-3F;
+
+    /// About 23 degrees. Enough that the box tips rather than lands flat.
+    constexpr float kTiltRadians = 0.4F;
 
     /// A stack big enough that the solver has real work to split.
     constexpr std::uint32_t kLargeWidth = 8;
@@ -357,6 +365,9 @@ namespace {
         for (std::uint32_t i = 0; i < kStepCount; ++i) {
             simulation.step(world, kStep);
         }
+        // The step records the pose and interpolate() writes it. An alpha of 1
+        // asks for the newest step with no blending.
+        simulation.interpolate(world, 1.0F);
 
         const engine::Transform& landed = world.local(crate);
         check(landed.position.y < 6.0F, "the dynamic entity fell");
@@ -379,6 +390,7 @@ namespace {
         for (std::uint32_t i = 0; i < 10; ++i) {
             simulation.step(world, kStep);
         }
+        simulation.interpolate(world, 1.0F);
 
         // A rigid body has no scale to give back, so the one the scene set has
         // to survive. Writing a whole transform back would reset it to 1.
@@ -431,6 +443,122 @@ namespace {
         check(world.world_matrix(child)[3][0] == 4.0F, "the parent carried it to x = 4");
     }
 
+    void a_step_alone_moves_nothing() {
+        section("A step records the pose and interpolate writes it");
+
+        sc::World world;
+        const entt::entity crate = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, 6.0F, 0.0F });
+
+        ph::Simulation simulation;
+        simulation.build(world);
+
+        const float started = world.local(crate).position.y;
+        for (std::uint32_t i = 0; i < 10; ++i) {
+            simulation.step(world, kStep);
+        }
+
+        // The split is what lets one frame run several steps and draw once. A
+        // step that wrote the entity would write it several times and still
+        // draw a pose that ignores where the frame sits between two of them.
+        check(world.local(crate).position.y == started, "ten steps left the entity alone");
+
+        simulation.interpolate(world, 1.0F);
+        check(world.local(crate).position.y < started, "and interpolate moved it");
+    }
+
+    void a_frame_between_two_steps_blends() {
+        section("A frame between two steps draws between them");
+
+        sc::World world;
+        const entt::entity crate = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, 6.0F, 0.0F });
+
+        ph::Simulation simulation;
+        simulation.build(world);
+
+        // Two steps, so the pair the blend reads are both real poses the solver
+        // produced rather than one pose and the place the scene started.
+        simulation.step(world, kStep);
+        simulation.interpolate(world, 1.0F);
+        const float older = world.local(crate).position.y;
+
+        simulation.step(world, kStep);
+        simulation.interpolate(world, 0.0F);
+        const float at_zero = world.local(crate).position.y;
+
+        simulation.interpolate(world, 1.0F);
+        const float newer = world.local(crate).position.y;
+
+        simulation.interpolate(world, 0.5F);
+        const float middle = world.local(crate).position.y;
+
+        check(at_zero == older, "alpha 0 draws the older of the two steps");
+        check(newer < older, "the body fell further over the second step");
+        check(middle < older && middle > newer, "alpha 0.5 draws between them");
+
+        // Halfway in the blend is halfway in distance, because the blend is a
+        // straight line between two points and nothing else.
+        const float halfway = (older + newer) * 0.5F;
+        check(std::fabs(middle - halfway) < kBlendTolerance, "and it sits at the midpoint");
+    }
+
+    void interpolating_twice_gives_one_answer() {
+        section("Interpolating twice with no step between gives one answer");
+
+        sc::World world;
+        const entt::entity crate = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, 6.0F, 0.0F });
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        for (std::uint32_t i = 0; i < 5; ++i) {
+            simulation.step(world, kStep);
+        }
+
+        simulation.interpolate(world, 0.5F);
+        const engine::Transform once = world.local(crate);
+        simulation.interpolate(world, 0.5F);
+        const engine::Transform twice = world.local(crate);
+
+        // The two recorded poses are the only input. Reading the entity back as
+        // one of them would make each call blend against the last answer, and
+        // then a frame that drew twice would creep forward on its own.
+        check(once.position == twice.position, "the position did not move again");
+        check(once.rotation == twice.rotation, "and neither did the rotation");
+    }
+
+    void a_blended_rotation_stays_a_rotation() {
+        section("A blended rotation is still a rotation");
+
+        sc::World world;
+        const entt::entity crate = add_physics_entity(world, ph::BodyType::Dynamic,
+                                                      Vec3{ 0.0F, 6.0F, 0.0F });
+        // Off-axis, so the box tips as it falls and the two poses differ by a
+        // real turn rather than by nothing.
+        world.set_local(crate, engine::Transform{ .position = { 0.0F, 6.0F, 0.0F },
+                                                  .rotation = glm::angleAxis(
+                                                      kTiltRadians, glm::normalize(Vec3{
+                                                                        1.0F, 0.0F, 1.0F })) });
+
+        const entt::entity floor = add_physics_entity(world, ph::BodyType::Static,
+                                                      Vec3{ 0.0F, -1.0F, 0.0F });
+        world.registry().get<ph::BoxCollider>(floor).half_extents = Vec3{ 50.0F, 1.0F, 50.0F };
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        for (std::uint32_t i = 0; i < kStepCount; ++i) {
+            simulation.step(world, kStep);
+        }
+
+        // A straight blend of two quaternions shortens as they part, and a
+        // rotation matrix built from one that is not unit length scales the
+        // mesh. slerp is what keeps the length at one.
+        simulation.interpolate(world, 0.5F);
+        const float length = glm::length(world.local(crate).rotation);
+        check(std::fabs(length - 1.0F) < kBlendTolerance, "the blended quaternion is unit length");
+    }
+
 } // namespace
 
 int main() {
@@ -445,6 +573,10 @@ int main() {
     the_scale_survives_the_write_back();
     a_parented_dynamic_body_is_refused();
     a_parented_static_body_is_allowed();
+    a_step_alone_moves_nothing();
+    a_frame_between_two_steps_blends();
+    interpolating_twice_gives_one_answer();
+    a_blended_rotation_stays_a_rotation();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();
