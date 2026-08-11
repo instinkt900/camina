@@ -718,6 +718,26 @@ here, consider whether moth_ui wants the same change.
   end of the list. `tests/.clang-tidy` relaxes magic numbers for test code.
   `cmake/ClangTidy.cmake` runs clang-tidy in the compile step, but only in a Debug
   build or when `CI` is set. A missing clang-tidy fails the build in CI.
+- **clang-tidy must be 19, and a wrong one fails open rather than loudly.**
+  `ExcludeHeaderFilterRegex` needs clang-tidy 19. Version 18 rejects that key,
+  and rejecting one key throws the whole file away: it prints
+  `Error parsing .clang-tidy: Invalid argument` and carries on with its own
+  defaults, which are `clang-analyzer-*` and the compiler diagnostics. No
+  `Checks` list, and no `WarningsAsErrors`. So the build passes and the lint
+  gate checked almost nothing.
+
+  Check with `clang-tidy --version` and `clang-tidy --verify-config`. The second
+  **exits 0 even when it rejects a key**, so read what it printed rather than
+  the status. CI runs both now, and fails when the config was not accepted.
+
+  Ubuntu noble ships 19.1.1 as `clang-tidy-19`, and the plain `clang-tidy`
+  package points at 18. Check which one `/usr/bin/clang-tidy` resolves to
+  before trusting a local result.
+- **An alias is a separate check, so turning one off leaves the other on.**
+  `cppcoreguidelines-avoid-magic-numbers` is an alias of
+  `readability-magic-numbers`. Disabling only the second left the first running
+  under `cppcoreguidelines-*`, and a local build reported about thirty findings
+  that CI never did. Both names are in the list now. Issue #242.
 - **`.clang-tidy` trap.** Never put a comment inside the `Checks:` block. It is a YAML
   folded scalar, so a comment line without a trailing comma merges with the entry
   after it, and that entry stops working with no error. Put rationale above the key.

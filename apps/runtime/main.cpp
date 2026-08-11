@@ -527,6 +527,37 @@ struct engine::reflect::Describe<ViewSettings> {
 namespace {
 
     /**
+     * Reads an option that carries no value.
+     *
+     * These are split out because the chain in parse_options that reads them
+     * all had grown past the branch count clang-tidy accepts in one function.
+     * The ones that take a value have to stay together, because each of them
+     * moves the loop index and the loop moves it again.
+     *
+     * @param arg One argument from the command line.
+     * @param options The options to fill.
+     * @return True when this took the argument, so the caller looks no further.
+     */
+    bool parse_flag(std::string_view arg, Options& options) {
+        if (arg == "--physics-debug") {
+            options.physics_debug = true;
+        } else if (arg == "--no-watch") {
+            options.hot_reload = false;
+        } else if (arg == "--no-validation") {
+            options.validation = false;
+        } else if (arg == "--sync-validation") {
+            options.sync_validation = true;
+        } else if (arg == "--no-vsync") {
+            options.vsync = false;
+        } else if (arg == "--offscreen") {
+            options.offscreen = true;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Reads the command line.
      *
      * Every option that takes a value moves the index once, and the loop moves
@@ -539,6 +570,13 @@ namespace {
         for (int i = 1; i < argc; ++i) {
             const std::string_view arg{ argv[i] };
             const bool has_value = i + 1 < argc;
+
+            // The value-less ones first, so the chain below holds only the
+            // options that have an index to move.
+            if (parse_flag(arg, options)) {
+                continue;
+            }
+
             if (arg == "--frames" && has_value) {
                 parse_count("--frames", argv[i + 1], options.max_frames);
                 ++i;
@@ -554,18 +592,6 @@ namespace {
             } else if (arg == "--throw-at-frame" && has_value) {
                 parse_count("--throw-at-frame", argv[i + 1], options.throw_at_frame);
                 ++i;
-            } else if (arg == "--physics-debug") {
-                options.physics_debug = true;
-            } else if (arg == "--no-watch") {
-                options.hot_reload = false;
-            } else if (arg == "--no-validation") {
-                options.validation = false;
-            } else if (arg == "--sync-validation") {
-                options.sync_validation = true;
-            } else if (arg == "--no-vsync") {
-                options.vsync = false;
-            } else if (arg == "--offscreen") {
-                options.offscreen = true;
             } else if (arg == "--resolution" && has_value) {
                 parse_resolution(argv[i + 1], options.resolution);
                 ++i;
@@ -2048,6 +2074,39 @@ namespace {
         return crate;
     }
 
+    /**
+     * Runs the whole steps this frame owes, then blends the pose it draws.
+     *
+     * Physics runs after the game, because the game moves the kinematic bodies
+     * and the solver has to see this frame's positions.
+     *
+     * @param clock The fixed step clock. Its rate follows the settings.
+     * @param settings Where the step rate and the ceiling are kept.
+     * @param simulation The bodies to step.
+     * @param world The scene to read and to write the drawn pose into.
+     * @param delta_seconds How much wall time this frame took.
+     * @param stats Receives what the whole of it cost on the CPU.
+     */
+    void advance_physics(engine::FixedTimestep& clock, const ViewSettings& settings,
+                         engine::physics::Simulation& simulation, engine::scene::World& world,
+                         float delta_seconds, engine::FrameStats& stats) {
+        // The inspector can move both of these while the program runs, so they
+        // are read each frame rather than at startup. Neither call throws away
+        // the time already accumulated.
+        clock.set_rate_hz(settings.physics_hz);
+        clock.set_max_steps(settings.max_physics_steps);
+
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint32_t left = clock.advance(delta_seconds); left > 0; --left) {
+            ENGINE_PROFILE_ZONE_N("physics step");
+            simulation.step(world, clock.step_seconds());
+        }
+        simulation.interpolate(world, clock.alpha());
+        stats.add(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+                .count());
+    }
+
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
@@ -2143,25 +2202,7 @@ namespace {
             // draws them. Reversing those two would draw a frame behind.
             sandbox::update(world, seconds);
 
-            // The inspector can move both of these while the program runs, so
-            // they are read each frame rather than at startup. Neither call
-            // throws away the time already accumulated.
-            clock.set_rate_hz(settings.physics_hz);
-            clock.set_max_steps(settings.max_physics_steps);
-
-            // Physics after the game, because the game moves the kinematic
-            // bodies and the solver has to see this frame's positions. The
-            // steps are whole and fixed, and how far the frame sits into the
-            // next one is what the blend below uses.
-            const auto physics_started = std::chrono::steady_clock::now();
-            for (std::uint32_t left = clock.advance(delta); left > 0; --left) {
-                ENGINE_PROFILE_ZONE_N("physics step");
-                simulation.step(world, clock.step_seconds());
-            }
-            simulation.interpolate(world, clock.alpha());
-            physics_stats.add(std::chrono::duration<double, std::milli>(
-                                  std::chrono::steady_clock::now() - physics_started)
-                                  .count());
+            advance_physics(clock, settings, simulation, world, delta, physics_stats);
 
             engine::gfx::Extent2D drawn_extent{};
             const FrameOutcome outcome = draw_frame(context, extent, drawn_extent);

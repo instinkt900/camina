@@ -127,6 +127,25 @@ jobs:
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
           sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-19 100
 
+      # The lint gate is only worth what clang-tidy actually reads. A version
+      # that does not know a key in .clang-tidy rejects the whole file and
+      # falls back to its own defaults, which check almost nothing, and it says
+      # so on stderr and carries on. That is silent from the build log.
+      # ExcludeHeaderFilterRegex needs clang-tidy 19, and clang-tidy 18 rejects
+      # it. See issue #242.
+      - name: Check clang-tidy reads the configuration
+        if: runner.os == 'Linux'
+        run: |
+          clang-tidy --version
+          # --verify-config exits 0 even when it rejects a key, so read what it
+          # printed rather than trusting the status.
+          output=$(clang-tidy --verify-config 2>&1)
+          echo "$output"
+          if ! grep -q "No config errors detected" <<<"$output"; then
+            echo "::error::clang-tidy did not accept .clang-tidy, so it would check almost nothing."
+            exit 1
+          fi
+
       # The windows profile asks for the Ninja generator, so cl.exe and the
       # Windows SDK must be on PATH before CMake runs. This action calls
       # vcvars64.bat and exports the result to the later steps.
