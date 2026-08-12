@@ -190,6 +190,57 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
+    void test_a_script_cooks_as_source_text() {
+        const std::filesystem::path source = scratch("script/src");
+        const std::filesystem::path out = scratch("script/out");
+
+        constexpr std::string_view kScript = "function on_update(dt)\n  return dt\nend\n";
+        write_file(source / "scripts" / "spin.lua", kScript);
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result first;
+        check(cooker::cook_all(options, first), "a tree with a script cooks");
+        check(first.cooked == 1, "and the script is the one asset in it");
+
+        // The cooked form is the source text. See src/assets/script.h for why
+        // it is not bytecode, and issue #258 for when that could change.
+        const std::filesystem::path cooked = out / "scripts" / "spin.lua";
+        check(std::filesystem::exists(cooked), "the script landed under its own name");
+        check(read_file(cooked) == kScript, "and the bytes went through unchanged");
+
+        // A script is an asset, so it carries an identity like any other. This
+        // is what ScriptComponent names, and losing it would leave a component
+        // pointing at nothing. See issue #178.
+        check(std::filesystem::exists(as::meta_path(source / "scripts" / "spin.lua")),
+              "the cook wrote it a sidecar");
+
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "and the manifest reads back");
+        const auto entry = std::ranges::find_if(manifest.entries, [](const as::ManifestEntry& e) {
+            return e.source == "scripts/spin.lua";
+        });
+        check(entry != manifest.entries.end(), "the manifest holds the script");
+        if (entry != manifest.entries.end()) {
+            check(entry->outputs.size() == 1, "and it wrote exactly one output");
+            check(entry->guid.valid(), "and the script has a real identity");
+        }
+
+        // The rule changes no output, so the freshness check has to behave the
+        // same way it does for every other asset.
+        cooker::Result second;
+        check(cooker::cook_all(options, second), "the second cook works");
+        check(second.cooked == 0 && second.skipped == 1, "an unchanged script cooks nothing");
+
+        write_file(source / "scripts" / "spin.lua", "function on_update() end\n");
+        cooker::Result changed;
+        check(cooker::cook_all(options, changed), "an edited script cooks");
+        check(changed.cooked == 1, "and the edit is what cooked it");
+        check(read_file(cooked) == "function on_update() end\n",
+              "and the new text reached the cooked tree");
+
+        test::remove_tree(source.parent_path());
+    }
+
     void test_missing_output_recooks() {
         const std::filesystem::path source = scratch("gone/src");
         const std::filesystem::path out = scratch("gone/out");
@@ -2444,6 +2495,7 @@ int main() {
     test_input_order_matters();
     test::section("cooking");
     test_cook_and_skip();
+    test_a_script_cooks_as_source_text();
     test_missing_output_recooks();
     test_new_identity_recooks();
     test_duplicate_identity_is_refused();

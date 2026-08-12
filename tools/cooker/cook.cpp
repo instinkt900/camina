@@ -4,6 +4,7 @@
 #include "assets/mesh.h"
 #include "assets/meta.h"
 #include "assets/reference.h"
+#include "assets/script.h"
 #include "assets/shader.h"
 #include "assets/texture.h"
 #include "core/log.h"
@@ -34,12 +35,18 @@ namespace cooker {
             Brdf,        ///< The split sum BRDF table, integrated from its sidecar alone.
             Mesh,        ///< glTF through cgltf, out as one cooked mesh for each mesh.
             Document,    ///< A scene or a prefab, with its asset references resolved.
+            Script,      ///< Lua source text, copied. See src/assets/script.h.
             Copy,        ///< No rule yet. The bytes go through unchanged.
         };
 
         /// Whether a file is a scene or a prefab, which name assets by path.
         [[nodiscard]] bool is_document_extension(std::string_view extension) {
             return extension == ".scene" || extension == ".prefab";
+        }
+
+        /// Whether a file is a Lua script.
+        [[nodiscard]] bool is_script_extension(std::string_view extension) {
+            return extension == as::kScriptExtension;
         }
 
         [[nodiscard]] Rule rule_for(const std::filesystem::path& source) {
@@ -63,6 +70,12 @@ namespace cooker {
             }
             if (is_document_extension(extension)) {
                 return Rule::Document;
+            }
+            // The rule copies the bytes, so this changes no output. It is here
+            // so that a script is content by declaration rather than by falling
+            // past every other rule. See src/assets/script.h and issue #178.
+            if (is_script_extension(extension)) {
+                return Rule::Script;
             }
             return Rule::Copy;
         }
@@ -107,6 +120,9 @@ namespace cooker {
             case Rule::Document:
                 // It keeps its own name. A scene is still a scene after its
                 // references resolve, and the runtime opens it by that name.
+            case Rule::Script:
+                // The same. A cooked script is the source text, so the cooked
+                // file is a .lua and a person can read it in the cooked tree.
             case Rule::Copy:
                 break;
             }
@@ -249,6 +265,10 @@ namespace cooker {
                 return single([&](const std::filesystem::path& to) {
                     return cook_document(source, to, options.content);
                 });
+            case Rule::Script:
+                // The bytes go through unchanged, the same as a copy. The rule
+                // exists so that a script is content by declaration, and so
+                // that issue #258 has a place to add a precompile step.
             case Rule::Copy:
                 break;
             }
