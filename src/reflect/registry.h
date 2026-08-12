@@ -14,6 +14,7 @@
  */
 
 #include "reflect/reflect.h"
+#include "reflect/value.h"
 
 #include <cstddef>
 #include <string_view>
@@ -51,6 +52,42 @@ namespace engine::reflect {
          * @param user     Passed through to every call of @p visit.
          */
         void (*walk_fields)(void* instance, FieldVisitor visit, void* user) = nullptr;
+
+        /**
+         * @brief Reads one field by name into a Value.
+         *
+         * This is what a consumer that holds only strings needs. A script
+         * arrives with a component name and a field name, and C++ can turn
+         * neither one into a type.
+         *
+         * @param instance A pointer to a live instance of this type.
+         * @param field The field name, as Describe gave it.
+         * @param out Receives the value. Its kind is None when no field has
+         * that name, and Unsupported when the field exists and its type does
+         * not fit a Value. See issue #271.
+         * @return True when a field of that name was read.
+         */
+        bool (*get_field)(const void* instance, std::string_view field, Value& out) = nullptr;
+
+        /**
+         * @brief Writes one field by name from a Value.
+         *
+         * A value whose kind does not match the field leaves the field alone
+         * and reports false. Half-writing a component is worse than refusing.
+         *
+         * @param instance A pointer to a live instance of this type.
+         * @param field The field name, as Describe gave it.
+         * @param in The value to write.
+         * @return True when the field was found and the value fitted it.
+         *
+         * @warning A Transform written this way goes around
+         * `scene::World::set_local()`, so the caller has to call
+         * `scene::World::mark_dirty()` or the world matrix stays stale.
+         */
+        bool (*set_field)(void* instance, std::string_view field, const Value& in) = nullptr;
+
+        /// @brief Every described field name, in the order Describe gave them.
+        std::vector<const char*> field_names;
     };
 
     /**
@@ -74,8 +111,47 @@ namespace engine::reflect {
             if (find(type_name<T>()) != nullptr) {
                 return;
             }
-            TypeInfo info{ type_name<T>(), sizeof(T), field_count<T>() };
+            // Set member by member rather than braced, because the struct has
+            // grown past the point where a reader can match a brace list to it.
+            TypeInfo info;
+            info.name = type_name<T>();
+            info.size = sizeof(T);
+            info.field_count = field_count<T>();
+
             if constexpr (field_count<T>() > 0) {
+                // Read once here rather than on each lookup, because a caller
+                // that lists the fields of a type does not want to build an
+                // instance to do it.
+                T named{};
+                for_each_field(named, [&](const auto& field, const auto& /*value*/) {
+                    info.field_names.push_back(field.name());
+                });
+
+                info.get_field = [](const void* instance, std::string_view field,
+                                    Value& out) {
+                    const T& object = *static_cast<const T*>(instance);
+                    bool found = false;
+                    for_each_field(object, [&](const auto& described, const auto& value) {
+                        if (!found && field == described.name()) {
+                            found = true;
+                            to_value(value, out);
+                        }
+                    });
+                    return found;
+                };
+
+                info.set_field = [](void* instance, std::string_view field,
+                                    const Value& in) {
+                    T& object = *static_cast<T*>(instance);
+                    bool written = false;
+                    for_each_field(object, [&](const auto& described, auto& value) {
+                        if (!written && field == described.name()) {
+                            written = from_value(in, value);
+                        }
+                    });
+                    return written;
+                };
+
                 info.walk_fields = [](void* instance, TypeInfo::FieldVisitor visit,
                                       void* user) {
                     T& object = *static_cast<T*>(instance);
