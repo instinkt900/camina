@@ -108,6 +108,15 @@ namespace engine::physics {
         /// @brief Half the size along each axis, in meters, before the entity scale.
         Vec3 half_extents{ kDefaultColliderHalfSize, kDefaultColliderHalfSize,
                            kDefaultColliderHalfSize };
+
+        /**
+         * @brief Whether it reports what passes through instead of stopping it.
+         *
+         * A trigger takes part in no contact resolution. Something moves
+         * through it and the simulation reports that it did, which is what a
+         * goal volume or a pickup is.
+         */
+        bool is_trigger = false;
     };
 
     /**
@@ -126,6 +135,10 @@ namespace engine::physics {
     struct SphereCollider {
         /// @brief How far it reaches, in meters, before the entity scale.
         float radius = kDefaultColliderHalfSize;
+
+        /// @brief Whether it reports what passes through instead of stopping it.
+        /// @see BoxCollider::is_trigger
+        bool is_trigger = false;
     };
 
     /**
@@ -191,14 +204,18 @@ struct engine::reflect::Describe<engine::physics::RigidBody> {
 template <>
 struct engine::reflect::Describe<engine::physics::BoxCollider> {
     static constexpr const char* name = "BoxCollider"; ///< The name a scene file stores.
-    /// @brief The one field.
+    /// @brief The two fields.
     /// @return A tuple of field descriptors.
     static constexpr auto fields() {
-        return std::make_tuple(ENGINE_FIELD(
-            engine::physics::BoxCollider, half_extents,
-            engine::reflect::Tooltip{
-                "Half the size along each axis, in meters. The entity scale "
-                "multiplies this." }));
+        return std::make_tuple(
+            ENGINE_FIELD(engine::physics::BoxCollider, half_extents,
+                         engine::reflect::Tooltip{
+                             "Half the size along each axis, in meters. The entity scale "
+                             "multiplies this." }),
+            ENGINE_FIELD(engine::physics::BoxCollider, is_trigger,
+                         engine::reflect::Version{ 2 },
+                         engine::reflect::Tooltip{
+                             "Reports what passes through instead of stopping it." }));
     }
 };
 
@@ -206,7 +223,7 @@ struct engine::reflect::Describe<engine::physics::BoxCollider> {
 template <>
 struct engine::reflect::Describe<engine::physics::SphereCollider> {
     static constexpr const char* name = "SphereCollider"; ///< The name a scene file stores.
-    /// @brief The one field.
+    /// @brief The two fields.
     /// @return A tuple of field descriptors.
     static constexpr auto fields() {
         return std::make_tuple(
@@ -214,6 +231,10 @@ struct engine::reflect::Describe<engine::physics::SphereCollider> {
                          engine::reflect::Range{ 0.001, 100.0, 0.01 },
                          engine::reflect::Tooltip{
                              "How far it reaches, in meters. The entity scale "
-                             "multiplies this, and a sphere takes the largest axis." }));
+                             "multiplies this, and a sphere takes the largest axis." }),
+            ENGINE_FIELD(engine::physics::SphereCollider, is_trigger,
+                         engine::reflect::Version{ 2 },
+                         engine::reflect::Tooltip{
+                             "Reports what passes through instead of stopping it." }));
     }
 };

@@ -383,6 +383,116 @@ namespace {
     namespace sc = engine::scene;
     namespace ph = engine::physics;
 
+    /// An entity with a body and one box collider, at a height.
+    entt::entity add_body_entity(sc::World& scene, ph::BodyType type, const Vec3& position,
+                                 const Vec3& half_extents, bool is_trigger) {
+        const entt::entity entity = scene.create();
+        scene.set_local(entity, engine::Transform{ .position = position });
+        scene.registry().emplace<ph::RigidBody>(entity, ph::RigidBody{ .type = type });
+        scene.registry().emplace<ph::BoxCollider>(
+            entity, ph::BoxCollider{ .half_extents = half_extents, .is_trigger = is_trigger });
+        return entity;
+    }
+
+    void a_trigger_reports_the_entity_that_passed_through() {
+        section("A trigger placed by a scene names the entity that crossed it");
+
+        sc::World scene;
+        const entt::entity goal =
+            add_body_entity(scene, ph::BodyType::Static, Vec3{ 0.0F, 2.0F, 0.0F },
+                            Vec3{ 2.0F, 0.5F, 2.0F }, true);
+        const entt::entity crate =
+            add_body_entity(scene, ph::BodyType::Dynamic, Vec3{ 0.0F, 6.0F, 0.0F },
+                            Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize }, false);
+
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        // The entity travels through Box3D as an opaque number on the shape, so
+        // this is what says the number came back as the entity it went in as.
+        bool entered = false;
+        bool left = false;
+        for (std::uint32_t i = 0; i < 240 && !left; ++i) {
+            simulation.step(scene, kStep);
+            for (const ph::Simulation::Touch& touch : simulation.trigger_events()) {
+                check(touch.a == goal, "the trigger is the entity that carries it");
+                check(touch.b == crate, "and the visitor is the one that moved");
+                if (touch.began) {
+                    entered = true;
+                } else {
+                    left = true;
+                }
+            }
+        }
+        check(entered, "the crate entering was reported");
+        check(left, "and so was it leaving");
+    }
+
+    void a_trigger_holds_nothing_up() {
+        section("A trigger placed by a scene stops nothing");
+
+        sc::World scene;
+        (void)add_body_entity(scene, ph::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F },
+                              Vec3{ 50.0F, 1.0F, 50.0F }, false);
+        (void)add_body_entity(scene, ph::BodyType::Static, Vec3{ 0.0F, 2.0F, 0.0F },
+                              Vec3{ 2.0F, 0.5F, 2.0F }, true);
+        const entt::entity crate =
+            add_body_entity(scene, ph::BodyType::Dynamic, Vec3{ 0.0F, 6.0F, 0.0F },
+                            Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize }, false);
+
+        ph::Simulation simulation;
+        simulation.build(scene);
+        for (std::uint32_t i = 0; i < 240; ++i) {
+            simulation.step(scene, kStep);
+        }
+        simulation.interpolate(scene, 1.0F);
+        scene.update();
+
+        // A solid shape at 2.0 would have stopped it there. Landing on the
+        // floor is what says the trigger took no part in the contact.
+        const float height = scene.world_matrix(crate)[3][1];
+        check(height < 1.5F, "the crate fell past the trigger");
+        check(height > 0.0F, "and the floor stopped it");
+    }
+
+    void a_trigger_takes_the_scale_of_its_entity() {
+        section("A trigger scales with its entity, the same as a solid collider");
+
+        // Issue #237 gave every collider the scale of its entity. A trigger is
+        // a collider, so a scene that scales one has to reach further. A narrow
+        // trigger scaled wide is what tells the two apart.
+        const auto crossed = [](float scale) {
+            sc::World scene;
+            const entt::entity goal = scene.create();
+            scene.set_local(goal, engine::Transform{ .position = { 4.0F, 2.0F, 0.0F },
+                                                     .scale = { scale, 1.0F, 1.0F } });
+            scene.registry().emplace<ph::RigidBody>(goal,
+                                                    ph::RigidBody{ .type = ph::BodyType::Static });
+            scene.registry().emplace<ph::BoxCollider>(
+                goal, ph::BoxCollider{ .half_extents = { 0.5F, 4.0F, 4.0F },
+                                       .is_trigger = true });
+
+            // Dropped where the unscaled trigger does not reach and the scaled
+            // one does.
+            (void)add_body_entity(scene, ph::BodyType::Dynamic, Vec3{ 0.0F, 4.0F, 0.0F },
+                                  Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize }, false);
+
+            ph::Simulation simulation;
+            simulation.build(scene);
+            for (std::uint32_t i = 0; i < 120; ++i) {
+                simulation.step(scene, kStep);
+                if (!simulation.trigger_events().empty()) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        check(!crossed(1.0F), "the unscaled trigger does not reach the falling crate");
+        check(crossed(9.0F), "and the scaled one does");
+    }
+
+
     /// A registry that knows the engine components and the physics ones.
     sc::ComponentRegistry make_registry() {
         sc::ComponentRegistry registry;
@@ -397,8 +507,11 @@ namespace {
         // Nothing was written for this. The descriptors are the whole of it,
         // which is hard rule 4.5.
         check(engine::reflect::field_count<ph::RigidBody>() == 4, "RigidBody describes 4 fields");
-        check(engine::reflect::field_count<ph::BoxCollider>() == 1, "BoxCollider describes 1");
-        check(engine::reflect::field_count<ph::SphereCollider>() == 1, "SphereCollider describes 1");
+        // Two each since M8.4 added the trigger flag. The count is the check
+        // that a new field reached the descriptors rather than only the struct.
+        check(engine::reflect::field_count<ph::BoxCollider>() == 2, "BoxCollider describes 2");
+        check(engine::reflect::field_count<ph::SphereCollider>() == 2,
+              "SphereCollider describes 2");
 
         check(engine::reflect::DescribedEnum<ph::BodyType>, "BodyType is a described enum");
         check(engine::reflect::enumerator_count<ph::BodyType>() == 3,
@@ -1454,6 +1567,9 @@ int main() {
     a_settled_body_sleeps_and_wakes();
     a_sleeping_body_ignores_a_zero_velocity();
     a_sleeping_body_still_draws();
+    a_trigger_reports_the_entity_that_passed_through();
+    a_trigger_holds_nothing_up();
+    a_trigger_takes_the_scale_of_its_entity();
     a_trigger_reports_an_overlap_and_pushes_nothing();
     a_trigger_event_names_the_two_shapes();
     a_contact_is_reported_between_two_bodies();
