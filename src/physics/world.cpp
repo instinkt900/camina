@@ -433,6 +433,22 @@ namespace engine::physics {
     }
 
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::apply_linear_impulse(BodyId body, const Vec3& impulse, bool wake) {
+        // Box3D takes the wake flag rather than deciding for itself, unlike
+        // b3Body_SetLinearVelocity. A sleeping body drops the impulse without
+        // saying so when this is false.
+        b3Body_ApplyLinearImpulseToCenter(unpack_body(body), to_box3d(impulse), wake);
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    bool World::is_awake(BodyId body) const { return b3Body_IsAwake(unpack_body(body)); }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::set_awake(BodyId body, bool awake) {
+        b3Body_SetAwake(unpack_body(body), awake);
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     Vec3 World::body_position(BodyId body) const {
         const b3Pos position = b3Body_GetPosition(unpack_body(body));
         return Vec3{ position.x, position.y, position.z };

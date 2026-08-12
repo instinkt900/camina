@@ -110,6 +110,52 @@ namespace engine::physics {
         bool set_linear_velocity(entt::entity entity, const Vec3& velocity);
 
         /**
+         * @brief How fast one entity's body is moving.
+         *
+         * A body that has gone to sleep reads as zero, which is what it is
+         * doing. Use is_awake() to tell a resting body from a moving one.
+         *
+         * @param entity The entity to read.
+         * @param out Receives meters each second, in world space.
+         * @return True when the entity had a body to read.
+         */
+        [[nodiscard]] bool linear_velocity(entt::entity entity, Vec3& out) const;
+
+        /**
+         * @brief Adds momentum to one entity's body at its center of mass.
+         *
+         * This wakes a sleeping body, because an impulse a body ignores is the
+         * kind of nothing that takes an afternoon to find.
+         *
+         * @param entity The entity to push. One with no body is ignored.
+         * @param impulse Kilogram meters each second, in world space.
+         * @return True when the entity had a body to push.
+         */
+        bool apply_linear_impulse(entt::entity entity, const Vec3& impulse);
+
+        /**
+         * @brief Whether the solver is still working on one entity's body.
+         *
+         * @param entity The entity to ask about.
+         * @return True while its body is awake. False when it sleeps, and false
+         *         when it has no body at all.
+         */
+        [[nodiscard]] bool is_awake(entt::entity entity) const;
+
+        /**
+         * @brief Wakes one entity's body, or puts it to sleep.
+         *
+         * @warning **A sleeping body ignores a velocity of zero, silently.** So
+         * a caller that means to stop a body which may have settled has to wake
+         * it first. See DESIGN.md section 5.
+         *
+         * @param entity The entity to change. One with no body is ignored.
+         * @param awake True to wake it, false to put it to sleep.
+         * @return True when the entity had a body to change.
+         */
+        bool set_awake(entt::entity entity, bool awake);
+
+        /**
          * @brief Advances the simulation by one fixed step.
          *
          * Three things happen in order. Every static and kinematic body takes
