@@ -1865,6 +1865,52 @@ binding with a **curated** surface. A fully mechanical binding produces an API t
 enjoys. Add hot reload from the start.
 **Done when:** the sandbox game logic runs entirely in Lua.
 
+Seven increments, #259 to #265.
+
+**Input comes first, and it is not scripting.** §6 lists input under `platform/`, and the
+directory has never held it. Every input read in the engine today sits inline in
+`apps/runtime/main.cpp`. A script API over that inherits an SDL shape, which is what #207
+warns about. So M8.0 builds the module and the rest of the milestone binds it. M10 puts the
+moth_ui bridge on the same module.
+
+**Curated means two halves, not a compromise.** A component field goes through the reflection
+descriptors. The alternative is a hand-written binding for each component, and a game type
+like `sandbox::Spin` could never reach that. Everything else is hand-written and small: the
+world, prefabs, physics, input, math, and logging. The first half cannot be curated, and the
+second half must not be mechanical.
+
+The §7 note predicted this split. `reflect::Registry` records facts about a type and cannot
+act on one. #25 closed on the reasoning that the right operation set needs a second caller to
+state it. The script binding is that caller.
+
+**A script is an ordinary asset, and one cooked form serves both uses.** The cooker has no
+`.lua` rule, so a `.lua` already reaches the copy path, takes a GUID, gets a `.meta` sidecar,
+and enters the manifest. M8.1 makes that deliberate. A person edits the `.lua` in the source
+tree, the M4.5 watcher cooks it again, and `Content::reload` names that one asset. So the
+development loop and the packaged game read one path, and no build mode decides which script
+ran.
+
+The cooked form is the source text. Lua bytecode records the number sizes and the byte order
+of the host that wrote it, so a blob cooked on Linux will not load in the Windows runtime.
+`luaL_loadbuffer` takes source or bytecode through one call, so a later precompile step
+changes the cooker alone. #258 holds it.
+
+**The fixed step is the constraint the whole milestone works under.** #245 put the game logic
+on it, and M7 proved three offscreen runs byte-identical. Lua can lose that quietly in two
+ways. `pairs` walks a table in an unspecified order, and `math.random` seeded from the clock
+differs on each run. Neither one announces itself, and the first symptom is a determinism
+test that fails once in ten runs.
+
+**The milestone needs two things from physics that M7 did not build.** A trigger volume and a
+contact event. The puzzle asks whether the stack landed in the goal, and nothing in the engine
+can answer that today. M8.4 builds both, and §5 gains whatever Box3D costs to read.
+
+**The done-when test is authoring, not porting.** The sandbox game logic today is `Spin` at 30
+lines, plus a crate throw that lives in the application rather than in the game. Moving those
+two proves the binding is complete. It does not prove the binding is pleasant, because a port
+already knows the answer it wants. So M8.6 also authors the physics puzzle §11 names, in Lua
+first and never in C++: a goal volume, a win, and a reset.
+
 ### M9 — Editor split
 `editor` and `runtime` as separate executables over `engine_core`. The game module links
 into both, so the editor holds the project types and can inspect them. A release build
