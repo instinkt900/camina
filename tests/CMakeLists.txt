@@ -178,6 +178,18 @@ engine_enable_clang_tidy(test_physics)
 
 add_test(NAME physics COMMAND test_physics)
 
+# M8.1. The Lua host. Every script here is a string literal, so this needs no
+# cooked tree and no content root. It only builds when the option is on,
+# because with it off engine_core holds no host at all.
+if(ENGINE_WITH_LUA)
+    add_executable(test_script test_script.cpp)
+    target_link_libraries(test_script PRIVATE engine::core)
+    engine_set_warnings(test_script)
+    engine_enable_clang_tidy(test_script)
+
+    add_test(NAME script COMMAND test_script)
+endif()
+
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
 add_executable(test_sandbox test_sandbox.cpp)

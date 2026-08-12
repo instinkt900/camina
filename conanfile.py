@@ -31,7 +31,7 @@ class CaminaConan(ConanFile):
     default_options = {
         "with_editor": False,   # M9
         "with_ui": False,       # M10, and the M6 spike
-        "with_lua": False,      # M8
+        "with_lua": True,       # M8. On, because the sandbox game runs on it
         "with_audio": False,    # M11
 
         # HarfBuzz takes glib by default, and glib drags elfutils, gettext,
@@ -101,7 +101,12 @@ class CaminaConan(ConanFile):
             self.requires("imguizmo/1.83")
 
         if self.options.with_lua:
-            self.requires("lua/5.4.8")
+            # sol2/3.5.0 requires lua/5.4.6, and it is the newest sol2 on Conan
+            # Center. Asking for any other Lua gives a version conflict and the
+            # graph will not resolve at all, so these two move together. This
+            # asked for lua/5.4.8 until M8.1, which nothing noticed because the
+            # option had never been turned on.
+            self.requires("lua/5.4.6")
             self.requires("sol2/3.5.0")
 
         if self.options.with_audio:

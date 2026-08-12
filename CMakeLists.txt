@@ -70,6 +70,14 @@ if(ENGINE_WITH_UI)
     find_package(harfbuzz REQUIRED)
 endif()
 
+# M8. Scripting. Only src/script/ links these, and only when the option is on.
+# sol2 is header only and Lua is a small C library, so both build from source in
+# well under a minute. See DESIGN.md section 10 M8.
+if(ENGINE_WITH_LUA)
+    find_package(lua REQUIRED)
+    find_package(sol2 REQUIRED)
+endif()
+
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)

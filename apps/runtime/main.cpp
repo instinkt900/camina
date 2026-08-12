@@ -1,6 +1,7 @@
 #include "assets/hot_reload.h"
 #include "assets/manifest.h"
 #include "assets/reference.h"
+#include "assets/script.h"
 #include "core/arena.h"
 #include "core/frame_stats.h"
 #include "core/jobs.h"
@@ -27,6 +28,10 @@
 #include "physics/simulation.h"
 #include "render/debug_line_pass.h"
 #include "scene/component_registry.h"
+#if defined(ENGINE_WITH_LUA)
+#include "script/components.h"
+#include "script/host.h"
+#endif
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
 #include "scene/components.h"
@@ -1557,6 +1562,10 @@ namespace {
         /// M8.0. Keyboard and mouse, sampled once for each frame. Every reader
         /// asks it for an action by name rather than reading a device.
         engine::platform::Input input;
+#if defined(ENGINE_WITH_LUA)
+        /// M8.1. The interpreter, and one instance for each scripted entity.
+        engine::script::Host script;
+#endif
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
 
@@ -2084,12 +2093,78 @@ namespace {
         double seconds = 0.0;             ///< Simulated seconds since the run began.
     };
 
+#if defined(ENGINE_WITH_LUA)
+    /**
+     * Reads every cooked script in the game tree into the host.
+     *
+     * This walks the manifest rather than a list the game holds, the same way
+     * sandbox::add_prefabs() does. A game that named its scripts in C++ could
+     * load only its own content tree, and a tree the runtime never saw at build
+     * time is exactly what `--content` points at.
+     *
+     * A script that will not compile is reported by load() and skipped. The
+     * rest still load, because one broken script should not take the others
+     * down with it.
+     *
+     * @param runtime Holds the open content and the host to fill.
+     */
+    void load_scripts(Runtime& runtime) {
+        std::size_t loaded = 0;
+        std::size_t failed = 0;
+
+        for (const engine::assets::ManifestEntry& entry :
+             runtime.game_content.manifest().entries) {
+            for (const engine::assets::ManifestOutput& output : entry.outputs) {
+                if (!std::string_view{ output.cooked }.ends_with(
+                        engine::assets::kScriptExtension)) {
+                    continue;
+                }
+
+                std::vector<std::byte> bytes;
+                if (!runtime.game_content.read_bytes(output, bytes)) {
+                    ENGINE_LOG_ERROR("{} is in the manifest and will not read.", output.cooked);
+                    ++failed;
+                    continue;
+                }
+                if (runtime.script.load(output.guid, output.cooked, bytes)) {
+                    ++loaded;
+                } else {
+                    ++failed;
+                }
+            }
+        }
+
+        ENGINE_LOG_INFO("Loaded {} script(s), {} failed.", loaded, failed);
+    }
+#endif
+
+    /**
+     * Runs the game logic for one fixed step.
+     *
+     * The C++ game and the scripts are one thing from here, and both take
+     * simulated seconds. Neither one sees the wall clock, which is what keeps a
+     * run reproducible. See DESIGN.md section 9 and issue #245.
+     *
+     * @param runtime Holds the script host.
+     * @param world The scene to run.
+     * @param state The simulated seconds and the poses a frame blends.
+     */
+    void run_game_step(Runtime& runtime, engine::scene::World& world, StepState& state) {
+        sandbox::update(world, state.seconds, state.motion);
+#if defined(ENGINE_WITH_LUA)
+        runtime.script.update(world, state.seconds);
+#else
+        (void)runtime;
+#endif
+    }
+
     /**
      * Runs the whole steps this frame owes, then blends the pose it draws.
      *
      * Physics runs after the game, because the game moves the kinematic bodies
      * and the solver has to see this step's positions.
      *
+     * @param runtime Passed through to the game step, which needs the scripts.
      * @param state The clock, the simulated seconds, and the game poses.
      * @param settings Where the step rate and the ceiling are kept.
      * @param simulation The bodies to step.
@@ -2097,7 +2172,7 @@ namespace {
      * @param delta_seconds How much wall time this frame took.
      * @param stats Receives what the whole of it cost on the CPU.
      */
-    void advance_simulation(StepState& state, const ViewSettings& settings,
+    void advance_simulation(Runtime& runtime, StepState& state, const ViewSettings& settings,
                             engine::physics::Simulation& simulation, engine::scene::World& world,
                             float delta_seconds, engine::FrameStats& stats) {
         // The inspector can move both of these while the program runs, so they
@@ -2124,7 +2199,7 @@ namespace {
             // The game moves things, then the solver runs. A kinematic body the
             // game drives has to carry its new transform into the step, so this
             // order is the one that works.
-            sandbox::update(world, state.seconds, state.motion);
+            run_game_step(runtime, world, state);
             simulation.step(world, state.clock.step_seconds());
         }
 
@@ -2333,7 +2408,7 @@ namespace {
             // The game and the solver both run on the fixed step now, so this
             // is one call rather than two. The frame composes the matrices and
             // draws after it. Reversing those two would draw a frame behind.
-            advance_simulation(step, settings, simulation, world, delta, physics_stats);
+            advance_simulation(runtime, step, settings, simulation, world, delta, physics_stats);
 
             engine::gfx::Extent2D drawn_extent{};
             const FrameOutcome outcome = draw_frame(context, last_extent, drawn_extent);
@@ -2435,6 +2510,9 @@ int main(int argc, char** argv) {
     // Physics registers its own, so scene/ needs no physics header.
     engine::scene::register_builtin_components();
     engine::physics::register_components();
+#if defined(ENGINE_WITH_LUA)
+    engine::script::register_components();
+#endif
     sandbox::register_components();
 
     const std::filesystem::path content = options.content.empty()
@@ -2501,6 +2579,12 @@ int main(int argc, char** argv) {
     // is already cooked and nothing arrives as a change on the first frame.
     start_hot_reload(runtime, options);
     const std::filesystem::path source = game_source_directory(options);
+
+#if defined(ENGINE_WITH_LUA)
+    // Before the first step, so an entity that names a script finds it loaded
+    // rather than reporting it missing on the first frame.
+    load_scripts(runtime);
+#endif
 
     // After the world loads, because a body starts where its entity sits. It is
     // also after jobs::init(), because the solver runs on the job system and
