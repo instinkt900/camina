@@ -95,12 +95,17 @@ namespace engine::physics {
     /**
      * @brief A box that collides, centered on the entity.
      *
-     * @warning The entity scale does not reach this. The half extents are in
-     * meters and they say the whole size. Scaling the entity scales what it
-     * draws and not what it collides with, which is issue #237.
+     * The half extents are in meters, before the scale of the entity. The
+     * simulation multiplies the two, so a prefab instance scaled to twice its
+     * size collides at twice its size. A scale that differs on each axis lands
+     * exactly, because a box is axis aligned in the frame of its entity.
+     *
+     * @note **A scale changed after the body exists rebuilds the shape.** Box3D
+     * fixes the size of a shape when it creates it, so the next step replaces
+     * it. The body survives, which keeps the velocity and the contacts.
      */
     struct BoxCollider {
-        /// @brief Half the size along each axis, in meters.
+        /// @brief Half the size along each axis, in meters, before the entity scale.
         Vec3 half_extents{ kDefaultColliderHalfSize, kDefaultColliderHalfSize,
                            kDefaultColliderHalfSize };
     };
@@ -108,10 +113,18 @@ namespace engine::physics {
     /**
      * @brief A sphere that collides, centered on the entity.
      *
-     * @warning The entity scale does not reach this either. See BoxCollider.
+     * The radius is in meters, before the scale of the entity, the same way
+     * BoxCollider works.
+     *
+     * @warning **A sphere holds one radius, so a scale that differs on each
+     * axis cannot land exactly.** The simulation takes the largest of the
+     * three and says so in the log, naming the entity. That collides bigger
+     * than it draws, which holds the body up. Taking the smallest would let it
+     * sink through a floor instead. Use a BoxCollider for a shape that is not
+     * the same on every axis.
      */
     struct SphereCollider {
-        /// @brief How far it reaches, in meters.
+        /// @brief How far it reaches, in meters, before the entity scale.
         float radius = kDefaultColliderHalfSize;
     };
 
@@ -183,7 +196,9 @@ struct engine::reflect::Describe<engine::physics::BoxCollider> {
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(
             engine::physics::BoxCollider, half_extents,
-            engine::reflect::Tooltip{ "Half the size along each axis, in meters." }));
+            engine::reflect::Tooltip{
+                "Half the size along each axis, in meters. The entity scale "
+                "multiplies this." }));
     }
 };
 
@@ -197,6 +212,8 @@ struct engine::reflect::Describe<engine::physics::SphereCollider> {
         return std::make_tuple(
             ENGINE_FIELD(engine::physics::SphereCollider, radius,
                          engine::reflect::Range{ 0.001, 100.0, 0.01 },
-                         engine::reflect::Tooltip{ "How far it reaches, in meters." }));
+                         engine::reflect::Tooltip{
+                             "How far it reaches, in meters. The entity scale "
+                             "multiplies this, and a sphere takes the largest axis." }));
     }
 };

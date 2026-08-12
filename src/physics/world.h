@@ -151,6 +151,34 @@ namespace engine::physics {
         void add_sphere(BodyId body, float radius, const SurfaceMaterial& material);
 
         /**
+         * @brief Takes every shape off a body and leaves the body in place.
+         *
+         * This is what a resize needs. Box3D fixes the size of a shape when it
+         * creates it, so a collider that has to change size becomes a new shape
+         * on the same body. Destroying the body instead would lose the velocity
+         * and the contacts, so a crate resized in the inspector would stop dead
+         * and drop.
+         *
+         * The mass is not recomputed here, because a body with no shape has
+         * none to compute. Add the new shapes and then call
+         * apply_mass_from_shapes().
+         *
+         * @param body The body to strip.
+         */
+        void clear_shapes(BodyId body);
+
+        /**
+         * @brief Works the mass out from the shapes a body now carries.
+         *
+         * add_box() and add_sphere() each update the mass as they go, so this
+         * is only needed after clear_shapes() has emptied a body and the new
+         * shapes have gone on.
+         *
+         * @param body The body to recompute.
+         */
+        void apply_mass_from_shapes(BodyId body);
+
+        /**
          * @brief Moves a body, whatever its type.
          *
          * This teleports rather than pushes. Contacts are worked out afresh

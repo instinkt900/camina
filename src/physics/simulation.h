@@ -170,6 +170,17 @@ namespace engine::physics {
         /// @return The Box3D world.
         [[nodiscard]] World& world();
 
+        /**
+         * @brief How many times a collider has been rebuilt at a new scale.
+         *
+         * A rebuild costs a shape and throws the contacts of that body away, so
+         * a scene that resizes nothing must never pay for one. This is what
+         * measures that rather than asserting it. See issue #237.
+         *
+         * @return The count since this Simulation was built.
+         */
+        [[nodiscard]] std::size_t shape_rebuild_count() const;
+
     private:
         /**
          * One body, and the two poses a frame blends between.
@@ -184,7 +195,35 @@ namespace engine::physics {
             Quat previous_rotation{ 1.0F, 0.0F, 0.0F, 0.0F }; ///< How it was turned then.
             Vec3 position{ 0.0F, 0.0F, 0.0F };                ///< Where the last step left it.
             Quat rotation{ 1.0F, 0.0F, 0.0F, 0.0F };          ///< How the last step left it turned.
+            Vec3 scale{ 1.0F, 1.0F, 1.0F };                   ///< The scale its shapes were built at.
         };
+
+        /**
+         * Puts the colliders an entity describes onto a body, at a scale.
+         *
+         * create_body() and rebuild_shapes() share this, so the scale reaches a
+         * collider the same way whether the body is new or resized.
+         *
+         * @param world The scene holding the entity.
+         * @param entity The entity to read the colliders from.
+         * @param body The body to put them on.
+         * @param scale The world scale of the entity.
+         */
+        void add_shapes(const scene::World& world, entt::entity entity, BodyId body,
+                        const Vec3& scale);
+
+        /**
+         * Replaces the shapes of a body with ones built at a new scale.
+         *
+         * The body itself stays, so the velocity and the contacts survive.
+         *
+         * @param world The scene holding the entity.
+         * @param entity The entity that was resized.
+         * @param body The record to rebuild and to record the new scale in.
+         * @param scale The world scale to build at.
+         */
+        void rebuild_shapes(const scene::World& world, entt::entity entity, Body& body,
+                            const Vec3& scale);
 
         /**
          * Builds one body from what an entity describes.
@@ -202,6 +241,7 @@ namespace engine::physics {
 
         World m_world;
         std::unordered_map<entt::entity, Body> m_bodies;
+        std::size_t m_shape_rebuilds = 0;
     };
 
 } // namespace engine::physics
