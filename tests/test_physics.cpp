@@ -1149,6 +1149,38 @@ namespace {
 
         check(!simulation.apply_linear_impulse(entt::null, Vec3{ 0.0F, 0.0F, 1.0F }),
               "an entity with no body reports false");
+
+        // The half the section name promises, and the half that says an impulse
+        // is momentum rather than a speed. Two boxes of the same size and
+        // different density take the same push, and the heavy one has to end up
+        // slower. A binding that set the velocity instead would move both the
+        // same and pass every check above.
+        sc::World two;
+        const entt::entity light = two.create();
+        two.set_local(light, engine::Transform{ .position = { 0.0F, 5.0F, 0.0F } });
+        two.registry().emplace<ph::RigidBody>(
+            light, ph::RigidBody{ .type = ph::BodyType::Dynamic, .density = 100.0F });
+        two.registry().emplace<ph::BoxCollider>(light, ph::BoxCollider{});
+
+        const entt::entity heavy = two.create();
+        two.set_local(heavy, engine::Transform{ .position = { 4.0F, 5.0F, 0.0F } });
+        two.registry().emplace<ph::RigidBody>(
+            heavy, ph::RigidBody{ .type = ph::BodyType::Dynamic, .density = 1000.0F });
+        two.registry().emplace<ph::BoxCollider>(heavy, ph::BoxCollider{});
+
+        ph::Simulation pair;
+        pair.build(two);
+
+        const Vec3 push{ 0.0F, 0.0F, 50.0F };
+        check(pair.apply_linear_impulse(light, push), "the light body takes the push");
+        check(pair.apply_linear_impulse(heavy, push), "and so does the heavy one");
+
+        Vec3 light_velocity{ 0.0F, 0.0F, 0.0F };
+        Vec3 heavy_velocity{ 0.0F, 0.0F, 0.0F };
+        check(pair.linear_velocity(light, light_velocity), "the light velocity reads");
+        check(pair.linear_velocity(heavy, heavy_velocity), "the heavy velocity reads");
+        check(light_velocity.z > heavy_velocity.z,
+              "the same impulse moved the heavy body less");
     }
 
     void a_settled_body_sleeps_and_wakes() {

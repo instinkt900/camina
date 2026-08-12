@@ -31,6 +31,7 @@ namespace {
     namespace sc = engine::scene;
     namespace sp = engine::script;
     namespace pf = engine::platform;
+    using engine::Vec3;
 
     /// Two identities that are not the null GUID and are not each other. The
     /// values mean nothing. The host only ever compares them.
@@ -1070,6 +1071,64 @@ namespace {
         check(host.stopped_count() == 0, "and a step with no simulation answers nothing");
     }
 
+    void test_stop_does_not_reach_the_services_of_the_last_step() {
+        section("A teardown reaches no service the caller did not pass to stop()");
+
+        // stop() is called as the world goes away, and the simulation usually
+        // goes with it. An on_destroy that kept an entity and pushed a body
+        // through the services of the last update() would reach freed memory,
+        // and nothing would report it. So stop() takes its own services and the
+        // default is nothing.
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        engine::physics::register_components(components);
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            kept = nil
+            function on_update(s) kept = entity end
+            function on_destroy()
+              -- The world is still there, so a component still reads.
+              if kept:get("Transform") == nil then error("lost the world too") end
+              -- The services are not. This write has to be refused, and the
+              -- velocity the caller set has to survive it.
+              kept:set_velocity(vec3(0, 0, 99))
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = { 0.0F, 5.0F, 0.0F } });
+        world.registry().emplace<engine::physics::RigidBody>(
+            entity, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        world.registry().emplace<engine::physics::BoxCollider>(
+            entity, engine::physics::BoxCollider{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        // The simulation stays alive on purpose. Letting it go out of scope
+        // first would make the bug this guards against undefined rather than
+        // wrong, and a test cannot tell the two apart. Here the pointer would
+        // still be good, so a stop() that kept it would read a real velocity
+        // and the script would say so.
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+        host.update(world, 1.0 / 60.0, sp::Services{ .physics = &simulation });
+        check(host.stopped_count() == 0, "the step ran with a simulation");
+
+        // A value only the caller set, so a write from the teardown is visible.
+        // stop() resets the stopped counter, so that cannot be the signal here.
+        check(simulation.set_linear_velocity(entity, Vec3{ 0.0F, 0.0F, 7.0F }),
+              "the caller sets a velocity");
+
+        host.stop(world);
+        check(host.call_count(sp::Callback::Destroy) == 1, "on_destroy ran");
+
+        Vec3 after{ 0.0F, 0.0F, 0.0F };
+        check(simulation.linear_velocity(entity, after), "the velocity reads back");
+        check(after.z == 7.0F, "and the teardown could not write through a service");
+    }
+
 } // namespace
 
 int main() {
@@ -1108,6 +1167,12 @@ int main() {
     test_the_services_follow_the_step();
     test_a_script_instances_a_prefab();
     test_the_physics_verbs_reach_a_script();
+    test_stop_does_not_reach_the_services_of_the_last_step();
+
+    // The pool has to stop before main returns. test_physics.cpp does the same,
+    // and leaving the workers running at exit can hang the process or read as a
+    // leak under a sanitizer.
+    engine::jobs::shutdown();
 
     if (test::g_failures != 0) {
         std::printf("\n%d check(s) failed.\n", test::g_failures);

@@ -165,8 +165,12 @@ namespace engine::script {
          * teardown rather than the process ending under it.
          *
          * @param world The world the instances belong to.
+         * @param services What a teardown may still reach. **The default is
+         * nothing**, because this is called as the world goes away and the
+         * simulation usually goes with it. A caller whose services are still
+         * alive passes them and lets `on_destroy` use them.
          */
-        void stop(scene::World& world);
+        void stop(scene::World& world, const Services& services = {});
 
         /// @brief How many entities have a live instance.
         /// @return The instance count after the last update().

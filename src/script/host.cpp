@@ -678,7 +678,13 @@ namespace engine::script {
         // What the crate throw does. The prefab name is the source path, the
         // same one a scene file writes.
         world.set_function("instance", [context](const std::string& name) -> sol::optional<EntityHandle> {
-            if (context->world == nullptr || context->services.prefabs == nullptr) {
+            if (context->world == nullptr) {
+                ENGINE_LOG_ERROR("A script asked for prefab {} and no world is being "
+                                 "stepped.",
+                                 name);
+                return sol::nullopt;
+            }
+            if (context->services.prefabs == nullptr) {
                 ENGINE_LOG_ERROR("A script asked for prefab {} and this step has no prefab "
                                  "library.",
                                  name);
@@ -825,10 +831,16 @@ namespace engine::script {
         }
     }
 
-    void Host::stop(scene::World& world) {
+    void Host::stop(scene::World& world, const Services& services) {
         // on_destroy may read the entity, so the handles have to name this
         // world and not the one the last step used.
         impl_->context.world = &world;
+
+        // And the services of this call rather than the ones the last step
+        // left. Those point at a simulation the caller is usually tearing down
+        // alongside the world, and a teardown that pushed a body through one of
+        // them would reach freed memory. The default is nothing.
+        impl_->context.services = services;
 
         const entt::registry& registry = world.registry();
         for (auto& [entity, instance] : impl_->instances) {
@@ -843,6 +855,7 @@ namespace engine::script {
         // table still holds a live handle, and this is what makes that handle
         // report nothing rather than read a world the caller may have dropped.
         impl_->context.world = nullptr;
+        impl_->context.services = Services{};
     }
 
     std::size_t Host::instance_count() const { return impl_->instances.size(); }
