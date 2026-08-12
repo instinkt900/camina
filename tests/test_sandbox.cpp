@@ -382,7 +382,10 @@ namespace {
         check(load_shipped(world, registry, library),
               "the shipped content loads");
 
-        check(sandbox::update(world, 0.0F) == 2, "the update moves both spinning entities");
+        sc::StepMotion motion;
+        check(sandbox::update(world, 0.0, motion) == 2,
+              "the update moves both spinning entities");
+        check(motion.tracked() == 2, "and it recorded both, so a frame can blend them");
 
         // The angle follows the elapsed time, so the same time gives the same
         // rotation. A test can therefore state an exact value.
@@ -393,7 +396,7 @@ namespace {
             at_zero.push_back(world.world_matrix(entity));
         }
 
-        sandbox::update(world, 1.0F);
+        sandbox::update(world, 1.0, motion);
         world.update();
         std::size_t moved = 0;
         std::size_t i = 0;
@@ -408,7 +411,7 @@ namespace {
 
         // Going back to the same time gives the same matrices, which is what
         // makes the elapsed-time form reproducible.
-        sandbox::update(world, 0.0F);
+        sandbox::update(world, 0.0, motion);
         world.update();
         std::size_t same = 0;
         i = 0;
@@ -432,7 +435,9 @@ namespace {
         world.registry().emplace<sandbox::Spin>(
             degenerate, sandbox::Spin{ .axis = { 0.0F, 0.0F, 0.0F }, .seconds_per_turn = 1.0F });
 
-        check(sandbox::update(world, 1.0F) == 0, "neither entity turns");
+        sc::StepMotion motion;
+        check(sandbox::update(world, 1.0, motion) == 0, "neither entity turns");
+        check(motion.tracked() == 0, "and nothing was recorded to blend");
 
         world.update();
         // A zero axis normalizes to NaN, and NaN spreads to every child through

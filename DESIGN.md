@@ -942,10 +942,44 @@ steps, which takes longer still. That is the spiral of death. The default is fiv
 `dropped_seconds()` reports the simulated time the run will never make up, so a machine that
 cannot keep up says so rather than quietly running slow.
 
-**Only physics is on the fixed step.** `sandbox::update` still takes the elapsed time, because
-the entities it turns are not physics bodies and nothing interpolates them. Putting them on a
-60 Hz step would make them judder on a faster display. Determinism for a replay needs the game
-logic on the step as well, and that is #245.
+**The game logic is on the fixed step too**, which #245 closed. `sandbox::update` takes
+simulated seconds now, which is the step count times the step length, rather than the wall
+clock. So the game is a function of how many steps have run and of nothing else. A replay that
+feeds the same input lands on the same values.
+
+**`scene::StepMotion` is where the interpolation for a mover that is not a rigid body lives.**
+This is the design question #245 posed. `physics::Simulation` already blends the last two poses
+of a dynamic body. Game logic has the same problem and no solver to ask. So `StepMotion` is that
+mechanism with the game as the author. It sits in `scene/` because it records transforms and
+names neither a physics type nor a game type. It holds no reflected component either. These
+poses are the state of a run rather than something a person authors, so none of them reach a
+scene file.
+
+`StepMotion` also drops an entity the world no longer holds. A reloaded scene clears the
+registry, and EnTT then hands the same numbers out again with a new version. A stale handle can
+therefore name an entity somebody else now owns, and `World::set_local` does not check. The
+runtime clears the poses at the reload as well, beside the selection it already clears.
+
+**A step reads the last step, not the blend the last frame drew.** This is the part that is
+easy to miss. The transform on an entity is whatever the frame drew, and that is a blend of two
+steps rather than the result of one. A step that read it back would feed the motion of a frame
+that fell between two steps into the simulation, and it would compound. `StepMotion::begin_step`
+puts the authoritative pose back first, and the pose it holds is the one that counts.
+
+One alpha drives both blends. Two would let the game and the physics draw different instants of
+the same frame.
+
+**The same wall time is not the same number of steps.** In float, 288 frames of 1/144 sum to
+just under two seconds. That run takes 119 steps where a 30 Hz run takes 120. This is the frame delta accumulating and not the step drifting.
+
+So determinism means that the same step count gives the same answer.
+`tests/test_step_motion.cpp` holds the step count fixed rather than the wall time. The drawn
+pose still differs between two frame rates by up to one step of motion. That difference is the
+interpolation doing its job.
+
+Simulated seconds are a `double`, all the way into the game. A `float` resolves steps of 1/60
+until about three days of running. Past that, two steps in a row land on the same number and the
+game stops advancing.
 
 Working the step count out by dividing the accumulator was wrong. A step of 1/60 is not a
 number a float holds, so one whole second divided by it gives 59.99998 and truncates to 59. A
@@ -1820,10 +1854,10 @@ The physics step costs 0.004 ms of a 3.5 ms frame in the sandbox, against a mesh
 ms. That is five bodies, so it measures the overhead rather than the solver. §5.1 holds the
 measurement that does load it.
 
-Two things the milestone did not do, and one of them is now done. #237 closed after the
-milestone: a collider reads the scale on its entity, and `sandbox/content/main.scene` stands a
-crate at 1.6 beside the stack to show it. The game logic still runs on the frame delta rather
-than the fixed step, which is issue #245 and which the §9 note explains.
+Two things the milestone did not do, and both are now done. #237 closed after the milestone. A
+collider reads the scale on its entity now, and `sandbox/content/main.scene` stands a crate at
+1.6 beside the stack to show it. #245 closed after that. The game logic runs on the fixed step,
+and `scene::StepMotion` blends what it moves for the frame. The §9 note holds both.
 
 ### M8 — Scripting
 sol2. A `ScriptComponent` with `on_start`, `on_update`, and `on_destroy`. Reflection-driven
