@@ -110,6 +110,15 @@ engine_enable_clang_tidy(test_platform)
 
 add_test(NAME platform COMMAND test_platform)
 
+# The input module. This opens no window, because sample() is the only part
+# that needs one and it is a free function the test never calls.
+add_executable(test_input test_input.cpp)
+target_link_libraries(test_input PRIVATE engine::core)
+engine_set_warnings(test_input)
+engine_enable_clang_tidy(test_input)
+
+add_test(NAME input COMMAND test_input)
+
 add_executable(test_assets test_assets.cpp)
 target_link_libraries(test_assets PRIVATE engine::core)
 engine_set_warnings(test_assets)
