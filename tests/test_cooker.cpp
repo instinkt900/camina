@@ -214,6 +214,13 @@ namespace {
         check(std::filesystem::exists(as::meta_path(source / "scripts" / "spin.lua")),
               "the cook wrote it a sidecar");
 
+        as::AssetMeta meta;
+        check(as::load_meta(source / "scripts" / "spin.lua", meta) && meta.guid.valid(),
+              "and the sidecar carries a real identity");
+
+        // The sidecar identity is the one a ScriptComponent stores, so the
+        // manifest has to agree with it. A valid but different GUID would read
+        // as correct here and resolve to nothing at load time.
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "and the manifest reads back");
         const auto entry = std::ranges::find_if(manifest.entries, [](const as::ManifestEntry& e) {
@@ -222,7 +229,14 @@ namespace {
         check(entry != manifest.entries.end(), "the manifest holds the script");
         if (entry != manifest.entries.end()) {
             check(entry->outputs.size() == 1, "and it wrote exactly one output");
-            check(entry->guid.valid(), "and the script has a real identity");
+            check(entry->guid == meta.guid, "and it kept the identity the sidecar gave");
+        }
+        if (entry != manifest.entries.end() && entry->outputs.size() == 1) {
+            // The rule adds no suffix and no part number, which is what keeps a
+            // cooked script readable under the name a person wrote.
+            check(entry->outputs[0].cooked == "scripts/spin.lua",
+                  "and the cooked path is the source path");
+            check(entry->outputs[0].guid == meta.guid, "and the output carries that identity");
         }
 
         // The rule changes no output, so the freshness check has to behave the
