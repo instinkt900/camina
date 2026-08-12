@@ -56,6 +56,7 @@ add_library(engine_core STATIC
 # sol2 stay PRIVATE below for the same reason.
 if(ENGINE_WITH_LUA)
     target_sources(engine_core PRIVATE
+        script/bindings.cpp
         script/components.cpp
         script/host.cpp
     )

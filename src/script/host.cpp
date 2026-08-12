@@ -3,6 +3,7 @@
 #include "core/entt.h"
 #include "core/log.h"
 #include "scene/world.h"
+#include "script/bindings.h"
 #include "script/components.h"
 
 #include <sol/sol.hpp>
@@ -64,20 +65,19 @@ namespace engine::script {
                 // nothing a person can read and would change meaning the moment
                 // somebody inserted an enumerator above it.
                 return sol::make_object(lua, value.text);
-            case reflect::ValueKind::Vec2:
-                return vector_table(lua, value, 2);
             case reflect::ValueKind::Vec3:
-                return vector_table(lua, value, 3);
+                // The engine type, so `p + v` works and the value crosses back
+                // to a field with no conversion. See script/bindings.h.
+                return sol::make_object(
+                    lua, Vec3{ value.vector.x, value.vector.y, value.vector.z });
+            case reflect::ValueKind::Quat:
+                return sol::make_object(lua, value.quat);
+            case reflect::ValueKind::Vec2:
+                // No component carries either of these, so they stay tables
+                // rather than earning a usertype nobody asked for. Rule 4.6.
+                return vector_table(lua, value, 2);
             case reflect::ValueKind::Vec4:
                 return vector_table(lua, value, 4);
-            case reflect::ValueKind::Quat: {
-                sol::table out = lua.create_table();
-                out["w"] = value.quat.w;
-                out["x"] = value.quat.x;
-                out["y"] = value.quat.y;
-                out["z"] = value.quat.z;
-                return out;
-            }
             case reflect::ValueKind::None:
             case reflect::ValueKind::Unsupported:
                 break;
@@ -129,6 +129,17 @@ namespace engine::script {
             case reflect::ValueKind::Vec2:
             case reflect::ValueKind::Vec3:
             case reflect::ValueKind::Vec4: {
+                // A vec3 the script built or read back, which is the usual way.
+                if (from.is<Vec3>()) {
+                    const Vec3 value = from.as<Vec3>();
+                    out.vector.x = value.x;
+                    out.vector.y = value.y;
+                    out.vector.z = value.z;
+                    return true;
+                }
+                // A table naming some of the components, which keeps the rest.
+                // Both spellings work, because writing one axis is worth the
+                // second branch.
                 if (!from.is<sol::table>()) {
                     return false;
                 }
@@ -140,6 +151,10 @@ namespace engine::script {
                 return true;
             }
             case reflect::ValueKind::Quat: {
+                if (from.is<Quat>()) {
+                    out.quat = from.as<Quat>();
+                    return true;
+                }
                 if (!from.is<sol::table>()) {
                     return false;
                 }
@@ -411,6 +426,11 @@ namespace engine::script {
         log.set_function("error", [](const std::string& message) {
             ENGINE_LOG_ERROR("[lua] {}", message);
         });
+
+        // The curated half. M8.2 gave a script every component field, and this
+        // gives it the types and the guarantees. See script/bindings.h.
+        bind_math(impl_->lua);
+        bind_random(impl_->lua);
 
         bind_entity();
     }
