@@ -338,9 +338,12 @@ namespace engine::physics {
         /**
          * @brief Every contact that began or ended in the last step.
          *
-         * A shape reports these only when something asked it to, because Box3D
-         * would otherwise carry the cost for every shape in the world. See
-         * ShapeOptions.
+         * @warning **Every shape this class creates reports contacts, whether
+         * anything reads them or not.** Box3D buffers a begin and an end event
+         * for each pair that touches, so a settling stack pays for events
+         * nobody asks for. There is no opt-in today because the sandbox wants
+         * them and rule 4.6 says to build what it needs. Issue #278 holds the
+         * switch, and the measurement that would justify one.
          *
          * @param out Receives the events. Cleared first.
          */
