@@ -259,12 +259,43 @@ namespace engine::physics {
             return b3_dynamicBody;
         }
 
-        [[nodiscard]] b3ShapeDef to_box3d(const SurfaceMaterial& material) {
+        [[nodiscard]] b3ShapeDef to_box3d(const SurfaceMaterial& material,
+                                          const ShapeOptions& options) {
             b3ShapeDef def = b3DefaultShapeDef();
             def.density = material.density;
             def.baseMaterial.friction = material.friction;
             def.baseMaterial.restitution = material.restitution;
+            def.isSensor = options.is_trigger;
+
+            // Box3D reports nothing unless a shape asks for it, because the
+            // bookkeeping costs something for every shape in the world.
+            //
+            // The flags go on the shape that is *not* the sensor. Box3D ignores
+            // both on a sensor itself, which is what its own comment on
+            // b3Shape_EnableSensorEvents says.
+            def.enableSensorEvents = true;
+            def.enableContactEvents = true;
             return def;
+        }
+
+        /// Stores an opaque value on a shape, so an event can name it later.
+        void set_shape_user(b3ShapeId shape, std::uint64_t user) {
+            // Box3D takes a pointer, and the engine has a number. The value is
+            // never dereferenced, and an entity fits in a pointer on both
+            // targets.
+            b3Shape_SetUserData(shape,
+                                reinterpret_cast<void*>(static_cast<std::uintptr_t>(user)));
+        }
+
+        /// Reads back what set_shape_user() stored, or 0 for a dead shape.
+        [[nodiscard]] std::uint64_t shape_user(b3ShapeId shape) {
+            // A destroyed shape still arrives in an end event, so this asks
+            // before it reads. See the warning on TouchEvent.
+            if (!b3Shape_IsValid(shape)) {
+                return 0;
+            }
+            return static_cast<std::uint64_t>(
+                reinterpret_cast<std::uintptr_t>(b3Shape_GetUserData(shape)));
         }
 
     } // namespace
@@ -336,19 +367,56 @@ namespace engine::physics {
     // for the reason body_position() carries a note about. They stay methods
     // because a shape belongs to a body in one world.
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-    void World::add_box(BodyId body, const Vec3& half_extents, const SurfaceMaterial& material) {
+    void World::add_box(BodyId body, const Vec3& half_extents, const SurfaceMaterial& material,
+                        const ShapeOptions& options) {
         // The world clones the hull into its own database, so this stack copy can
         // go out of scope. b3AddHullToDatabase is where it happens.
         const b3BoxHull hull = b3MakeBoxHull(half_extents.x, half_extents.y, half_extents.z);
-        const b3ShapeDef shape_def = to_box3d(material);
-        b3CreateHullShape(unpack_body(body), &shape_def, &hull.base);
+        const b3ShapeDef shape_def = to_box3d(material, options);
+        const b3ShapeId shape = b3CreateHullShape(unpack_body(body), &shape_def, &hull.base);
+        set_shape_user(shape, options.user);
     }
 
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-    void World::add_sphere(BodyId body, float radius, const SurfaceMaterial& material) {
+    void World::add_sphere(BodyId body, float radius, const SurfaceMaterial& material,
+                           const ShapeOptions& options) {
         const b3Sphere sphere{ .center = b3Vec3{ 0.0F, 0.0F, 0.0F }, .radius = radius };
-        const b3ShapeDef shape_def = to_box3d(material);
-        b3CreateSphereShape(unpack_body(body), &shape_def, &sphere);
+        const b3ShapeDef shape_def = to_box3d(material, options);
+        const b3ShapeId shape = b3CreateSphereShape(unpack_body(body), &shape_def, &sphere);
+        set_shape_user(shape, options.user);
+    }
+
+    void World::sensor_events(std::vector<TouchEvent>& out) const {
+        out.clear();
+        const b3SensorEvents events = b3World_GetSensorEvents(unpack_world(m_world));
+        for (int i = 0; i < events.beginCount; ++i) {
+            const b3SensorBeginTouchEvent& begin = events.beginEvents[i];
+            out.push_back(TouchEvent{ shape_user(begin.sensorShapeId),
+                                      shape_user(begin.visitorShapeId), true });
+        }
+        for (int i = 0; i < events.endCount; ++i) {
+            const b3SensorEndTouchEvent& end = events.endEvents[i];
+            // Box3D reports an end event when either shape is destroyed, and
+            // the id may already be dead. Reading user data off a dead shape is
+            // what b3Shape_IsValid exists to stop.
+            out.push_back(TouchEvent{ shape_user(end.sensorShapeId),
+                                      shape_user(end.visitorShapeId), false });
+        }
+    }
+
+    void World::contact_events(std::vector<TouchEvent>& out) const {
+        out.clear();
+        const b3ContactEvents events = b3World_GetContactEvents(unpack_world(m_world));
+        for (int i = 0; i < events.beginCount; ++i) {
+            const b3ContactBeginTouchEvent& begin = events.beginEvents[i];
+            out.push_back(
+                TouchEvent{ shape_user(begin.shapeIdA), shape_user(begin.shapeIdB), true });
+        }
+        for (int i = 0; i < events.endCount; ++i) {
+            const b3ContactEndTouchEvent& end = events.endEvents[i];
+            out.push_back(
+                TouchEvent{ shape_user(end.shapeIdA), shape_user(end.shapeIdB), false });
+        }
     }
 
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

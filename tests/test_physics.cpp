@@ -174,6 +174,121 @@ namespace {
         return std::chrono::duration<double, std::milli>(end - start).count();
     }
 
+    /// Steps until @p wanted appears in the sensor events, or gives up.
+    [[nodiscard]] bool step_until_sensor(engine::physics::World& world, bool began,
+                                         std::uint32_t limit) {
+        std::vector<engine::physics::TouchEvent> events;
+        for (std::uint32_t i = 0; i < limit; ++i) {
+            world.step(kStep);
+            world.sensor_events(events);
+            for (const engine::physics::TouchEvent& event : events) {
+                if (event.began == began) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void a_trigger_reports_an_overlap_and_pushes_nothing() {
+        section("A trigger reports what passes through it and does not stop it");
+
+        engine::physics::World world;
+
+        // A trigger in the air, and a box dropped through it. A solid shape
+        // there would stop the box, so the height it ends at is what says the
+        // trigger pushed nothing.
+        const engine::physics::BodyId floor = world.add_body(
+            engine::physics::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F }, kUpright);
+        world.add_box(floor, Vec3{ 50.0F, 1.0F, 50.0F }, engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .user = 1 });
+
+        const engine::physics::BodyId trigger = world.add_body(
+            engine::physics::BodyType::Static, Vec3{ 0.0F, 2.0F, 0.0F }, kUpright);
+        world.add_box(trigger, Vec3{ 2.0F, 0.5F, 2.0F }, engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .is_trigger = true, .user = 7 });
+
+        const engine::physics::BodyId faller = world.add_body(
+            engine::physics::BodyType::Dynamic, Vec3{ 0.0F, 6.0F, 0.0F }, kUpright);
+        world.add_box(faller, Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize },
+                      engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .user = 9 });
+
+        check(step_until_sensor(world, true, 120), "the box entering is reported");
+
+        // Falling through and out the bottom, which a solid shape would not
+        // allow. Both halves matter: the begin says the trigger saw it, and the
+        // end says it kept going.
+        check(step_until_sensor(world, false, 120), "and so is it leaving");
+        check(world.body_position(faller).y < 1.5F, "the trigger did not hold it up");
+    }
+
+    void a_trigger_event_names_the_two_shapes() {
+        section("An event says which trigger and which visitor");
+
+        engine::physics::World world;
+
+        const engine::physics::BodyId trigger = world.add_body(
+            engine::physics::BodyType::Static, Vec3{ 0.0F, 2.0F, 0.0F }, kUpright);
+        world.add_box(trigger, Vec3{ 2.0F, 0.5F, 2.0F }, engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .is_trigger = true, .user = 7 });
+
+        const engine::physics::BodyId faller = world.add_body(
+            engine::physics::BodyType::Dynamic, Vec3{ 0.0F, 6.0F, 0.0F }, kUpright);
+        world.add_box(faller, Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize },
+                      engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .user = 9 });
+
+        // The user value is what carries an entity through Box3D, which reports
+        // by shape and knows nothing about the engine. A swap here would send
+        // every game event to the wrong object.
+        std::vector<engine::physics::TouchEvent> events;
+        bool found = false;
+        for (std::uint32_t i = 0; i < 120 && !found; ++i) {
+            world.step(kStep);
+            world.sensor_events(events);
+            for (const engine::physics::TouchEvent& event : events) {
+                if (event.began) {
+                    found = true;
+                    check(event.a == 7, "the trigger is the first value");
+                    check(event.b == 9, "and the visitor is the second");
+                }
+            }
+        }
+        check(found, "an overlap was reported at all");
+    }
+
+    void a_contact_is_reported_between_two_bodies() {
+        section("A contact between two solid bodies is reported");
+
+        engine::physics::World world;
+
+        const engine::physics::BodyId floor = world.add_body(
+            engine::physics::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F }, kUpright);
+        world.add_box(floor, Vec3{ 50.0F, 1.0F, 50.0F }, engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .user = 1 });
+
+        const engine::physics::BodyId crate = world.add_body(
+            engine::physics::BodyType::Dynamic, Vec3{ 0.0F, 3.0F, 0.0F }, kUpright);
+        world.add_box(crate, Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize },
+                      engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .user = 2 });
+
+        std::vector<engine::physics::TouchEvent> events;
+        bool landed = false;
+        for (std::uint32_t i = 0; i < 240 && !landed; ++i) {
+            world.step(kStep);
+            world.contact_events(events);
+            for (const engine::physics::TouchEvent& event : events) {
+                if (event.began && ((event.a == 1 && event.b == 2) ||
+                                    (event.a == 2 && event.b == 1))) {
+                    landed = true;
+                }
+            }
+        }
+        check(landed, "the crate landing on the floor is reported");
+    }
+
     void a_box_falls_and_lands() {
         section("A body falls, and the floor stops it");
 
@@ -1339,6 +1454,9 @@ int main() {
     a_settled_body_sleeps_and_wakes();
     a_sleeping_body_ignores_a_zero_velocity();
     a_sleeping_body_still_draws();
+    a_trigger_reports_an_overlap_and_pushes_nothing();
+    a_trigger_event_names_the_two_shapes();
+    a_contact_is_reported_between_two_bodies();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
     the_solver_runs_on_the_job_system();
