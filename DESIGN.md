@@ -906,8 +906,26 @@ Going the other way later is cheap, and this direction is not. A build that allo
 dynamic body can start converting whenever a real case turns up. A build that already has
 content relying on it cannot take that back.
 
-Two things the write-back deliberately leaves alone. It does not touch scale, because a rigid
-body has none to give. And a collider does not read the entity scale at all, which is #237.
+The write-back deliberately leaves scale alone, because a rigid body has none to give. The
+collider reads it instead, which #237 closed.
+
+**A collider is sized in meters and then multiplied by the world scale of its entity.** So one
+crate prefab makes a big crate and a small crate, which is what prefab instancing exists for.
+A box takes a scale of three different numbers exactly, because a box is axis aligned in the
+frame of its entity. A sphere holds one radius, so it takes the largest of the three and names
+the entity in a warning. The largest rather than the smallest, because a collider bigger than
+the picture holds the body up and a smaller one lets it sink through the floor.
+
+Box3D fixes the size of a shape when it creates it, so a scale that changes after the body
+exists needs a new shape. `Simulation::step` compares the world scale of every body against
+the scale its shapes were built at, and rebuilds when they differ. The body survives the
+rebuild, so a crate resized while it falls keeps its velocity and its contacts rather than
+stopping dead in the air.
+
+The compare carries a tolerance of 1e-4. A world matrix decompose leaves rounding that moves
+with the rotation, so an exact compare rebuilds a resting body every step, throws its contacts
+away each time, and the body never settles. `Simulation::shape_rebuild_count` is what measures
+that rather than asserting it: a scene that resizes nothing reports zero.
 
 **Time model.** Use a fixed timestep for physics and game logic, and interpolate for
 rendering. See the note at the top of this section.
@@ -1788,9 +1806,10 @@ The physics step costs 0.004 ms of a 3.5 ms frame in the sandbox, against a mesh
 ms. That is five bodies, so it measures the overhead rather than the solver. §5.1 holds the
 measurement that does load it.
 
-Two things the milestone did not do. A collider still ignores the scale on its entity, which
-issue #237 holds. And the game logic still runs on the frame delta rather than the fixed step,
-which is issue #245 and which the §9 note explains.
+Two things the milestone did not do, and one of them is now done. #237 closed after the
+milestone: a collider reads the scale on its entity, and `sandbox/content/main.scene` stands a
+crate at 1.6 beside the stack to show it. The game logic still runs on the frame delta rather
+than the fixed step, which is issue #245 and which the §9 note explains.
 
 ### M8 — Scripting
 sol2. A `ScriptComponent` with `on_start`, `on_update`, and `on_destroy`. Reflection-driven
