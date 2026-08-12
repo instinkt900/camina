@@ -101,7 +101,23 @@ namespace engine::script {
         // A rotation of so many radians about an axis, which is what an author
         // reaches for rather than four numbers they have to work out.
         lua.set_function("quat_from_axis_angle", [](const Vec3& axis, float radians) {
-            return glm::angleAxis(radians, safe_normalize(axis));
+            const Vec3 unit = safe_normalize(axis);
+            if (unit == Vec3{ 0.0F, 0.0F, 0.0F }) {
+                // glm::angleAxis wants a unit axis and does not check. Given a
+                // zero axis it works out cos(angle / 2) for w and leaves the
+                // rest zero, so half a turn gives quat(0, 0, 0, 0).
+                //
+                // That is not a rotation. It survives a multiply by a vector
+                // and a matrix cast, because both happen to read as identity
+                // with every term zero, so nothing reports it. It does not
+                // survive being written to a rotation field and read back, and
+                // it has no unit length for anything that assumes one.
+                //
+                // An axis of no direction names no rotation, so identity is the
+                // honest answer.
+                return Quat{ 1.0F, 0.0F, 0.0F, 0.0F };
+            }
+            return glm::angleAxis(radians, unit);
         });
     }
 

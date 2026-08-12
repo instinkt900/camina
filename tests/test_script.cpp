@@ -626,6 +626,30 @@ namespace {
               "it comes back as zero");
     }
 
+    void test_an_axis_of_no_direction_gives_identity() {
+        section("A rotation about a zero axis is identity, not a zero quaternion");
+
+        // glm::angleAxis wants a unit axis and does not check. With a zero axis
+        // it gives quat(cos(angle / 2), 0, 0, 0), so half a turn is
+        // quat(0, 0, 0, 0). That is not a rotation, and nothing reports it:
+        // multiplying a vector by it and casting it to a matrix both read as
+        // identity, because every term is zero either way.
+        check(run_ok(R"(
+            function on_update(s)
+              local q = quat_from_axis_angle(vec3(0, 0, 0), math.pi)
+              if q.w ~= 1 then error("w is " .. tostring(q.w) .. ", not identity") end
+              if q.x ~= 0 or q.y ~= 0 or q.z ~= 0 then error("not identity") end
+
+              -- The part a zero quaternion would fail: it has to be a unit
+              -- quaternion, so writing it to a rotation field reads back whole.
+              entity:set("Transform", { rotation = q })
+              local back = entity:get("Transform").rotation
+              if back.w ~= 1 then error("the rotation did not round trip") end
+            end
+        )"),
+              "it comes back as identity and round trips through a field");
+    }
+
     void test_quat_turns_a_vector() {
         section("A quaternion composes and turns a vector");
 
@@ -742,21 +766,33 @@ namespace {
         section("math.randomseed refuses the form that reads the clock");
 
         // The no-argument form seeds from the clock, which would undo the seed
-        // above without a script meaning to. Making it unavailable is what
-        // turns the guarantee from a note into something structural.
+        // the host set without a script meaning to. Making it unavailable is
+        // what turns the guarantee from a note into something structural.
+        //
+        // The rejected call has to sit between a known seed and the draw, with
+        // nothing reseeding after it. An earlier version of this test called
+        // math.randomseed(1) again before drawing, which reset the generator
+        // and made the check pass whether the clock form was refused or not.
         check(run_ok(R"(
             function on_update(s)
-              local before = math.random()
+              math.randomseed(7)
+              local expected = math.random()
+
+              math.randomseed(7)
               math.randomseed()
-              math.randomseed(1)
-              math.randomseed(1)
-              local a = math.random()
-              math.randomseed(1)
-              local b = math.random()
-              if a ~= b then error("a named seed did not take") end
+              local actual = math.random()
+              if actual ~= expected then
+                error("math.randomseed() reseeded, so the run is not reproducible")
+              end
+
+              -- And a named seed still works, or the guard would be doing its
+              -- job by breaking the whole function.
+              math.randomseed(8)
+              local other = math.random()
+              if other == expected then error("a different seed drew the same number") end
             end
         )"),
-              "a named seed works and the clock form changes nothing");
+              "the clock form changes nothing and a named seed still works");
     }
 
 } // namespace
@@ -782,6 +818,7 @@ int main() {
     test_on_destroy_can_still_read_its_entity();
     test_vec3_has_the_operators_an_author_expects();
     test_normalizing_a_zero_vector_gives_no_nan();
+    test_an_axis_of_no_direction_gives_identity();
     test_quat_turns_a_vector();
     test_a_component_vector_is_the_engine_type();
     test_a_partial_table_still_writes();
