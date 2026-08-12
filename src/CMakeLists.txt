@@ -16,6 +16,7 @@ add_library(engine_core STATIC
     assets/shader.cpp
     assets/texture.cpp
     platform/window.cpp
+    platform/input.cpp
     platform/paths.cpp
     platform/process.cpp
     platform/watch.cpp
