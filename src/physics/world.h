@@ -32,6 +32,47 @@ namespace engine::physics {
     using BodyId = std::uint64_t;
 
     /**
+     * @brief What a shape is besides its size and its material.
+     *
+     * @p user is opaque here on purpose. This class wraps Box3D and names no
+     * entity, so `physics::Simulation` puts the entity in it and reads it back
+     * out of an event. Box3D reports an event by shape, and a caller needs to
+     * know which of its own things that shape belonged to.
+     */
+    struct ShapeOptions {
+        /**
+         * @brief Whether the shape reports overlaps instead of pushing.
+         *
+         * A trigger takes part in no contact resolution. Something moves
+         * through it and the world reports that it did.
+         */
+        bool is_trigger = false;
+
+        /// @brief Whatever the caller wants back when this shape reports an event.
+        std::uint64_t user = 0;
+    };
+
+    /**
+     * @brief One shape starting or stopping touching another.
+     *
+     * The same shape serves a trigger overlap and a contact, because both are
+     * two shapes and a direction. @ref a is the trigger for an overlap and the
+     * first shape for a contact.
+     *
+     * @warning **A shape reports an end event when it is destroyed**, so an
+     * entity that has gone away still appears here once. A reader has to cope
+     * with a value naming something it can no longer find.
+     */
+    struct TouchEvent {
+        /// @brief The ShapeOptions::user of the trigger, or of the first shape.
+        std::uint64_t a = 0;
+        /// @brief The ShapeOptions::user of the visitor, or of the second shape.
+        std::uint64_t b = 0;
+        /// @brief True when the two began touching, false when they stopped.
+        bool began = false;
+    };
+
+    /**
      * @brief What a shape is made of.
      *
      * These sit on the shape rather than on the body, which is how Box3D works.
@@ -139,16 +180,20 @@ namespace engine::physics {
          * @param body The body to add it to.
          * @param half_extents Half the size along each axis, in meters.
          * @param material The density, the friction, and the restitution.
+         * @param options Whether it is a trigger, and what it reports as.
          */
-        void add_box(BodyId body, const Vec3& half_extents, const SurfaceMaterial& material);
+        void add_box(BodyId body, const Vec3& half_extents, const SurfaceMaterial& material,
+                     const ShapeOptions& options = {});
 
         /**
          * @brief Puts a sphere on a body, centered on it.
          * @param body The body to add it to.
          * @param radius How far it reaches, in meters.
          * @param material The density, the friction, and the restitution.
+         * @param options Whether it is a trigger, and what it reports as.
          */
-        void add_sphere(BodyId body, float radius, const SurfaceMaterial& material);
+        void add_sphere(BodyId body, float radius, const SurfaceMaterial& material,
+                        const ShapeOptions& options = {});
 
         /**
          * @brief Takes every shape off a body and leaves the body in place.
@@ -277,6 +322,32 @@ namespace engine::physics {
          * @param awake True to wake it, false to put it to sleep.
          */
         void set_awake(BodyId body, bool awake);
+
+        /**
+         * @brief Every trigger overlap that began or ended in the last step.
+         *
+         * Box3D buffers these inside the step and hands them over afterwards,
+         * so one step can report several and this reports all of them. The
+         * event data is transient, which is why this copies rather than
+         * handing back a view.
+         *
+         * @param out Receives the events. Cleared first.
+         */
+        void sensor_events(std::vector<TouchEvent>& out) const;
+
+        /**
+         * @brief Every contact that began or ended in the last step.
+         *
+         * @warning **Every shape this class creates reports contacts, whether
+         * anything reads them or not.** Box3D buffers a begin and an end event
+         * for each pair that touches, so a settling stack pays for events
+         * nobody asks for. There is no opt-in today because the sandbox wants
+         * them and rule 4.6 says to build what it needs. Issue #278 holds the
+         * switch, and the measurement that would justify one.
+         *
+         * @param out Receives the events. Cleared first.
+         */
+        void contact_events(std::vector<TouchEvent>& out) const;
 
         /// @brief Destroys one body and every shape on it.
         /// @param body The body to destroy.
