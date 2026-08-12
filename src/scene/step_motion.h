@@ -106,6 +106,17 @@ namespace engine::scene {
         [[nodiscard]] std::size_t tracked() const;
 
     private:
+        /**
+         * Forgets every entity the world no longer holds.
+         *
+         * A reloaded scene clears the registry and EnTT hands the same numbers
+         * out again, so a stale handle can name an entity somebody else now
+         * owns. Writing a pose into that one is silent and wrong.
+         *
+         * @param world The scene to ask.
+         */
+        void drop_dead(const World& world);
+
         /// The two poses a frame blends between, for one entity.
         struct Pose {
             Transform previous; ///< Where the step before the last one left it.

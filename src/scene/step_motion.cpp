@@ -3,15 +3,28 @@
 #include "scene/world.h"
 
 #include <algorithm>
+#include <utility>
 
 #include <glm/gtx/quaternion.hpp>
 
 namespace engine::scene {
 
     void StepMotion::begin_step(World& world) {
+        drop_dead(world);
         for (const auto& [entity, pose] : m_poses) {
             world.set_local(entity, pose.current);
         }
+    }
+
+    void StepMotion::drop_dead(const World& world) {
+        // A reloaded scene clears the registry, and EnTT then hands the same
+        // numbers out again with a new version. So a stale handle is either
+        // invalid or, worse, names an entity somebody else now owns. Writing a
+        // pose into that one is silent and wrong, which is why this checks
+        // rather than trusting the caller to have called clear().
+        std::erase_if(m_poses, [&world](const auto& entry) {
+            return !world.registry().valid(entry.first);
+        });
     }
 
     void StepMotion::record(const World& world, entt::entity entity) {
@@ -31,6 +44,7 @@ namespace engine::scene {
     }
 
     void StepMotion::interpolate(World& world, float alpha) {
+        drop_dead(world);
         const float weight = std::clamp(alpha, 0.0F, 1.0F);
 
         for (const auto& [entity, pose] : m_poses) {

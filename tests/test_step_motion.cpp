@@ -34,7 +34,7 @@ namespace {
     constexpr float kTwoPi = 6.2831853F;
 
     /// One turn every four seconds, so a step of 1/60 moves a visible amount.
-    constexpr float kSecondsPerTurn = 4.0F;
+    constexpr double kSecondsPerTurn = 4.0;
 
     /// Metres each simulated second, for the entity that also travels.
     constexpr float kSpeed = 3.0F;
@@ -46,10 +46,12 @@ namespace {
      * The game this test drives. It turns and it travels, both as a function of
      * simulated seconds, and it records what it moved.
      */
-    void run_game(sc::World& world, entt::entity entity, float seconds, sc::StepMotion& motion) {
+    void run_game(sc::World& world, entt::entity entity, double seconds, sc::StepMotion& motion) {
         Transform local = world.local(entity);
-        local.position = Vec3{ kSpeed * seconds, 0.0F, 0.0F };
-        local.rotation = glm::angleAxis(kTwoPi * seconds / kSecondsPerTurn, Vec3{ 0.0F, 1.0F, 0.0F });
+        local.position = Vec3{ kSpeed * static_cast<float>(seconds), 0.0F, 0.0F };
+        local.rotation = glm::angleAxis(
+            static_cast<float>(static_cast<double>(kTwoPi) * seconds / kSecondsPerTurn),
+            Vec3{ 0.0F, 1.0F, 0.0F });
         world.set_local(entity, local);
         motion.record(world, entity);
     }
@@ -78,7 +80,7 @@ namespace {
             for (std::uint32_t left = clock.advance(frame_delta); left > 0; --left) {
                 motion.begin_step(world);
                 seconds += static_cast<double>(clock.step_seconds());
-                run_game(world, entity, static_cast<float>(seconds), motion);
+                run_game(world, entity, seconds, motion);
             }
             // The frame draws a blend, which the next step undoes. Running it
             // here is what proves that undo works over a whole session.
@@ -124,9 +126,9 @@ namespace {
 
         // Two steps by hand, so the pair the blend runs over is known.
         motion.begin_step(world);
-        run_game(world, entity, 1.0F, motion);
+        run_game(world, entity, 1.0, motion);
         motion.begin_step(world);
-        run_game(world, entity, 2.0F, motion);
+        run_game(world, entity, 2.0, motion);
 
         motion.interpolate(world, 0.0F);
         const float at_start = world.local(entity).position.x;
@@ -149,9 +151,9 @@ namespace {
         sc::StepMotion motion;
 
         motion.begin_step(world);
-        run_game(world, entity, 1.0F, motion);
+        run_game(world, entity, 1.0, motion);
         motion.begin_step(world);
-        run_game(world, entity, 2.0F, motion);
+        run_game(world, entity, 2.0, motion);
 
         // A frame drew a blend into the transform. The next step must not read
         // it back, or the motion of that frame compounds into the simulation
@@ -181,6 +183,35 @@ namespace {
         motion.interpolate(world, 0.0F);
         check(std::fabs(world.local(entity).position.x - 100.0F) < kBlendTolerance,
               "alpha 0 draws where it is and not the origin");
+    }
+
+    void a_dead_entity_is_dropped() {
+        section("An entity the world no longer holds is forgotten");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, Transform{ .position = Vec3{ 5.0F, 0.0F, 0.0F } });
+
+        sc::StepMotion motion;
+        motion.record(world, entity);
+        check(motion.tracked() == 1, "it is tracked");
+
+        // A hot reload clears the registry and reads the scene again. EnTT then
+        // hands the same numbers out with a new version, so a stale handle can
+        // name an entity somebody else now owns. Writing a pose into that one
+        // is silent and wrong, and set_local does not check.
+        world.clear();
+        const entt::entity replacement = world.create();
+        world.set_local(replacement, Transform{ .position = Vec3{ -9.0F, 0.0F, 0.0F } });
+
+        motion.begin_step(world);
+        check(motion.tracked() == 0, "and it is gone once the world no longer holds it");
+        check(std::fabs(world.local(replacement).position.x + 9.0F) < kBlendTolerance,
+              "so the entity that took its number keeps its own pose");
+
+        motion.interpolate(world, 1.0F);
+        check(std::fabs(world.local(replacement).position.x + 9.0F) < kBlendTolerance,
+              "and the frame does not draw the old pose over it either");
     }
 
     void forgetting_and_clearing_work() {
@@ -213,6 +244,7 @@ int main() {
     a_frame_between_two_steps_blends();
     a_step_reads_the_pose_the_last_step_left();
     a_first_sighting_does_not_swing_in_from_the_origin();
+    a_dead_entity_is_dropped();
     forgetting_and_clearing_work();
     return test::report();
 }

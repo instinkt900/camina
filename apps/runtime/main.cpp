@@ -1662,7 +1662,7 @@ namespace {
      * flight before it frees anything, which cannot happen inside one.
      */
     void apply_hot_reload(Runtime& runtime, const FrameContext& context,
-                          engine::scene::World& world) {
+                          engine::scene::World& world, engine::scene::StepMotion& motion) {
         std::vector<engine::assets::AssetChange> changed;
 
         // The engine tree holds the two shaders and the split sum lookup table.
@@ -1716,8 +1716,11 @@ namespace {
             return;
         }
 
-        // Every entity goes, so anything holding one lets go first.
+        // Every entity goes, so anything holding one lets go first. StepMotion
+        // holds the pose of everything the game moved, keyed by entity, and
+        // EnTT hands the same numbers out again after a clear.
         *context.selected = entt::null;
+        motion.clear();
         world.clear();
         engine::scene::prefabs().clear();
 
@@ -2119,14 +2122,15 @@ namespace {
             state.motion.begin_step(world);
 
             // Simulated seconds, which is what makes a run reproducible. A
-            // double, because a float stops counting whole steps of 1/60 after
-            // a few hours and the run would quietly slow down. See #245.
+            // double all the way to the game. A float resolves steps of 1/60
+            // until about three days of running, and then two steps in a row
+            // land on the same number and the game stops advancing. See #245.
             state.seconds += static_cast<double>(state.clock.step_seconds());
 
             // The game moves things, then the solver runs. A kinematic body the
             // game drives has to carry its new transform into the step, so this
             // order is the one that works.
-            sandbox::update(world, static_cast<float>(state.seconds), state.motion);
+            sandbox::update(world, state.seconds, state.motion);
             simulation.step(world, state.clock.step_seconds());
         }
 
@@ -2162,7 +2166,8 @@ namespace {
     ///                   next delta does not count the idle time.
     /// @return What the caller should do with this frame.
     FrameStart begin_frame(Runtime& runtime, const FrameContext& context, const Options& options,
-                           engine::scene::World& world, engine::gfx::Extent2D& last_extent,
+                           engine::scene::World& world, engine::scene::StepMotion& motion,
+                           engine::gfx::Extent2D& last_extent,
                            std::chrono::steady_clock::time_point& last_frame) {
         if (!options.offscreen && runtime.window.minimized()) {
             // poll() does not block, so without this the loop pins one core
@@ -2174,7 +2179,7 @@ namespace {
 
         // Between frames, because freeing a resource waits for the frames
         // in flight and a frame cannot wait for itself.
-        apply_hot_reload(runtime, context, world);
+        apply_hot_reload(runtime, context, world, motion);
 
         // Offscreen the size is fixed for the whole run, which is the point of
         // it. Nothing resizes, so nothing rebuilds. The window reports its new
@@ -2277,7 +2282,8 @@ namespace {
             frame_arena.reset();
 
             const FrameStart start =
-                begin_frame(runtime, context, options, world, last_extent, last_frame);
+                begin_frame(runtime, context, options, world, step.motion, last_extent,
+                            last_frame);
             if (start == FrameStart::Failed) {
                 return false;
             }

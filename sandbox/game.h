@@ -139,13 +139,15 @@ namespace sandbox {
      *
      * @param world The world to run.
      * @param seconds Simulated seconds since the game started, not since the
-     *                last step.
+     *                last step. A double, because the runtime counts steps in
+     *                one and narrowing here would throw that away at the
+     *                boundary.
      * @param motion Where to record what moved, so a frame between two steps
      *               draws a blend rather than the newest step. Every entity
      *               this moves is recorded in it.
      * @return How many entities moved.
      */
-    std::size_t update(engine::scene::World& world, float seconds,
+    std::size_t update(engine::scene::World& world, double seconds,
                        engine::scene::StepMotion& motion);
 
 } // namespace sandbox

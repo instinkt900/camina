@@ -143,7 +143,7 @@ namespace sandbox {
         return true;
     }
 
-    std::size_t update(engine::scene::World& world, float seconds,
+    std::size_t update(engine::scene::World& world, double seconds,
                        engine::scene::StepMotion& motion) {
         std::size_t moved = 0;
 
@@ -160,8 +160,12 @@ namespace sandbox {
             }
 
             engine::Transform local = world.local(entity);
-            local.rotation = glm::angleAxis(kTwoPi * seconds / spin.seconds_per_turn,
-                                            spin.axis / length);
+            // The turn is worked out in double and narrowed once, at the end.
+            // A float loses whole steps of 1/60 somewhere past three days of
+            // running, and the angle is what would stop advancing.
+            const auto angle = static_cast<float>(
+                static_cast<double>(kTwoPi) * seconds / static_cast<double>(spin.seconds_per_turn));
+            local.rotation = glm::angleAxis(angle, spin.axis / length);
             world.set_local(entity, local);
 
             // The step owns this pose now, so the frame that draws between two
