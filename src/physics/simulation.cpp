@@ -233,8 +233,17 @@ namespace engine::physics {
         // A box is axis aligned in the frame of its entity, so a scale of three
         // numbers lands exactly on three half extents. This is why a box takes
         // a non-uniform scale and a sphere does not.
+        // The entity travels with the shape, because Box3D reports an event by
+        // shape and knows nothing about an entity. See ShapeOptions.
+        //
+        // Offset by one, because a destroyed shape reads back as 0 and entity 0
+        // is a real entity. Without the offset the first entity a scene creates
+        // would be indistinguishable from a shape that had gone away.
+        const auto user = static_cast<std::uint64_t>(entt::to_integral(entity)) + 1;
+
         if (const auto* box = registry.try_get<const BoxCollider>(entity); box != nullptr) {
-            m_world.add_box(body, box->half_extents * scale, material);
+            m_world.add_box(body, box->half_extents * scale, material,
+                            ShapeOptions{ .is_trigger = box->is_trigger, .user = user });
         }
 
         if (const auto* sphere = registry.try_get<const SphereCollider>(entity);
@@ -246,7 +255,8 @@ namespace engine::physics {
                                 "for a shape that is not the same on every axis.",
                                 describe(world, entity), scale.x, scale.y, scale.z);
             }
-            m_world.add_sphere(body, sphere->radius * sphere_scale(scale), material);
+            m_world.add_sphere(body, sphere->radius * sphere_scale(scale), material,
+                               ShapeOptions{ .is_trigger = sphere->is_trigger, .user = user });
         }
     }
 
@@ -319,6 +329,45 @@ namespace engine::physics {
             body.position = m_world.body_position(body.id);
             body.rotation = m_world.body_rotation(body.id);
         }
+
+        // Inside the step, because Box3D calls the event data transient and the
+        // next step throws it away.
+        collect_events();
+    }
+
+    void Simulation::collect_events() {
+        const auto to_entity = [](std::uint64_t user) {
+            return user == 0 ? entt::null
+                             : static_cast<entt::entity>(
+                                   static_cast<entt::id_type>(user - 1));
+        };
+
+        const auto to_entities = [this, &to_entity](std::vector<Touch>& out) {
+            out.clear();
+            out.reserve(m_shape_events.size());
+            for (const TouchEvent& event : m_shape_events) {
+                // 0 is the shape that has gone away, and every live entity is
+                // stored one higher. entt::null is what says "no entity", so a
+                // reader cannot mistake it for entity 0.
+                out.push_back(Touch{ .a = to_entity(event.a),
+                                     .b = to_entity(event.b),
+                                     .began = event.began });
+            }
+        };
+
+        m_world.sensor_events(m_shape_events);
+        to_entities(m_trigger_events);
+
+        m_world.contact_events(m_shape_events);
+        to_entities(m_contact_events);
+    }
+
+    std::span<const Simulation::Touch> Simulation::trigger_events() const {
+        return m_trigger_events;
+    }
+
+    std::span<const Simulation::Touch> Simulation::contact_events() const {
+        return m_contact_events;
     }
 
     void Simulation::interpolate(scene::World& world, float alpha) {

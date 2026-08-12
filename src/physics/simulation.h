@@ -19,10 +19,13 @@
 #include "math/conventions.h"
 #include "physics/world.h"
 
+#include <entt/entity/entity.hpp>
 #include <entt/entity/fwd.hpp>
 
 #include <cstddef>
+#include <span>
 #include <unordered_map>
+#include <vector>
 
 namespace engine::scene {
     class World;
@@ -108,6 +111,23 @@ namespace engine::physics {
          * @return True when the entity had a body to move.
          */
         bool set_linear_velocity(entt::entity entity, const Vec3& velocity);
+
+        /**
+         * @brief Two entities that started or stopped touching.
+         *
+         * The same shape serves a trigger overlap and a contact. For an
+         * overlap @ref a is the trigger and @ref b is what passed through it.
+         * For a contact the order is whatever Box3D reported.
+         *
+         * @warning **An entity here may already be gone.** Box3D reports an end
+         * event when a shape is destroyed, so a reader has to check the world
+         * before it acts on either one.
+         */
+        struct Touch {
+            entt::entity a = entt::null; ///< The trigger, or the first body.
+            entt::entity b = entt::null; ///< The visitor, or the second body.
+            bool began = false;          ///< True on entering, false on leaving.
+        };
 
         /**
          * @brief How fast one entity's body is moving.
@@ -212,6 +232,25 @@ namespace engine::physics {
          */
         [[nodiscard]] bool has_body(entt::entity entity) const;
 
+        /**
+         * @brief The trigger overlaps the last step() reported.
+         *
+         * Collected inside step(), because Box3D calls the event data transient
+         * and the next step throws it away. One step can report several and
+         * this holds all of them, which is what a puzzle needs: an event lost
+         * because two things happened at once is the kind nobody reproduces.
+         *
+         * @return The overlaps, valid until the next step().
+         */
+        [[nodiscard]] std::span<const Touch> trigger_events() const;
+
+        /**
+         * @brief The contacts the last step() reported.
+         *
+         * @return The contacts, valid until the next step().
+         */
+        [[nodiscard]] std::span<const Touch> contact_events() const;
+
         /// @brief The world underneath, for anything this class does not cover.
         /// @return The Box3D world.
         [[nodiscard]] World& world();
@@ -287,6 +326,15 @@ namespace engine::physics {
 
         World m_world;
         std::unordered_map<entt::entity, Body> m_bodies;
+
+        /// Turns the shape events of the last step into entity events.
+        void collect_events();
+
+        /// What the last step reported. Rebuilt on each step, never grown.
+        std::vector<Touch> m_trigger_events;
+        std::vector<Touch> m_contact_events;
+        /// Reused so a step allocates nothing after the first one.
+        std::vector<TouchEvent> m_shape_events;
         std::size_t m_shape_rebuilds = 0;
     };
 
