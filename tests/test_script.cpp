@@ -568,6 +568,197 @@ namespace {
         check(host.stopped_count() == 0, "and it read the world stop() was given");
     }
 
+    /// Runs one script against one entity and reports whether it raised.
+    [[nodiscard]] bool run_ok(std::string_view text) {
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<Turret>();
+        sp::Host host{ components };
+        if (!load(host, kFirst, text)) {
+            return false;
+        }
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<Turret>(entity, Turret{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        host.update(world, 1.0 / 60.0);
+        return host.stopped_count() == 0 && host.call_count(sp::Callback::Update) == 1;
+    }
+
+    void test_vec3_has_the_operators_an_author_expects() {
+        section("vec3 does arithmetic rather than making a script call functions");
+
+        check(run_ok(R"(
+            function on_update(s)
+              local a = vec3(1, 2, 3)
+              local b = vec3(10, 20, 30)
+              local sum = a + b
+              if sum.x ~= 11 or sum.z ~= 33 then error("addition") end
+              if (b - a).y ~= 18 then error("subtraction") end
+              if (a * 2).z ~= 6 then error("vector times scalar") end
+              if (2 * a).z ~= 6 then error("scalar times vector") end
+              if (b / 10).x ~= 1 then error("division") end
+              if (-a).x ~= -1 then error("negation") end
+              if a ~= vec3(1, 2, 3) then error("equality") end
+              if a:dot(vec3(1, 0, 0)) ~= 1 then error("dot") end
+              if vec3(1,0,0):cross(vec3(0,1,0)).z ~= 1 then error("cross") end
+              if vec3(3, 4, 0):length() ~= 5 then error("length") end
+              if vec3(0, 5, 0):normalized().y ~= 1 then error("normalized") end
+            end
+        )"),
+              "every operator and method behaves");
+    }
+
+    void test_normalizing_a_zero_vector_gives_no_nan() {
+        section("A vector too short to normalize gives zero, not NaN");
+
+        // glm::normalize divides by the length, so this would otherwise fill
+        // every component with NaN and spread it through whatever came next.
+        check(run_ok(R"(
+            function on_update(s)
+              local n = vec3(0, 0, 0):normalized()
+              if n.x ~= 0 or n.y ~= 0 or n.z ~= 0 then error("not zero") end
+              if n.x ~= n.x then error("NaN") end
+            end
+        )"),
+              "it comes back as zero");
+    }
+
+    void test_quat_turns_a_vector() {
+        section("A quaternion composes and turns a vector");
+
+        check(run_ok(R"(
+            function on_update(s)
+              local half_pi = math.pi / 2
+              local q = quat_from_axis_angle(vec3(0, 1, 0), half_pi)
+              -- Turning +X a quarter turn about +Y gives -Z, right-handed.
+              local turned = q * vec3(1, 0, 0)
+              if math.abs(turned.z + 1) > 1e-5 then error("wrong axis: " .. turned.z) end
+              if math.abs(turned.x) > 1e-5 then error("x did not clear") end
+
+              local twice = q * q
+              local back = twice * vec3(1, 0, 0)
+              if math.abs(back.x + 1) > 1e-5 then error("composing two turns") end
+
+              local identity = quat(1, 0, 0, 0)
+              if (identity * vec3(2, 3, 4)).y ~= 3 then error("identity moved it") end
+            end
+        )"),
+              "it turns and composes the way the conventions say");
+    }
+
+    void test_a_component_vector_is_the_engine_type() {
+        section("A vector read from a component is a vec3, not a table");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<Turret>();
+        sp::Host host{ components };
+
+        // Read, do arithmetic on it, and write it straight back. That round
+        // trip is the reason the binding hands back the engine type.
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              local t = entity:get("Turret")
+              entity:set("Turret", { aim = t.aim + vec3(1, 1, 1) })
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<Turret>(entity, Turret{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        host.update(world, 1.0 / 60.0);
+        check(host.stopped_count() == 0, "it ran");
+
+        const Turret& turret = world.registry().get<Turret>(entity);
+        check(turret.aim.x == 1.0F && turret.aim.y == 1.0F && turret.aim.z == 0.0F,
+              "the vector came back through arithmetic and landed on the field");
+    }
+
+    void test_a_partial_table_still_writes() {
+        section("A table naming one component still works beside the vec3 form");
+
+        sc::ComponentRegistry components;
+        components.add<Turret>();
+        sp::Host host{ components };
+        check(load(host, kFirst, "function on_update(s) entity:set(\"Turret\", "
+                                 "{ aim = { y = 9.0 } }) end"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<Turret>(entity, Turret{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        host.update(world, 1.0 / 60.0);
+        const Turret& turret = world.registry().get<Turret>(entity);
+        check(turret.aim.y == 9.0F, "the named component was written");
+        check(turret.aim.z == -1.0F, "and the rest was kept");
+    }
+
+    void test_the_random_source_is_reproducible() {
+        section("Two hosts in one process draw the same numbers");
+
+        // DESIGN.md section 9 rests a reproducible run on the fixed step, and
+        // Lua seeds math.random from the clock unless something says otherwise.
+        // Two hosts built in one process stand in for two runs of one command.
+        const auto draw = [](sp::Host& host, sc::World& world) {
+            host.update(world, 1.0 / 60.0);
+        };
+
+        sc::ComponentRegistry components;
+        components.add<Turret>();
+
+        constexpr std::string_view kScript = R"(
+            function on_update(s)
+              entity:set("Turret", { range = math.random() })
+            end
+        )";
+
+        float first = 0.0F;
+        float second = 0.0F;
+        for (float* out : { &first, &second }) {
+            sp::Host host{ components };
+            check(load(host, kFirst, kScript), "the script compiles");
+            sc::World world;
+            const entt::entity entity = world.create();
+            world.registry().emplace<Turret>(entity, Turret{});
+            world.registry().emplace<sp::ScriptComponent>(entity,
+                                                          sp::ScriptComponent{ kFirst });
+            draw(host, world);
+            *out = world.registry().get<Turret>(entity).range;
+        }
+
+        check(first != 0.0F, "the script drew a number");
+        check(first == second, "and two hosts drew the same one");
+    }
+
+    void test_reseeding_from_the_clock_is_not_available() {
+        section("math.randomseed refuses the form that reads the clock");
+
+        // The no-argument form seeds from the clock, which would undo the seed
+        // above without a script meaning to. Making it unavailable is what
+        // turns the guarantee from a note into something structural.
+        check(run_ok(R"(
+            function on_update(s)
+              local before = math.random()
+              math.randomseed()
+              math.randomseed(1)
+              math.randomseed(1)
+              local a = math.random()
+              math.randomseed(1)
+              local b = math.random()
+              if a ~= b then error("a named seed did not take") end
+            end
+        )"),
+              "a named seed works and the clock form changes nothing");
+    }
+
 } // namespace
 
 int main() {
@@ -589,6 +780,13 @@ int main() {
     test_each_instance_sees_its_own_entity();
     test_the_handle_follows_the_world_of_the_step();
     test_on_destroy_can_still_read_its_entity();
+    test_vec3_has_the_operators_an_author_expects();
+    test_normalizing_a_zero_vector_gives_no_nan();
+    test_quat_turns_a_vector();
+    test_a_component_vector_is_the_engine_type();
+    test_a_partial_table_still_writes();
+    test_the_random_source_is_reproducible();
+    test_reseeding_from_the_clock_is_not_available();
 
     if (test::g_failures != 0) {
         std::printf("\n%d check(s) failed.\n", test::g_failures);
