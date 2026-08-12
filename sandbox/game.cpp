@@ -143,7 +143,8 @@ namespace sandbox {
         return true;
     }
 
-    std::size_t update(engine::scene::World& world, float seconds) {
+    std::size_t update(engine::scene::World& world, float seconds,
+                       engine::scene::StepMotion& motion) {
         std::size_t moved = 0;
 
         for (const auto [entity, spin] : world.registry().view<const Spin>().each()) {
@@ -162,6 +163,12 @@ namespace sandbox {
             local.rotation = glm::angleAxis(kTwoPi * seconds / spin.seconds_per_turn,
                                             spin.axis / length);
             world.set_local(entity, local);
+
+            // The step owns this pose now, so the frame that draws between two
+            // steps blends it rather than showing the newest one. Without this
+            // a Spin would step at 60 Hz and hold still between, which is the
+            // judder a fixed step exists to remove.
+            motion.record(world, entity);
             ++moved;
         }
 

@@ -16,6 +16,7 @@
 #include "assets/content.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
+#include "scene/step_motion.h"
 #include "scene/world.h"
 
 #include <filesystem>
@@ -125,16 +126,26 @@ namespace sandbox {
                             engine::scene::PrefabLibrary& library = engine::scene::prefabs());
 
     /**
-     * @brief Runs the game for one frame.
+     * @brief Runs the game for one fixed step.
      *
      * Every entity carrying a Spin turns to face the elapsed time. The call
      * changes the local transform and leaves the world matrices to
      * engine::scene::World::update(), which the application calls after this.
      *
+     * @warning **This runs on the fixed step, not once for each frame.** The
+     * seconds are simulated seconds, which is the step count times the step
+     * length, and not the wall clock. That is what makes a run reproducible.
+     * See DESIGN.md section 9.
+     *
      * @param world The world to run.
-     * @param seconds Seconds since the game started, not since the last frame.
+     * @param seconds Simulated seconds since the game started, not since the
+     *                last step.
+     * @param motion Where to record what moved, so a frame between two steps
+     *               draws a blend rather than the newest step. Every entity
+     *               this moves is recorded in it.
      * @return How many entities moved.
      */
-    std::size_t update(engine::scene::World& world, float seconds);
+    std::size_t update(engine::scene::World& world, float seconds,
+                       engine::scene::StepMotion& motion);
 
 } // namespace sandbox

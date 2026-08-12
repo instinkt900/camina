@@ -156,6 +156,12 @@ add_test(NAME bounds COMMAND test_bounds)
 # M7.1. Box3D builds, links, and agrees with the engine about which way is up.
 # The value comes out of the library at run time, so a Box3D update that turns
 # the world over fails here rather than in the game. See DESIGN.md section 3.
+add_executable(test_step_motion test_step_motion.cpp)
+target_link_libraries(test_step_motion PRIVATE engine::core)
+engine_set_warnings(test_step_motion)
+engine_enable_clang_tidy(test_step_motion)
+add_test(NAME step_motion COMMAND test_step_motion)
+
 add_executable(test_physics test_physics.cpp)
 target_link_libraries(test_physics PRIVATE engine::core)
 engine_set_warnings(test_physics)

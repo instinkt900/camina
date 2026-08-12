@@ -2075,33 +2075,67 @@ namespace {
     }
 
     /**
+     * Everything the fixed step owns, which outlives any one frame.
+     *
+     * The clock, the simulated clock reading the game runs on, and the poses a
+     * frame blends for whatever the game moved. Bundled because all three
+     * advance together and none of them means anything alone.
+     */
+    struct StepState {
+        engine::FixedTimestep clock;      ///< Turns a frame delta into whole steps.
+        engine::scene::StepMotion motion; ///< What the game moved, and where it was before.
+        double seconds = 0.0;             ///< Simulated seconds since the run began.
+    };
+
+    /**
      * Runs the whole steps this frame owes, then blends the pose it draws.
      *
      * Physics runs after the game, because the game moves the kinematic bodies
-     * and the solver has to see this frame's positions.
+     * and the solver has to see this step's positions.
      *
-     * @param clock The fixed step clock. Its rate follows the settings.
+     * @param state The clock, the simulated seconds, and the game poses.
      * @param settings Where the step rate and the ceiling are kept.
      * @param simulation The bodies to step.
      * @param world The scene to read and to write the drawn pose into.
      * @param delta_seconds How much wall time this frame took.
      * @param stats Receives what the whole of it cost on the CPU.
      */
-    void advance_physics(engine::FixedTimestep& clock, const ViewSettings& settings,
-                         engine::physics::Simulation& simulation, engine::scene::World& world,
-                         float delta_seconds, engine::FrameStats& stats) {
+    void advance_simulation(StepState& state, const ViewSettings& settings,
+                            engine::physics::Simulation& simulation, engine::scene::World& world,
+                            float delta_seconds, engine::FrameStats& stats) {
         // The inspector can move both of these while the program runs, so they
         // are read each frame rather than at startup. Neither call throws away
         // the time already accumulated.
-        clock.set_rate_hz(settings.physics_hz);
-        clock.set_max_steps(settings.max_physics_steps);
+        state.clock.set_rate_hz(settings.physics_hz);
+        state.clock.set_max_steps(settings.max_physics_steps);
 
         const auto started = std::chrono::steady_clock::now();
-        for (std::uint32_t left = clock.advance(delta_seconds); left > 0; --left) {
-            ENGINE_PROFILE_ZONE_N("physics step");
-            simulation.step(world, clock.step_seconds());
+        for (std::uint32_t left = state.clock.advance(delta_seconds); left > 0; --left) {
+            ENGINE_PROFILE_ZONE_N("fixed step");
+
+            // The game reads the pose the last step left rather than the blend
+            // the last frame drew. Without this the motion of a frame that fell
+            // between two steps feeds back in and compounds.
+            state.motion.begin_step(world);
+
+            // Simulated seconds, which is what makes a run reproducible. A
+            // double, because a float stops counting whole steps of 1/60 after
+            // a few hours and the run would quietly slow down. See #245.
+            state.seconds += static_cast<double>(state.clock.step_seconds());
+
+            // The game moves things, then the solver runs. A kinematic body the
+            // game drives has to carry its new transform into the step, so this
+            // order is the one that works.
+            sandbox::update(world, static_cast<float>(state.seconds), state.motion);
+            simulation.step(world, state.clock.step_seconds());
         }
-        simulation.interpolate(world, clock.alpha());
+
+        // One alpha for both, because they blend the same pair of steps. Two
+        // would let the game and the physics draw different instants.
+        const float alpha = state.clock.alpha();
+        simulation.interpolate(world, alpha);
+        state.motion.interpolate(world, alpha);
+
         stats.add(
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
                 .count());
@@ -2161,38 +2195,28 @@ namespace {
         return FrameStart::Skip;
     }
 
-    /// The two times a frame runs on. They are read together because offscreen
-    /// takes both from the frame number rather than from the clock.
-    struct FrameTime {
-        float seconds = 0.0F; ///< Since the run began. The game animates from it.
-        float delta = 0.0F;   ///< Since the last frame.
-    };
-
-    /// Works out how much time this frame covers.
+    /// Works out how much wall time this frame covers.
+    ///
+    /// The game no longer reads a frame clock at all. It runs on the fixed
+    /// step and counts simulated seconds, so this feeds the camera and the
+    /// step accumulator and nothing else. See issue #245.
     ///
     /// @param options The command line.
-    /// @param frame The number of frames drawn so far.
-    /// @param started When the run began.
     /// @param last_frame When the last frame ran.
     /// @param now The time this frame began.
-    /// @return The seconds elapsed and the delta.
-    [[nodiscard]] FrameTime frame_time(const Options& options, std::uint64_t frame,
-                                       std::chrono::steady_clock::time_point started,
-                                       std::chrono::steady_clock::time_point last_frame,
-                                       std::chrono::steady_clock::time_point now) {
+    /// @return Seconds since the last frame.
+    [[nodiscard]] float frame_delta(const Options& options,
+                                    std::chrono::steady_clock::time_point last_frame,
+                                    std::chrono::steady_clock::time_point now) {
         if (options.offscreen) {
             // Offscreen counts frames rather than reading the clock, so the
             // same command produces the same image. See kOffscreenStep.
-            return FrameTime{ .seconds = static_cast<float>(frame) * kOffscreenStep,
-                              .delta = kOffscreenStep };
+            return kOffscreenStep;
         }
         // A long stall, a debugger break, or a driver hitch would otherwise
         // multiply move_speed by the whole gap and throw the camera across
         // the scene in one step.
-        return FrameTime{
-            .seconds = std::chrono::duration<float>(now - started).count(),
-            .delta = std::min(std::chrono::duration<float>(now - last_frame).count(), kLongestFrame)
-        };
+        return std::min(std::chrono::duration<float>(now - last_frame).count(), kLongestFrame);
     }
 
     /// Says whether the frame limit has landed, and writes the screenshot when
@@ -2222,7 +2246,8 @@ namespace {
                     engine::scene::World& world, engine::physics::Simulation& simulation) {
         // The settings own the rate. This reads them here and again each frame,
         // because the inspector can move either one while the program runs.
-        engine::FixedTimestep clock(settings.physics_hz, settings.max_physics_steps);
+        StepState step;
+        step.clock = engine::FixedTimestep(settings.physics_hz, settings.max_physics_steps);
 
         std::uint64_t frame = 0;
         auto started = std::chrono::steady_clock::now();
@@ -2264,10 +2289,10 @@ namespace {
             }
 
             const auto now = std::chrono::steady_clock::now();
-            const FrameTime time = frame_time(options, frame, started, last_frame, now);
+            const float delta = frame_delta(options, last_frame, now);
             last_frame = now;
 
-            update_camera(settings, time.delta);
+            update_camera(settings, delta);
 
             // The key edge rather than the key being down, or holding it would
             // fill the room with crates in one second.
@@ -2278,11 +2303,10 @@ namespace {
                 (void)throw_crate(world, simulation, settings);
             }
 
-            // The game moves things, then the frame composes the matrices and
-            // draws them. Reversing those two would draw a frame behind.
-            sandbox::update(world, time.seconds);
-
-            advance_physics(clock, settings, simulation, world, time.delta, physics_stats);
+            // The game and the solver both run on the fixed step now, so this
+            // is one call rather than two. The frame composes the matrices and
+            // draws after it. Reversing those two would draw a frame behind.
+            advance_simulation(step, settings, simulation, world, delta, physics_stats);
 
             engine::gfx::Extent2D drawn_extent{};
             const FrameOutcome outcome = draw_frame(context, last_extent, drawn_extent);
@@ -2324,7 +2348,7 @@ namespace {
         // GPU split that report_frame_time prints. The two are different
         // domains and the labels say so: the solver runs on the CPU.
         report_frame_time(stats, options);
-        report_physics(clock, physics_stats);
+        report_physics(step.clock, physics_stats);
         return true;
     }
 
