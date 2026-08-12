@@ -459,6 +459,45 @@
           }
         }
       }
+    },
+    {
+      "parent": -1,
+      "prefab": "crate.prefab",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "big crate"
+          },
+          "Transform": {
+            "position": [
+              1.9,
+              4.0,
+              -2.6
+            ],
+            "scale": [
+              1.6,
+              1.6,
+              1.6
+            ]
+          },
+          "RigidBody": {
+            "__version": 1,
+            "type": "Dynamic",
+            "density": 1000.0,
+            "friction": 0.6,
+            "restitution": 0.0
+          },
+          "BoxCollider": {
+            "__version": 1,
+            "half_extents": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      }
     }
   ]
 }

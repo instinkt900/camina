@@ -112,12 +112,12 @@ namespace {
             }
         }
 
-        // The room, fourteen from the seven crate instances, which carry a mesh
+        // The room, sixteen from the eight crate instances, which carry a mesh
         // on the box and on the lid, six from the flight helmet, the beacon,
         // the two glass panes, and the seven roughness spheres. A prefab root
         // the cooker added draws nothing, so it names no mesh, and neither does
         // the floor body, which the room already draws.
-        check(named == 31, "every entity that draws names a mesh");
+        check(named == 33, "every entity that draws names a mesh");
         check(resolved == named, "and the cooker wrote every one of them");
     }
 
@@ -228,9 +228,11 @@ namespace {
         // the glass (a cooker-added root and the two panes), eight for the
         // spheres (a cooker-added root and one for each roughness step), the
         // one that carries the environment, and the floor body. Three of the
-        // crates are the M7.6 stack and one is the M7.4 crate that drops onto
-        // the floor body beside it.
-        check(world.size() == 39, "the scene holds thirty nine entities");
+        // crates are the M7.6 stack, one is the M7.4 crate that drops onto the
+        // floor body beside it, and one is the scaled crate of #237, which
+        // collides at the size it draws rather than at the size of its
+        // collider.
+        check(world.size() == 41, "the scene holds forty one entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
@@ -244,10 +246,10 @@ namespace {
             (void)entity;
             ++instances;
         }
-        // The room, the seven crates, the flight helmet, the glass, and the
+        // The room, the eight crates, the flight helmet, the glass, and the
         // spheres. The helmet is one instance rather than six hand-written
         // entities, which is what the node tree becoming a prefab bought.
-        check(instances == 11, "eleven entities are prefab instances");
+        check(instances == 12, "twelve entities are prefab instances");
     }
 
     void test_scene_round_trips() {
