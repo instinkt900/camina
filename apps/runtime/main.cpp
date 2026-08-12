@@ -11,6 +11,7 @@
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "math/conventions.h"
+#include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
 #include "reflect/inspector.h"
@@ -43,7 +44,6 @@
 #include <moth_ui/nodes/node.h>
 #endif
 
-#include <SDL3/SDL.h>
 #include <imgui.h>
 
 #include <algorithm>
@@ -693,68 +693,90 @@ namespace {
                                             -flat * std::cos(yaw) });
     }
 
+    /// The action names the runtime binds. One name for one thing, per §3.
+    namespace action {
+        constexpr const char* kForward = "move_forward";
+        constexpr const char* kBack = "move_back";
+        constexpr const char* kLeft = "move_left";
+        constexpr const char* kRight = "move_right";
+        constexpr const char* kUp = "move_up";
+        constexpr const char* kDown = "move_down";
+        constexpr const char* kSprint = "sprint";
+        constexpr const char* kLook = "look";
+        constexpr const char* kThrow = "throw";
+    } // namespace action
+
+    /**
+     * Binds the runtime's own actions.
+     *
+     * These belong to the debug camera and to the throw, which are application
+     * concerns rather than game logic. M8.6 moves the throw into a script, and
+     * its binding moves with it.
+     */
+    void bind_actions(engine::platform::Input& input) {
+        using engine::platform::Key;
+        using engine::platform::MouseButton;
+
+        input.bind(action::kForward, Key::W);
+        input.bind(action::kBack, Key::S);
+        input.bind(action::kLeft, Key::A);
+        input.bind(action::kRight, Key::D);
+        input.bind(action::kUp, Key::E);
+        input.bind(action::kDown, Key::Q);
+        input.bind(action::kSprint, Key::LeftShift);
+        input.bind(action::kSprint, Key::RightShift);
+        input.bind(action::kLook, MouseButton::Right);
+        input.bind(action::kThrow, Key::F);
+    }
+
     /**
      * Moves and turns the camera from the keyboard and the mouse.
      *
      * The right mouse button holds the look. While it is down the pointer is
-     * captured, so a drag never runs out of screen. ImGui gets first refusal on
-     * both devices, so typing in a field does not fly the camera away.
+     * captured, so a drag never runs out of screen.
+     *
+     * ImGui gets first refusal on both devices, so typing in a field does not
+     * fly the camera away. That gate is applied in platform::sample() now, so
+     * this function sees a frame with the taken parts already cleared.
      */
-    void update_camera(ViewSettings& settings, float delta_seconds) {
-        bool imgui_mouse = false;
-        bool imgui_keyboard = false;
-        engine::gfx::imgui_wants_input(&imgui_mouse, &imgui_keyboard);
-
-        float mouse_x = 0.0F;
-        float mouse_y = 0.0F;
-        const SDL_MouseButtonFlags buttons = SDL_GetRelativeMouseState(&mouse_x, &mouse_y);
-        const bool looking =
-            !imgui_mouse && (buttons & SDL_BUTTON_RMASK) != 0;
+    void update_camera(const engine::platform::Window& window,
+                       const engine::platform::Input& input, ViewSettings& settings,
+                       float delta_seconds) {
+        const bool looking = input.held(action::kLook);
 
         // The pointer stays put while the look is held, so the drag has no edge.
-        SDL_Window* focus = SDL_GetKeyboardFocus();
-        if (focus != nullptr) {
-            SDL_SetWindowRelativeMouseMode(focus, looking);
-        }
+        engine::platform::set_relative_mouse(window, looking);
 
         if (looking) {
-            settings.camera_yaw -= mouse_x * settings.look_sensitivity;
-            settings.camera_pitch -= mouse_y * settings.look_sensitivity;
+            const engine::Vec2 delta = input.mouse_delta();
+            settings.camera_yaw -= delta.x * settings.look_sensitivity;
+            settings.camera_pitch -= delta.y * settings.look_sensitivity;
             // Straight up would make the forward vector and world up parallel,
             // and lookAt has no basis to build from a pair like that.
             settings.camera_pitch = std::clamp(settings.camera_pitch, kLowestPitch, kHighestPitch);
             settings.camera_yaw = std::remainder(settings.camera_yaw, kFullTurnDegrees);
         }
 
-        if (imgui_keyboard) {
-            return;
-        }
-
-        const bool* keys = SDL_GetKeyboardState(nullptr);
-        if (keys == nullptr) {
-            return;
-        }
-
         const engine::Vec3 forward = camera_forward(settings);
         const engine::Vec3 right = glm::normalize(glm::cross(forward, engine::world_up));
 
         engine::Vec3 wanted{ 0.0F, 0.0F, 0.0F };
-        if (keys[SDL_SCANCODE_W]) {
+        if (input.held(action::kForward)) {
             wanted += forward;
         }
-        if (keys[SDL_SCANCODE_S]) {
+        if (input.held(action::kBack)) {
             wanted -= forward;
         }
-        if (keys[SDL_SCANCODE_D]) {
+        if (input.held(action::kRight)) {
             wanted += right;
         }
-        if (keys[SDL_SCANCODE_A]) {
+        if (input.held(action::kLeft)) {
             wanted -= right;
         }
-        if (keys[SDL_SCANCODE_E]) {
+        if (input.held(action::kUp)) {
             wanted += engine::world_up;
         }
-        if (keys[SDL_SCANCODE_Q]) {
+        if (input.held(action::kDown)) {
             wanted -= engine::world_up;
         }
 
@@ -763,9 +785,7 @@ namespace {
         }
 
         const float speed =
-            settings.move_speed * ((keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT])
-                                       ? kSprintFactor
-                                       : 1.0F);
+            settings.move_speed * (input.held(action::kSprint) ? kSprintFactor : 1.0F);
         settings.camera_position += glm::normalize(wanted) * speed * delta_seconds;
     }
 
@@ -1534,6 +1554,9 @@ namespace {
         engine::assets::HotReload reload;
         /// M4.5. The same for the engine tree, which holds the shaders and the table.
         engine::assets::HotReload engine_reload;
+        /// M8.0. Keyboard and mouse, sampled once for each frame. Every reader
+        /// asks it for an action by name rather than reading a device.
+        engine::platform::Input input;
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
 
@@ -1763,6 +1786,11 @@ namespace {
             }
         }
 
+        // Bound whether or not a window opened. An offscreen run reads every
+        // action as false, and binding costs nothing, so the two paths stay the
+        // same shape.
+        bind_actions(runtime.input);
+
         const engine::gfx::DeviceDesc device_desc{
             .window = options.offscreen ? nullptr : runtime.window.native(),
             .app_name = "camina",
@@ -1974,40 +2002,6 @@ namespace {
             ENGINE_LOG_INFO("Vsync is on, so that is the refresh rate. Use --no-vsync to measure "
                             "a change.");
         }
-    }
-
-    /**
-     * Whether the throw key went down since the last frame.
-     *
-     * The edge and not the state. A key that is held would throw a crate on
-     * every frame, which fills the room in a second and tells nobody anything.
-     *
-     * @param runtime The window, which has to have focus for a key to count.
-     * @param options The run options. An offscreen run has no keyboard at all.
-     * @param overlay Whether ImGui is up, because it takes the keyboard when a
-     *                person is typing in a panel.
-     * @return True on the frame the key goes down, and not while it is held.
-     */
-    bool throw_pressed(const Runtime& runtime, const Options& options, bool overlay) {
-        static bool was_down = false;
-        if (options.offscreen) {
-            return false;
-        }
-
-        bool imgui_mouse = false;
-        bool imgui_keyboard = false;
-        if (overlay) {
-            engine::gfx::imgui_wants_input(&imgui_mouse, &imgui_keyboard);
-        }
-
-        const bool* keys = SDL_GetKeyboardState(nullptr);
-        const bool down = !imgui_keyboard && keys != nullptr &&
-                          SDL_GetKeyboardFocus() == runtime.window.native() &&
-                          keys[SDL_SCANCODE_F];
-
-        const bool went_down = down && !was_down;
-        was_down = down;
-        return went_down;
     }
 
     /**
@@ -2245,6 +2239,32 @@ namespace {
         return true;
     }
 
+    /**
+     * Samples the devices once for this frame.
+     *
+     * This is the only place the runtime reads input. Every reader below it asks
+     * the module for an action by name.
+     *
+     * An offscreen run has no window and no devices, so it feeds a default
+     * frame. Every action then reads false, which is what the old
+     * throw_pressed() spelled out with its own check on options.offscreen.
+     *
+     * ImGui is asked first, because it owns the keyboard while a person types in
+     * a panel. platform/ sits below gfx/, so the module cannot ask on its own.
+     */
+    void update_input(Runtime& runtime, const FrameContext& context, const Options& options) {
+        if (options.offscreen) {
+            runtime.input.update(engine::platform::InputFrame{});
+            return;
+        }
+
+        engine::platform::InputConsumed consumed;
+        if (context.overlay) {
+            engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
+        }
+        runtime.input.update(engine::platform::sample(runtime.window, consumed));
+    }
+
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
@@ -2298,11 +2318,12 @@ namespace {
             const float delta = frame_delta(options, last_frame, now);
             last_frame = now;
 
-            update_camera(settings, delta);
+            update_input(runtime, context, options);
+            update_camera(runtime.window, runtime.input, settings, delta);
 
             // The key edge rather than the key being down, or holding it would
             // fill the room with crates in one second.
-            const bool throw_now = throw_pressed(runtime, options, context.overlay);
+            const bool throw_now = runtime.input.pressed(action::kThrow);
             const bool throw_this_frame =
                 options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame;
             if (throw_now || throw_this_frame) {
