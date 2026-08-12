@@ -417,6 +417,15 @@ The milestone test passes: a stack of three crates stands in the sandbox room an
 from the camera knocks it over. `--throw-at-frame <n>` fires the same throw on a fixed frame, so
 an offscreen capture of it is reproducible.
 
+**The game logic runs on the fixed step**, which closed #245. `sandbox::update` takes simulated
+seconds rather than the wall clock, so a run is reproducible. `scene::StepMotion` is where the
+interpolation for a mover that is not a rigid body lives: it records the two poses a frame
+blends, the same way `physics::Simulation` does, and `begin_step` puts the authoritative pose
+back before the game reads it. Without that the motion of a frame that fell between two steps
+feeds back in and compounds. Note that the same wall time is not the same number of steps: 288
+frames of 1/144 land just under two seconds in float and take 119 steps where a 30 Hz run takes
+120. So a determinism test holds the step count fixed, not the wall time.
+
 **A collider is multiplied by the world scale of its entity**, which closed #237 after the
 milestone. So one crate prefab makes a big crate and a small crate. A box takes a scale of three
 different numbers exactly. A sphere holds one radius, so it takes the largest of the three and
