@@ -10,6 +10,12 @@
 
 #include "check.h"
 #include "core/guid.h"
+#include "core/jobs.h"
+#include "physics/components.h"
+#include "physics/simulation.h"
+#include "platform/input.h"
+#include "scene/components.h"
+#include "scene/prefab.h"
 #include "scene/world.h"
 #include "script/components.h"
 #include "script/host.h"
@@ -24,6 +30,8 @@ namespace {
     using test::section;
     namespace sc = engine::scene;
     namespace sp = engine::script;
+    namespace pf = engine::platform;
+    using engine::Vec3;
 
     /// Two identities that are not the null GUID and are not each other. The
     /// values mean nothing. The host only ever compares them.
@@ -795,9 +803,338 @@ namespace {
               "the clock form changes nothing and a named seed still works");
     }
 
+    void test_the_world_finds_and_walks() {
+        section("A script finds an entity by name and walks its children");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<engine::scene::Name>();
+        sp::Host host{ components };
+
+        // The children come back as a sequence, so ipairs walks them in order.
+        // pairs over a string-keyed table would not, and that is the difference
+        // between a reproducible run and one that fails once in ten.
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              local stack = world.find("stack")
+              if stack == nil then error("did not find the stack") end
+              if stack:name() ~= "stack" then error("wrong name back") end
+
+              local kids = stack:children()
+              if #kids ~= 3 then error("wrong child count: " .. #kids) end
+
+              local names = {}
+              for i, child in ipairs(kids) do names[i] = child:name() end
+              if names[1] ~= "a" or names[2] ~= "b" or names[3] ~= "c" then
+                error("children came back out of order: " .. table.concat(names, ","))
+              end
+
+              if kids[1]:parent():name() ~= "stack" then error("wrong parent") end
+              if stack:parent() ~= nil then error("a root has a parent") end
+              if world.find("nothing_called_this") ~= nil then error("found a ghost") end
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity stack = world.create();
+        world.registry().emplace<engine::scene::Name>(stack, engine::scene::Name{ "stack" });
+        for (const char* name : { "a", "b", "c" }) {
+            const entt::entity child = world.create();
+            world.registry().emplace<engine::scene::Name>(child, engine::scene::Name{ name });
+            check(world.set_parent(child, stack), "the child parents");
+        }
+        world.registry().emplace<sp::ScriptComponent>(stack, sp::ScriptComponent{ kFirst });
+
+        host.update(world, 1.0 / 60.0);
+        check(host.stopped_count() == 0, "every lookup answered as the script expected");
+    }
+
+    void test_a_script_creates_and_destroys() {
+        section("A script creates an entity and destroys one");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        sp::Host host{ components };
+        check(load(host, kFirst, R"(
+            made = nil
+            function on_update(s)
+              if made == nil then
+                made = world.create()
+                if made == nil then error("create gave nothing") end
+                if not made:valid() then error("a new entity is not valid") end
+              else
+                if not world.destroy(made) then error("destroy refused") end
+                if made:valid() then error("it survived being destroyed") end
+                if world.destroy(made) then error("destroying it twice worked") end
+              end
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        const std::size_t before = world.size();
+        host.update(world, 1.0 / 60.0);
+        check(world.size() == before + 1, "the first step made one entity");
+
+        host.update(world, 2.0 / 60.0);
+        check(world.size() == before, "and the second step destroyed it");
+        check(host.stopped_count() == 0, "with no error either way");
+    }
+
+    void test_input_reaches_a_script_by_action_name() {
+        section("A script reads an action by name and never an SDL constant");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<Turret>();
+        sp::Host host{ components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              if input.held("fire") then entity:set("Turret", { armed = true }) end
+              if input.pressed("fire") then entity:set("Turret", { range = 99.0 }) end
+              if input.held("nothing_bound") then error("an unbound action read true") end
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<Turret>(entity, Turret{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        engine::platform::Input input;
+        input.bind("fire", engine::platform::Key::F);
+
+        // No input in the services at all, which is what an offscreen run gives.
+        host.update(world, 1.0 / 60.0);
+        check(!world.registry().get<Turret>(entity).armed,
+              "a step with no input module reads every action as false");
+
+        pf::InputFrame frame;
+        frame.focused = true;
+        frame.keys.at(static_cast<std::size_t>(engine::platform::Key::F)) = true;
+        input.update(frame);
+
+        host.update(world, 2.0 / 60.0, sp::Services{ .input = &input });
+        const Turret& turret = world.registry().get<Turret>(entity);
+        check(turret.armed, "a held action reaches the script");
+        check(turret.range == 99.0F, "and so does the press edge");
+        check(host.stopped_count() == 0, "and an unbound action reads false");
+    }
+
+    void test_the_services_follow_the_step() {
+        section("A service passed one step is gone the next");
+
+        // The same rule the world follows, for the same reason. An instance
+        // lives across steps, so anything captured when it was made would
+        // outlive the call that supplied it. See issue #273.
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<Turret>();
+        sp::Host host{ components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              entity:set("Turret", { armed = input.held("fire") })
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<Turret>(entity, Turret{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        engine::platform::Input input;
+        input.bind("fire", engine::platform::Key::F);
+        pf::InputFrame frame;
+        frame.focused = true;
+        frame.keys.at(static_cast<std::size_t>(engine::platform::Key::F)) = true;
+        input.update(frame);
+
+        host.update(world, 1.0 / 60.0, sp::Services{ .input = &input });
+        check(world.registry().get<Turret>(entity).armed, "the action read true with input");
+
+        host.update(world, 2.0 / 60.0);
+        check(!world.registry().get<Turret>(entity).armed,
+              "and false on a step that passed none");
+    }
+
+    void test_a_script_instances_a_prefab() {
+        section("A script instances a prefab by name, which is what the throw does");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<engine::scene::Name>();
+        sp::Host host{ components };
+
+        sc::PrefabLibrary library;
+        check(library.add("crate.prefab", nlohmann::json::parse(R"({
+            "__version": 1,
+            "entities": [{ "parent": -1, "components": {
+                "Name": { "__version": 1, "value": "crate" },
+                "Transform": { "position": [0.0, 5.0, 0.0] }
+            }}]
+        })")),
+              "the prefab parses");
+
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              local made = world.instance("crate.prefab")
+              if made == nil then error("instance gave nothing") end
+              if made:name() ~= "crate" then error("wrong prefab came back") end
+
+              -- A throw is this and a velocity, so the pose has to be settable
+              -- on the entity that just came back.
+              made:set("Transform", { position = vec3(1, 2, 3) })
+              local t = made:get("Transform")
+              if t.position.y ~= 2 then error("the new entity did not move") end
+
+              if world.instance("no_such.prefab") ~= nil then
+                error("instanced a prefab nobody loaded")
+              end
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        const std::size_t before = world.size();
+        host.update(world, 1.0 / 60.0, sp::Services{ .prefabs = &library });
+        check(host.stopped_count() == 0, "the script ran");
+        check(world.size() == before + 1, "and the world gained the instanced entity");
+
+        // Without a library in the services there is nothing to instance from,
+        // and the script has to be told rather than left guessing.
+        host.update(world, 2.0 / 60.0);
+        check(host.stopped_count() == 1, "a step with no library refuses and the script sees it");
+    }
+
+    void test_the_physics_verbs_reach_a_script() {
+        section("A script reads a velocity, pushes a body, and asks if it sleeps");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        engine::physics::register_components(components);
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              if entity:velocity() == nil then error("no velocity to read") end
+              if not entity:is_awake() then error("a new body is asleep") end
+              if not entity:set_velocity(vec3(0, 0, 5)) then error("set_velocity refused") end
+              if math.abs(entity:velocity().z - 5) > 1e-4 then error("the velocity did not take") end
+              if not entity:impulse(vec3(0, 1, 0)) then error("impulse refused") end
+              if entity:velocity().y <= 0 then error("the impulse did nothing") end
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = { 0.0F, 5.0F, 0.0F } });
+        world.registry().emplace<engine::physics::RigidBody>(
+            entity, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        world.registry().emplace<engine::physics::BoxCollider>(
+            entity, engine::physics::BoxCollider{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        host.update(world, 1.0 / 60.0, sp::Services{ .physics = &simulation });
+        check(host.stopped_count() == 0, "every physics verb answered");
+
+        // A step with no simulation leaves them all nil or false, rather than
+        // reaching a simulation the caller is no longer stepping.
+        check(load(host, kSecond, R"(
+            function on_update(s)
+              if entity:velocity() ~= nil then error("read a velocity with no simulation") end
+              if entity:set_velocity(vec3(1, 0, 0)) then error("wrote one") end
+              if entity:is_awake() then error("claimed a body was awake") end
+            end
+        )"),
+              "the second script compiles");
+        // Naming a different script drops the old instance on the step that
+        // sees the change, and the next step starts the new one.
+        world.registry().replace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kSecond });
+        host.update(world, 2.0 / 60.0);
+        check(host.instance_count() == 0, "changing the script drops the old instance");
+
+        host.update(world, 3.0 / 60.0);
+        check(host.instance_count() == 1, "and the next step starts the new one");
+        check(host.stopped_count() == 0, "and a step with no simulation answers nothing");
+    }
+
+    void test_stop_does_not_reach_the_services_of_the_last_step() {
+        section("A teardown reaches no service the caller did not pass to stop()");
+
+        // stop() is called as the world goes away, and the simulation usually
+        // goes with it. An on_destroy that kept an entity and pushed a body
+        // through the services of the last update() would reach freed memory,
+        // and nothing would report it. So stop() takes its own services and the
+        // default is nothing.
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        engine::physics::register_components(components);
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            kept = nil
+            function on_update(s) kept = entity end
+            function on_destroy()
+              -- The world is still there, so a component still reads.
+              if kept:get("Transform") == nil then error("lost the world too") end
+              -- The services are not. This write has to be refused, and the
+              -- velocity the caller set has to survive it.
+              kept:set_velocity(vec3(0, 0, 99))
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = { 0.0F, 5.0F, 0.0F } });
+        world.registry().emplace<engine::physics::RigidBody>(
+            entity, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        world.registry().emplace<engine::physics::BoxCollider>(
+            entity, engine::physics::BoxCollider{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        // The simulation stays alive on purpose. Letting it go out of scope
+        // first would make the bug this guards against undefined rather than
+        // wrong, and a test cannot tell the two apart. Here the pointer would
+        // still be good, so a stop() that kept it would read a real velocity
+        // and the script would say so.
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+        host.update(world, 1.0 / 60.0, sp::Services{ .physics = &simulation });
+        check(host.stopped_count() == 0, "the step ran with a simulation");
+
+        // A value only the caller set, so a write from the teardown is visible.
+        // stop() resets the stopped counter, so that cannot be the signal here.
+        check(simulation.set_linear_velocity(entity, Vec3{ 0.0F, 0.0F, 7.0F }),
+              "the caller sets a velocity");
+
+        host.stop(world);
+        check(host.call_count(sp::Callback::Destroy) == 1, "on_destroy ran");
+
+        Vec3 after{ 0.0F, 0.0F, 0.0F };
+        check(simulation.linear_velocity(entity, after), "the velocity reads back");
+        check(after.z == 7.0F, "and the teardown could not write through a service");
+    }
+
 } // namespace
 
 int main() {
+    // The physics test needs the scheduler, because Box3D runs its solver on it.
+    engine::jobs::init();
+
     test_the_lifecycle_runs_in_order();
     test_the_step_count_is_what_drives_it();
     test_seconds_reach_the_script();
@@ -824,6 +1161,18 @@ int main() {
     test_a_partial_table_still_writes();
     test_the_random_source_is_reproducible();
     test_reseeding_from_the_clock_is_not_available();
+    test_the_world_finds_and_walks();
+    test_a_script_creates_and_destroys();
+    test_input_reaches_a_script_by_action_name();
+    test_the_services_follow_the_step();
+    test_a_script_instances_a_prefab();
+    test_the_physics_verbs_reach_a_script();
+    test_stop_does_not_reach_the_services_of_the_last_step();
+
+    // The pool has to stop before main returns. test_physics.cpp does the same,
+    // and leaving the workers running at exit can hang the process or read as a
+    // leak under a sanitizer.
+    engine::jobs::shutdown();
 
     if (test::g_failures != 0) {
         std::printf("\n%d check(s) failed.\n", test::g_failures);
