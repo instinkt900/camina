@@ -386,6 +386,37 @@ namespace {
         check(missing.kind == rf::ValueKind::None, "and it reports None rather than Unsupported");
     }
 
+    void test_a_reused_value_carries_nothing_over() {
+        rf::Registry registry;
+        registry.add<Prop>();
+        const rf::TypeInfo* info = registry.find("Prop");
+        if (info == nullptr) {
+            check(false, "the registry holds Prop");
+            return;
+        }
+
+        const Prop prop;
+
+        // One Value across several reads, which is what a caller in a loop
+        // does. Every earlier test declared a fresh one for each read, and that
+        // is exactly what hid this: a branch that fills only the member its
+        // kind names leaves the rest holding the last read.
+        rf::Value value;
+        check(info->get_field(&prop, "label", value), "a string reads");
+        check(value.text == "prop", "and it carries the text");
+
+        check(info->get_field(&prop, "scale", value), "a number reads into the same Value");
+        check(value.kind == rf::ValueKind::Number, "it reports the new kind");
+        check(value.text.empty(), "and the text of the read before is gone");
+
+        check(info->get_field(&prop, "nested", value), "an Unsupported field reads");
+        check(value.kind == rf::ValueKind::Unsupported, "it says so");
+        check(value.number == 0.0, "and it carries no number from the read before");
+
+        check(!info->get_field(&prop, "nothing_called_this", value), "a miss reports false");
+        check(value.kind == rf::ValueKind::None, "and it leaves None rather than the last kind");
+    }
+
     void test_dynamic_write() {
         rf::Registry registry;
         registry.add<Prop>();
@@ -454,12 +485,17 @@ namespace {
         check(!info->set_field(&prop, "scale", text), "Text does not write to a float");
         check(prop.scale == before, "and the field is untouched");
 
+        // The whole vector, recorded before the call. Comparing one component
+        // proved nothing here: the value being written carries x == 1.0F and so
+        // does the default position, so the check passed whether the write was
+        // refused or half applied.
+        const engine::Vec3 position_before = prop.position;
         rf::Value wrong_length;
         wrong_length.kind = rf::ValueKind::Vec2;
-        wrong_length.vector = engine::Vec4{ 1.0F, 1.0F, 0.0F, 0.0F };
+        wrong_length.vector = engine::Vec4{ 9.0F, 9.0F, 0.0F, 0.0F };
         check(!info->set_field(&prop, "position", wrong_length),
               "a Vec2 does not write to a Vec3");
-        check(prop.position.x == 1.0F, "and that field is untouched too");
+        check(prop.position == position_before, "and every component is untouched");
 
         rf::Value bad_name;
         bad_name.kind = rf::ValueKind::Enum;
@@ -553,6 +589,7 @@ int main() {
     std::printf("dynamic field access\n");
     test_dynamic_read();
     test_dynamic_read_reports_what_it_cannot_carry();
+    test_a_reused_value_carries_nothing_over();
     test_dynamic_write();
     test_dynamic_write_refuses_a_wrong_kind();
     test_dynamic_round_trip();

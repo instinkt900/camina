@@ -122,13 +122,19 @@ namespace engine::reflect {
                 // Read once here rather than on each lookup, because a caller
                 // that lists the fields of a type does not want to build an
                 // instance to do it.
-                T named{};
-                for_each_field(named, [&](const auto& field, const auto& /*value*/) {
-                    info.field_names.push_back(field.name());
-                });
+                //
+                // The descriptor walk takes no object. A throwaway instance
+                // would cost work for nothing, and it would stop a described
+                // type with no default constructor registering at all.
+                for_each_field_descriptor<T>(
+                    [&](const auto& field) { info.field_names.push_back(field.name()); });
 
                 info.get_field = [](const void* instance, std::string_view field,
                                     Value& out) {
+                    // Cleared first, so a caller that reuses one Value across
+                    // reads sees None on a miss rather than the last read.
+                    out = Value{};
+
                     const T& object = *static_cast<const T*>(instance);
                     bool found = false;
                     for_each_field(object, [&](const auto& described, const auto& value) {

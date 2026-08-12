@@ -133,6 +133,12 @@ namespace engine::reflect {
     void to_value(const V& in, Value& out) {
         using Field = std::remove_cvref_t<V>;
 
+        // Cleared first. Every branch below fills the one member its kind names
+        // and leaves the rest, so without this a reused Value would carry the
+        // text or the number of whatever was read into it last. The Unsupported
+        // branch sets no member at all, which makes it the worst case.
+        out = Value{};
+
         if constexpr (TextValue<Field>) {
             out.kind = ValueKind::Text;
             out.text = to_text(in);
