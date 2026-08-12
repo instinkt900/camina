@@ -50,6 +50,17 @@ add_library(engine_core STATIC
     scene/prefab.cpp
 )
 
+# M8. The script host and the component that names a script. These join
+# engine_core rather than becoming a target of their own, the way src/ui does,
+# because script/host.h names no sol2 type and so nothing leaks out. Lua and
+# sol2 stay PRIVATE below for the same reason.
+if(ENGINE_WITH_LUA)
+    target_sources(engine_core PRIVATE
+        script/components.cpp
+        script/host.cpp
+    )
+endif()
+
 # The shaders are cooked content now, not generated source. tools/cooker builds
 # them into ENGINE_COOKED_CONTENT_DIR, and render/cube_pass.cpp reads them from
 # there through assets::Content.
@@ -93,6 +104,15 @@ target_link_libraries(engine_core
         # application that calls ImGui itself links imgui::imgui as well.
         imgui::imgui
 )
+
+# M8. Lua and sol2 reach script/host.cpp and nothing else. The header holds an
+# opaque pointer, so no consumer of engine::core sees a sol2 type or needs its
+# include directory. ENGINE_WITH_LUA is PUBLIC, because an application has to
+# know whether the host exists before it calls one.
+if(ENGINE_WITH_LUA)
+    target_link_libraries(engine_core PRIVATE lua::lua sol2::sol2)
+    target_compile_definitions(engine_core PUBLIC ENGINE_WITH_LUA)
+endif()
 
 # The math conventions in DESIGN.md section 3. These must reach every translation
 # unit that includes glm, so they are PUBLIC. math/conventions.h checks that they
