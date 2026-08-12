@@ -1873,11 +1873,14 @@ directory has never held it. Every input read in the engine today sits inline in
 warns about. So M8.0 builds the module and the rest of the milestone binds it. M10 puts the
 moth_ui bridge on the same module.
 
-**Curated means two halves, not a compromise.** A component field goes through the reflection
-descriptors. The alternative is a hand-written binding for each component, and a game type
-like `sandbox::Spin` could never reach that. Everything else is hand-written and small: the
-world, prefabs, physics, input, math, and logging. The first half cannot be curated, and the
-second half must not be mechanical.
+**The binding has two halves, and neither one can borrow the method of the other.** A
+component field goes through the reflection descriptors. The alternative is a hand-written
+binding for each component, and a game type like `sandbox::Spin` could never reach that. So
+the first half is mechanical, and nobody picks the fields by hand.
+
+Everything else stays hand-written and small: the world, prefabs, physics, input, math, and
+logging. Generating that half from the descriptors gives the API nobody enjoys. So a person
+chooses the second half one call at a time, and rule 4.6 keeps it to what the sandbox needs.
 
 The §7 note predicted this split. `reflect::Registry` records facts about a type and cannot
 act on one. #25 closed on the reasoning that the right operation set needs a second caller to
@@ -1890,16 +1893,36 @@ tree, the M4.5 watcher cooks it again, and `Content::reload` names that one asse
 development loop and the packaged game read one path, and no build mode decides which script
 ran.
 
-The cooked form is the source text. Lua bytecode records the number sizes and the byte order
-of the host that wrote it, so a blob cooked on Linux will not load in the Windows runtime.
+The cooked form is the source text, and the reason is weaker than it looks. Lua writes the
+instruction size, the integer size, the number size, and the byte order into the header of a
+binary chunk, and the loader refuses a chunk that disagrees.
+
+Both engine targets are x86-64 and little-endian, and both build Lua the same way. So those
+values match, and a chunk cooked on Linux does load in the Windows runtime today. The format
+promises nothing about that. A third target, a 32-bit build, or a Lua major version each
+break it, and the failure arrives at load time rather than at cook time.
+
+Bytecode also buys nothing measurable for a handful of small scripts. That is the reason M8
+skips it, and the portability is only why it stays skipped by default later.
 `luaL_loadbuffer` takes source or bytecode through one call, so a later precompile step
 changes the cooker alone. #258 holds it.
 
 **The fixed step is the constraint the whole milestone works under.** #245 put the game logic
-on it, and M7 proved three offscreen runs byte-identical. Lua can lose that quietly in two
-ways. `pairs` walks a table in an unspecified order, and `math.random` seeded from the clock
-differs on each run. Neither one announces itself, and the first symptom is a determinism
-test that fails once in ten runs.
+on it, and M7 proved three offscreen runs byte-identical. Lua can lose that in two ways, and
+the two need different answers.
+
+`math.random` seeded from the clock gives a different sequence on each run. M8.3 seeds it
+from a fixed value, and that settles it.
+
+`pairs` costs more. Lua 5.4 seeds its string hash from the clock and from an address, so the
+walk order of a string-keyed table changes between two runs of one binary. The array part
+stays ordered, so `ipairs` and an integer-keyed table are already safe. Making `pairs` itself
+deterministic means patching `luai_makeseed`, and rule 4.4 then turns Lua into a vendored
+dependency. So the cheap answer is to keep an ordered walk out of `pairs`, and M8.3 writes
+the rule down.
+
+Neither one announces itself. The first symptom is a determinism test that fails once in ten
+runs.
 
 **The milestone needs two things from physics that M7 did not build.** A trigger volume and a
 contact event. The puzzle asks whether the stack landed in the goal, and nothing in the engine
@@ -1910,6 +1933,11 @@ lines, plus a crate throw that lives in the application rather than in the game.
 two proves the binding is complete. It does not prove the binding is pleasant, because a port
 already knows the answer it wants. So M8.6 also authors the physics puzzle §11 names, in Lua
 first and never in C++: a goal volume, a win, and a reset.
+
+The test moves with it. `tests/test_sandbox.cpp` calls `sandbox::update` today, and M8.6
+deletes that function. The replacement drives the puzzle through a cooked `.lua` and the
+script callbacks. A test that keeps a C++ entry point alive to call would pass while the
+binding did nothing.
 
 ### M9 — Editor split
 `editor` and `runtime` as separate executables over `engine_core`. The game module links
