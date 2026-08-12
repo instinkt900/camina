@@ -352,6 +352,29 @@ namespace engine::physics {
     }
 
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::clear_shapes(BodyId body) {
+        const b3BodyId id = unpack_body(body);
+        const int count = b3Body_GetShapeCount(id);
+        if (count <= 0) {
+            return;
+        }
+
+        std::vector<b3ShapeId> shapes(static_cast<std::size_t>(count));
+        const int read = b3Body_GetShapes(id, shapes.data(), count);
+        for (int at = 0; at < read; ++at) {
+            // false, because the mass of a body that is losing every shape is
+            // worth nothing. apply_mass_from_shapes() settles it once the new
+            // shapes are on.
+            b3DestroyShape(shapes.at(static_cast<std::size_t>(at)), false);
+        }
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::apply_mass_from_shapes(BodyId body) {
+        b3Body_ApplyMassFromShapes(unpack_body(body));
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     void World::set_body_transform(BodyId body, const Vec3& position, const Quat& rotation) {
         b3Body_SetTransform(unpack_body(body), to_box3d(position), to_box3d(rotation));
     }

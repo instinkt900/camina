@@ -417,6 +417,16 @@ The milestone test passes: a stack of three crates stands in the sandbox room an
 from the camera knocks it over. `--throw-at-frame <n>` fires the same throw on a fixed frame, so
 an offscreen capture of it is reproducible.
 
+**A collider is multiplied by the world scale of its entity**, which closed #237 after the
+milestone. So one crate prefab makes a big crate and a small crate. A box takes a scale of three
+different numbers exactly. A sphere holds one radius, so it takes the largest of the three and
+warns, naming the entity. A scale changed after the body exists rebuilds the shape and keeps the
+body, so a crate resized while it falls keeps its velocity. The compare carries a tolerance,
+because a matrix decompose leaves rounding that moves with the rotation, and an exact compare
+rebuilds a resting body every step and it never settles. `Simulation::shape_rebuild_count`
+measures that. `sandbox/content/main.scene` stands a crate at 1.6 beside the stack, and
+`--physics-debug` shows its wireframe covering the mesh it draws.
+
 **The simulation is deterministic.** Three offscreen runs of the same command, with the solver on
 eight workers and a crate thrown on a fixed frame, produce byte-identical images. Working the
 step count out by dividing rather than subtracting cost a step of every second, because 1/60 is

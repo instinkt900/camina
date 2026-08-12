@@ -868,6 +868,162 @@ namespace {
               "an entity with no body cannot be given a velocity");
     }
 
+    /// A floor whose top face sits at y = 0, so a resting body's height above
+    /// the origin is exactly its own half extent.
+    entt::entity add_floor(sc::World& world) {
+        const entt::entity floor =
+            add_physics_entity(world, ph::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F });
+        world.registry().get<ph::BoxCollider>(floor).half_extents = Vec3{ 50.0F, 1.0F, 50.0F };
+        return floor;
+    }
+
+    /// Drops one crate at `scale` onto a floor and returns where it comes to
+    /// rest. The collider is the default half metre cube, so the resting height
+    /// says directly what size the solver used.
+    float resting_height(const Vec3& scale, std::uint32_t steps = kSettleSteps) {
+        sc::World world;
+        add_floor(world);
+
+        const entt::entity crate =
+            add_physics_entity(world, ph::BodyType::Dynamic, Vec3{ 0.0F, 4.0F, 0.0F });
+        engine::Transform local = world.local(crate);
+        local.scale = scale;
+        world.set_local(crate, local);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, steps);
+        return world.local(crate).position.y;
+    }
+
+    void a_scaled_entity_collides_at_the_size_it_draws() {
+        section("The entity scale reaches its collider");
+
+        // The collider is half a metre, so an unscaled crate rests with its
+        // centre half a metre up. Doubling the entity has to double that. This
+        // is the whole of issue #237: before it, every one of these read 0.5.
+        check(std::fabs(resting_height(Vec3{ 1.0F, 1.0F, 1.0F }) - kBoxHalfSize) <
+                  kStackTolerance,
+              "an unscaled crate rests half a metre up");
+        check(std::fabs(resting_height(Vec3{ 2.0F, 2.0F, 2.0F }) - (kBoxHalfSize * 2.0F)) <
+                  kStackTolerance,
+              "a crate at twice the size rests twice as high");
+        check(std::fabs(resting_height(Vec3{ 0.5F, 0.5F, 0.5F }) - (kBoxHalfSize * 0.5F)) <
+                  kStackTolerance,
+              "and one at half the size rests half as high");
+    }
+
+    void a_non_uniform_scale_reaches_a_box() {
+        section("A box takes a scale that differs on each axis");
+
+        // A box is axis aligned in the frame of its entity, so three scale
+        // numbers land on three half extents exactly. Only the Y one can show
+        // up in a resting height, which is what makes this the axis to stretch.
+        check(std::fabs(resting_height(Vec3{ 1.0F, 3.0F, 1.0F }) - (kBoxHalfSize * 3.0F)) <
+                  kStackTolerance,
+              "a box stretched on Y rests at the height it draws");
+
+        // Stretching the other two must not move it. A scale applied to the
+        // wrong axis would pass the test above and fail this one.
+        check(std::fabs(resting_height(Vec3{ 4.0F, 1.0F, 4.0F }) - kBoxHalfSize) <
+                  kStackTolerance,
+              "and stretching X and Z leaves the resting height alone");
+    }
+
+    void a_sphere_takes_the_largest_axis() {
+        section("A sphere scaled unevenly takes its largest axis");
+
+        sc::World world;
+        add_floor(world);
+
+        const entt::entity ball =
+            add_physics_entity(world, ph::BodyType::Dynamic, Vec3{ 0.0F, 4.0F, 0.0F });
+        world.registry().remove<ph::BoxCollider>(ball);
+        world.registry().emplace<ph::SphereCollider>(ball);
+
+        engine::Transform local = world.local(ball);
+        local.scale = Vec3{ 1.0F, 2.0F, 0.5F };
+        world.set_local(ball, local);
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, kSettleSteps);
+
+        // Box3D holds one radius, so the largest of the three is the safe
+        // reading: it holds the ball up rather than letting it sink. Taking the
+        // smallest would rest it at a quarter of a metre and taking the mean
+        // would rest it at about 0.58.
+        check(std::fabs(world.local(ball).position.y - (kBoxHalfSize * 2.0F)) < kStackTolerance,
+              "the ball rests on the largest of its three scale axes");
+    }
+
+    void a_resize_after_the_body_exists_rebuilds_the_shape() {
+        section("Changing the scale rebuilds the collider");
+
+        sc::World world;
+        add_floor(world);
+        const entt::entity crate =
+            add_physics_entity(world, ph::BodyType::Dynamic, Vec3{ 0.0F, 4.0F, 0.0F });
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, kSettleSteps);
+
+        check(std::fabs(world.local(crate).position.y - kBoxHalfSize) < kStackTolerance,
+              "it rests at its built size first");
+        check(simulation.shape_rebuild_count() == 0,
+              "and a scene that resized nothing rebuilt nothing");
+
+        // The inspector is where this happens: somebody drags the scale of a
+        // crate that has already settled.
+        engine::Transform local = world.local(crate);
+        local.scale = Vec3{ 3.0F, 3.0F, 3.0F };
+        world.set_local(crate, local);
+        settle(world, simulation, kSettleSteps);
+
+        check(simulation.shape_rebuild_count() == 1, "the resize rebuilt the shape once");
+        check(std::fabs(world.local(crate).position.y - (kBoxHalfSize * 3.0F)) < kStackTolerance,
+              "and the crate now rests at the size it draws");
+
+        // Settling again must not rebuild. A compare with no tolerance would
+        // fire on the rounding a matrix decompose leaves, and then a resting
+        // body would throw its contacts away every step and never settle.
+        settle(world, simulation, kSettleSteps);
+        check(simulation.shape_rebuild_count() == 1, "and holding still rebuilds nothing more");
+    }
+
+    void a_resize_keeps_the_body_moving() {
+        section("A rebuild keeps the velocity and the contacts");
+
+        sc::World world;
+        add_floor(world);
+        const entt::entity crate =
+            add_physics_entity(world, ph::BodyType::Dynamic, Vec3{ 0.0F, 6.0F, 0.0F });
+
+        ph::Simulation simulation;
+        simulation.build(world);
+        settle(world, simulation, 20);
+
+        const float before = world.local(crate).position.y;
+        check(before < 6.0F, "it is falling before the resize");
+
+        // Resized in the air. Destroying and recreating the body would lose the
+        // velocity, and the crate would stop dead and start again from nothing.
+        engine::Transform local = world.local(crate);
+        local.scale = Vec3{ 1.5F, 1.5F, 1.5F };
+        world.set_local(crate, local);
+        settle(world, simulation, 1);
+
+        const float after = world.local(crate).position.y;
+        const float step_fall = before - after;
+        check(simulation.shape_rebuild_count() == 1, "the resize rebuilt the shape");
+
+        // A body that kept its velocity falls by about velocity times the step.
+        // One that was recreated from rest falls by only the gravity of a
+        // single step, which is about 0.003 metres.
+        check(step_fall > 0.01F, "and it kept falling at the speed it already had");
+    }
+
     /// The extent of a set of lines along one axis, which is what says whether
     /// a wireframe is the size and in the place its collider is.
     struct Extent {
@@ -1017,6 +1173,11 @@ int main() {
     a_stack_stands_and_settles();
     something_thrown_knocks_the_stack_over();
     a_body_added_late_leaves_the_others_alone();
+    a_scaled_entity_collides_at_the_size_it_draws();
+    a_non_uniform_scale_reaches_a_box();
+    a_sphere_takes_the_largest_axis();
+    a_resize_after_the_body_exists_rebuilds_the_shape();
+    a_resize_keeps_the_body_moving();
     a_box_draws_its_twelve_edges();
     a_sphere_draws_three_rings();
     a_wireframe_follows_its_body();
