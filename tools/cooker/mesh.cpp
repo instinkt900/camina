@@ -391,31 +391,62 @@ namespace cooker {
             return out;
         }
 
-        /// The full set of geometry accessors for one glTF mesh's first
-        /// primitive. When a later mesh names the same set, its data can
-        /// be reused without re-processing. See issue #118.
-        struct GeometryKey {
+        /**
+         * Everything about one glTF primitive that decides the vertices and
+         * the indices it produces.
+         *
+         * Every accessor add_primitive reads into a MeshVertex is here, the
+         * tangents included, and so is the primitive type, because
+         * add_primitive skips one that is not triangles.
+         */
+        struct PrimitiveKey {
             const void* positions = nullptr;
             const void* normals = nullptr;
+            const void* tangents = nullptr;
             const void* texcoords = nullptr;
             const void* indices = nullptr;
+            cgltf_primitive_type type = cgltf_primitive_type_triangles;
 
-            bool operator==(const GeometryKey& other) const {
-                return positions == other.positions && normals == other.normals &&
-                       texcoords == other.texcoords && indices == other.indices;
-            }
+            bool operator==(const PrimitiveKey& other) const = default;
+        };
+
+        /**
+         * Every primitive of one glTF mesh, in order.
+         *
+         * A mesh cooks into one vertex buffer and one index buffer that hold
+         * every primitive, and into one submesh for each. So the whole list has
+         * to match before the result can be reused. Keying on the first
+         * primitive alone was issue #254: two meshes that agreed there and
+         * differed after it shared a buffer, and the submesh ranges of the
+         * second then indexed into the geometry of the first.
+         *
+         * The order matters as well as the set. Two meshes holding the same
+         * primitives in a different order lay their vertices out differently,
+         * so the submesh ranges differ even though the geometry does not.
+         */
+        struct GeometryKey {
+            std::vector<PrimitiveKey> primitives;
+
+            bool operator==(const GeometryKey& other) const = default;
         };
 
         struct GeometryKeyHash {
             std::size_t operator()(const GeometryKey& key) const {
                 std::size_t h = 0;
-                auto mix = [&h](const void* p) {
-                    h ^= reinterpret_cast<std::uintptr_t>(p) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                auto mix = [&h](std::size_t value) {
+                    h ^= value + 0x9e3779b9 + (h << 6) + (h >> 2);
                 };
-                mix(key.positions);
-                mix(key.normals);
-                mix(key.texcoords);
-                mix(key.indices);
+                auto mix_pointer = [&mix](const void* p) {
+                    mix(static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(p)));
+                };
+                for (const PrimitiveKey& primitive : key.primitives) {
+                    mix_pointer(primitive.positions);
+                    mix_pointer(primitive.normals);
+                    mix_pointer(primitive.tangents);
+                    mix_pointer(primitive.texcoords);
+                    mix_pointer(primitive.indices);
+                    mix(static_cast<std::size_t>(primitive.type));
+                }
                 return h;
             }
         };
@@ -439,28 +470,43 @@ namespace cooker {
             const CookedMaterials& materials;
         };
 
-        /// Reads the accessors that the first primitive names. Two meshes that
-        /// name the same set hold the same geometry.
-        [[nodiscard]] GeometryKey geometry_key(const cgltf_primitive& first) {
-            GeometryKey key;
-            for (cgltf_size at = 0; at < first.attributes_count; ++at) {
-                switch (first.attributes[at].type) {
+        /// Reads the accessors one primitive names.
+        [[nodiscard]] PrimitiveKey primitive_key(const cgltf_primitive& primitive) {
+            PrimitiveKey key;
+            key.type = primitive.type;
+            for (cgltf_size at = 0; at < primitive.attributes_count; ++at) {
+                switch (primitive.attributes[at].type) {
                 case cgltf_attribute_type_position:
-                    key.positions = first.attributes[at].data;
+                    key.positions = primitive.attributes[at].data;
                     break;
                 case cgltf_attribute_type_normal:
-                    key.normals = first.attributes[at].data;
+                    key.normals = primitive.attributes[at].data;
+                    break;
+                case cgltf_attribute_type_tangent:
+                    key.tangents = primitive.attributes[at].data;
                     break;
                 case cgltf_attribute_type_texcoord:
-                    if (first.attributes[at].index == 0) {
-                        key.texcoords = first.attributes[at].data;
+                    // The first set only, which is the one add_primitive reads.
+                    if (primitive.attributes[at].index == 0) {
+                        key.texcoords = primitive.attributes[at].data;
                     }
                     break;
                 default:
                     break;
                 }
             }
-            key.indices = first.indices;
+            key.indices = primitive.indices;
+            return key;
+        }
+
+        /// Reads every primitive of a mesh. Two meshes that agree on the whole
+        /// list hold the same geometry.
+        [[nodiscard]] GeometryKey geometry_key(const cgltf_mesh& mesh) {
+            GeometryKey key;
+            key.primitives.reserve(mesh.primitives_count);
+            for (cgltf_size at = 0; at < mesh.primitives_count; ++at) {
+                key.primitives.push_back(primitive_key(mesh.primitives[at]));
+            }
             return key;
         }
 
@@ -495,8 +541,8 @@ namespace cooker {
                 return false;
             }
 
-            const GeometryKey key = geometry_key(mesh.primitives[0]);
-            if (key.positions == nullptr) {
+            const GeometryKey key = geometry_key(mesh);
+            if (key.primitives.front().positions == nullptr) {
                 ENGINE_LOG_ERROR("{}: the first primitive has no positions.", where);
                 return false;
             }
