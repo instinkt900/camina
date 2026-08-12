@@ -14,15 +14,18 @@
  */
 
 #include "core/entt.h"
+#include "math/transform.h"
 #include "reflect/inspector.h"
 #include "reflect/json.h"
 #include "reflect/reflect.h"
+#include "reflect/value.h"
 
 #include <entt/entity/registry.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace engine::scene {
@@ -56,6 +59,62 @@ namespace engine::scene {
          * because the change went around set_local().
          */
         bool (*inspect)(entt::registry& registry, entt::entity entity) = nullptr;
+
+        /**
+         * @brief Reaches the component on an entity as untyped storage.
+         *
+         * This is the half only an ECS registry can do: turn an entity and a
+         * name into the address of a live component. `get_field` and
+         * `set_field` beside it do the other half, and they name no entity.
+         *
+         * A consumer that holds two strings, a component name and a field name,
+         * needs both. That is what a script is.
+         *
+         * @param registry The registry holding the entity.
+         * @param entity The entity to read.
+         * @return The component, or nullptr when the entity does not carry one.
+         */
+        void* (*instance)(entt::registry& registry, entt::entity entity) = nullptr;
+
+        /// @brief The const form of instance().
+        const void* (*const_instance)(const entt::registry& registry,
+                                      entt::entity entity) = nullptr;
+
+        /**
+         * @brief Reads one field of this component by name.
+         *
+         * The same function `reflect::Registry` stores. One implementation
+         * serves both, so rule 4.5 holds and there is no second field walk.
+         */
+        reflect::FieldGetter get_field = nullptr;
+
+        /**
+         * @brief Writes one field of this component by name.
+         *
+         * @warning A Transform written this way goes around
+         * `World::set_local()`. Call `World::mark_dirty()` after, or the world
+         * matrix stays stale. See @ref owns_transform.
+         */
+        reflect::FieldSetter set_field = nullptr;
+
+        /**
+         * @brief Whether writing this component moves the entity.
+         *
+         * True for `engine::Transform` alone. A caller that writes a component
+         * by name cannot know which one needs `World::mark_dirty()`, and
+         * comparing the name against a spelling would put that knowledge in
+         * every caller instead of here.
+         */
+        bool owns_transform = false;
+
+        /**
+         * @brief Every described field name, in the order Describe gave them.
+         *
+         * Held here rather than looked up in `reflect::Registry`, so a consumer
+         * needs only this registry. The two are filled from one description, so
+         * neither is a second source of truth.
+         */
+        std::vector<const char*> field_names;
 
         /// @brief The field names that carry AssetRef, or empty.
         std::vector<const char*> reference_field_names;
@@ -109,11 +168,23 @@ namespace engine::scene {
             ops.inspect = [](entt::registry& registry, entt::entity entity) {
                 return reflect::inspect(registry.get<T>(entity));
             };
+            ops.instance = [](entt::registry& registry, entt::entity entity) -> void* {
+                return registry.try_get<T>(entity);
+            };
+            ops.const_instance = [](const entt::registry& registry,
+                                    entt::entity entity) -> const void* {
+                return registry.try_get<T>(entity);
+            };
+            ops.get_field = reflect::field_getter<T>();
+            ops.set_field = reflect::field_setter<T>();
+            // The one component the hierarchy reads. See ComponentOps.
+            ops.owns_transform = std::is_same_v<T, engine::Transform>;
             if constexpr (reflect::field_count<T>() > 0) {
                 // The descriptor walk, because only the name and the attribute
                 // are wanted here. This used to build a throwaway instance,
                 // which cost work for nothing and needed a default constructor.
                 reflect::for_each_field_descriptor<T>([&](const auto& field) {
+                    ops.field_names.push_back(field.name());
                     if constexpr (reflect::has_attribute_v<reflect::AssetRef,
                                                            decltype(field)>) {
                         ops.reference_field_names.push_back(field.name());

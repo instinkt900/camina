@@ -246,6 +246,252 @@ namespace {
         check(host.stopped_count() == 0, "and that is not a failure");
     }
 
+    /// A component the engine does not name, standing in for a game type.
+    ///
+    /// sandbox::Spin is the real case: the engine names it nowhere, and it has
+    /// to reach a script all the same. A type declared here proves the binding
+    /// reads descriptors rather than a list somebody maintains.
+    struct Turret {
+        engine::Vec3 aim{ 0.0F, 0.0F, -1.0F };
+        float range = 12.0F;
+        bool armed = false;
+        std::string label = "turret";
+    };
+
+} // namespace
+
+/// @brief Describes the game-side test component, the way a game would.
+///
+/// This sits outside the engine exactly as `sandbox::Spin` does. Nothing in
+/// `src/` names Turret, and the binding still carries it.
+template <>
+struct engine::reflect::Describe<Turret> {
+    static constexpr const char* name = "Turret"; ///< The name a script uses.
+    /// @brief The four fields.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(Turret, aim), ENGINE_FIELD(Turret, range),
+                               ENGINE_FIELD(Turret, armed), ENGINE_FIELD(Turret, label));
+    }
+};
+
+namespace {
+
+    /// A world and a registry that holds the two types these tests use.
+    struct Fixture {
+        sc::ComponentRegistry components;
+        sc::World world;
+
+        Fixture() {
+            components.add<engine::Transform>();
+            components.add<Turret>();
+        }
+    };
+
+    void test_a_script_reads_a_component() {
+        section("A script reads any described component by name");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              local t = entity:get("Turret")
+              if t == nil then error("no Turret") end
+              if t.range ~= 12.0 then error("wrong range: " .. tostring(t.range)) end
+              if t.armed ~= false then error("wrong armed") end
+              if t.label ~= "turret" then error("wrong label") end
+              if t.aim.z ~= -1.0 then error("wrong aim.z") end
+            end
+        )"),
+              "the reading script compiles");
+
+        const entt::entity entity = fixture.world.create();
+        fixture.world.registry().emplace<Turret>(entity, Turret{});
+        fixture.world.registry().emplace<sp::ScriptComponent>(entity,
+                                                              sp::ScriptComponent{ kFirst });
+
+        host.update(fixture.world, 1.0 / 60.0);
+        check(host.call_count(sp::Callback::Update) == 1, "it ran");
+        check(host.stopped_count() == 0, "and every field read as the C++ side holds it");
+    }
+
+    void test_a_script_writes_a_component() {
+        section("A script writes a component, and the change reaches the world");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              entity:set("Turret", { range = 30.0, armed = true, label = "live",
+                                     aim = { x = 1.0 } })
+            end
+        )"),
+              "the writing script compiles");
+
+        const entt::entity entity = fixture.world.create();
+        fixture.world.registry().emplace<Turret>(entity, Turret{});
+        fixture.world.registry().emplace<sp::ScriptComponent>(entity,
+                                                              sp::ScriptComponent{ kFirst });
+
+        host.update(fixture.world, 1.0 / 60.0);
+        check(host.stopped_count() == 0, "the script ran without an error");
+
+        const Turret& turret = fixture.world.registry().get<Turret>(entity);
+        check(turret.range == 30.0F, "a number reached the component");
+        check(turret.armed, "and a bool did");
+        check(turret.label == "live", "and a string did");
+
+        // A table naming one component keeps the rest, so a script can move one
+        // axis without reading the whole vector back first.
+        check(turret.aim.x == 1.0F, "the named part of a vector was written");
+        check(turret.aim.z == -1.0F, "and the parts it did not name were kept");
+    }
+
+    void test_a_game_type_needs_no_engine_code() {
+        section("A component the engine never names still reaches a script");
+
+        // Turret is declared in this file. Nothing in src/ mentions it, and the
+        // binding still reads and writes it, because it walks Describe<T> and
+        // not a list. That is rule 4.5 working from the outside.
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              local t = entity:get("Turret")
+              entity:set("Turret", { range = t.range * 2.0 })
+            end
+        )"),
+              "the script compiles");
+
+        const entt::entity entity = fixture.world.create();
+        fixture.world.registry().emplace<Turret>(entity, Turret{});
+        fixture.world.registry().emplace<sp::ScriptComponent>(entity,
+                                                              sp::ScriptComponent{ kFirst });
+
+        host.update(fixture.world, 1.0 / 60.0);
+        check(fixture.world.registry().get<Turret>(entity).range == 24.0F,
+              "it read the value and wrote a new one back");
+    }
+
+    void test_a_transform_written_from_lua_marks_the_entity_dirty() {
+        section("Moving an entity from Lua moves what it draws");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              entity:set("Transform", { position = { x = 5.0, y = 6.0, z = 7.0 } })
+            end
+        )"),
+              "the moving script compiles");
+
+        const entt::entity parent = fixture.world.create();
+        const entt::entity child = fixture.world.create();
+        check(fixture.world.set_parent(child, parent), "the child parents to the entity");
+        fixture.world.set_local(child, engine::Transform{ .position = { 0.0F, 1.0F, 0.0F } });
+        fixture.world.registry().emplace<sp::ScriptComponent>(parent,
+                                                              sp::ScriptComponent{ kFirst });
+
+        fixture.world.update();
+        host.update(fixture.world, 1.0 / 60.0);
+        check(host.stopped_count() == 0, "the script ran");
+
+        // A Transform written through the registry goes around set_local(), so
+        // without mark_dirty() the world matrix stays stale and the child never
+        // follows. This is the check that the binding does not forget it.
+        fixture.world.update();
+        const engine::Mat4 moved = fixture.world.world_matrix(parent);
+        check(moved[3][0] == 5.0F && moved[3][1] == 6.0F,
+              "the parent's world matrix rebuilt");
+
+        const engine::Mat4 child_matrix = fixture.world.world_matrix(child);
+        check(child_matrix[3][1] == 7.0F, "and the child moved with it");
+    }
+
+    void test_the_binding_refuses_what_it_cannot_do() {
+        section("A wrong name or a wrong type is refused rather than guessed at");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            results = {}
+            function on_update(s)
+              if entity:get("NoSuchComponent") ~= nil then error("named a missing type") end
+              if entity:has("NoSuchComponent") then error("claimed a missing type") end
+              if not entity:has("Turret") then error("lost a real type") end
+              if entity:set("Turret", { range = "not a number" }) then
+                error("wrote a string into a float")
+              end
+              if entity:set("NoSuchComponent", { x = 1 }) then
+                error("wrote to a missing type")
+              end
+            end
+        )"),
+              "the script compiles");
+
+        const entt::entity entity = fixture.world.create();
+        fixture.world.registry().emplace<Turret>(entity, Turret{});
+        fixture.world.registry().emplace<sp::ScriptComponent>(entity,
+                                                              sp::ScriptComponent{ kFirst });
+
+        host.update(fixture.world, 1.0 / 60.0);
+        check(host.stopped_count() == 0, "every refusal came back as the script expected");
+        check(fixture.world.registry().get<Turret>(entity).range == 12.0F,
+              "and the refused write left the field alone");
+    }
+
+    void test_a_component_the_entity_lacks_reads_nil() {
+        section("Asking for a component the entity does not carry gives nil");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              if entity:get("Turret") ~= nil then error("invented a component") end
+              if entity:has("Turret") then error("claimed one") end
+              if entity:get("Transform") == nil then error("lost the one it has") end
+            end
+        )"),
+              "the script compiles");
+
+        const entt::entity entity = fixture.world.create();
+        fixture.world.registry().emplace<sp::ScriptComponent>(entity,
+                                                              sp::ScriptComponent{ kFirst });
+
+        host.update(fixture.world, 1.0 / 60.0);
+        check(host.stopped_count() == 0, "the registered type it lacks reads as nil");
+    }
+
+    void test_each_instance_sees_its_own_entity() {
+        section("Two entities running one script each see themselves");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        // Each writes its own id into its own range, so a shared entity handle
+        // would leave the two fields equal.
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              entity:set("Turret", { range = entity.id + 1000.0 })
+            end
+        )"),
+              "the script compiles");
+
+        const entt::entity first = fixture.world.create();
+        const entt::entity second = fixture.world.create();
+        for (const entt::entity entity : { first, second }) {
+            fixture.world.registry().emplace<Turret>(entity, Turret{});
+            fixture.world.registry().emplace<sp::ScriptComponent>(
+                entity, sp::ScriptComponent{ kFirst });
+        }
+
+        host.update(fixture.world, 1.0 / 60.0);
+        const float a = fixture.world.registry().get<Turret>(first).range;
+        const float b = fixture.world.registry().get<Turret>(second).range;
+        check(a != b, "the two entities wrote different values");
+        check(a == static_cast<float>(entt::to_integral(first)) + 1000.0F,
+              "and each one is its own id");
+    }
+
 } // namespace
 
 int main() {
@@ -258,6 +504,13 @@ int main() {
     test_a_dead_entity_drops_its_instance();
     test_stop_runs_destroy_on_everything();
     test_a_script_needs_no_callbacks();
+    test_a_script_reads_a_component();
+    test_a_script_writes_a_component();
+    test_a_game_type_needs_no_engine_code();
+    test_a_transform_written_from_lua_marks_the_entity_dirty();
+    test_the_binding_refuses_what_it_cannot_do();
+    test_a_component_the_entity_lacks_reads_nil();
+    test_each_instance_sees_its_own_entity();
 
     if (test::g_failures != 0) {
         std::printf("\n%d check(s) failed.\n", test::g_failures);

@@ -38,8 +38,229 @@ namespace engine::script {
 
     } // namespace
 
+    namespace {
+
+        /// A Lua table holding a vector, so a script writes `p.x` and not `p[1]`.
+        [[nodiscard]] sol::table vector_table(sol::state_view lua, const reflect::Value& value,
+                                              int components) {
+            sol::table out = lua.create_table();
+            const std::array<const char*, 4> keys{ "x", "y", "z", "w" };
+            for (int i = 0; i < components; ++i) {
+                out[keys.at(static_cast<std::size_t>(i))] = value.vector[i];
+            }
+            return out;
+        }
+
+        /// Turns one field value into what a script sees.
+        [[nodiscard]] sol::object to_lua(sol::state_view lua, const reflect::Value& value) {
+            switch (value.kind) {
+            case reflect::ValueKind::Bool:
+                return sol::make_object(lua, value.boolean);
+            case reflect::ValueKind::Number:
+                return sol::make_object(lua, value.number);
+            case reflect::ValueKind::Text:
+            case reflect::ValueKind::Enum:
+                // An enum reaches a script as its name. A number would say
+                // nothing a person can read and would change meaning the moment
+                // somebody inserted an enumerator above it.
+                return sol::make_object(lua, value.text);
+            case reflect::ValueKind::Vec2:
+                return vector_table(lua, value, 2);
+            case reflect::ValueKind::Vec3:
+                return vector_table(lua, value, 3);
+            case reflect::ValueKind::Vec4:
+                return vector_table(lua, value, 4);
+            case reflect::ValueKind::Quat: {
+                sol::table out = lua.create_table();
+                out["w"] = value.quat.w;
+                out["x"] = value.quat.x;
+                out["y"] = value.quat.y;
+                out["z"] = value.quat.z;
+                return out;
+            }
+            case reflect::ValueKind::None:
+            case reflect::ValueKind::Unsupported:
+                break;
+            }
+            return sol::lua_nil;
+        }
+
+        /// Reads one component of a vector table, keeping what is already there.
+        [[nodiscard]] float component_or(const sol::table& table, const char* key,
+                                         float fallback) {
+            const sol::optional<float> value = table[key];
+            return value.value_or(fallback);
+        }
+
+        /**
+         * Turns what a script wrote into a field value of the kind @p wanted.
+         *
+         * The kind comes from reading the field first rather than from guessing
+         * at the Lua value. A table of three numbers could be a Vec3, a Vec4 or
+         * a quaternion, and only the field knows which.
+         *
+         * A table that names some of the components keeps the rest, so a script
+         * can write `{ y = 2 }` and move one axis.
+         */
+        [[nodiscard]] bool from_lua(const sol::object& from, const reflect::Value& current,
+                                    reflect::Value& out) {
+            out = current;
+
+            switch (current.kind) {
+            case reflect::ValueKind::Bool:
+                if (!from.is<bool>()) {
+                    return false;
+                }
+                out.boolean = from.as<bool>();
+                return true;
+            case reflect::ValueKind::Number:
+                if (!from.is<double>()) {
+                    return false;
+                }
+                out.number = from.as<double>();
+                return true;
+            case reflect::ValueKind::Text:
+            case reflect::ValueKind::Enum:
+                if (!from.is<std::string>()) {
+                    return false;
+                }
+                out.text = from.as<std::string>();
+                return true;
+            case reflect::ValueKind::Vec2:
+            case reflect::ValueKind::Vec3:
+            case reflect::ValueKind::Vec4: {
+                if (!from.is<sol::table>()) {
+                    return false;
+                }
+                const sol::table table = from.as<sol::table>();
+                out.vector.x = component_or(table, "x", current.vector.x);
+                out.vector.y = component_or(table, "y", current.vector.y);
+                out.vector.z = component_or(table, "z", current.vector.z);
+                out.vector.w = component_or(table, "w", current.vector.w);
+                return true;
+            }
+            case reflect::ValueKind::Quat: {
+                if (!from.is<sol::table>()) {
+                    return false;
+                }
+                const sol::table table = from.as<sol::table>();
+                out.quat.w = component_or(table, "w", current.quat.w);
+                out.quat.x = component_or(table, "x", current.quat.x);
+                out.quat.y = component_or(table, "y", current.quat.y);
+                out.quat.z = component_or(table, "z", current.quat.z);
+                return true;
+            }
+            case reflect::ValueKind::None:
+            case reflect::ValueKind::Unsupported:
+                break;
+            }
+            return false;
+        }
+
+    } // namespace
+
+    /**
+     * @cond
+     * Declared before EntityHandle uses them. Doxygen skips implementation.
+     */
+    struct EntityHandle;
+    /// @endcond
+
+    /**
+     * What a script means by `entity`.
+     *
+     * One of these is bound into each instance's environment, naming the entity
+     * the script runs on. It holds no state of its own: the world and the
+     * registry come from the host, and the entity number is the whole value.
+     */
+    struct EntityHandle {
+        entt::entity id = entt::null;
+        scene::World* world = nullptr;
+        const scene::ComponentRegistry* components = nullptr;
+    };
+
+    namespace {
+
+        /**
+         * Reads every described field of one component into a Lua table.
+         *
+         * A field type no Value carries is left out rather than given a wrong
+         * value, so a script sees nil and can say so. See issue #271.
+         */
+        [[nodiscard]] sol::object read_component(const EntityHandle& self,
+                                                 const std::string& component,
+                                                 sol::this_state state) {
+            sol::state_view lua{ state };
+            const scene::ComponentOps* ops = self.components->find(component);
+            if (ops == nullptr || ops->const_instance == nullptr) {
+                return sol::lua_nil;
+            }
+            const void* instance = ops->const_instance(self.world->registry(), self.id);
+            if (instance == nullptr) {
+                return sol::lua_nil;
+            }
+
+            sol::table out = lua.create_table();
+            for (const char* field : ops->field_names) {
+                reflect::Value value;
+                if (ops->get_field(instance, field, value)) {
+                    out[field] = to_lua(lua, value);
+                }
+            }
+            return sol::object{ out };
+        }
+
+        /**
+         * Writes the fields the table names and leaves the rest alone.
+         *
+         * A script can move one axis without reading the whole component back.
+         */
+        [[nodiscard]] bool write_component(const EntityHandle& self,
+                                           const std::string& component,
+                                           const sol::table& fields) {
+            const scene::ComponentOps* ops = self.components->find(component);
+            if (ops == nullptr || ops->instance == nullptr) {
+                return false;
+            }
+            void* instance = ops->instance(self.world->registry(), self.id);
+            if (instance == nullptr) {
+                return false;
+            }
+
+            bool wrote = false;
+            for (const auto& entry : fields) {
+                if (!entry.first.template is<std::string>()) {
+                    continue;
+                }
+                const std::string field = entry.first.template as<std::string>();
+
+                // Read first, to learn the kind. A table of three numbers could
+                // be a Vec3, a Vec4 or a quaternion, and only the field knows.
+                reflect::Value current;
+                if (!ops->get_field(instance, field, current)) {
+                    continue;
+                }
+                reflect::Value wanted;
+                if (from_lua(entry.second, current, wanted) &&
+                    ops->set_field(instance, field, wanted)) {
+                    wrote = true;
+                }
+            }
+
+            // A Transform written this way went around World::set_local(), so
+            // the hierarchy does not know. Without this the entity draws where
+            // it was and every child stays behind it.
+            if (wrote && ops->owns_transform) {
+                self.world->mark_dirty(self.id);
+            }
+            return wrote;
+        }
+
+    } // namespace
+
     struct Host::Impl {
         sol::state lua;
+        const scene::ComponentRegistry* components = nullptr;
 
         /**
          * One script, held under the identity a component names.
@@ -133,8 +354,9 @@ namespace engine::script {
         }
     };
 
-    Host::Host()
+    Host::Host(const scene::ComponentRegistry& components)
         : impl_(std::make_unique<Impl>()) {
+        impl_->components = &components;
         // Deliberately not the whole standard library. `io` and `os` reach the
         // file system and the clock, and a script that reads either one breaks
         // the reproducible run that DESIGN.md section 9 rests on.
@@ -157,6 +379,38 @@ namespace engine::script {
         log.set_function("error", [](const std::string& message) {
             ENGINE_LOG_ERROR("[lua] {}", message);
         });
+
+        bind_entity();
+    }
+
+    /**
+     * Binds what a script can do to the entity it runs on.
+     *
+     * Every component reaches Lua through the reflection descriptors, so a
+     * component the game defined works with no engine code naming it. That is
+     * the half of the surface nobody hand-writes. The curated half is #262.
+     */
+    void Host::bind_entity() {
+        impl_->lua.new_usertype<EntityHandle>(
+            "Entity", sol::no_constructor,
+
+            // The entity number, so a script can tell two apart and use one as
+            // a table key.
+            "id",
+            sol::readonly_property([](const EntityHandle& self) {
+                return static_cast<std::uint32_t>(entt::to_integral(self.id));
+            }),
+
+            "has",
+            [](const EntityHandle& self, const std::string& component) {
+                const scene::ComponentOps* ops = self.components->find(component);
+                return ops != nullptr && ops->has(self.world->registry(), self.id);
+            },
+
+            // A table of every field the component describes. A field type no
+            // Value carries is left out rather than given a wrong value, so a
+            // script sees nil and can say so. See issue #271.
+            "get", &read_component, "set", &write_component);
     }
 
     Host::~Host() = default;
@@ -216,6 +470,11 @@ namespace engine::script {
             Impl::Instance instance;
             instance.script = component.script;
             instance.env = sol::environment(impl_->lua, sol::create, impl_->lua.globals());
+
+            // The entity the script runs on. It goes in the environment rather
+            // than the globals, because each instance names a different one.
+            instance.env["entity"] =
+                EntityHandle{ entity, &world, impl_->components };
 
             // Loaded again for this instance, so the chunk carries an `_ENV`
             // upvalue of its own. Reusing one chunk would point every closure
