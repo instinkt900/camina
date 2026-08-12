@@ -390,6 +390,33 @@ namespace engine::reflect {
                    Describe<std::remove_cv_t<T>>::fields());
     }
 
+    /**
+     * @brief Calls a function once for each field descriptor, with no instance.
+     *
+     * The same walk as for_each_field(), for a caller that wants the name or an
+     * attribute rather than a value. A description is static, so asking what a
+     * type has needs no object of that type.
+     *
+     * Use this rather than building a throwaway instance. A default-constructed
+     * object costs work for nothing, and it stops a described type that has no
+     * default constructor from registering at all.
+     *
+     * @tparam T A described type.
+     * @tparam Fn The visitor type, deduced. Taken by value, because it runs once
+     * for each field and so cannot be forwarded.
+     * @param visit Called as `visit(field)` for each field.
+     *
+     * @code
+     * for_each_field_descriptor<Player>([&](const auto& f) {
+     *     names.push_back(f.name());
+     * });
+     * @endcode
+     */
+    template <Described T, typename Fn>
+    constexpr void for_each_field_descriptor(Fn visit) {
+        std::apply([&](const auto&... fields) { (visit(fields), ...); }, Describe<T>::fields());
+    }
+
 } // namespace engine::reflect
 
 /**

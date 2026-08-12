@@ -110,8 +110,10 @@ namespace engine::scene {
                 return reflect::inspect(registry.get<T>(entity));
             };
             if constexpr (reflect::field_count<T>() > 0) {
-                T instance{};
-                reflect::for_each_field(instance, [&](const auto& field, const auto& /*value*/) {
+                // The descriptor walk, because only the name and the attribute
+                // are wanted here. This used to build a throwaway instance,
+                // which cost work for nothing and needed a default constructor.
+                reflect::for_each_field_descriptor<T>([&](const auto& field) {
                     if constexpr (reflect::has_attribute_v<reflect::AssetRef,
                                                            decltype(field)>) {
                         ops.reference_field_names.push_back(field.name());
