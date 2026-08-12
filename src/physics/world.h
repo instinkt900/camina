@@ -190,6 +190,7 @@ namespace engine::physics {
          * @param body The body to add it to.
          * @param radius How far it reaches, in meters.
          * @param material The density, the friction, and the restitution.
+         * @param options Whether it is a trigger, and what it reports as.
          */
         void add_sphere(BodyId body, float radius, const SurfaceMaterial& material,
                         const ShapeOptions& options = {});
