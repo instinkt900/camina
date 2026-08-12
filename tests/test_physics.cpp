@@ -455,6 +455,46 @@ namespace {
         check(height > 0.0F, "and the floor stopped it");
     }
 
+    void a_contact_names_the_two_entities() {
+        section("A contact reports the two entities, not the two shapes");
+
+        // The trigger tests cover the sensor path to the entity layer, and the
+        // World tests cover contacts at the shape layer. This is the corner
+        // neither reaches: the contact path decoded to entities.
+        //
+        // collect_events() fills the two lists from two different Box3D calls.
+        // Swapping them would leave every check above passing and put contacts
+        // in the trigger list, so this is what tells the two apart.
+        sc::World scene;
+        const entt::entity floor =
+            add_body_entity(scene, ph::BodyType::Static, Vec3{ 0.0F, -1.0F, 0.0F },
+                            Vec3{ 50.0F, 1.0F, 50.0F }, false);
+        const entt::entity crate =
+            add_body_entity(scene, ph::BodyType::Dynamic, Vec3{ 0.0F, 3.0F, 0.0F },
+                            Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize }, false);
+
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        bool landed = false;
+        for (std::uint32_t i = 0; i < 240 && !landed; ++i) {
+            simulation.step(scene, kStep);
+
+            // Nothing in this scene is a trigger, so the other list has to stay
+            // empty. That is the half that catches a swap.
+            check(simulation.trigger_events().empty() || landed,
+                  "a scene with no trigger reports no overlap");
+
+            for (const ph::Simulation::Touch& touch : simulation.contact_events()) {
+                if (touch.began && ((touch.a == floor && touch.b == crate) ||
+                                    (touch.a == crate && touch.b == floor))) {
+                    landed = true;
+                }
+            }
+        }
+        check(landed, "the crate landing on the floor names both entities");
+    }
+
     void a_trigger_takes_the_scale_of_its_entity() {
         section("A trigger scales with its entity, the same as a solid collider");
 
@@ -1569,6 +1609,7 @@ int main() {
     a_sleeping_body_still_draws();
     a_trigger_reports_the_entity_that_passed_through();
     a_trigger_holds_nothing_up();
+    a_contact_names_the_two_entities();
     a_trigger_takes_the_scale_of_its_entity();
     a_trigger_reports_an_overlap_and_pushes_nothing();
     a_trigger_event_names_the_two_shapes();
