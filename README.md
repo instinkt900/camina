@@ -10,16 +10,27 @@ behind each decision. Read [CLAUDE.md](CLAUDE.md) for the working rules.
 
 ## Status
 
-M5, the PBR renderer and the render graph, is in progress. M0 through M4 are complete.
+M0 through M7 are complete. M8, scripting, is in progress.
 
 The runtime draws a scene of glTF models through Vulkan, shaded by Cook-Torrance
 metallic-roughness and lit by an HDR environment through the split sum approximation. A
-directional light casts a cascaded shadow. A render graph derives the barriers between
-passes from what each pass declares. Assets are cooked by `tools/cooker/` and reload while
-the program runs.
+directional light casts a cascaded shadow, and a compute pass culls the point lights into a
+cluster grid. The scene renders to a half float target and an ACES curve tonemaps it. A
+render graph derives the barriers between passes from what each pass declares.
 
-What M5 has left is a clustered light cull and an ACES tonemap. See DESIGN.md section 10
-for the milestone list, and CLAUDE.md for the detail of what has landed.
+Assets are cooked by `tools/cooker/` and reload while the program runs. A scene holds an
+EnTT world with a transform hierarchy and prefab instances.
+
+Box3D runs on the engine job system at a fixed step, and a frame interpolates between the
+last two steps. A stack of crates stands, and a crate thrown at it knocks it over.
+
+Lua is the newest part. A script runs on the same fixed step, reads and writes any reflected
+component by name, and reaches the world, prefabs, physics and input through a small
+hand-written surface. What M8 has left is the script side of physics triggers, script hot
+reload, and moving the sandbox game logic into Lua.
+
+See DESIGN.md section 10 for the milestone list, and CLAUDE.md for the detail of what has
+landed.
 
 ## Requirements
 
@@ -76,10 +87,10 @@ signal handlers.
 ## Run
 
 ```bash
-./build/RelWithDebInfo/apps/runtime/runtime
+./build/RelWithDebInfo/bin/runtime
 ```
 
-On Windows the binary is `build\RelWithDebInfo\apps\runtime\runtime.exe`.
+On Windows the binary is `build\RelWithDebInfo\bin\runtime.exe`.
 
 Press Escape or close the window to quit. Pass `--frames N` to exit after N frames, which is
 what a scripted run and a screenshot use.
@@ -109,9 +120,9 @@ Nothing fetches it during a build and nothing fetches it in CI. A clean clone bu
 tests with no network. `scenes/sponza/README.md` says what the archive holds, what was
 done to the source, and how the scene is licensed and cited.
 
-**The scene does not draw yet.** It loads, cooks, and reports its draws, and the viewport
-is black. That is issue #188, and it is not about this scene: a sandbox scene with no
-blended geometry goes black the same way.
+The scene renders: 3.75 million triangles over 115 meshes and 28 materials, lit by a sun
+with four cascades and 22 lamps. It is what M5 was measured against, and it is the scene to
+reach for when a change needs somewhere it cannot hide.
 
 ## Render without a window
 
@@ -163,9 +174,9 @@ ctest --preset conan-relwithdebinfo --output-on-failure
 ```
 
 This runs the unit tests and the rule 4.1 check, which proves that no file outside
-`src/render/vulkan/` includes a Vulkan header. The rule 4.1 check is a shell script, so a
-Windows machine without Git Bash does not get it. The `vulkan-containment` job in CI runs
-on Linux and covers every push.
+`src/gfx/vulkan/` includes a Vulkan header. The rule 4.1 check is a shell script, so a
+Windows machine without Git Bash does not get it. The `containment` job in CI runs on
+Linux and covers every push, and it checks the Box3D headers the same way.
 
 ## Profile
 
@@ -209,8 +220,9 @@ fine when the change is small.
 
 1. Branch from `main`. Name the branch `feat/...`, `fix/...`, or `docs/...`.
 2. Commit in the conventional style.
-3. Open a pull request. CI runs the format check, the docs build, the Vulkan containment
-   check, and a build on Linux with Clang and on Windows with MSVC.
+3. Open a pull request. CI runs the format check, the docs build, the containment check,
+   and four builds: Linux with Clang and Windows with MSVC, each with the game UI off and
+   on.
 4. Squash merge, with a conventional-commit title. Each pull request then becomes one
    changelog entry.
 
@@ -235,7 +247,7 @@ Pass these to `conan install` as `-o with_editor=True` and so on.
 |---|---|---|
 | `with_editor` | False | M9 |
 | `with_ui` | False | M10, and the M6 spike |
-| `with_lua` | False | M8 |
+| `with_lua` | True | M8 |
 | `with_audio` | False | M11 |
 
 `with_ui` needs moth_ui in the local Conan cache. It is not on Conan Center.
