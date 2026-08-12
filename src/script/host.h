@@ -37,6 +37,15 @@
 
 namespace engine::scene {
     class World;
+    class PrefabLibrary;
+} // namespace engine::scene
+
+namespace engine::physics {
+    class Simulation;
+}
+
+namespace engine::platform {
+    class Input;
 }
 
 namespace engine::script {
@@ -52,6 +61,27 @@ namespace engine::script {
         Start,   ///< `on_start()`, once, when the entity gets its instance.
         Update,  ///< `on_update(seconds)`, once for each fixed step.
         Destroy, ///< `on_destroy()`, once, when the entity loses its instance.
+    };
+
+    /**
+     * @brief What a script may reach besides the world and its components.
+     *
+     * Every one is optional. A test that binds no physics passes none, and a
+     * script that asks for a velocity gets nil rather than a crash.
+     *
+     * **These arrive on each update() rather than once at startup, for the same
+     * reason the world does.** A caller may pass a different simulation after a
+     * reload, and an instance lives across steps. Holding them from the call
+     * that made the instance is how a handle ends up naming something nobody is
+     * stepping. See issue #273.
+     */
+    struct Services {
+        /// @brief Velocities, impulses and sleep. Null leaves those unbound.
+        physics::Simulation* physics = nullptr;
+        /// @brief Actions by name. Null makes every action read false.
+        const platform::Input* input = nullptr;
+        /// @brief Prefabs a script may instance. Null makes instancing fail.
+        const scene::PrefabLibrary* prefabs = nullptr;
     };
 
     /**
@@ -123,8 +153,10 @@ namespace engine::script {
          * @param world   The world to read. Nothing here writes to it yet.
          * @param seconds Simulated seconds since the game started, not the wall
          *                clock and not the length of one step.
+         * @param services What else a script may reach this step. The default
+         *                 binds none of it, which is what a test wants.
          */
-        void update(scene::World& world, double seconds);
+        void update(scene::World& world, double seconds, const Services& services = {});
 
         /**
          * @brief Runs `on_destroy` on every instance and drops them all.
@@ -160,6 +192,12 @@ namespace engine::script {
     private:
         /// Binds the `entity` type, once, when the host is built.
         void bind_entity();
+
+        /// Binds the `world` table: find, create, destroy and instance.
+        void bind_world();
+
+        /// Binds the `input` table, by action name.
+        void bind_input();
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

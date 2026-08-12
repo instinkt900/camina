@@ -2,6 +2,10 @@
 
 #include "core/entt.h"
 #include "core/log.h"
+#include "physics/simulation.h"
+#include "platform/input.h"
+#include "scene/components.h"
+#include "scene/prefab.h"
 #include "scene/world.h"
 #include "script/bindings.h"
 #include "script/components.h"
@@ -190,6 +194,7 @@ namespace engine::script {
     struct ScriptContext {
         scene::World* world = nullptr;
         const scene::ComponentRegistry* components = nullptr;
+        Services services;
     };
 
     /**
@@ -215,6 +220,11 @@ namespace engine::script {
             return self.context == nullptr ? nullptr : self.context->world;
         }
 
+        /// The simulation this step is running against, or nullptr.
+        [[nodiscard]] physics::Simulation* physics_of(const EntityHandle& self) {
+            return self.context == nullptr ? nullptr : self.context->services.physics;
+        }
+
         /// The component registry the host was built with, or nullptr.
         [[nodiscard]] const scene::ComponentOps* ops_of(const EntityHandle& self,
                                                         const std::string& component) {
@@ -222,6 +232,48 @@ namespace engine::script {
                 return nullptr;
             }
             return self.context->components->find(component);
+        }
+
+        /// The entity a script names, or entt::null when the world is gone.
+        [[nodiscard]] EntityHandle handle_for(const EntityHandle& self, entt::entity id) {
+            return EntityHandle{ id, self.context };
+        }
+
+        /**
+         * The direct children of an entity, as a Lua sequence.
+         *
+         * A sequence and not a keyed table on purpose. `ipairs` walks the array
+         * part in order, where `pairs` over string keys does not, and that
+         * order is the difference between a reproducible run and one that
+         * fails once in ten. See @ref script_determinism.
+         */
+        [[nodiscard]] sol::object children_of(const EntityHandle& self, sol::this_state state) {
+            sol::state_view lua{ state };
+            scene::World* world = world_of(self);
+            if (world == nullptr) {
+                return sol::lua_nil;
+            }
+
+            sol::table out = lua.create_table();
+            const entt::registry& registry = world->registry();
+            if (!registry.valid(self.id)) {
+                return sol::object{ out };
+            }
+
+            const auto* hierarchy = registry.try_get<scene::Hierarchy>(self.id);
+            if (hierarchy == nullptr) {
+                return sol::object{ out };
+            }
+
+            // The list is doubly linked inside the entities, so this walks it
+            // rather than asking for a container nobody stores.
+            int index = 1;
+            for (entt::entity child = hierarchy->first_child; child != entt::null;) {
+                out[index++] = handle_for(self, child);
+                const auto* link = registry.try_get<scene::Hierarchy>(child);
+                child = link == nullptr ? entt::null : link->next_sibling;
+            }
+            return sol::object{ out };
         }
 
         /**
@@ -464,7 +516,93 @@ namespace engine::script {
             // A table of every field the component describes. A field type no
             // Value carries is left out rather than given a wrong value, so a
             // script sees nil and can say so. See issue #271.
-            "get", &read_component, "set", &write_component);
+            "get", &read_component, "set", &write_component,
+
+            // The hierarchy. A sequence, so ipairs walks it in order.
+            "children", &children_of,
+
+            "parent",
+            [](const EntityHandle& self) -> sol::optional<EntityHandle> {
+                const scene::World* world = world_of(self);
+                if (world == nullptr || !world->registry().valid(self.id)) {
+                    return sol::nullopt;
+                }
+                const auto* hierarchy = world->registry().try_get<scene::Hierarchy>(self.id);
+                if (hierarchy == nullptr || hierarchy->parent == entt::null) {
+                    return sol::nullopt;
+                }
+                return handle_for(self, hierarchy->parent);
+            },
+
+            "name",
+            [](const EntityHandle& self) -> sol::optional<std::string> {
+                const scene::World* world = world_of(self);
+                if (world == nullptr || !world->registry().valid(self.id)) {
+                    return sol::nullopt;
+                }
+                const auto* named = world->registry().try_get<scene::Name>(self.id);
+                return named == nullptr ? sol::nullopt : sol::optional<std::string>{ named->value };
+            },
+
+            "valid",
+            [](const EntityHandle& self) {
+                const scene::World* world = world_of(self);
+                return world != nullptr && world->registry().valid(self.id);
+            },
+
+            // Where the entity ended up after the hierarchy composed, which is
+            // not the local pose a script writes through get and set.
+            "world_position",
+            [](const EntityHandle& self) -> sol::optional<Vec3> {
+                const scene::World* world = world_of(self);
+                if (world == nullptr || !world->registry().valid(self.id)) {
+                    return sol::nullopt;
+                }
+                const Mat4& matrix = world->world_matrix(self.id);
+                return Vec3{ matrix[3][0], matrix[3][1], matrix[3][2] };
+            },
+
+            // Physics. Each one answers nil or false when the entity has no
+            // body, or when no simulation was passed this step.
+            "velocity",
+            [](const EntityHandle& self) -> sol::optional<Vec3> {
+                physics::Simulation* physics = physics_of(self);
+                Vec3 velocity{ 0.0F, 0.0F, 0.0F };
+                if (physics == nullptr || !physics->linear_velocity(self.id, velocity)) {
+                    return sol::nullopt;
+                }
+                return velocity;
+            },
+
+            "set_velocity",
+            [](const EntityHandle& self, const Vec3& velocity) {
+                physics::Simulation* physics = physics_of(self);
+                return physics != nullptr && physics->set_linear_velocity(self.id, velocity);
+            },
+
+            // A change of momentum rather than a speed, so a heavy body moves
+            // less for the same push. It wakes a sleeping body, because one
+            // that dropped the push would report nothing.
+            "impulse",
+            [](const EntityHandle& self, const Vec3& impulse) {
+                physics::Simulation* physics = physics_of(self);
+                return physics != nullptr && physics->apply_linear_impulse(self.id, impulse);
+            },
+
+            "is_awake",
+            [](const EntityHandle& self) {
+                physics::Simulation* physics = physics_of(self);
+                return physics != nullptr && physics->is_awake(self.id);
+            },
+
+            "wake",
+            [](const EntityHandle& self) {
+                physics::Simulation* physics = physics_of(self);
+                return physics != nullptr && physics->set_awake(self.id, true);
+            });
+
+        bind_world();
+        bind_input();
     }
 
     Host::~Host() = default;
@@ -493,7 +631,103 @@ namespace engine::script {
 
     bool Host::loaded(Guid script) const { return impl_->scripts.contains(script); }
 
-    void Host::update(scene::World& world, double seconds) {
+    /**
+     * Binds the verbs that belong to the scene rather than to one entity.
+     *
+     * A free table rather than methods on `entity`, because none of these is
+     * about the entity a script happens to run on.
+     */
+    void Host::bind_world() {
+        const ScriptContext* context = &impl_->context;
+
+        sol::table world = impl_->lua.create_named_table("world");
+
+        // The first entity carrying this name. A scene is authored by a person,
+        // so two entities with one name is a mistake rather than a shape to
+        // support, and taking the first is the readable answer.
+        world.set_function("find", [context](const std::string& name) -> sol::optional<EntityHandle> {
+            if (context->world == nullptr) {
+                return sol::nullopt;
+            }
+            for (const auto [entity, named] :
+                 context->world->registry().view<const scene::Name>().each()) {
+                if (named.value == name) {
+                    return EntityHandle{ entity, context };
+                }
+            }
+            return sol::nullopt;
+        });
+
+        world.set_function("create", [context]() -> sol::optional<EntityHandle> {
+            if (context->world == nullptr) {
+                return sol::nullopt;
+            }
+            return EntityHandle{ context->world->create(), context };
+        });
+
+        world.set_function("destroy", [context](const EntityHandle& entity) {
+            if (context->world == nullptr || !context->world->registry().valid(entity.id)) {
+                return false;
+            }
+            // World::destroy takes the children with it, which is what a script
+            // means by destroying a thing that has parts.
+            context->world->destroy(entity.id);
+            return true;
+        });
+
+        // What the crate throw does. The prefab name is the source path, the
+        // same one a scene file writes.
+        world.set_function("instance", [context](const std::string& name) -> sol::optional<EntityHandle> {
+            if (context->world == nullptr || context->services.prefabs == nullptr) {
+                ENGINE_LOG_ERROR("A script asked for prefab {} and this step has no prefab "
+                                 "library.",
+                                 name);
+                return sol::nullopt;
+            }
+            const scene::Prefab* prefab = context->services.prefabs->find(name);
+            if (prefab == nullptr) {
+                ENGINE_LOG_ERROR("A script asked for prefab {}, which is not loaded.", name);
+                return sol::nullopt;
+            }
+            const entt::entity entity = scene::instantiate(
+                *context->world, *prefab, nlohmann::json::object(), *context->components);
+            if (entity == entt::null) {
+                return sol::nullopt;
+            }
+            return EntityHandle{ entity, context };
+        });
+    }
+
+    /**
+     * Binds the input module by action name.
+     *
+     * A script never names an SDL constant, which is what issue #207 asked for.
+     * A step with no input module reads every action as false, so an offscreen
+     * run needs no special case in a script.
+     */
+    void Host::bind_input() {
+        const ScriptContext* context = &impl_->context;
+
+        sol::table input = impl_->lua.create_named_table("input");
+
+        input.set_function("held", [context](const std::string& action) {
+            return context->services.input != nullptr && context->services.input->held(action);
+        });
+        input.set_function("pressed", [context](const std::string& action) {
+            return context->services.input != nullptr &&
+                   context->services.input->pressed(action);
+        });
+        input.set_function("released", [context](const std::string& action) {
+            return context->services.input != nullptr &&
+                   context->services.input->released(action);
+        });
+    }
+
+    void Host::update(scene::World& world, double seconds, const Services& services) {
+        // Everything that can change between steps arrives here rather than
+        // being captured when an instance was made. See issue #273.
+        impl_->context.services = services;
+
         // The world arrives on each call, so every handle reads it from here
         // rather than from whatever world made the instance. A scene reload
         // that builds a new world would otherwise leave every running instance
@@ -565,7 +799,15 @@ namespace engine::script {
         // that kept its number would attach to whatever took it.
         for (auto it = impl_->instances.begin(); it != impl_->instances.end();) {
             const entt::entity entity = it->first;
-            if (registry.valid(entity) && registry.all_of<ScriptComponent>(entity)) {
+            const auto* component =
+                registry.valid(entity) ? registry.try_get<const ScriptComponent>(entity) : nullptr;
+
+            // An entity that named a different script is not the same instance
+            // any more. Keeping the old one would leave the entity running a
+            // script it no longer names, and nothing would say so. The start
+            // pass above gives it a new instance on the next step.
+            const bool same = component != nullptr && component->script == it->second.script;
+            if (same) {
                 ++it;
                 continue;
             }

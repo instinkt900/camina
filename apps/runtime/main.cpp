@@ -2149,12 +2149,21 @@ namespace {
      * @param world The scene to run.
      * @param state The simulated seconds and the poses a frame blends.
      */
-    void run_game_step(Runtime& runtime, engine::scene::World& world, StepState& state) {
+    void run_game_step(Runtime& runtime, engine::scene::World& world, StepState& state,
+                       engine::physics::Simulation& simulation) {
         sandbox::update(world, state.seconds, state.motion);
 #if defined(ENGINE_WITH_LUA)
-        runtime.script.update(world, state.seconds);
+        // Passed on each step rather than held, so a reload that builds a new
+        // simulation cannot leave a script driving the old one. See issue #273.
+        runtime.script.update(world, state.seconds,
+                              engine::script::Services{
+                                  .physics = &simulation,
+                                  .input = &runtime.input,
+                                  .prefabs = &engine::scene::prefabs(),
+                              });
 #else
         (void)runtime;
+        (void)simulation;
 #endif
     }
 
@@ -2199,7 +2208,7 @@ namespace {
             // The game moves things, then the solver runs. A kinematic body the
             // game drives has to carry its new transform into the step, so this
             // order is the one that works.
-            run_game_step(runtime, world, state);
+            run_game_step(runtime, world, state, simulation);
             simulation.step(world, state.clock.step_seconds());
         }
 
