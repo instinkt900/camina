@@ -50,7 +50,15 @@ namespace engine::script {
             // spelling an author reaches for.
             sol::call_constructor, sol::constructors<Vec3(), Vec3(float, float, float)>(),
 
-            "x", &Vec3::x, "y", &Vec3::y, "z", &Vec3::z,
+            // Explicit accessors rather than `&Vec3::x`. A glm component lives
+            // in an anonymous union, and binding the member pointer sends sol2
+            // down a path whose noexcept specification is deduced differently
+            // by different patch releases of Clang. It built here on 19.1.1 and
+            // failed CI on a later 19, with an error inside sol2 that names
+            // none of this. A lambda has no such deduction to get wrong.
+            "x", sol::property([](const Vec3& v) { return v.x; }, [](Vec3& v, float f) { v.x = f; }),
+            "y", sol::property([](const Vec3& v) { return v.y; }, [](Vec3& v, float f) { v.y = f; }),
+            "z", sol::property([](const Vec3& v) { return v.z; }, [](Vec3& v, float f) { v.z = f; }),
 
             sol::meta_function::addition,
             [](const Vec3& a, const Vec3& b) { return a + b; },
@@ -84,7 +92,11 @@ namespace engine::script {
             sol::call_constructor,
             sol::constructors<Quat(), Quat(float, float, float, float)>(),
 
-            "w", &Quat::w, "x", &Quat::x, "y", &Quat::y, "z", &Quat::z,
+            // Accessors rather than member pointers, for the reason vec3 gives.
+            "w", sol::property([](const Quat& q) { return q.w; }, [](Quat& q, float f) { q.w = f; }),
+            "x", sol::property([](const Quat& q) { return q.x; }, [](Quat& q, float f) { q.x = f; }),
+            "y", sol::property([](const Quat& q) { return q.y; }, [](Quat& q, float f) { q.y = f; }),
+            "z", sol::property([](const Quat& q) { return q.z; }, [](Quat& q, float f) { q.z = f; }),
 
             sol::meta_function::multiplication,
             sol::overload([](const Quat& a, const Quat& b) { return a * b; },
