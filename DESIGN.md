@@ -1668,6 +1668,20 @@ indices inside each submesh so a triangle reuses a vertex the GPU still holds. T
 fetch pass then reorders the vertices so the ones a triangle reads sit near each other.
 Running fetch first would undo it.
 
+**The cooker reuses geometry between two meshes that name the same accessors**, which saves
+building tangents and running both meshopt passes again. The key has to describe the whole
+mesh, and #254 is what happens when it does not. It described the first primitive alone while
+the value held every primitive, so two meshes that agreed there and differed after it shared a
+buffer. The reuse replaces the vertices and the indices and leaves the submeshes alone, so the
+submesh ranges of the second mesh then indexed into the geometry of the first. Leaving TANGENT
+out of the key had the same shape: two meshes supplying different tangents shared the first
+one's, and the normal map lit the wrong way. Neither reported anything, because a cook that
+writes the wrong bytes still succeeds.
+
+So the key is every primitive in order, with every accessor that feeds a `MeshVertex` and the
+primitive type. Order counts as well as the set: the same primitives in another order lay the
+vertices out differently, so the submesh ranges differ even though the geometry does not.
+
 **Profiling.** Add Tracy in M0. It integrates quickly and it changes how you work for the
 rest of the project.
 

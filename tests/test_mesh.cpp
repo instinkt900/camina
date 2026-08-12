@@ -452,6 +452,214 @@ namespace {
         test::remove_tree(dir.parent_path());
     }
 
+    /**
+     * Writes a two-mesh .gltf where the meshes agree on their first primitive
+     * and differ after it.
+     *
+     * Mesh 0 holds two primitives and mesh 1 holds only the first of them. The
+     * buffer carries the triangle twice, so the two halves hold the same bytes
+     * under different accessors. That is deliberate: the geometry is the same
+     * and only the primitive list differs, which is exactly the case a key
+     * built from the first primitive alone cannot tell apart. See issue #254.
+     */
+    void write_shared_first_primitive_gltf(const std::filesystem::path& path) {
+        const Geometry one = build_triangle();
+
+        // The triangle twice, so the second copy sits at a known offset.
+        const std::size_t half = one.buffer.size();
+        std::vector<std::byte> buffer = one.buffer;
+        buffer.insert(buffer.end(), one.buffer.begin(), one.buffer.end());
+
+        const std::string bin_name = path.stem().string() + ".bin";
+        write_bytes(path.parent_path() / bin_name, buffer);
+
+        const auto at = [&](std::size_t offset, std::size_t copy) {
+            return std::to_string(offset + (copy * half));
+        };
+
+        std::string views = R"("bufferViews":[)";
+        for (std::size_t copy = 0; copy < 2; ++copy) {
+            if (copy > 0) {
+                views += ",";
+            }
+            views += R"({"buffer":0,"byteOffset":)" + at(one.positions_at, copy) +
+                     R"(,"byteLength":36},)";
+            views += R"({"buffer":0,"byteOffset":)" + at(one.normals_at, copy) +
+                     R"(,"byteLength":36},)";
+            views += R"({"buffer":0,"byteOffset":)" + at(one.uvs_at, copy) +
+                     R"(,"byteLength":24},)";
+            views += R"({"buffer":0,"byteOffset":)" + at(one.indices_at, copy) +
+                     R"(,"byteLength":6})";
+        }
+        views += "],";
+
+        std::string accessors = R"("accessors":[)";
+        for (std::size_t copy = 0; copy < 2; ++copy) {
+            const std::string base = std::to_string(copy * 4);
+            if (copy > 0) {
+                accessors += ",";
+            }
+            accessors += R"({"bufferView":)" + base +
+                         R"(,"componentType":5126,"count":3,"type":"VEC3"},)";
+            accessors += R"({"bufferView":)" + std::to_string((copy * 4) + 1) +
+                         R"(,"componentType":5126,"count":3,"type":"VEC3"},)";
+            accessors += R"({"bufferView":)" + std::to_string((copy * 4) + 2) +
+                         R"(,"componentType":5126,"count":3,"type":"VEC2"},)";
+            accessors += R"({"bufferView":)" + std::to_string((copy * 4) + 3) +
+                         R"(,"componentType":5123,"count":3,"type":"SCALAR"})";
+        }
+        accessors += "],";
+
+        const std::string first =
+            R"({"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3})";
+        const std::string second =
+            R"({"attributes":{"POSITION":4,"NORMAL":5,"TEXCOORD_0":6},"indices":7})";
+
+        const std::string meshes = R"("meshes":[)"
+                                   R"({"name":"two parts","primitives":[)" +
+                                   first + "," + second + R"(]},)"
+                                                          R"({"name":"one part","primitives":[)" +
+                                   first + R"(]}])";
+
+        const std::string json = R"({"asset":{"version":"2.0"},"buffers":[{"uri":")" + bin_name +
+                                 R"(","byteLength":)" + std::to_string(buffer.size()) + "}]," +
+                                 views + accessors + meshes + "}";
+        write_bytes(path, std::as_bytes(std::span{ json.data(), json.size() }));
+    }
+
+    void test_the_cache_reads_every_primitive() {
+        const std::filesystem::path dir = scratch("cache");
+        const std::filesystem::path out = scratch("cache_out");
+        write_shared_first_primitive_gltf(dir / "share.gltf");
+
+        std::vector<as::ManifestOutput> cooked;
+        check(cook_gltf(dir / "share.gltf", out, "share.gltf", cooked), "it cooks");
+        check(cooked.size() == 2, "and writes a mesh for each");
+
+        as::Mesh two_parts;
+        as::Mesh one_part;
+        check(as::read_mesh(read_bytes(out / cooked.at(0).cooked), two_parts, "two parts") &&
+                  as::read_mesh(read_bytes(out / cooked.at(1).cooked), one_part, "one part"),
+              "both read back");
+
+        // The whole of issue #254. Mesh 1 names the accessors of mesh 0's first
+        // primitive and nothing else. A key built from that one primitive calls
+        // the two the same and hands mesh 1 the buffers of mesh 0, so it would
+        // carry six vertices and two submeshes here rather than three and one.
+        check(two_parts.submeshes.size() == 2, "the two-primitive mesh has two submeshes");
+        check(one_part.submeshes.size() == 1, "and the one-primitive mesh has one");
+        check(two_parts.vertices.size() == 6, "the two-primitive mesh holds both primitives");
+        check(one_part.vertices.size() == 3,
+              "and the one-primitive mesh holds its own geometry, not the other one's");
+
+        // Every submesh range has to sit inside the buffers it indexes. This is
+        // what would break in the other order, where the mesh with two
+        // primitives reuses the geometry of the mesh with one.
+        for (const as::Mesh& mesh : { two_parts, one_part }) {
+            for (const as::MeshSubmesh& submesh : mesh.submeshes) {
+                check(static_cast<std::size_t>(submesh.first_index) + submesh.index_count <=
+                          mesh.indices.size(),
+                      "a submesh indexes inside the index buffer");
+            }
+        }
+
+        test::remove_tree(dir.parent_path());
+    }
+
+    /**
+     * Writes a two-mesh .gltf whose meshes agree on every accessor except the
+     * tangents.
+     *
+     * The positions, the normals, the texcoords and the indices are one set,
+     * shared. Only TANGENT differs, and the two sets point opposite ways. A key
+     * that leaves TANGENT out calls these two meshes the same, and the second
+     * gets the tangents of the first. Nothing reports it and the normal map
+     * then lights the wrong way. See issue #254.
+     */
+    void write_shared_geometry_different_tangents_gltf(const std::filesystem::path& path) {
+        const Geometry one = build_triangle();
+        std::vector<std::byte> buffer = one.buffer;
+
+        const std::size_t tangents_a_at = buffer.size();
+        for (int corner = 0; corner < 3; ++corner) {
+            for (const float value : { 1.0F, 0.0F, 0.0F, 1.0F }) {
+                append(buffer, value);
+            }
+        }
+        const std::size_t tangents_b_at = buffer.size();
+        for (int corner = 0; corner < 3; ++corner) {
+            for (const float value : { 0.0F, 1.0F, 0.0F, -1.0F }) {
+                append(buffer, value);
+            }
+        }
+
+        const std::string bin_name = path.stem().string() + ".bin";
+        write_bytes(path.parent_path() / bin_name, buffer);
+
+        std::string views = R"("bufferViews":[)";
+        views += R"({"buffer":0,"byteOffset":)" + std::to_string(one.positions_at) +
+                 R"(,"byteLength":36},)";
+        views += R"({"buffer":0,"byteOffset":)" + std::to_string(one.normals_at) +
+                 R"(,"byteLength":36},)";
+        views += R"({"buffer":0,"byteOffset":)" + std::to_string(one.uvs_at) +
+                 R"(,"byteLength":24},)";
+        views += R"({"buffer":0,"byteOffset":)" + std::to_string(one.indices_at) +
+                 R"(,"byteLength":6},)";
+        views += R"({"buffer":0,"byteOffset":)" + std::to_string(tangents_a_at) +
+                 R"(,"byteLength":48},)";
+        views += R"({"buffer":0,"byteOffset":)" + std::to_string(tangents_b_at) +
+                 R"(,"byteLength":48}],)";
+
+        std::string accessors = R"("accessors":[)"
+                                R"({"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},)"
+                                R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},)"
+                                R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},)"
+                                R"({"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},)"
+                                R"({"bufferView":4,"componentType":5126,"count":3,"type":"VEC4"},)"
+                                R"({"bufferView":5,"componentType":5126,"count":3,"type":"VEC4"}],)";
+
+        const std::string meshes =
+            R"("meshes":[)"
+            R"({"name":"tangents a","primitives":[{"attributes":)"
+            R"({"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"TANGENT":4},"indices":3}]},)"
+            R"({"name":"tangents b","primitives":[{"attributes":)"
+            R"({"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"TANGENT":5},"indices":3}]}])";
+
+        const std::string json = R"({"asset":{"version":"2.0"},"buffers":[{"uri":")" + bin_name +
+                                 R"(","byteLength":)" + std::to_string(buffer.size()) + "}]," +
+                                 views + accessors + meshes + "}";
+        write_bytes(path, std::as_bytes(std::span{ json.data(), json.size() }));
+    }
+
+    void test_the_cache_reads_the_tangents() {
+        const std::filesystem::path dir = scratch("tangent_cache");
+        const std::filesystem::path out = scratch("tangent_cache_out");
+        write_shared_geometry_different_tangents_gltf(dir / "tangents.gltf");
+
+        std::vector<as::ManifestOutput> cooked;
+        check(cook_gltf(dir / "tangents.gltf", out, "tangents.gltf", cooked), "it cooks");
+        check(cooked.size() == 2, "and writes a mesh for each");
+
+        as::Mesh a;
+        as::Mesh b;
+        check(as::read_mesh(read_bytes(out / cooked.at(0).cooked), a, "a") &&
+                  as::read_mesh(read_bytes(out / cooked.at(1).cooked), b, "b"),
+              "both read back");
+        check(!a.vertices.empty() && a.vertices.size() == b.vertices.size(),
+              "and they hold the same number of vertices");
+
+        // The two meshes name the same positions, normals, texcoords and
+        // indices, and different tangents. Leaving TANGENT out of the key hands
+        // the second mesh the tangents of the first, and the two come out equal.
+        bool differ = false;
+        for (std::size_t at = 0; at < a.vertices.size(); ++at) {
+            differ = differ || a.vertices[at].tangent != b.vertices[at].tangent;
+        }
+        check(differ, "a mesh with its own tangents keeps them");
+
+        test::remove_tree(dir.parent_path());
+    }
+
     void test_gltf_with_a_separate_buffer_cooks() {
         const std::filesystem::path dir = scratch("gltf");
         const std::filesystem::path out = scratch("gltf_out");
@@ -1505,6 +1713,8 @@ int main() {
     test::section("importing");
     test_glb_cooks();
     test_gltf_with_a_separate_buffer_cooks();
+    test_the_cache_reads_every_primitive();
+    test_the_cache_reads_the_tangents();
     test_tangents_are_built_when_the_source_has_none();
     test_the_optimizer_keeps_the_geometry();
     test_a_broken_gltf_fails();
