@@ -145,6 +145,40 @@ namespace engine::physics {
         return true;
     }
 
+    bool Simulation::linear_velocity(entt::entity entity, Vec3& out) const {
+        const auto found = m_bodies.find(entity);
+        if (found == m_bodies.end()) {
+            return false;
+        }
+        out = m_world.linear_velocity(found->second.id);
+        return true;
+    }
+
+    bool Simulation::apply_linear_impulse(entt::entity entity, const Vec3& impulse) {
+        const auto found = m_bodies.find(entity);
+        if (found == m_bodies.end()) {
+            return false;
+        }
+        // Waking is not optional here. An impulse a sleeping body drops reports
+        // nothing, and a stack that has settled is exactly what a game pushes.
+        m_world.apply_linear_impulse(found->second.id, impulse, true);
+        return true;
+    }
+
+    bool Simulation::is_awake(entt::entity entity) const {
+        const auto found = m_bodies.find(entity);
+        return found != m_bodies.end() && m_world.is_awake(found->second.id);
+    }
+
+    bool Simulation::set_awake(entt::entity entity, bool awake) {
+        const auto found = m_bodies.find(entity);
+        if (found == m_bodies.end()) {
+            return false;
+        }
+        m_world.set_awake(found->second.id, awake);
+        return true;
+    }
+
     bool Simulation::create_body(scene::World& world, entt::entity entity) {
         entt::registry& registry = world.registry();
         const RigidBody& description = registry.get<const RigidBody>(entity);

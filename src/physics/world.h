@@ -238,6 +238,46 @@ namespace engine::physics {
          */
         [[nodiscard]] Vec3 linear_velocity(BodyId body) const;
 
+        /**
+         * @brief Adds momentum to a body at its center of mass.
+         *
+         * An impulse is a change of momentum rather than a speed, so a heavy
+         * body moves less than a light one for the same push. That is what a
+         * game means by a hit or a kick, where set_linear_velocity() is what it
+         * means by a throw.
+         *
+         * @param body The body to push. A static body ignores this.
+         * @param impulse Kilogram meters each second, in world space.
+         * @param wake Whether to wake a sleeping body first. A sleeping body
+         *             ignores an impulse otherwise, and says nothing.
+         */
+        void apply_linear_impulse(BodyId body, const Vec3& impulse, bool wake = true);
+
+        /**
+         * @brief Whether the solver is still working on this body.
+         *
+         * A body that has come to rest goes to sleep and costs no solver time
+         * until something disturbs it.
+         *
+         * @param body The body to ask about.
+         * @return True while it is awake.
+         */
+        [[nodiscard]] bool is_awake(BodyId body) const;
+
+        /**
+         * @brief Wakes a sleeping body, or puts an awake one to sleep.
+         *
+         * @warning **A sleeping body ignores a velocity of zero, silently.**
+         * `b3Body_SetLinearVelocity` wakes a body before it writes, but only
+         * when the velocity is not zero, so a zero on a sleeping body does
+         * nothing at all. A caller that means to stop a body it may have sent
+         * to sleep has to wake it first. See DESIGN.md section 5.
+         *
+         * @param body The body to change.
+         * @param awake True to wake it, false to put it to sleep.
+         */
+        void set_awake(BodyId body, bool awake);
+
         /// @brief Destroys one body and every shape on it.
         /// @param body The body to destroy.
         void destroy_body(BodyId body);

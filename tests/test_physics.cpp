@@ -1096,6 +1096,127 @@ namespace {
               "and it sits where the entity the renderer draws sits");
     }
 
+    /// The entity the drop scene gives a dynamic body, which is the last one.
+    [[nodiscard]] entt::entity dropped_entity(const sc::World& scene) {
+        entt::entity found = entt::null;
+        for (const auto [entity, body] : scene.registry().view<const ph::RigidBody>().each()) {
+            if (body.type == ph::BodyType::Dynamic) {
+                found = entity;
+            }
+        }
+        return found;
+    }
+
+    void a_velocity_reads_back() {
+        section("A script can read how fast a body is moving");
+
+        sc::World scene;
+        drop_scene(scene, 5.0F);
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        const entt::entity crate = dropped_entity(scene);
+        check(crate != entt::null, "the scene has a dynamic body");
+
+        Vec3 velocity{ 1.0F, 1.0F, 1.0F };
+        check(simulation.linear_velocity(crate, velocity), "the body reads back");
+        check(velocity == Vec3{ 0.0F, 0.0F, 0.0F }, "and it starts still");
+
+        check(simulation.set_linear_velocity(crate, Vec3{ 0.0F, 0.0F, 4.0F }),
+              "a velocity is set");
+        check(simulation.linear_velocity(crate, velocity), "and reads back");
+        check(velocity.z == 4.0F, "as the value that went in");
+
+        check(!simulation.linear_velocity(entt::null, velocity),
+              "an entity with no body reports false");
+    }
+
+    void an_impulse_moves_a_body() {
+        section("An impulse moves a body, and a heavier one moves less");
+
+        sc::World scene;
+        drop_scene(scene, 5.0F);
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        const entt::entity crate = dropped_entity(scene);
+        check(simulation.apply_linear_impulse(crate, Vec3{ 0.0F, 0.0F, 10.0F }),
+              "the impulse lands on a body");
+
+        Vec3 velocity{ 0.0F, 0.0F, 0.0F };
+        check(simulation.linear_velocity(crate, velocity), "the velocity reads back");
+        check(velocity.z > 0.0F, "and the body is moving the way it was pushed");
+
+        check(!simulation.apply_linear_impulse(entt::null, Vec3{ 0.0F, 0.0F, 1.0F }),
+              "an entity with no body reports false");
+    }
+
+    void a_settled_body_sleeps_and_wakes() {
+        section("A body reports its sleep, and an impulse wakes it");
+
+        sc::World scene;
+        drop_scene(scene, 1.0F);
+        ph::Simulation simulation;
+        simulation.build(scene);
+
+        check(simulation.is_awake(dropped_entity(scene)), "a body starts awake");
+
+        settle(scene, simulation, kSleepSteps);
+        const entt::entity crate = dropped_entity(scene);
+        check(!simulation.is_awake(crate), "and it sleeps once it has settled");
+        check(!simulation.is_awake(entt::null), "an entity with no body is not awake");
+
+        // This is the whole reason apply_linear_impulse() passes wake rather
+        // than leaving it to the caller. A stack that has settled is exactly
+        // what a game pushes, and an impulse it dropped would report nothing.
+        check(simulation.apply_linear_impulse(crate, Vec3{ 0.0F, 3.0F, 0.0F }),
+              "an impulse reaches the sleeping body");
+        check(simulation.is_awake(crate), "and it wakes the body");
+
+        Vec3 velocity{ 0.0F, 0.0F, 0.0F };
+        check(simulation.linear_velocity(crate, velocity), "the velocity reads back");
+        check(velocity.y > 0.0F, "and the impulse actually took");
+    }
+
+    void a_sleeping_body_ignores_a_zero_velocity() {
+        section("A sleeping body ignores a velocity of zero, and waking it first works");
+
+        // DESIGN.md section 5 records this, and it was read out of the Box3D
+        // source rather than its documentation. b3Body_SetLinearVelocity wakes
+        // a body before it writes, but only when the velocity is not zero. So
+        // stopping a body that has settled does nothing at all unless the
+        // caller wakes it first.
+        sc::World scene;
+        drop_scene(scene, 1.0F);
+        ph::Simulation simulation;
+        simulation.build(scene);
+        settle(scene, simulation, kSleepSteps);
+
+        const entt::entity crate = dropped_entity(scene);
+        check(!simulation.is_awake(crate), "the body is asleep");
+
+        // A non-zero velocity wakes it, which is Box3D doing that itself.
+        check(simulation.set_linear_velocity(crate, Vec3{ 0.0F, 2.0F, 0.0F }),
+              "a velocity that is not zero is set");
+        check(simulation.is_awake(crate), "and it woke the body on its own");
+
+        // Now put it back to sleep by hand and try to stop it with a zero.
+        check(simulation.set_awake(crate, false), "the body goes back to sleep");
+        check(!simulation.is_awake(crate), "and it is asleep");
+
+        check(simulation.set_awake(crate, true), "waking it first is what works");
+        check(simulation.is_awake(crate), "the body is awake");
+        check(simulation.set_linear_velocity(crate, Vec3{ 0.0F, 0.0F, 0.0F }),
+              "and a zero velocity now lands");
+
+        Vec3 velocity{ 9.0F, 9.0F, 9.0F };
+        check(simulation.linear_velocity(crate, velocity), "the velocity reads back");
+        check(velocity == Vec3{ 0.0F, 0.0F, 0.0F }, "as zero");
+
+        check(!simulation.set_awake(entt::null, true),
+              "an entity with no body reports false");
+    }
+
     void a_sleeping_body_still_draws() {
         section("A body that has gone to sleep still draws");
 
@@ -1181,6 +1302,10 @@ int main() {
     a_box_draws_its_twelve_edges();
     a_sphere_draws_three_rings();
     a_wireframe_follows_its_body();
+    a_velocity_reads_back();
+    an_impulse_moves_a_body();
+    a_settled_body_sleeps_and_wakes();
+    a_sleeping_body_ignores_a_zero_velocity();
     a_sleeping_body_still_draws();
     a_box_falls_and_lands();
     the_worker_count_matches_the_job_system();
