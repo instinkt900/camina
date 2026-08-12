@@ -492,6 +492,82 @@ namespace {
               "and each one is its own id");
     }
 
+    void test_the_handle_follows_the_world_of_the_step() {
+        section("An instance reads the world it is being stepped with");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        components.add<Turret>();
+        sp::Host host{ components };
+
+        // Writes its own range from the Turret it finds. Run against a second
+        // world holding a different value, it has to see the second one.
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              local t = entity:get("Turret")
+              if t == nil then error("no world") end
+              seen = t.range
+              entity:set("Turret", { label = "visited" })
+            end
+        )"),
+              "the script compiles");
+
+        sc::World first;
+        const entt::entity a = first.create();
+        first.registry().emplace<Turret>(a, Turret{ .range = 1.0F });
+        first.registry().emplace<sp::ScriptComponent>(a, sp::ScriptComponent{ kFirst });
+        host.update(first, 1.0 / 60.0);
+        check(first.registry().get<Turret>(a).label == "visited", "the first world was written");
+
+        // A different world, the way a scene reload would give one. The
+        // instance was made against the first, and it must not read that one.
+        sc::World second;
+        const entt::entity b = second.create();
+        second.registry().emplace<Turret>(b, Turret{ .range = 2.0F });
+        second.registry().emplace<sp::ScriptComponent>(b, sp::ScriptComponent{ kFirst });
+
+        host.update(second, 2.0 / 60.0);
+        check(host.stopped_count() == 0, "the script ran against the second world");
+        check(second.registry().get<Turret>(b).label == "visited",
+              "and it wrote the entity of that world");
+    }
+
+    void test_on_destroy_can_still_read_its_entity() {
+        section("A teardown reads the world stop() was given");
+
+        sc::ComponentRegistry components;
+        components.add<Turret>();
+        sp::Host host{ components };
+
+        // on_destroy is where a script gives something back, so it has to be
+        // able to read the entity. stop() sets the world for that reason, and
+        // an entity kept in a table has to reach the same world rather than
+        // whichever one made the instance.
+        check(load(host, kFirst, R"(
+            kept = nil
+            function on_update(s) kept = entity end
+            function on_destroy()
+              if kept == nil then error("nothing kept") end
+              local t = kept:get("Turret")
+              if t == nil then error("on_destroy could not read its entity") end
+              if t.range ~= 12.0 then error("read the wrong world") end
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<Turret>(entity, Turret{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        host.update(world, 1.0 / 60.0);
+        check(host.instance_count() == 1, "it ran and kept the entity");
+
+        host.stop(world);
+        check(host.call_count(sp::Callback::Destroy) == 1, "on_destroy ran");
+        check(host.stopped_count() == 0, "and it read the world stop() was given");
+    }
+
 } // namespace
 
 int main() {
@@ -511,6 +587,8 @@ int main() {
     test_the_binding_refuses_what_it_cannot_do();
     test_a_component_the_entity_lacks_reads_nil();
     test_each_instance_sees_its_own_entity();
+    test_the_handle_follows_the_world_of_the_step();
+    test_on_destroy_can_still_read_its_entity();
 
     if (test::g_failures != 0) {
         std::printf("\n%d check(s) failed.\n", test::g_failures);
