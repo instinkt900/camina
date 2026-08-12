@@ -299,4 +299,66 @@ namespace engine::reflect {
         }
     }
 
+    /// @brief Reads one field by name. See field_getter().
+    using FieldGetter = bool (*)(const void* instance, std::string_view field, Value& out);
+
+    /// @brief Writes one field by name. See field_setter().
+    using FieldSetter = bool (*)(void* instance, std::string_view field, const Value& in);
+
+    /**
+     * @brief A function that reads one field of T by name.
+     *
+     * The function carries the type inside it, so a caller works with a name and
+     * a `void*` and never names a field type.
+     *
+     * This is a free function rather than a member of one registry, because two
+     * registries hold it. `reflect::Registry` reaches a type by its described
+     * name, and `scene::ComponentRegistry` reaches one through an entity. Both
+     * store the pointer this returns, so there is one implementation and no
+     * second descriptor system. Rule 4.5.
+     *
+     * @tparam T A described type.
+     * @return The reader. It reports false when no field carries that name, and
+     * leaves @p out cleared to ValueKind::None.
+     */
+    template <Described T>
+    [[nodiscard]] constexpr FieldGetter field_getter() {
+        return [](const void* instance, std::string_view field, Value& out) {
+            // Cleared first, so a caller that reuses one Value across reads
+            // sees None on a miss rather than whatever the last read left.
+            out = Value{};
+
+            const T& object = *static_cast<const T*>(instance);
+            bool found = false;
+            for_each_field(object, [&](const auto& described, const auto& value) {
+                if (!found && field == described.name()) {
+                    found = true;
+                    to_value(value, out);
+                }
+            });
+            return found;
+        };
+    }
+
+    /**
+     * @brief A function that writes one field of T by name.
+     *
+     * @tparam T A described type.
+     * @return The writer. It reports false when no field carries that name, or
+     * when the value does not fit the field, and leaves the field alone.
+     */
+    template <Described T>
+    [[nodiscard]] constexpr FieldSetter field_setter() {
+        return [](void* instance, std::string_view field, const Value& in) {
+            T& object = *static_cast<T*>(instance);
+            bool written = false;
+            for_each_field(object, [&](const auto& described, auto& value) {
+                if (!written && field == described.name()) {
+                    written = from_value(in, value);
+                }
+            });
+            return written;
+        };
+    }
+
 } // namespace engine::reflect

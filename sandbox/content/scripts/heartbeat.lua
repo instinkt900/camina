@@ -16,7 +16,17 @@ local next_report = 0.0
 local report_every = 2.0
 
 function on_start()
-    log.info("heartbeat.lua started")
+    -- Spin is a sandbox type. The engine names it nowhere, and a script reads
+    -- it all the same, because the binding walks the reflection descriptors
+    -- rather than a list somebody keeps up to date. That is rule 4.5 working
+    -- from the outside.
+    local spin = entity:get("Spin")
+    if spin ~= nil then
+        log.info(string.format("heartbeat.lua started on a Spin of %.1f s per turn",
+                               spin.seconds_per_turn))
+    else
+        log.info("heartbeat.lua started")
+    end
 end
 
 function on_update(seconds)

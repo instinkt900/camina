@@ -33,6 +33,8 @@
 #include <span>
 #include <string_view>
 
+#include "scene/component_registry.h"
+
 namespace engine::scene {
     class World;
 }
@@ -63,7 +65,17 @@ namespace engine::script {
      */
     class Host {
     public:
-        Host();
+        /**
+         * @brief Builds a host that reads components through @p components.
+         *
+         * The registry is what turns a component name into a live component.
+         * Passing one lets a test register two types and nothing else, rather
+         * than working against whatever the process happens to hold.
+         *
+         * @param components Where a component name is looked up. Defaults to
+         * the process-wide registry.
+         */
+        explicit Host(const scene::ComponentRegistry& components = scene::components());
         ~Host();
 
         Host(const Host&) = delete;
@@ -146,6 +158,9 @@ namespace engine::script {
         [[nodiscard]] std::size_t call_count(Callback callback) const;
 
     private:
+        /// Binds the `entity` type, once, when the host is built.
+        void bind_entity();
+
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

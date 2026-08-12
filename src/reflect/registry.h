@@ -129,34 +129,10 @@ namespace engine::reflect {
                 for_each_field_descriptor<T>(
                     [&](const auto& field) { info.field_names.push_back(field.name()); });
 
-                info.get_field = [](const void* instance, std::string_view field,
-                                    Value& out) {
-                    // Cleared first, so a caller that reuses one Value across
-                    // reads sees None on a miss rather than the last read.
-                    out = Value{};
-
-                    const T& object = *static_cast<const T*>(instance);
-                    bool found = false;
-                    for_each_field(object, [&](const auto& described, const auto& value) {
-                        if (!found && field == described.name()) {
-                            found = true;
-                            to_value(value, out);
-                        }
-                    });
-                    return found;
-                };
-
-                info.set_field = [](void* instance, std::string_view field,
-                                    const Value& in) {
-                    T& object = *static_cast<T*>(instance);
-                    bool written = false;
-                    for_each_field(object, [&](const auto& described, auto& value) {
-                        if (!written && field == described.name()) {
-                            written = from_value(in, value);
-                        }
-                    });
-                    return written;
-                };
+                // The same two functions scene::ComponentRegistry stores, so
+                // there is one implementation of field access and not two.
+                info.get_field = field_getter<T>();
+                info.set_field = field_setter<T>();
 
                 info.walk_fields = [](void* instance, TypeInfo::FieldVisitor visit,
                                       void* user) {
