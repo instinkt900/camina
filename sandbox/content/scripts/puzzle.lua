@@ -51,11 +51,11 @@ function on_start()
         end
     end
 
-    -- The win goes on a component and not in this table. A reload throws the
-    -- table away and leaves the component alone, so a puzzle solved stays
-    -- solved across a save. See DESIGN.md section 10 M8.
-    entity:set("Goal", { won = false })
-
+    -- The win is deliberately not cleared here. on_start runs again on every
+    -- reload, so clearing it would wipe a solved puzzle each time the file is
+    -- saved, which is the opposite of what putting the win on a component
+    -- bought. The scene ships it false and the reset is what clears it. See
+    -- DESIGN.md section 10 M8.
     log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R.", #homes))
 end
 
@@ -121,15 +121,20 @@ function on_update(seconds)
         return
     end
 
-    -- A crate that is merely passing through the goal has not landed in it. The
-    -- win waits until one has settled, which is what a sleeping body is.
+    -- A crate merely passing through the goal has not landed in it, so the win
+    -- counts the ones that have settled. A sleeping body is what settled means.
+    local settled = 0
     for _, home in ipairs(homes) do
         if inside[home.entity.id] and not home.entity:is_awake() then
-            entity:set("Goal", { won = true })
-            log.info(string.format("You win. %s came to rest in the goal.",
-                                   home.entity:name() or "a crate"))
-            return
+            settled = settled + 1
         end
+    end
+
+    -- The scene says how many are needed, so raising the bar is an edit to a
+    -- component and not to this file.
+    if settled >= goal.needed then
+        entity:set("Goal", { won = true })
+        log.info(string.format("You win. %d crate(s) came to rest in the goal.", settled))
     end
 end
 

@@ -19,11 +19,14 @@
 #include "scene/components.h"
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
-#include "scene/step_motion.h"
 #include "scene/world.h"
+
+#if defined(ENGINE_WITH_LUA)
+#include "platform/input.h"
+#include "scene/step_motion.h"
 #include "script/components.h"
 #include "script/host.h"
-#include "platform/input.h"
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -52,7 +55,9 @@ namespace {
         sc::ComponentRegistry registry;
         sc::register_builtin_components(registry);
         engine::physics::register_components(registry);
+#if defined(ENGINE_WITH_LUA)
         engine::script::register_components(registry);
+#endif
         sandbox::register_components(registry);
         return registry;
     }
@@ -79,10 +84,15 @@ namespace {
         check(registry.find("Goal") != nullptr, "and so is the Goal the puzzle keeps its win on");
 
         // The engine never names a game type. The game joins the same registry,
-        // and so do physics and script. Six built in, three physics, one script,
-        // and the game's own Spin and Goal.
+        // and so do physics and script. Six built in, three physics, the game's
+        // own Spin and Goal, and the one ScriptComponent when Lua is in.
         const sc::ComponentRegistry full = make_registry();
-        check(full.size() == 12, "every subsystem and the game share one registry");
+#if defined(ENGINE_WITH_LUA)
+        constexpr std::size_t kExpected = 12;
+#else
+        constexpr std::size_t kExpected = 11;
+#endif
+        check(full.size() == kExpected, "every subsystem and the game share one registry");
     }
 
     /**
@@ -281,16 +291,6 @@ namespace {
         check(instances == 12, "twelve entities are prefab instances");
     }
 
-    /// The first entity that carries this name, or null when none does.
-    [[nodiscard]] entt::entity find_by_name(const sc::World& world, std::string_view wanted) {
-        for (const auto [entity, name] : world.registry().view<const sc::Name>().each()) {
-            if (name.value == wanted) {
-                return entity;
-            }
-        }
-        return entt::null;
-    }
-
     void test_scene_round_trips() {
         const sc::ComponentRegistry registry = make_registry();
         sc::PrefabLibrary library;
@@ -413,6 +413,18 @@ namespace {
         check(checked_stack, "and the stacked crate was there to check");
     }
 
+
+#if defined(ENGINE_WITH_LUA)
+
+    /// The first entity that carries this name, or null when none does.
+    [[nodiscard]] entt::entity find_by_name(const sc::World& world, std::string_view wanted) {
+        for (const auto [entity, name] : world.registry().view<const sc::Name>().each()) {
+            if (name.value == wanted) {
+                return entity;
+            }
+        }
+        return entt::null;
+    }
 
     // ---------------------------------------------------------------------
     // The game, which is entirely Lua from M8.6.
@@ -662,7 +674,7 @@ namespace {
         // Transform write, because a dynamic body owns its pose.
         game.run(2);
         const engine::Vec3 target = world_position(game.world, goal);
-        check(game.simulation.teleport(crate,
+        check(game.simulation.teleport(game.world, crate,
                                        engine::Vec3{ target.x, 0.5F, target.z },
                                        engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
               "the crate moves into the goal");
@@ -707,7 +719,7 @@ namespace {
 
         // Knock it a long way from home, and throw something as well, so the
         // reset has both kinds of work to undo.
-        check(game.simulation.teleport(crate, engine::Vec3{ 4.0F, 0.5F, 4.0F },
+        check(game.simulation.teleport(game.world, crate, engine::Vec3{ 4.0F, 0.5F, 4.0F },
                                        engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
               "the crate is moved away");
         game.press(engine::platform::Key::F);
@@ -727,6 +739,8 @@ namespace {
         check(count_named(game.world, "thrown crate") == 0,
               "and took away what the throw had made");
     }
+
+#endif // ENGINE_WITH_LUA
 
 } // namespace
 
@@ -748,12 +762,18 @@ int main() {
     // that steps one needs the pool up.
     engine::jobs::init();
 
+#if defined(ENGINE_WITH_LUA)
+    // The game is Lua, so a build without it has no game logic to drive. The
+    // content tests above still run, because a scene and a prefab are the same
+    // either way.
     std::printf("the game, which is entirely Lua\n");
     test_spin_turns_what_it_should();
     test_a_bad_spin_turns_nothing();
     test_the_throw_makes_a_crate_that_falls();
     test_a_crate_at_rest_in_the_goal_wins();
     test_the_reset_puts_the_room_back();
+#endif
+
     engine::jobs::shutdown();
     return test::report();
 }

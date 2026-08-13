@@ -685,7 +685,11 @@ namespace engine::script {
             }
             // Upright when the caller gives no rotation, which is what a reset
             // wants and is one fewer thing to spell out.
-            return physics->teleport(self.id, position,
+            const scene::World* world = world_of(self);
+            if (world == nullptr) {
+                return false;
+            }
+            return physics->teleport(*world, self.id, position,
                                      rotation.value_or(Quat{ 1.0F, 0.0F, 0.0F, 0.0F }));
         };
 
