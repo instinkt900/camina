@@ -8,6 +8,11 @@
 #include "assets/shader.h"
 #include "assets/texture.h"
 #include "core/log.h"
+#include "physics/components.h"
+#include "scene/component_registry.h"
+#if defined(ENGINE_WITH_LUA)
+#include "script/components.h"
+#endif
 #include "brdf.h"
 #include "document.h"
 #include "environment.h"
@@ -27,6 +32,19 @@ namespace cooker {
     namespace {
 
         namespace as = engine::assets;
+
+        /**
+         * The component types this run reads a document against.
+         *
+         * A caller that names none gets the engine's own, which is right for a
+         * tree of engine content and for a test. An application cooking a
+         * game's content names the registry that game registered into.
+         */
+        [[nodiscard]] const engine::scene::ComponentRegistry& components_of(
+            const Options& options) {
+            static const engine::scene::ComponentRegistry kEngineOnly = engine_components();
+            return options.components != nullptr ? *options.components : kEngineOnly;
+        }
 
         /// What rule turns one source file into one cooked file.
         enum class Rule : std::uint8_t {
@@ -288,7 +306,7 @@ namespace cooker {
                 return cook_gltf(source, options.out, relative, meta.guid, outputs);
             case Rule::Document:
                 return single([&](const std::filesystem::path& to) {
-                    return cook_document(source, to, options.content);
+                    return cook_document(source, to, options.content, components_of(options));
                 });
             case Rule::Script:
                 // The bytes go through unchanged, the same as a copy. The rule
@@ -403,7 +421,7 @@ namespace cooker {
                     continue;
                 }
                 std::vector<std::filesystem::path> named;
-                document_references(options.content / relative, named);
+                document_references(options.content / relative, components_of(options), named);
 
                 std::vector<std::filesystem::path> inputs;
                 inputs.reserve(named.size());
@@ -527,7 +545,8 @@ namespace cooker {
                 if (rule_for(relative) != Rule::Document || unfinished.contains(relative)) {
                     continue;
                 }
-                if (!validate_references(options.content / relative, options.content, manifest)) {
+                if (!validate_references(options.content / relative, options.content, manifest,
+                                         components_of(options))) {
                     ++failed;
                 }
             }
@@ -614,6 +633,20 @@ namespace cooker {
             ENGINE_LOG_INFO("Pruned {} cooked files the new manifest no longer names.",
                             removed.size());
         }
+    }
+
+    engine::scene::ComponentRegistry engine_components() {
+        // The engine registers what it defines, and a game registers what it
+        // defines on top. The same order the runtime uses, and for the same
+        // reason: physics and script each own their types, so scene/ needs no
+        // header from either one.
+        engine::scene::ComponentRegistry types;
+        engine::scene::register_builtin_components(types);
+        engine::physics::register_components(types);
+#if defined(ENGINE_WITH_LUA)
+        engine::script::register_components(types);
+#endif
+        return types;
     }
 
     bool cook_all(const Options& options, Result& result) {

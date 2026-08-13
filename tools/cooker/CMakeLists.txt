@@ -48,8 +48,12 @@ target_link_libraries(cooker_lib
 engine_set_warnings(cooker_lib)
 engine_enable_clang_tidy(cooker_lib)
 
+# cooker_lib knows no game. The executable picks one, the same way apps/runtime
+# does, because a document may carry a component the game defines and only the
+# descriptors say which of its fields name an asset. camina::sandbox links
+# engine::core and nothing else, so this brings in no driver and no window.
 add_executable(cooker main.cpp)
-target_link_libraries(cooker PRIVATE cooker_lib)
+target_link_libraries(cooker PRIVATE cooker_lib camina::sandbox)
 
 engine_set_warnings(cooker)
 engine_enable_clang_tidy(cooker)

@@ -9,7 +9,14 @@
  *
  * It links no Vulkan and opens no window. A cook runs on a build machine with
  * no graphics driver, and CI is exactly that machine.
+ *
+ * It names no game either. A document names an asset in a component field, and
+ * which field that is comes from the descriptors. So the caller hands in the
+ * component registry, and an application that cooks a game's content registers
+ * that game's components first. See @ref cooker::engine_components.
  */
+
+#include "scene/component_registry.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -17,6 +24,17 @@
 
 /// @brief The asset cooker. It reads source assets and writes cooked ones.
 namespace cooker {
+
+    /**
+     * @brief The component types the engine itself defines.
+     *
+     * The builtin scene components, the physics components, and the script
+     * component when the build carries Lua. A game adds its own on top.
+     *
+     * @return A registry holding them, for a caller to extend and hand back
+     * through @ref Options::components.
+     */
+    [[nodiscard]] engine::scene::ComponentRegistry engine_components();
 
     /// @brief What one run of the cooker was asked to do.
     struct Options {
@@ -28,6 +46,23 @@ namespace cooker {
 
         /// @brief Cook every asset, even one the manifest calls unchanged.
         bool force = false;
+
+        /**
+         * @brief The component types a document may carry.
+         *
+         * A scene and a prefab name an asset in a field that carries
+         * `reflect::AssetRef`, and only the descriptors say which field that
+         * is. A component this does not hold has no fields the cooker will
+         * resolve, so a reference inside one fails the cook rather than
+         * reaching the cooked tree unresolved.
+         *
+         * It defaults to @ref engine_components when it is null, which covers
+         * a caller with no game of its own.
+         *
+         * @warning Nothing owns this. The registry has to outlive the call to
+         * @ref cook_all, which reads it for the whole run.
+         */
+        const engine::scene::ComponentRegistry* components = nullptr;
     };
 
     /// @brief What one run of the cooker did.
