@@ -477,6 +477,13 @@ namespace engine::physics {
         b3Body_SetLinearVelocity(unpack_body(body), to_box3d(velocity));
     }
 
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void World::set_angular_velocity(BodyId body, const Vec3& velocity) {
+        // The same shape as b3Body_SetLinearVelocity, and the same trap. See
+        // b3Body_SetAngularVelocity in third_party/box3d/src/body.c.
+        b3Body_SetAngularVelocity(unpack_body(body), to_box3d(velocity));
+    }
+
     void World::debug_lines(std::vector<DebugLine>& out) const {
         ENGINE_PROFILE_ZONE_N("physics debug lines");
 

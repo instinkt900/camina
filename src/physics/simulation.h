@@ -113,6 +113,36 @@ namespace engine::physics {
         bool set_linear_velocity(entt::entity entity, const Vec3& velocity);
 
         /**
+         * @brief Puts one dynamic body somewhere, and stops it dead.
+         *
+         * This teleports. The body appears at @p position with no velocity and
+         * no spin, awake, and its contacts are worked out afresh where it lands.
+         * A reset is this and nothing else.
+         *
+         * **Writing the entity transform does not do this.** A dynamic body
+         * owns its pose, so step() overwrites whatever a caller put on the
+         * entity. This is the only way to move one.
+         *
+         * The pair of poses interpolate() blends is set to the new one, both
+         * halves. Without that the next frame would draw the body sliding from
+         * where it used to be, across everything in between.
+         *
+         * @warning **A static or a kinematic body is refused, and says so.**
+         * For those two the entity owns the pose and step() writes it into the
+         * body, so a teleport here would be undone on the next step. Move one of
+         * those by writing its transform, which is the thing step() reads.
+         *
+         * @param world The scene holding the entity, read for its body type.
+         * @param entity The entity to move. One with no body is ignored.
+         * @param position Where to put it, in world space.
+         * @param rotation How to turn it, in world space.
+         * @return True when the entity had a dynamic body and it moved. False
+         *         when it had no body, or when the body was not dynamic.
+         */
+        bool teleport(const scene::World& world, entt::entity entity, const Vec3& position,
+                      const Quat& rotation);
+
+        /**
          * @brief Two entities that started or stopped touching.
          *
          * The same shape serves a trigger overlap and a contact. For an
@@ -323,6 +353,18 @@ namespace engine::physics {
          * @return True when a body was created.
          */
         bool create_body(scene::World& world, entt::entity entity);
+
+        /**
+         * Destroys any body whose entity has gone, or which lost its RigidBody.
+         *
+         * Every loop over m_bodies reads the RigidBody of what it holds, so one
+         * left behind by a destroyed entity kills the process on an EnTT
+         * assertion. Called at the top of step() and again in interpolate(),
+         * because a physics callback runs between the two and may destroy one.
+         *
+         * @param registry The registry to check each entity against.
+         */
+        void drop_dead_bodies(const entt::registry& registry);
 
         World m_world;
         std::unordered_map<entt::entity, Body> m_bodies;

@@ -26,7 +26,8 @@
  * // Once for each frame.
  * input.update(engine::platform::sample(window, consumed));
  * if (input.pressed("throw")) {
- *     throw_crate();
+ *     // What the action means is the caller's business. In the sandbox it is
+ *     // a line of Lua, because the game logic is a script.
  * }
  * @endcode
  */

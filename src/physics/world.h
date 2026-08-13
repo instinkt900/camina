@@ -273,6 +273,23 @@ namespace engine::physics {
         void set_linear_velocity(BodyId body, const Vec3& velocity);
 
         /**
+         * @brief Sets how fast a body is turning.
+         *
+         * This replaces the spin rather than adding to it. A reset needs it:
+         * a teleport that left the body turning would put a crate back in its
+         * place and leave it rolling out of it.
+         *
+         * @warning **The zero case carries the same trap as
+         * set_linear_velocity().** A sleeping body holds no velocity state, so
+         * writing zero to one does nothing. Wake it first when the write itself
+         * has to happen.
+         *
+         * @param body The body to turn. A static body ignores this.
+         * @param velocity Radians each second, about each world axis.
+         */
+        void set_angular_velocity(BodyId body, const Vec3& velocity);
+
+        /**
          * @brief How fast a body is moving now.
          *
          * A sleeping body reads as zero, which is what it is doing. So this

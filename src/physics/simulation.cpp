@@ -145,6 +145,49 @@ namespace engine::physics {
         return true;
     }
 
+    bool Simulation::teleport(const scene::World& world, entt::entity entity,
+                              const Vec3& position, const Quat& rotation) {
+        const auto found = m_bodies.find(entity);
+        if (found == m_bodies.end()) {
+            return false;
+        }
+
+        // The type is read from the registry rather than cached on the body,
+        // because the inspector can change it between two steps and a cached
+        // copy would answer for the type the body used to be.
+        const entt::registry& registry = world.registry();
+        const auto* rigid = registry.valid(entity) ? registry.try_get<const RigidBody>(entity)
+                                                   : nullptr;
+        if (rigid == nullptr || rigid->type != BodyType::Dynamic) {
+            // Refused rather than done badly. step() writes the entity transform
+            // into a static or kinematic body, so this would be undone on the
+            // next step and the caller would have been told it worked.
+            return false;
+        }
+
+        Body& body = found->second;
+        m_world.set_body_transform(body.id, position, rotation);
+
+        // Stopped dead. A crate put back at the top of a stack while it still
+        // carried the speed of its fall would knock the stack over again, which
+        // is the opposite of a reset.
+        m_world.set_linear_velocity(body.id, Vec3{ 0.0F, 0.0F, 0.0F });
+        m_world.set_angular_velocity(body.id, Vec3{ 0.0F, 0.0F, 0.0F });
+
+        // A body that had gone to sleep stays asleep through a transform write,
+        // and then the solver never works out where it now rests.
+        m_world.set_awake(body.id, true);
+
+        // Both halves of the pair interpolate() blends. Setting only the newer
+        // one draws the body sliding from wherever it used to be, across
+        // everything between there and here, over the frames of one step.
+        body.previous_position = position;
+        body.position = position;
+        body.previous_rotation = rotation;
+        body.rotation = rotation;
+        return true;
+    }
+
     bool Simulation::linear_velocity(entt::entity entity, Vec3& out) const {
         const auto found = m_bodies.find(entity);
         if (found == m_bodies.end()) {
@@ -272,10 +315,32 @@ namespace engine::physics {
         ++m_shape_rebuilds;
     }
 
+    void Simulation::drop_dead_bodies(const entt::registry& registry) {
+        // Drop a body whose entity has gone, or which no longer carries a
+        // RigidBody. Nothing did either while the game was C++, so this never
+        // came up until a script could destroy an entity: every loop over
+        // m_bodies reads the RigidBody of what it holds, and reading one off a
+        // destroyed entity kills the process on an EnTT assertion.
+        //
+        // valid() rather than a check that the entity number is in range,
+        // because EnTT hands a number out again after a destroy and only the
+        // version tells the new entity from the old one.
+        for (auto it = m_bodies.begin(); it != m_bodies.end();) {
+            if (registry.valid(it->first) && registry.all_of<RigidBody>(it->first)) {
+                ++it;
+                continue;
+            }
+            m_world.destroy_body(it->second.id);
+            it = m_bodies.erase(it);
+        }
+    }
+
     void Simulation::step(scene::World& world, float delta_seconds, std::uint32_t substeps) {
         ENGINE_PROFILE_ZONE_N("physics simulation step");
 
         entt::registry& registry = world.registry();
+
+        drop_dead_bodies(registry);
 
         // The entity owns a static or kinematic body, so its transform goes in
         // before the solver runs. update() first, because an entity moved this
@@ -375,6 +440,11 @@ namespace engine::physics {
 
         const float weight = std::clamp(alpha, 0.0F, 1.0F);
         entt::registry& registry = world.registry();
+
+        // Again here, and not only at the top of step(). A physics callback runs
+        // between the two, and a script that destroys an entity from one leaves
+        // a body whose RigidBody the loop below would read.
+        drop_dead_bodies(registry);
 
         // A dynamic body is at the root, which is what makes this a store
         // rather than a conversion out of world space.

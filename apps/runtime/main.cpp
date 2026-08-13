@@ -34,6 +34,7 @@
 #endif
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
+#include "scene/step_motion.h"
 #include "scene/components.h"
 #include "scene/world.h"
 
@@ -83,17 +84,6 @@ namespace {
     constexpr float kSprintFactor = 4.0F;
     /// The largest step one frame may apply. A stall must not teleport the camera.
     constexpr float kLongestFrame = 0.1F;
-
-    /// Meters each second. Fast enough to knock a crate off a stack rather than
-    /// nudge it, and slow enough that a person can watch it travel.
-    constexpr float kThrowSpeed = 16.0F;
-
-    /// How far in front of the camera a thrown crate starts, in meters. A body
-    /// created at the camera fills the screen for one frame before it leaves.
-    constexpr float kThrowOffset = 1.2F;
-
-    /// Half the crate, in meters. The model is a one meter cube.
-    constexpr float kCrateHalfExtent = 0.5F;
 
     /// The step an offscreen run advances the world by, in seconds.
     ///
@@ -709,14 +699,20 @@ namespace {
         constexpr const char* kSprint = "sprint";
         constexpr const char* kLook = "look";
         constexpr const char* kThrow = "throw";
+        constexpr const char* kReset = "reset";
     } // namespace action
+
+    /// The key the throw is bound to. Named once, because --throw-at-frame has
+    /// to hold down the same one the binding reads.
+    constexpr engine::platform::Key kThrowKey = engine::platform::Key::F;
 
     /**
      * Binds the runtime's own actions.
      *
-     * These belong to the debug camera and to the throw, which are application
-     * concerns rather than game logic. M8.6 moves the throw into a script, and
-     * its binding moves with it.
+     * The camera actions belong to the application. The throw and the reset
+     * belong to the game, and puzzle.lua reads both by name. The binding stays
+     * here because a key is what the application owns: a script names the
+     * action and never the key, which is what issue #207 asked for.
      */
     void bind_actions(engine::platform::Input& input) {
         using engine::platform::Key;
@@ -731,7 +727,8 @@ namespace {
         input.bind(action::kSprint, Key::LeftShift);
         input.bind(action::kSprint, Key::RightShift);
         input.bind(action::kLook, MouseButton::Right);
-        input.bind(action::kThrow, Key::F);
+        input.bind(action::kThrow, kThrowKey);
+        input.bind(action::kReset, Key::R);
     }
 
     /**
@@ -1562,9 +1559,36 @@ namespace {
         /// M8.0. Keyboard and mouse, sampled once for each frame. Every reader
         /// asks it for an action by name rather than reading a device.
         engine::platform::Input input;
+
+        /**
+         * The same actions, on the fixed step instead of on the frame.
+         *
+         * A press edge is the difference between two update() calls, so which
+         * clock update() runs on decides who can see one. The camera runs on
+         * the frame and reads `input`. The game runs on the fixed step and
+         * reads this.
+         *
+         * One Input for both cannot work. A frame often runs no step at all,
+         * and offscreen it almost never does, so an edge raised and cleared
+         * between two steps is one the game never sees. That is not a rare
+         * race: it is what --throw-at-frame does every time.
+         */
+        engine::platform::Input step_input;
+
+        /// Every device state since the last step, folded together. A key that
+        /// was down on any frame in between is down for the step that follows.
+        engine::platform::InputFrame pending;
+
+        /// What the device actually read on the last frame, which is what
+        /// `pending` goes back to once a step has taken it.
+        engine::platform::InputFrame latest;
 #if defined(ENGINE_WITH_LUA)
         /// M8.1. The interpreter, and one instance for each scripted entity.
         engine::script::Host script;
+
+        /// The view pose a script reads. Rewritten at the top of every step,
+        /// because a script holds the services only for the call they arrive on.
+        engine::script::CameraView camera;
 #endif
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
@@ -1840,6 +1864,7 @@ namespace {
         // action as false, and binding costs nothing, so the two paths stay the
         // same shape.
         bind_actions(runtime.input);
+        bind_actions(runtime.step_input);
 
         const engine::gfx::DeviceDesc device_desc{
             .window = options.offscreen ? nullptr : runtime.window.native(),
@@ -2054,72 +2079,6 @@ namespace {
         }
     }
 
-    /**
-     * Throws a crate from the camera, along the way it is looking.
-     *
-     * The projectile is an instance of the same prefab the scene stacks, so
-     * nothing new is authored and the thing thrown is the thing being hit. The
-     * two physics components are added by the instance record, which
-     * merge_patch allows because a prefab that does not carry a component gains
-     * it rather than being refused.
-     *
-     * @param world The world to add the crate to.
-     * @param simulation The bodies. The new one joins without rebuilding them.
-     * @param settings Where the camera is and which way it faces.
-     * @return The new entity, or entt::null when the prefab is not loaded.
-     */
-    entt::entity throw_crate(engine::scene::World& world, engine::physics::Simulation& simulation,
-                             const ViewSettings& settings) {
-        const engine::scene::Prefab* prefab = engine::scene::prefabs().find(sandbox::kCratePrefab);
-        if (prefab == nullptr) {
-            ENGINE_LOG_WARN("There is no {} to throw. The content tree did not load it.",
-                            sandbox::kCratePrefab);
-            return entt::null;
-        }
-
-        const engine::Vec3 forward = camera_forward(settings);
-        // In front of the camera rather than at it. A body created inside the
-        // near plane is a crate that fills the screen for one frame.
-        const engine::Vec3 from = settings.camera_position + (forward * kThrowOffset);
-
-        // An empty record, and then the components are placed as components.
-        // Writing them as an override patch would spell out the field names and
-        // the schema versions that reflect/ already owns, which is the second
-        // descriptor system rule 4.5 forbids. It would also go stale in silence
-        // the day a field is renamed.
-        const entt::entity crate =
-            engine::scene::instantiate(world, *prefab, nlohmann::json::object());
-        if (crate == entt::null) {
-            ENGINE_LOG_ERROR("The thrown crate did not instance.");
-            return entt::null;
-        }
-
-        entt::registry& registry = world.registry();
-        registry.emplace_or_replace<engine::scene::Name>(crate,
-                                                         engine::scene::Name{ "thrown crate" });
-        registry.emplace_or_replace<engine::physics::RigidBody>(
-            crate, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
-        registry.emplace_or_replace<engine::physics::BoxCollider>(
-            crate, engine::physics::BoxCollider{ .half_extents = { kCrateHalfExtent,
-                                                                   kCrateHalfExtent,
-                                                                   kCrateHalfExtent } });
-
-        // The prefab put the crate at the origin, so this is where it is thrown
-        // from. set_local rather than the transform component, because the
-        // hierarchy has to know the world matrix went stale.
-        engine::Transform local = world.local(crate);
-        local.position = from;
-        world.set_local(crate, local);
-
-        // add_body rather than build. Rebuilding would put the stack back where
-        // the scene file put it, which is the opposite of hitting it.
-        if (!simulation.add_body(world, crate)) {
-            ENGINE_LOG_ERROR("The thrown crate got no body, so it will not fall.");
-            return crate;
-        }
-        (void)simulation.set_linear_velocity(crate, forward * kThrowSpeed);
-        return crate;
-    }
 
     /**
      * Everything the fixed step owns, which outlives any one frame.
@@ -2186,16 +2145,28 @@ namespace {
      * Built for each call rather than held, so a reload that builds a new
      * simulation cannot leave a script driving the old one. See issue #273.
      *
+     * The camera pose goes in because the throw is a script now and it throws
+     * along the line of sight. The view belongs to the application rather than
+     * to the scene, so it is handed over for the step. A `scene::Camera`
+     * component is where it belongs once a scene carries one.
+     *
      * @param runtime Holds the input and the host.
      * @param simulation The simulation this step ran on.
+     * @param settings Where the camera stands and which way it looks.
+     * @param motion Where a transform a script writes is recorded for blending.
      * @return The services to pass to the host.
      */
     [[nodiscard]] engine::script::Services
-    step_services(Runtime& runtime, engine::physics::Simulation& simulation) {
+    step_services(Runtime& runtime, engine::physics::Simulation& simulation,
+                  const ViewSettings& settings, engine::scene::StepMotion& motion) {
+        runtime.camera = engine::script::CameraView{ .position = settings.camera_position,
+                                                     .forward = camera_forward(settings) };
         return engine::script::Services{
             .physics = &simulation,
-            .input = &runtime.input,
+            .input = &runtime.step_input,
             .prefabs = &engine::scene::prefabs(),
+            .camera = &runtime.camera,
+            .motion = &motion,
         };
     }
 #endif
@@ -2203,23 +2174,29 @@ namespace {
     /**
      * Runs the game logic for one fixed step.
      *
-     * The C++ game and the scripts are one thing from here, and both take
-     * simulated seconds. Neither one sees the wall clock, which is what keeps a
-     * run reproducible. See DESIGN.md section 9 and issue #245.
+     * **Every line of it is Lua**, which M8.6 closed. The seconds are simulated
+     * seconds and never the wall clock, which is what keeps a run reproducible.
+     * See DESIGN.md section 9 and issue #245.
      *
      * @param runtime Holds the script host.
      * @param world The scene to run.
      * @param state The simulated seconds and the poses a frame blends.
+     * @param settings Where the camera stands, which the throw reads.
+     * @param simulation The bodies a script may push.
      */
     void run_game_step(Runtime& runtime, engine::scene::World& world, StepState& state,
+                       const ViewSettings& settings,
                        engine::physics::Simulation& simulation) {
-        sandbox::update(world, state.seconds, state.motion);
 #if defined(ENGINE_WITH_LUA)
         // Passed on each step rather than held, so a reload that builds a new
         // simulation cannot leave a script driving the old one. See issue #273.
-        runtime.script.update(world, state.seconds, step_services(runtime, simulation));
+        runtime.script.update(world, state.seconds,
+                              step_services(runtime, simulation, settings, state.motion));
 #else
         (void)runtime;
+        (void)world;
+        (void)state;
+        (void)settings;
         (void)simulation;
 #endif
     }
@@ -2236,12 +2213,16 @@ namespace {
      * @param runtime Holds the script host.
      * @param world The world the events name.
      * @param simulation The simulation that has just stepped.
+     * @param settings Where the camera stands, which a callback may read.
+     * @param motion Where a transform a callback writes is recorded.
      */
     void report_physics_events(Runtime& runtime, engine::scene::World& world,
-                               engine::physics::Simulation& simulation) {
+                               engine::physics::Simulation& simulation,
+                               const ViewSettings& settings,
+                               engine::scene::StepMotion& motion) {
 #if defined(ENGINE_WITH_LUA)
-        runtime.script.deliver_physics_events(world, simulation,
-                                              step_services(runtime, simulation));
+        runtime.script.deliver_physics_events(
+            world, simulation, step_services(runtime, simulation, settings, motion));
 #else
         (void)runtime;
         (void)world;
@@ -2276,6 +2257,13 @@ namespace {
         for (std::uint32_t left = state.clock.advance(delta_seconds); left > 0; --left) {
             ENGINE_PROFILE_ZONE_N("fixed step");
 
+            // The actions the game reads move to this step, and the fold starts
+            // again from whatever the device last read. So a key held across
+            // several steps stays held, and a key tapped and let go between two
+            // of them still raises exactly one edge.
+            runtime.step_input.update(runtime.pending);
+            runtime.pending = runtime.latest;
+
             // The game reads the pose the last step left rather than the blend
             // the last frame drew. Without this the motion of a frame that fell
             // between two steps feeds back in and compounds.
@@ -2290,12 +2278,12 @@ namespace {
             // The game moves things, then the solver runs. A kinematic body the
             // game drives has to carry its new transform into the step, so this
             // order is the one that works.
-            run_game_step(runtime, world, state, simulation);
+            run_game_step(runtime, world, state, settings, simulation);
             simulation.step(world, state.clock.step_seconds());
 
             // Inside the loop, because the simulation keeps one step of events.
             // Reading them after the loop would report the last step alone.
-            report_physics_events(runtime, world, simulation);
+            report_physics_events(runtime, world, simulation, settings, state.motion);
         }
 
         // One alpha for both, because they blend the same pair of steps. Two
@@ -2422,17 +2410,43 @@ namespace {
      * ImGui is asked first, because it owns the keyboard while a person types in
      * a panel. platform/ sits below gfx/, so the module cannot ask on its own.
      */
-    void update_input(Runtime& runtime, const FrameContext& context, const Options& options) {
+    void update_input(Runtime& runtime, const FrameContext& context, const Options& options,
+                      std::uint64_t frame) {
+        engine::platform::InputFrame state;
         if (options.offscreen) {
-            runtime.input.update(engine::platform::InputFrame{});
-            return;
+            // No devices offscreen, so every key starts up.
+            state = engine::platform::InputFrame{};
+        } else {
+            engine::platform::InputConsumed consumed;
+            if (context.overlay) {
+                engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
+            }
+            state = engine::platform::sample(runtime.window, consumed);
         }
 
-        engine::platform::InputConsumed consumed;
-        if (context.overlay) {
-            engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
+        // --throw-at-frame holds the throw key down for one frame rather than
+        // calling the throw itself. The throw is a script now and it reads the
+        // action, so a hook that went around the input module would drive a path
+        // the game never takes. input.h calls this the replay shape: write a
+        // frame out and feed it back. See DESIGN.md section 9.
+        if (options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame) {
+            state.keys.at(static_cast<std::size_t>(kThrowKey)) = true;
         }
-        runtime.input.update(engine::platform::sample(runtime.window, consumed));
+
+        runtime.input.update(state);
+
+        // And fold it into what the next step will read. A key down on any
+        // frame since the last step is down for that step, so an edge cannot
+        // fall between two of them and go unseen.
+        runtime.latest = state;
+        for (std::size_t i = 0; i < state.keys.size(); ++i) {
+            runtime.pending.keys.at(i) = runtime.pending.keys.at(i) || state.keys.at(i);
+        }
+        for (std::size_t i = 0; i < state.mouse_buttons.size(); ++i) {
+            runtime.pending.mouse_buttons.at(i) =
+                runtime.pending.mouse_buttons.at(i) || state.mouse_buttons.at(i);
+        }
+        runtime.pending.focused = runtime.pending.focused || state.focused;
     }
 
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
@@ -2488,17 +2502,8 @@ namespace {
             const float delta = frame_delta(options, last_frame, now);
             last_frame = now;
 
-            update_input(runtime, context, options);
+            update_input(runtime, context, options, frame);
             update_camera(runtime.window, runtime.input, settings, delta);
-
-            // The key edge rather than the key being down, or holding it would
-            // fill the room with crates in one second.
-            const bool throw_now = runtime.input.pressed(action::kThrow);
-            const bool throw_this_frame =
-                options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame;
-            if (throw_now || throw_this_frame) {
-                (void)throw_crate(world, simulation, settings);
-            }
 
             // The game and the solver both run on the fixed step now, so this
             // is one call rather than two. The frame composes the matrices and

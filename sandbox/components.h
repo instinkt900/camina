@@ -41,7 +41,43 @@ namespace sandbox {
         float seconds_per_turn = kDefaultSecondsPerTurn;
     };
 
+    /**
+     * @brief Whether the puzzle has been solved, and what solves it.
+     *
+     * The state lives on a component rather than in the script table for the
+     * reason `DESIGN.md` §10 M8 gives: a reload throws the table away, and a
+     * component survives one. It is also saved by the scene file, shown in the
+     * inspector, and readable from C++, and a Lua table is none of those.
+     *
+     * `puzzle.lua` owns it. Nothing in C++ writes it.
+     */
+    struct Goal {
+        /// @brief True once a crate has come to rest inside the volume.
+        bool won = false;
+        /// @brief How many crates have to settle in it. One, for now.
+        int needed = 1;
+    };
+
 } // namespace sandbox
+
+/**
+ * @brief Describes Goal for the inspector and for scene files.
+ *
+ * The game describes its own types, the same as Spin does.
+ */
+template <>
+struct engine::reflect::Describe<sandbox::Goal> {
+    static constexpr const char* name = "Goal"; ///< The name a scene file stores.
+    /// @brief The fields, in the order an editor shows them.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(sandbox::Goal, won,
+                         Tooltip{ "True once a crate has come to rest in the volume" }),
+            ENGINE_FIELD(sandbox::Goal, needed,
+                         Tooltip{ "How many crates have to settle in it" }));
+    }
+};
 
 /**
  * @brief Describes Spin for the inspector and for scene files.
