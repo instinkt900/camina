@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace engine::script {
@@ -201,6 +202,16 @@ namespace engine::script {
         scene::World* world = nullptr;
         const scene::ComponentRegistry* components = nullptr;
         Services services;
+
+        /**
+         * Entities already told that the solver owns their pose.
+         *
+         * A script that writes a Transform to a dynamic body usually does it
+         * on every step, so this is said once rather than sixty times a
+         * second. update() drops an entity the world no longer holds, because
+         * EnTT hands the same number out again after a reload.
+         */
+        mutable std::unordered_set<entt::entity> warned_solver_owns;
     };
 
     /**
@@ -313,6 +324,37 @@ namespace engine::script {
         }
 
         /**
+         * Whether the solver owns this entity's pose.
+         *
+         * A dynamic body integrates its own pose, and step() writes the result
+         * onto the entity. So a Transform written from a script is overwritten
+         * on the next step, and `Simulation::teleport` is the verb that moves
+         * one. A static or a kinematic body is the other way round: the entity
+         * owns the pose and step() reads it, so writing the Transform is right
+         * for those two.
+         */
+        [[nodiscard]] bool solver_owns_pose(const EntityHandle& self, const scene::World& world) {
+            const physics::Simulation* simulation = physics_of(self);
+            if (simulation == nullptr || !simulation->has_body(self.id)) {
+                return false;
+            }
+            const auto* body = world.registry().try_get<physics::RigidBody>(self.id);
+            return body != nullptr && body->type == physics::BodyType::Dynamic;
+        }
+
+        /// Says once, for one entity, that a Transform written there is lost.
+        void warn_solver_owns_pose(const EntityHandle& self) {
+            if (self.context == nullptr ||
+                !self.context->warned_solver_owns.insert(self.id).second) {
+                return;
+            }
+            ENGINE_LOG_WARN("Entity {} has a dynamic body, so the solver owns its pose. The "
+                            "Transform written here is thrown away by the next step. Use "
+                            "entity:teleport() to move it, or make the body kinematic.",
+                            static_cast<std::uint32_t>(entt::to_integral(self.id)));
+        }
+
+        /**
          * Writes the fields the table names and leaves the rest alone.
          *
          * A script can move one axis without reading the whole component back.
@@ -356,13 +398,20 @@ namespace engine::script {
             if (wrote && ops->owns_transform) {
                 world->mark_dirty(self.id);
 
-                // And the step owns the pose now, so a frame between two steps
-                // blends it rather than showing the newest one. Without this a
-                // script that turns something steps it at 60 Hz and holds it
-                // still in between, which is the judder a fixed step exists to
-                // remove. owns_transform rather than a name compare, because
-                // the registry already records which component this is.
-                if (self.context->services.motion != nullptr) {
+                if (solver_owns_pose(self, *world)) {
+                    // Recording it here is worse than doing nothing. Issue
+                    // #284: begin_step() puts a recorded pose back at the top
+                    // of every step, so the body integrates and never moves,
+                    // while its velocity reads back correctly the whole time.
+                    warn_solver_owns_pose(self);
+                } else if (self.context->services.motion != nullptr) {
+                    // The step owns the pose now, so a frame between two steps
+                    // blends it rather than showing the newest one. Without
+                    // this a script that turns something steps it at 60 Hz and
+                    // holds it still in between, which is the judder a fixed
+                    // step exists to remove. owns_transform rather than a name
+                    // compare, because the registry already records which
+                    // component this is.
                     self.context->services.motion->record(*world, self.id);
                 }
             }
@@ -579,6 +628,11 @@ namespace engine::script {
             // A table of every field the component describes. A field type no
             // Value carries is left out rather than given a wrong value, so a
             // script sees nil and can say so. See issue #271.
+            //
+            // "set" writes a Transform like any other component, and that is
+            // the wrong verb for a dynamic body. The solver owns that pose and
+            // throws the write away on the next step, so write_component warns
+            // and points at teleport(). See issue #284.
             "get", &read_component, "set", &write_component,
 
             // The hierarchy. A sequence, so ipairs walks it in order.
@@ -898,6 +952,12 @@ namespace engine::script {
         impl_->context.world = &world;
 
         entt::registry& registry = world.registry();
+
+        // A reload builds a new world and EnTT hands the same entity numbers
+        // out again, so a number left here would silence the warning for
+        // whoever holds that number next.
+        std::erase_if(impl_->context.warned_solver_owns,
+                      [&registry](entt::entity entity) { return !registry.valid(entity); });
 
         // Start what is new. An entity that names a script nobody loaded gets
         // one message and no instance, so the next step does not repeat it.
