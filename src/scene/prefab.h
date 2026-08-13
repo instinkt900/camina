@@ -138,9 +138,23 @@ namespace engine::scene {
 
         /**
          * @brief Reads a prefab from a `.prefab` file.
+         *
+         * Nothing in the engine calls this. Prefab registration became
+         * data-driven and reads every prefab through the manifest instead, so
+         * the last caller went with it.
+         *
+         * It stays because the editor in M9 opens a prefab a person has just
+         * put in a directory, before any cooker has run over it, and no other
+         * entry point reads a loose file. `tests/test_prefab.cpp` covers it, so
+         * the path does not rot while it waits. See issue #185.
+         *
          * @param name The name a scene file uses.
          * @param path The file to read.
-         * @return True when the file parsed.
+         * @return True when the file read, parsed as JSON, and held a prefab
+         * this build can use. False when the file will not open, when the text
+         * is not JSON, and when the document parses but is not a prefab, which
+         * is add()'s half of the answer. The library is left alone in every
+         * failing case.
          */
         [[nodiscard]] bool add_file(std::string name, const std::filesystem::path& path);
 
