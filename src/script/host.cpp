@@ -13,6 +13,7 @@
 #include <sol/sol.hpp>
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -383,6 +384,21 @@ namespace engine::script {
         struct Script {
             std::string name; ///< The source path, for the log and a traceback.
             std::string text; ///< The source, loaded again for each instance.
+
+            /**
+             * Counts up on each reload, and never on a plain load.
+             *
+             * An instance records the value it was built from. The two
+             * disagreeing is what says the instance is running text nobody
+             * holds any more, and the sync in update() then drops it the same
+             * way it drops an instance whose entity named a different script.
+             *
+             * A counter rather than a flag on the script, because the flag
+             * would have to be cleared and there is no one moment to clear it
+             * in: several entities share one script and each is restarted on
+             * the step its own sync reaches it.
+             */
+            std::uint64_t generation = 0;
         };
 
         /**
@@ -394,6 +410,8 @@ namespace engine::script {
          */
         struct Instance {
             Guid script;
+            /// The Script::generation this was built from. See that field.
+            std::uint64_t generation = 0;
             sol::environment env;
             sol::protected_function on_update;
             sol::protected_function on_destroy;
@@ -407,6 +425,7 @@ namespace engine::script {
         std::unordered_map<entt::entity, Instance> instances;
         std::array<std::size_t, kCallbackCount> counts{};
         std::size_t stopped = 0;
+        std::size_t restarted = 0;
 
         /**
          * Reports one Lua error, and stops the instance that raised it.
@@ -651,8 +670,33 @@ namespace engine::script {
             return false;
         }
 
+        // The generation is kept across a plain load, so loading the same text
+        // twice at startup does not look like a reload to the instances.
+        const auto held = impl_->scripts.find(script);
+        const std::uint64_t generation =
+            held == impl_->scripts.end() ? 0 : held->second.generation;
+
         impl_->scripts.insert_or_assign(
-            script, Impl::Script{ std::string{ name }, std::string{ text } });
+            script, Impl::Script{ std::string{ name }, std::string{ text }, generation });
+        return true;
+    }
+
+    bool Host::reload(Guid script, std::string_view name, std::span<const std::byte> source) {
+        // The text is compiled before anything is replaced. A save in the middle
+        // of an edit must leave the running game alone, and load() reports the
+        // file and the line when it will not compile.
+        const auto held = impl_->scripts.find(script);
+        const std::uint64_t before = held == impl_->scripts.end() ? 0 : held->second.generation;
+
+        if (!load(script, name, source)) {
+            return false;
+        }
+
+        // Every instance built from the old text now disagrees with the script,
+        // and the sync in update() drops each one and starts it again. That is
+        // where on_destroy and on_start run, because both need the world and the
+        // services of a step and this call has neither.
+        impl_->scripts.at(script).generation = before + 1;
         return true;
     }
 
@@ -796,6 +840,7 @@ namespace engine::script {
             // crates running one script keep separate state this way.
             Impl::Instance instance;
             instance.script = component.script;
+            instance.generation = script->second.generation;
             instance.env = sol::environment(impl_->lua, sol::create, impl_->lua.globals());
 
             // The entity the script runs on. It goes in the environment rather
@@ -841,10 +886,35 @@ namespace engine::script {
             // any more. Keeping the old one would leave the entity running a
             // script it no longer names, and nothing would say so. The start
             // pass above gives it a new instance on the next step.
-            const bool same = component != nullptr && component->script == it->second.script;
-            if (same) {
+            //
+            // A reload counts as a different script for the same reason. The
+            // instance is running text the host no longer holds, so it is torn
+            // down and built again, which is what makes a reload a restart. Both
+            // arrive here, so there is one path that runs on_destroy and one
+            // that runs on_start, rather than a second copy for reloading.
+            const auto held = component == nullptr ? impl_->scripts.end()
+                                                   : impl_->scripts.find(component->script);
+            const bool named_the_same =
+                component != nullptr && component->script == it->second.script;
+            // A script the host does not hold counts as current, and that is
+            // load-bearing. An entity naming a script nobody loaded is given a
+            // stopped instance with no callbacks, so that the error is reported
+            // once rather than on every step. Treating an absent script as stale
+            // would drop that marker and build it again each step, and the one
+            // message would become sixty each second.
+            const bool current = held == impl_->scripts.end() ||
+                                 held->second.generation == it->second.generation;
+
+            if (named_the_same && current) {
                 ++it;
                 continue;
+            }
+
+            // A restart is the entity keeping the script it named and losing the
+            // instance anyway, which only a reload does. An entity that changed
+            // script or went away is not one.
+            if (named_the_same) {
+                ++impl_->restarted;
             }
             if (registry.valid(entity)) {
                 impl_->call(it->second, entity, Callback::Destroy, it->second.on_destroy);
@@ -936,6 +1006,8 @@ namespace engine::script {
     std::size_t Host::instance_count() const { return impl_->instances.size(); }
 
     std::size_t Host::stopped_count() const { return impl_->stopped; }
+
+    std::size_t Host::restart_count() const { return impl_->restarted; }
 
     std::size_t Host::call_count(Callback callback) const {
         return impl_->counts.at(index_of(callback));
