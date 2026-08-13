@@ -20,8 +20,11 @@
 #include "script/components.h"
 #include "script/host.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -1129,6 +1132,263 @@ namespace {
         check(after.z == 7.0F, "and the teardown could not write through a service");
     }
 
+    /// A named entity with a body and a box collider, at a height.
+    entt::entity add_body(sc::World& world, std::string_view name, engine::physics::BodyType type,
+                          const Vec3& position, const Vec3& half_extents, bool is_trigger) {
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = position });
+        world.registry().emplace<sc::Name>(entity, sc::Name{ std::string{ name } });
+        world.registry().emplace<engine::physics::RigidBody>(
+            entity, engine::physics::RigidBody{ .type = type });
+        world.registry().emplace<engine::physics::BoxCollider>(
+            entity, engine::physics::BoxCollider{ .half_extents = half_extents,
+                                                  .is_trigger = is_trigger });
+        return entity;
+    }
+
+    /// The registry a physics scene needs, which is the transform and the bodies.
+    [[nodiscard]] sc::ComponentRegistry physics_registry() {
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        engine::physics::register_components(components);
+        return components;
+    }
+
+    /**
+     * Runs @p steps whole steps, and hands the events of each one over.
+     *
+     * The delivery goes inside the loop rather than after it, which is the whole
+     * point: the simulation keeps the events of one step, so a caller that read
+     * them once for several steps would report the last and lose the rest.
+     */
+    void run_steps(sp::Host& host, sc::World& world, engine::physics::Simulation& simulation,
+                   std::uint32_t steps) {
+        constexpr float kStep = 1.0F / 60.0F;
+        for (std::uint32_t i = 0; i < steps; ++i) {
+            host.update(world, static_cast<double>(i + 1) / 60.0,
+                        sp::Services{ .physics = &simulation });
+            simulation.step(world, kStep);
+            host.deliver_physics_events(world, simulation,
+                                        sp::Services{ .physics = &simulation });
+        }
+    }
+
+    void test_a_trigger_reaches_the_volume_and_not_the_visitor() {
+        section("A trigger event runs on the volume, and names what crossed it");
+
+        // The script verifies itself and calls error() on anything it did not
+        // expect, so stopped_count() reports a wrong pairing as well as a wrong
+        // order. The count of calls is what says it ran at all.
+        sc::ComponentRegistry components = physics_registry();
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            calls = 0
+            function on_trigger(other, began)
+              calls = calls + 1
+              if entity:name() ~= "goal" then error("this ran on the wrong entity") end
+              if other:name() ~= "crate" then error("the visitor is not the crate") end
+              if calls == 1 and not began then error("the first event was not the entry") end
+              if calls == 2 and began then error("the second event was not the exit") end
+              if calls > 2 then error("more events than one crossing can make") end
+            end
+        )"),
+              "the goal script compiles");
+
+        // The visitor is deaf on purpose. A trigger has a direction, and a
+        // script on the thing that crossed must not hear the volume's event.
+        check(load(host, kSecond, R"(
+            function on_trigger(other, began) error("the visitor heard a trigger event") end
+        )"),
+              "the crate script compiles");
+
+        sc::World world;
+        const entt::entity goal = add_body(world, "goal", engine::physics::BodyType::Static,
+                                           Vec3{ 0.0F, 2.0F, 0.0F }, Vec3{ 2.0F, 0.5F, 2.0F },
+                                           true);
+        const entt::entity crate = add_body(world, "crate", engine::physics::BodyType::Dynamic,
+                                            Vec3{ 0.0F, 6.0F, 0.0F }, Vec3{ 0.5F, 0.5F, 0.5F },
+                                            false);
+        world.registry().emplace<sp::ScriptComponent>(goal, sp::ScriptComponent{ kFirst });
+        world.registry().emplace<sp::ScriptComponent>(crate, sp::ScriptComponent{ kSecond });
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+        run_steps(host, world, simulation, 240);
+
+        check(host.call_count(sp::Callback::Trigger) == 2,
+              "the volume heard the crate enter and heard it leave");
+        check(host.stopped_count() == 0, "and every check inside the script held");
+    }
+
+    void test_a_contact_reaches_both_bodies() {
+        section("A contact runs on each of the two bodies, with the other as other");
+
+        // Box3D fixes no order for a contact, so a one-sided call would land on
+        // whichever body the solver listed first and which script heard a
+        // collision would depend on solver internals.
+        sc::ComponentRegistry components = physics_registry();
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            function on_contact(other, began)
+              if entity:name() ~= "floor" then error("this ran on the wrong entity") end
+              if other:name() ~= "crate" then error("the floor was not touched by the crate") end
+            end
+        )"),
+              "the floor script compiles");
+
+        check(load(host, kSecond, R"(
+            function on_contact(other, began)
+              if entity:name() ~= "crate" then error("this ran on the wrong entity") end
+              if other:name() ~= "floor" then error("the crate did not touch the floor") end
+            end
+        )"),
+              "the crate script compiles");
+
+        sc::World world;
+        const entt::entity floor = add_body(world, "floor", engine::physics::BodyType::Static,
+                                            Vec3{ 0.0F, -1.0F, 0.0F }, Vec3{ 50.0F, 1.0F, 50.0F },
+                                            false);
+        const entt::entity crate = add_body(world, "crate", engine::physics::BodyType::Dynamic,
+                                            Vec3{ 0.0F, 3.0F, 0.0F }, Vec3{ 0.5F, 0.5F, 0.5F },
+                                            false);
+        world.registry().emplace<sp::ScriptComponent>(floor, sp::ScriptComponent{ kFirst });
+        world.registry().emplace<sp::ScriptComponent>(crate, sp::ScriptComponent{ kSecond });
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        // One step at a time, so the first contact can be measured on its own.
+        // A total taken at the end would say nothing about the sides: one script
+        // called twice and two scripts called once come to the same number.
+        std::size_t before = 0;
+        std::size_t gained = 0;
+        for (std::uint32_t i = 0; i < 240 && gained == 0; ++i) {
+            before = host.call_count(sp::Callback::Contact);
+            run_steps(host, world, simulation, 1);
+            gained = host.call_count(sp::Callback::Contact) - before;
+        }
+
+        check(gained == 2, "one contact between two scripted bodies makes two calls");
+        check(host.stopped_count() == 0, "and each side was handed the other one");
+    }
+
+    void test_one_step_reports_every_event() {
+        section("A step that makes several events reports all of them");
+
+        // Collapsing the events of a step to one would lose the ones a puzzle
+        // cares about, and it would make the result depend on the frame rate.
+        // Two crates dropped side by side from one height cross on the same
+        // step, so a delivery that reported one of them would be caught here.
+        sc::ComponentRegistry components = physics_registry();
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            function on_trigger(other, began) end
+        )"),
+              "the goal script compiles");
+
+        sc::World world;
+        const entt::entity goal = add_body(world, "goal", engine::physics::BodyType::Static,
+                                           Vec3{ 0.0F, 2.0F, 0.0F }, Vec3{ 4.0F, 0.5F, 4.0F },
+                                           true);
+        world.registry().emplace<sp::ScriptComponent>(goal, sp::ScriptComponent{ kFirst });
+
+        // Far enough apart never to touch each other, and at one height, so the
+        // two crossings fall on the same step.
+        (void)add_body(world, "left", engine::physics::BodyType::Dynamic,
+                       Vec3{ -2.0F, 6.0F, 0.0F }, Vec3{ 0.5F, 0.5F, 0.5F }, false);
+        (void)add_body(world, "right", engine::physics::BodyType::Dynamic,
+                       Vec3{ 2.0F, 6.0F, 0.0F }, Vec3{ 0.5F, 0.5F, 0.5F }, false);
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        std::size_t most_in_one_step = 0;
+        for (std::uint32_t i = 0; i < 240; ++i) {
+            const std::size_t before = host.call_count(sp::Callback::Trigger);
+            run_steps(host, world, simulation, 1);
+            most_in_one_step =
+                std::max(most_in_one_step, host.call_count(sp::Callback::Trigger) - before);
+        }
+
+        check(host.call_count(sp::Callback::Trigger) == 4,
+              "two crates entering and leaving make four calls");
+        check(most_in_one_step == 2, "and one step handed over both of them at once");
+        check(host.stopped_count() == 0, "with no script stopped");
+    }
+
+    void test_an_event_for_an_unscripted_entity_is_dropped() {
+        section("An event that names no script costs nothing and reports nothing");
+
+        // The normal case. Most things that touch carry no script, and a crate
+        // landing on a floor is two entities and usually no callback at all.
+        sc::ComponentRegistry components = physics_registry();
+        sp::Host host{ components };
+
+        sc::World world;
+        (void)add_body(world, "floor", engine::physics::BodyType::Static,
+                       Vec3{ 0.0F, -1.0F, 0.0F }, Vec3{ 50.0F, 1.0F, 50.0F }, false);
+        (void)add_body(world, "crate", engine::physics::BodyType::Dynamic,
+                       Vec3{ 0.0F, 3.0F, 0.0F }, Vec3{ 0.5F, 0.5F, 0.5F }, false);
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+        run_steps(host, world, simulation, 120);
+
+        check(host.call_count(sp::Callback::Contact) == 0, "nothing was called");
+        check(host.instance_count() == 0, "because nothing carried a script");
+        check(host.stopped_count() == 0, "and the delivery raised nothing");
+    }
+
+    void test_a_callback_reaches_the_services_of_its_step() {
+        section("A physics callback can push a body through the services");
+
+        // The delivery takes its own services, the same way update() does. A
+        // callback that could read a component but not push a body would be a
+        // half-bound call, and a puzzle that answers an overlap by moving
+        // something is the first thing anybody writes.
+        sc::ComponentRegistry components = physics_registry();
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            function on_trigger(other, began)
+              if not began then return end
+              if not other:set_velocity(vec3(0, 20, 0)) then error("the push was refused") end
+            end
+        )"),
+              "the goal script compiles");
+
+        sc::World world;
+        const entt::entity goal = add_body(world, "goal", engine::physics::BodyType::Static,
+                                           Vec3{ 0.0F, 2.0F, 0.0F }, Vec3{ 2.0F, 0.5F, 2.0F },
+                                           true);
+        const entt::entity crate = add_body(world, "crate", engine::physics::BodyType::Dynamic,
+                                            Vec3{ 0.0F, 6.0F, 0.0F }, Vec3{ 0.5F, 0.5F, 0.5F },
+                                            false);
+        world.registry().emplace<sp::ScriptComponent>(goal, sp::ScriptComponent{ kFirst });
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        // Stop on the step the push happens, so the velocity is read before
+        // gravity has taken it back.
+        for (std::uint32_t i = 0; i < 240; ++i) {
+            run_steps(host, world, simulation, 1);
+            if (host.call_count(sp::Callback::Trigger) > 0) {
+                break;
+            }
+        }
+
+        check(host.call_count(sp::Callback::Trigger) == 1, "the crate entered the volume");
+        check(host.stopped_count() == 0, "and the script pushed it without error");
+
+        Vec3 velocity{ 0.0F, 0.0F, 0.0F };
+        check(simulation.linear_velocity(crate, velocity), "the crate velocity reads back");
+        check(velocity.y > 0.0F, "and the callback sent a falling crate upward");
+    }
+
 } // namespace
 
 int main() {
@@ -1168,6 +1428,11 @@ int main() {
     test_a_script_instances_a_prefab();
     test_the_physics_verbs_reach_a_script();
     test_stop_does_not_reach_the_services_of_the_last_step();
+    test_a_trigger_reaches_the_volume_and_not_the_visitor();
+    test_a_contact_reaches_both_bodies();
+    test_one_step_reports_every_event();
+    test_an_event_for_an_unscripted_entity_is_dropped();
+    test_a_callback_reaches_the_services_of_its_step();
 
     // The pool has to stop before main returns. test_physics.cpp does the same,
     // and leaving the workers running at exit can hang the process or read as a

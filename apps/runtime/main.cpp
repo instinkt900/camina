@@ -2138,6 +2138,27 @@ namespace {
     }
 #endif
 
+#if defined(ENGINE_WITH_LUA)
+    /**
+     * What a script may reach on this step.
+     *
+     * Built for each call rather than held, so a reload that builds a new
+     * simulation cannot leave a script driving the old one. See issue #273.
+     *
+     * @param runtime Holds the input and the host.
+     * @param simulation The simulation this step ran on.
+     * @return The services to pass to the host.
+     */
+    [[nodiscard]] engine::script::Services
+    step_services(Runtime& runtime, engine::physics::Simulation& simulation) {
+        return engine::script::Services{
+            .physics = &simulation,
+            .input = &runtime.input,
+            .prefabs = &engine::scene::prefabs(),
+        };
+    }
+#endif
+
     /**
      * Runs the game logic for one fixed step.
      *
@@ -2155,14 +2176,34 @@ namespace {
 #if defined(ENGINE_WITH_LUA)
         // Passed on each step rather than held, so a reload that builds a new
         // simulation cannot leave a script driving the old one. See issue #273.
-        runtime.script.update(world, state.seconds,
-                              engine::script::Services{
-                                  .physics = &simulation,
-                                  .input = &runtime.input,
-                                  .prefabs = &engine::scene::prefabs(),
-                              });
+        runtime.script.update(world, state.seconds, step_services(runtime, simulation));
 #else
         (void)runtime;
+        (void)simulation;
+#endif
+    }
+
+    /**
+     * Hands the scripts what the step that just ran reported.
+     *
+     * This runs inside the step loop and not once for each frame. The simulation
+     * keeps the events of one step only, so a frame that ran three steps and
+     * read them once would report the third and throw the first two away. An
+     * overlap lost because two things happened in one frame is the kind nobody
+     * reproduces. See issue #263.
+     *
+     * @param runtime Holds the script host.
+     * @param world The world the events name.
+     * @param simulation The simulation that has just stepped.
+     */
+    void report_physics_events(Runtime& runtime, engine::scene::World& world,
+                               engine::physics::Simulation& simulation) {
+#if defined(ENGINE_WITH_LUA)
+        runtime.script.deliver_physics_events(world, simulation,
+                                              step_services(runtime, simulation));
+#else
+        (void)runtime;
+        (void)world;
         (void)simulation;
 #endif
     }
@@ -2210,6 +2251,10 @@ namespace {
             // order is the one that works.
             run_game_step(runtime, world, state, simulation);
             simulation.step(world, state.clock.step_seconds());
+
+            // Inside the loop, because the simulation keeps one step of events.
+            // Reading them after the loop would report the last step alone.
+            report_physics_events(runtime, world, simulation);
         }
 
         // One alpha for both, because they blend the same pair of steps. Two
