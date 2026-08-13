@@ -191,6 +191,26 @@ namespace engine::gfx {
         /// GPU timestamp queries. Allocated lazily on the first write.
         VkQueryPool timestamp_pool = VK_NULL_HANDLE; ///< The query pool, or null until created.
         std::uint32_t timestamp_count = 0;           ///< How many query slots the pool holds.
+
+        /**
+         * @brief The readback a screenshot copies out of.
+         *
+         * The copy is recorded inside the frame, before end_frame() presents.
+         * After the present the presentation engine owns the image, and no wait
+         * this side can say when it has finished reading. See issue #124.
+         *
+         * The buffer is allocated on the first request and kept, because a run
+         * that captures once is the common case and a run that captures often
+         * would otherwise allocate for each one.
+         */
+        bool capture_requested = false;                    ///< Arm the copy in the next end_frame().
+        bool capture_ready = false;                        ///< A frame has recorded a copy.
+        VkBuffer capture_buffer = VK_NULL_HANDLE;          ///< Host visible, TRANSFER_DST.
+        VmaAllocation capture_allocation = VK_NULL_HANDLE; ///< The block behind it.
+        void* capture_mapped = nullptr;                    ///< Where the copy lands.
+        std::size_t capture_size = 0;                      ///< How many bytes the buffer holds.
+        Extent2D capture_extent{};                         ///< The size the copy was taken at.
+        std::uint32_t capture_frame_index = 0;             ///< Which ring slot recorded it.
     };
 
     namespace vk {

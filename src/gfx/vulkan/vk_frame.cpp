@@ -121,12 +121,100 @@ namespace engine::gfx {
         return Result::Success;
     }
 
+    namespace {
+
+        /// Makes the readback buffer at least @p wanted bytes, keeping what fits.
+        [[nodiscard]] bool grow_capture_buffer(Device& device, std::size_t wanted) {
+            if (device.capture_buffer != VK_NULL_HANDLE && device.capture_size >= wanted) {
+                return true;
+            }
+            if (device.capture_buffer != VK_NULL_HANDLE) {
+                // Nothing reads it now. A capture is recorded and read inside one
+                // frame, and this runs before the next one records.
+                vmaDestroyBuffer(device.allocator, device.capture_buffer,
+                                 device.capture_allocation);
+                device.capture_buffer = VK_NULL_HANDLE;
+                device.capture_allocation = VK_NULL_HANDLE;
+                device.capture_mapped = nullptr;
+                device.capture_size = 0;
+            }
+
+            VkBufferCreateInfo buffer_info{};
+            buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            buffer_info.size = wanted;
+            buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+            VmaAllocationCreateInfo allocation{};
+            allocation.usage = VMA_MEMORY_USAGE_AUTO;
+            allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                               VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+            VmaAllocationInfo mapped{};
+            if (vmaCreateBuffer(device.allocator, &buffer_info, &allocation,
+                                &device.capture_buffer, &device.capture_allocation,
+                                &mapped) != VK_SUCCESS) {
+                ENGINE_LOG_ERROR("A capture of {} bytes would not allocate.", wanted);
+                device.capture_buffer = VK_NULL_HANDLE;
+                device.capture_allocation = VK_NULL_HANDLE;
+                return false;
+            }
+            device.capture_mapped = mapped.pMappedData;
+            device.capture_size = wanted;
+            return true;
+        }
+
+        /**
+         * Copies the frame's own target into the readback buffer.
+         *
+         * This runs while the target is still a colour attachment this side
+         * owns, which is the whole point. It leaves the image in CopySource, and
+         * end_frame() takes it from there.
+         */
+        [[nodiscard]] bool record_capture(Device& device, Frame& frame) {
+            constexpr std::size_t kBytesPerPixel = 4;
+            const Extent2D extent = frame.commands.extent;
+            const std::size_t wanted =
+                static_cast<std::size_t>(extent.width) * extent.height * kBytesPerPixel;
+            if (extent.width == 0 || extent.height == 0 || !grow_capture_buffer(device, wanted)) {
+                return false;
+            }
+
+            vk::transition_image(frame.commands.buffer, frame.commands.target_image,
+                                 ResourceState::ColorTarget, ResourceState::CopySource,
+                                 VK_IMAGE_ASPECT_COLOR_BIT);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = VkExtent3D{ extent.width, extent.height, 1 };
+            vkCmdCopyImageToBuffer(frame.commands.buffer, frame.commands.target_image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, device.capture_buffer,
+                                   1, &region);
+
+            device.capture_extent = extent;
+            device.capture_frame_index = device.frame_index;
+            device.capture_ready = true;
+            return true;
+        }
+
+    } // namespace
+
     Result end_frame(Device* device) {
         ENGINE_CHECK(device != nullptr, "end_frame needs a device.");
         ENGINE_ASSERT(device->frame_open, "end_frame was called without a begin_frame.");
 
         Frame& frame = device->frames[device->frame_index];
         device->frame_open = false;
+
+        // A capture copies here, inside the frame, while this side still owns
+        // the image. Reading it after the present cannot be made safe: the
+        // presentation engine keeps using the image, and vkDeviceWaitIdle waits
+        // only for queue work. See issue #124.
+        //
+        // The copy goes in before the transition below, so the image is still a
+        // colour target and one barrier moves it to CopySource.
+        const bool capturing = device->capture_requested && record_capture(*device, frame);
+        device->capture_requested = false;
 
         // Presentation stays here rather than in the graph. The wait belongs to
         // the present semaphore below, and a caller that forgot this barrier
@@ -136,8 +224,10 @@ namespace engine::gfx {
         // Offscreen there is nothing to present to, and PRESENT_SRC is a layout
         // only a swapchain image may take. The way out is a copy instead, so the
         // image ends where capture_frame() needs it.
+        //
+        // A capture already moved it to CopySource, so that is where it starts.
         vk::transition_image(frame.commands.buffer, frame.commands.target_image,
-                             ResourceState::ColorTarget,
+                             capturing ? ResourceState::CopySource : ResourceState::ColorTarget,
                              device->headless ? ResourceState::CopySource : ResourceState::Present,
                              VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -434,6 +524,9 @@ namespace engine::gfx {
             return Result::ErrorInit;
         }
 
+        // The size query answers from the swapchain, because a caller asks it to
+        // size a buffer before any capture has been recorded. device_extent() in
+        // the runtime uses it that way on a frame of its own.
         const std::uint32_t width = device->swapchain_extent.width;
         const std::uint32_t height = device->swapchain_extent.height;
         if (out_extent != nullptr) {
@@ -444,72 +537,51 @@ namespace engine::gfx {
             return Result::Success;
         }
 
-        constexpr std::size_t kBytesPerPixel = 4;
-        const std::size_t wanted =
-            static_cast<std::size_t>(width) * height * kBytesPerPixel;
-        if (width == 0 || height == 0 || size < wanted) {
-            ENGINE_LOG_ERROR("capture_frame got {} bytes and {} by {} pixels need {}.", size,
-                             width, height, wanted);
+        if (!device->capture_ready) {
+            ENGINE_LOG_ERROR("capture_frame found no capture. Call request_capture() before "
+                             "the end_frame() of the frame you want.");
             return Result::ErrorInit;
         }
 
-        // The frame has been presented, so nothing is reading the image. Waiting
-        // is the simplest correct synchronization, and a capture happens once.
-        vkDeviceWaitIdle(device->device);
-
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.size = wanted;
-        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-        VmaAllocationCreateInfo allocation{};
-        allocation.usage = VMA_MEMORY_USAGE_AUTO;
-        allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                           VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-        VkBuffer readback = VK_NULL_HANDLE;
-        VmaAllocation readback_allocation = VK_NULL_HANDLE;
-        VmaAllocationInfo mapped{};
-        ENGINE_VK_TRY(vmaCreateBuffer(device->allocator, &buffer_info, &allocation, &readback,
-                                      &readback_allocation, &mapped));
-
-        VkImage image = device->images[device->image_index];
-        Result result = vk::immediate_submit(*device, [&](VkCommandBuffer commands) {
-            // end_frame() left it in PRESENT_SRC, or in CopySource offscreen
-            // where there is no presentation to leave it ready for.
-            vk::transition_image(commands, image,
-                                 device->headless ? ResourceState::CopySource
-                                                  : ResourceState::Present,
-                                 ResourceState::CopySource, VK_IMAGE_ASPECT_COLOR_BIT);
-
-            VkBufferImageCopy region{};
-            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            region.imageSubresource.layerCount = 1;
-            region.imageExtent = VkExtent3D{ width, height, 1 };
-            vkCmdCopyImageToBuffer(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   readback, 1, &region);
-
-            // Put it back, because the presentation engine still owns it and the
-            // next acquire expects to find it as it was.
-            //
-            // Offscreen it stays where it is. PRESENT_SRC needs the swapchain
-            // extension, which a device with no surface never enabled, and the
-            // next frame starts this image from Undefined anyway.
-            if (!device->headless) {
-                vk::transition_image(commands, image, ResourceState::CopySource,
-                                     ResourceState::Present, VK_IMAGE_ASPECT_COLOR_BIT);
-            }
-        });
-
-        if (succeeded(result)) {
-            copy_as_rgba(mapped.pMappedData, pixels, wanted, device->swapchain_format);
-        } else {
-            ENGINE_LOG_ERROR("capture_frame could not read the swapchain: {}",
-                             result_name(result));
+        // The capture is the size the frame drew at, which a resize can leave
+        // behind the swapchain. Report what was actually taken, so the caller
+        // writes a PNG of the right shape rather than a sheared one.
+        if (out_extent != nullptr) {
+            *out_extent = device->capture_extent;
         }
 
-        vmaDestroyBuffer(device->allocator, readback, readback_allocation);
-        return result;
+        constexpr std::size_t kBytesPerPixel = 4;
+        const std::size_t wanted = static_cast<std::size_t>(device->capture_extent.width) *
+                                   device->capture_extent.height * kBytesPerPixel;
+        if (wanted == 0 || size < wanted) {
+            ENGINE_LOG_ERROR("capture_frame got {} bytes and {} by {} pixels need {}.", size,
+                             device->capture_extent.width, device->capture_extent.height,
+                             wanted);
+            return Result::ErrorInit;
+        }
+
+        // Wait for the frame that recorded the copy, and nothing else. The copy
+        // is queue work in that frame's command buffer, so its fence is exactly
+        // the right thing to wait on.
+        //
+        // vkDeviceWaitIdle used to stand here, with a comment saying the frame
+        // had been presented so nothing was reading the image. That was wrong
+        // twice over. It waits for queue work, and presentation is not queue
+        // work, so it said nothing about the compositor. And the copy it guarded
+        // read the presented image, which the compositor still owns. See #124.
+        Frame& recorded = device->frames[device->capture_frame_index];
+        ENGINE_VK_TRY(
+            vkWaitForFences(device->device, 1, &recorded.in_flight, VK_TRUE, UINT64_MAX));
+
+        ENGINE_VK_TRY(vmaInvalidateAllocation(device->allocator, device->capture_allocation, 0,
+                                              wanted));
+        copy_as_rgba(device->capture_mapped, pixels, wanted, device->swapchain_format);
+        return Result::Success;
+    }
+
+    void request_capture(Device* device) {
+        ENGINE_CHECK(device != nullptr, "request_capture needs a device.");
+        device->capture_requested = true;
     }
 
     void cmd_reset_timestamps(CommandList* commands) {

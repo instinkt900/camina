@@ -2510,6 +2510,18 @@ namespace {
             // draws after it. Reversing those two would draw a frame behind.
             advance_simulation(runtime, step, settings, simulation, world, delta, physics_stats);
 
+            // Arm the capture before the frame that will be the last one, because
+            // the copy happens inside end_frame() while this side still owns the
+            // image. frame counts what has been drawn, so the frame about to run
+            // is frame + 1. See issue #124.
+            //
+            // A skipped frame leaves the request armed, because end_frame() is
+            // what consumes it, and a frame that never ended never copied.
+            if (!options.screenshot.empty() && options.max_frames > 0 &&
+                frame + 1 >= options.max_frames) {
+                engine::gfx::request_capture(runtime.device);
+            }
+
             engine::gfx::Extent2D drawn_extent{};
             const FrameOutcome outcome = draw_frame(context, last_extent, drawn_extent);
             if (outcome == FrameOutcome::Failed) {
