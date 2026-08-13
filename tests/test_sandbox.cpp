@@ -18,6 +18,7 @@
 #include "scene/component_registry.h"
 #include "scene/components.h"
 #include "scene/prefab.h"
+#include "scene/references.h"
 #include "scene/scene_file.h"
 #include "scene/world.h"
 
@@ -331,8 +332,7 @@ namespace {
         check(identities.find("asset:") == std::string::npos,
               "a world saves identities, because that is what it holds");
 
-        const std::size_t restored =
-            engine::assets::restore_references(saved, content.manifest());
+        const std::size_t restored = sc::restore_references(saved, content.manifest(), registry);
         check(restored > 0, "saving puts references back");
 
         const std::string text = saved.dump();
@@ -344,23 +344,22 @@ namespace {
         check(text.find("\"beacon\"") != std::string::npos, "an ordinary name is untouched");
 
         // What went back has to be what the cooker reads forward again, or the
-        // save writes a file the next cook cannot resolve.
-        for (const auto& entity : saved["entities"]) {
-            for (const auto& part : entity.value("components", nlohmann::json::object())) {
-                for (const auto& value : part) {
-                    if (!value.is_string()) {
-                        continue;
-                    }
-                    const auto text_value = value.get<std::string>();
-                    if (!text_value.starts_with(engine::assets::kAssetPrefix)) {
-                        continue;
-                    }
-                    engine::assets::AssetReference parsed;
-                    check(engine::assets::parse_reference(text_value, parsed),
-                          "every reference written back reads forward again");
-                }
+        // save writes a file the next cook cannot resolve. The walk is the one
+        // the save used, so a scene of prefab instances is covered: nearly
+        // every reference the sandbox holds sits in an override patch.
+        std::size_t seen = 0;
+        sc::for_each_reference_field(saved, registry, [&](nlohmann::json& value) {
+            const auto text_value = value.get<std::string>();
+            if (!text_value.starts_with(engine::assets::kAssetPrefix)) {
+                return true;
             }
-        }
+            ++seen;
+            engine::assets::AssetReference parsed;
+            check(engine::assets::parse_reference(text_value, parsed),
+                  "every reference written back reads forward again");
+            return true;
+        });
+        check(seen == restored, "and the walk finds every one of them again");
     }
 
     void test_overrides_reach_the_world() {

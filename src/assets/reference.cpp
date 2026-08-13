@@ -207,30 +207,4 @@ namespace engine::assets {
         return {};
     }
 
-    std::size_t restore_references(nlohmann::json& document, const Manifest& manifest) {
-        if (document.is_object() || document.is_array()) {
-            std::size_t count = 0;
-            for (auto& child : document) {
-                count += restore_references(child, manifest);
-            }
-            return count;
-        }
-        if (!document.is_string()) {
-            return 0;
-        }
-
-        Guid guid;
-        if (!Guid::parse(document.get<std::string>(), guid)) {
-            return 0;
-        }
-        std::string named = reference_for(manifest, guid);
-        if (named.empty()) {
-            // An identity nothing in this manifest produced. Leaving it alone
-            // keeps a document readable rather than dropping what it held.
-            return 0;
-        }
-        document = std::move(named);
-        return 1;
-    }
-
 } // namespace engine::assets

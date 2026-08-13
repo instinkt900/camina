@@ -1,6 +1,5 @@
 #include "assets/hot_reload.h"
 #include "assets/manifest.h"
-#include "assets/reference.h"
 #include "assets/script.h"
 #include "core/arena.h"
 #include "core/frame_stats.h"
@@ -33,6 +32,7 @@
 #include "script/host.h"
 #endif
 #include "scene/prefab.h"
+#include "scene/references.h"
 #include "scene/scene_file.h"
 #include "scene/step_motion.h"
 #include "scene/components.h"
@@ -632,7 +632,7 @@ namespace {
                             const engine::assets::Content& content) {
         nlohmann::json document = engine::scene::save_scene(world);
         const std::size_t restored =
-            engine::assets::restore_references(document, content.manifest());
+            engine::scene::restore_references(document, content.manifest());
 
         // Through a temporary in the same directory, then a rename. Writing
         // over the scene directly means a disk that fills up, or a close that

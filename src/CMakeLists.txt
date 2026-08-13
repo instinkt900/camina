@@ -48,6 +48,7 @@ add_library(engine_core STATIC
     scene/component_registry.cpp
     scene/scene_file.cpp
     scene/prefab.cpp
+    scene/references.cpp
 )
 
 # M8. The script host and the component that names a script. These join
