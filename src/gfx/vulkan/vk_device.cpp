@@ -635,6 +635,16 @@ namespace engine::gfx {
                 vkDestroyQueryPool(device->device, device->timestamp_pool, nullptr);
                 device->timestamp_pool = VK_NULL_HANDLE;
             }
+            // The readback a screenshot copies out of. It is allocated on the
+            // first request_capture() and kept, so a run that captures once
+            // still frees it here.
+            if (device->capture_buffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(device->allocator, device->capture_buffer,
+                                 device->capture_allocation);
+                device->capture_buffer = VK_NULL_HANDLE;
+                device->capture_allocation = VK_NULL_HANDLE;
+                device->capture_mapped = nullptr;
+            }
         }
 
         if (device->allocator != VK_NULL_HANDLE) {

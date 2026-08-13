@@ -114,7 +114,30 @@ namespace engine::gfx {
     [[nodiscard]] Result end_frame(Device* device);
 
     /**
-     * @brief Copies the frame that was presented last into host memory.
+     * @brief Asks the next end_frame() to keep a copy of what it drew.
+     *
+     * The copy happens inside the frame, while this side still owns the image.
+     * That is the only place it can happen. After end_frame() presents, the
+     * presentation engine owns the image and no wait on this side can say when
+     * it has finished reading it. See issue #124.
+     *
+     * Call this before the end_frame() of the frame you want, then
+     * capture_frame() after it.
+     *
+     * @code
+     * if (this_is_the_frame_i_want) {
+     *     engine::gfx::request_capture(device);
+     * }
+     * (void)engine::gfx::end_frame(device);
+     * (void)engine::gfx::capture_frame(device, pixels, size, &extent);
+     * @endcode
+     *
+     * @param device The device that will draw the frame.
+     */
+    void request_capture(Device* device);
+
+    /**
+     * @brief Copies the frame that request_capture() asked for into host memory.
      *
      * This is how a person or a test looks at what the renderer drew. A run
      * that ends with no error says the commands were valid. It says nothing
@@ -124,19 +147,22 @@ namespace engine::gfx {
      * The pixels arrive as 8 bits for each channel in RGBA order, whatever the
      * swapchain format is. The alpha is whatever the frame wrote.
      *
-     * This waits for the device to go idle, so it costs a stall. Call it once
-     * at the end of a run and not on every frame.
+     * This waits for the frame that recorded the copy, and for nothing else. It
+     * no longer stalls the whole device.
      *
      * @warning Call this after end_frame() and not between begin_frame() and
      * end_frame(). There is no frame to read while one is still being recorded.
      *
      * @param device The device that drew the frame.
-     * @param pixels Where to write. It must hold width times height times 4 bytes.
+     * @param pixels Where to write. It must hold width times height times 4
+     * bytes. Pass null to ask for the size alone, which answers from the
+     * swapchain and needs no capture.
      * @param size How many bytes @p pixels holds.
      * @param out_extent The size that was written. Ask for it with a null
      * @p pixels to size a buffer before the second call.
      * @return Result::Success when the pixels were written. Result::ErrorInit
-     * when @p size is too small, or when the swapchain cannot be read from.
+     * when @p size is too small, when the swapchain cannot be read from, or
+     * when no request_capture() preceded the last end_frame().
      */
     [[nodiscard]] Result capture_frame(Device* device, void* pixels, std::size_t size,
                                        Extent2D* out_extent);
