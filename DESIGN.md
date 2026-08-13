@@ -1873,7 +1873,8 @@ collider reads the scale on its entity now, and `sandbox/content/main.scene` sta
 and `scene::StepMotion` blends what it moves for the frame. The §9 note holds both.
 
 ### M8 — Scripting
-sol2. A `ScriptComponent` with `on_start`, `on_update`, and `on_destroy`. Reflection-driven
+sol2. A `ScriptComponent` with `on_start`, `on_update`, `on_destroy`, `on_trigger`, and
+`on_contact`. Reflection-driven
 binding with a **curated** surface. A fully mechanical binding produces an API that nobody
 enjoys. Add hot reload from the start.
 **Done when:** the sandbox game logic runs entirely in Lua.
@@ -1940,6 +1941,19 @@ runs.
 **The milestone needs two things from physics that M7 did not build.** A trigger volume and a
 contact event. The puzzle asks whether the stack landed in the goal, and nothing in the engine
 can answer that today. M8.4 builds both, and §5 gains whatever Box3D costs to read.
+
+**The two events reach a script differently, because they are not the same shape.** A trigger
+has a direction: one side is the volume and the other crossed it. So `on_trigger(other, began)`
+runs on the volume alone, and `other` is the visitor. A goal asks what landed in it, and a
+crate never has to know what a goal is. A contact has no direction that Box3D promises, so
+`on_contact(other, began)` runs on both bodies, each with the other as `other`. A one-sided
+call there would land on whichever body the solver listed first, and which script heard a
+collision would depend on solver internals.
+
+**The delivery runs inside the fixed step, right after the solver.** The simulation keeps the
+events of one step only, so a frame that ran three steps and read them once would report the
+third and throw the first two away. That would lose the events a puzzle cares about, and it
+would put the result back on the frame rate that #245 removed it from.
 
 **The done-when test is authoring, not porting.** The sandbox game logic today is `Spin` at 30
 lines, plus a crate throw that lives in the application rather than in the game. Moving those

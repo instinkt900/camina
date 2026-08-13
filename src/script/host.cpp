@@ -22,7 +22,7 @@ namespace engine::script {
     namespace {
 
         /// How many values Callback names, so the counters are one array.
-        constexpr std::size_t kCallbackCount = 3;
+        constexpr std::size_t kCallbackCount = 5;
 
         [[nodiscard]] std::size_t index_of(Callback callback) {
             return static_cast<std::size_t>(callback);
@@ -37,6 +37,10 @@ namespace engine::script {
                 return "on_update";
             case Callback::Destroy:
                 return "on_destroy";
+            case Callback::Trigger:
+                return "on_trigger";
+            case Callback::Contact:
+                return "on_contact";
             }
             return "";
         }
@@ -393,6 +397,8 @@ namespace engine::script {
             sol::environment env;
             sol::protected_function on_update;
             sol::protected_function on_destroy;
+            sol::protected_function on_trigger;
+            sol::protected_function on_contact;
             /// An error stopped this one. It is never called again.
             bool stopped = false;
         };
@@ -449,6 +455,27 @@ namespace engine::script {
             ++counts.at(index_of(Callback::Update));
             if (!result.valid()) {
                 fail(instance, entity, Callback::Update, result);
+            }
+        }
+
+        /**
+         * The overload for the two physics callbacks, which take the same pair.
+         *
+         * @p other is handed over as a handle rather than as a number, so a
+         * script reads its name and its components the same way it reads its
+         * own entity. The handle may name an entity that has gone, because Box3D
+         * reports the end of an overlap when a shape is destroyed, and
+         * `other:valid()` is what a script asks about that.
+         */
+        void call_touch(Instance& instance, entt::entity entity, Callback callback,
+                        const sol::protected_function& fn, EntityHandle other, bool began) {
+            if (instance.stopped || !fn.valid()) {
+                return;
+            }
+            const sol::protected_function_result result = fn(other, began);
+            ++counts.at(index_of(callback));
+            if (!result.valid()) {
+                fail(instance, entity, callback, result);
             }
         }
     };
@@ -794,6 +821,8 @@ namespace engine::script {
             // step rather than a table lookup that misses.
             instance.on_update = instance.env[name_of(Callback::Update)];
             instance.on_destroy = instance.env[name_of(Callback::Destroy)];
+            instance.on_trigger = instance.env[name_of(Callback::Trigger)];
+            instance.on_contact = instance.env[name_of(Callback::Contact)];
 
             const sol::protected_function on_start = instance.env[name_of(Callback::Start)];
             impl_->call(instance, entity, Callback::Start, on_start);
@@ -828,6 +857,52 @@ namespace engine::script {
 
         for (auto& [entity, instance] : impl_->instances) {
             impl_->call_update(instance, entity, seconds);
+        }
+    }
+
+    void Host::deliver_physics_events(scene::World& world, const physics::Simulation& simulation,
+                                      const Services& services) {
+        // The world and the services of this call rather than the ones the last
+        // update() left, for the reason Services records: a reload builds a new
+        // simulation, and a callback that pushed a body through a stale handle
+        // would reach the one nobody is stepping.
+        impl_->context.world = &world;
+        impl_->context.services = services;
+
+        const entt::registry& registry = world.registry();
+
+        // The instance is looked up rather than walked, because most events name
+        // an entity with no script. A crate landing on a floor is two entities
+        // and normally no callback at all.
+        const auto deliver = [&](entt::entity self, entt::entity other, Callback callback,
+                                 bool began) {
+            if (self == entt::null || !registry.valid(self)) {
+                return;
+            }
+            const auto found = impl_->instances.find(self);
+            if (found == impl_->instances.end()) {
+                return;
+            }
+            Impl::Instance& instance = found->second;
+            const sol::protected_function& fn =
+                callback == Callback::Trigger ? instance.on_trigger : instance.on_contact;
+            impl_->call_touch(instance, self, callback, fn,
+                              EntityHandle{ other, &impl_->context }, began);
+        };
+
+        // The trigger only. The volume is what the event is about, and DESIGN.md
+        // section 10 M8 wants the goal to ask what landed in it rather than every
+        // crate to know what a goal is.
+        for (const physics::Simulation::Touch& touch : simulation.trigger_events()) {
+            deliver(touch.a, touch.b, Callback::Trigger, touch.began);
+        }
+
+        // Both sides. Box3D promises no order here, so a one-sided call would
+        // reach whichever body the solver happened to list first, and which
+        // script heard a collision would depend on solver internals.
+        for (const physics::Simulation::Touch& touch : simulation.contact_events()) {
+            deliver(touch.a, touch.b, Callback::Contact, touch.began);
+            deliver(touch.b, touch.a, Callback::Contact, touch.began);
         }
     }
 

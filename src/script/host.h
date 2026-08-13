@@ -51,7 +51,7 @@ namespace engine::platform {
 namespace engine::script {
 
     /**
-     * @brief The three calls a script may declare.
+     * @brief The five calls a script may declare.
      *
      * A script declares what it needs and leaves out the rest. A script with no
      * `on_update` costs nothing each step, because the host looks the function
@@ -61,6 +61,8 @@ namespace engine::script {
         Start,   ///< `on_start()`, once, when the entity gets its instance.
         Update,  ///< `on_update(seconds)`, once for each fixed step.
         Destroy, ///< `on_destroy()`, once, when the entity loses its instance.
+        Trigger, ///< `on_trigger(other, began)`, on the entity that is the trigger.
+        Contact, ///< `on_contact(other, began)`, on each of the two bodies.
     };
 
     /**
@@ -157,6 +159,37 @@ namespace engine::script {
          *                 binds none of it, which is what a test wants.
          */
         void update(scene::World& world, double seconds, const Services& services = {});
+
+        /**
+         * @brief Hands the scripts what the last solver step reported.
+         *
+         * @warning **Call this inside the fixed step, right after
+         * `physics::Simulation::step()`, and never once for each frame.** The
+         * simulation keeps the events of one step only, so a frame that ran
+         * three steps and read them once would report the third step and throw
+         * the first two away. A puzzle that missed an overlap because two things
+         * happened in one frame is the kind nobody reproduces. See issue #263.
+         *
+         * **A trigger overlap goes to the trigger, and a contact goes to both
+         * sides.** The two are not the same shape. A trigger has a direction,
+         * because one side is the volume and the other crossed it, so
+         * `on_trigger(other, began)` runs on the volume alone and `other` is the
+         * visitor. A contact has no direction that Box3D promises, so a
+         * one-sided call would land on whichever body the solver listed first.
+         * `on_contact(other, began)` therefore runs on both, each with the other
+         * as `other`.
+         *
+         * An entity with no instance is skipped, which is the normal case: most
+         * things that touch carry no script. An entity the world no longer holds
+         * is skipped too, because Box3D reports the end of an overlap when a
+         * shape is destroyed.
+         *
+         * @param world The world the events name. The same one step() ran on.
+         * @param simulation The simulation to read the events out of.
+         * @param services What a callback may reach, the same as update().
+         */
+        void deliver_physics_events(scene::World& world, const physics::Simulation& simulation,
+                                    const Services& services = {});
 
         /**
          * @brief Runs `on_destroy` on every instance and drops them all.
