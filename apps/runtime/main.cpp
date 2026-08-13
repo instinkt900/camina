@@ -1688,6 +1688,46 @@ namespace {
     }
 
     /**
+     * Loads every changed script again, and restarts what was running it.
+     *
+     * A script that will not compile is reported by reload() and changes
+     * nothing, so the entity carries on with the text it already had. That is
+     * what makes saving in the middle of an edit safe.
+     *
+     * **A script the manifest no longer holds is left alone.** Its bytes are
+     * already in this process and the entities running it keep running it.
+     * Deleting a source file during a session should not stop a game, and the
+     * next start reports the entity as naming a script nobody loaded.
+     *
+     * @param runtime Holds the open content and the host.
+     * @param changed What the cook reported.
+     */
+    void reload_scripts(Runtime& runtime,
+                        const std::vector<engine::assets::AssetChange>& changed) {
+#if defined(ENGINE_WITH_LUA)
+        for (const engine::assets::AssetChange& change : changed) {
+            if (change.gone || !std::string_view{ change.cooked }.ends_with(
+                                   engine::assets::kScriptExtension)) {
+                continue;
+            }
+
+            std::vector<std::byte> bytes;
+            if (!runtime.game_content.read_bytes(change.guid, bytes)) {
+                ENGINE_LOG_ERROR("{} cooked and will not read, so it was not loaded again.",
+                                 change.cooked);
+                continue;
+            }
+            if (runtime.script.reload(change.guid, change.cooked, bytes)) {
+                ENGINE_LOG_INFO("{} was read again.", change.cooked);
+            }
+        }
+#else
+        (void)runtime;
+        (void)changed;
+#endif
+    }
+
+    /**
      * Cooks whatever changed and swaps it in.
      *
      * Call this between frames. MeshPass::reload() waits for the frames in
@@ -1742,6 +1782,7 @@ namespace {
         }
 
         runtime.mesh.reload(identities_of(changed));
+        reload_scripts(runtime, changed);
         // A mesh or a texture swapped in behind the entities that name it, so
         // the world stands and whatever was selected is still that entity.
         if (!world_was_built_from(changed)) {

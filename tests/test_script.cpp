@@ -205,6 +205,252 @@ namespace {
         check(host.stopped_count() == 1, "and the entity is counted as stopped once");
     }
 
+    /// Loads @p text again under @p guid, and reports whether it compiled.
+    [[nodiscard]] bool reload(sp::Host& host, engine::Guid guid, std::string_view text) {
+        return host.reload(guid, "test.lua", bytes_of(text));
+    }
+
+    /**
+     * Runs the two steps a restart takes, and says what the instance did.
+     *
+     * A reload marks the instance rather than tearing it down there and then,
+     * because `on_destroy` and `on_start` need the world and the services of a
+     * step. So the sync drops it on the next update() and builds it again on the
+     * one after, the same as an entity that changed which script it names.
+     */
+    void settle_reload(sp::Host& host, sc::World& world) {
+        host.update(world, 1.0);
+        host.update(world, 2.0);
+    }
+
+    void test_a_reload_restarts_the_instance() {
+        section("A reload runs on_destroy, throws the table away, and runs on_start");
+
+        sp::Host host;
+        check(load(host, kFirst, R"(
+            function on_start() end
+            function on_update(s) end
+            function on_destroy() end
+        )"),
+              "the first text compiles");
+
+        sc::World world;
+        (void)with_script(world, kFirst);
+
+        host.update(world, 0.0);
+        check(host.call_count(sp::Callback::Start) == 1, "the entity started once");
+        check(host.call_count(sp::Callback::Destroy) == 0, "and has not been torn down");
+
+        check(reload(host, kFirst, R"(
+            function on_start() end
+            function on_update(s) end
+            function on_destroy() end
+        )"),
+              "the new text compiles");
+
+        settle_reload(host, world);
+
+        // Both halves. Only on_destroy would be a leak, and only on_start would
+        // be an instance built over one nobody told it was going.
+        check(host.call_count(sp::Callback::Destroy) == 1, "the old instance was torn down");
+        check(host.call_count(sp::Callback::Start) == 2, "and the new one was started");
+        check(host.instance_count() == 1, "and the entity is running again");
+        check(host.restart_count() == 1, "which counts as one restart");
+        check(host.stopped_count() == 0, "with nothing stopped");
+    }
+
+    void test_a_reload_throws_the_script_table_away() {
+        section("A value a script kept in its own table does not survive a reload");
+
+        // The rule, and it is deliberate. Carrying a table across two versions
+        // of a chunk has no answer for a value whose shape changed, and the
+        // wrong answer there reads as a game bug. State that has to survive goes
+        // on a component, which the test below checks.
+        sp::Host host;
+        const std::string_view text = R"(
+            counter = 0
+            function on_update(s)
+              counter = counter + 1
+              if counter > 2 then error("the table survived the reload") end
+            end
+        )";
+        check(load(host, kFirst, text), "the script compiles");
+
+        sc::World world;
+        (void)with_script(world, kFirst);
+
+        // Two steps, so the counter is at its ceiling. A third with the same
+        // table would raise, and that is what says the table went away.
+        host.update(world, 0.0);
+        host.update(world, 1.0);
+        check(host.stopped_count() == 0, "two steps are within what the script allows");
+
+        check(reload(host, kFirst, text), "the same text loads again");
+
+        // settle_reload runs on_update once on the fresh instance, so the
+        // counter is at 1 after it. A table that survived would be at 3 and the
+        // script would have raised inside settle_reload itself.
+        settle_reload(host, world);
+        host.update(world, 3.0);
+        check(host.stopped_count() == 0, "the counter started from zero again");
+    }
+
+    void test_component_state_survives_a_reload() {
+        section("State a script put on a component is still there after a reload");
+
+        // The other half of the rule above. A reload rebuilds the Lua instance
+        // and no entity, so nothing it wrote to the world moves.
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            function on_start()
+              entity:set("Transform", { position = vec3(0, 7, 0) })
+            end
+            function on_update(s) end
+        )"),
+              "the writing script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        host.update(world, 0.0);
+        check(world.local(entity).position.y == 7.0F, "the script wrote the component");
+
+        // The new text reads the component rather than writing it, and raises
+        // when the value is not the one the old version left. So the check is
+        // the reload seeing state the previous version put there.
+        check(reload(host, kFirst, R"(
+            function on_start()
+              local t = entity:get("Transform")
+              if t == nil then error("no transform after the reload") end
+              if math.abs(t.position.y - 7) > 1e-4 then error("the component was reset") end
+            end
+            function on_update(s) end
+        )"),
+              "the reading script compiles");
+
+        settle_reload(host, world);
+        check(host.call_count(sp::Callback::Start) == 2, "the new version started");
+        check(host.stopped_count() == 0, "and it found the value the old one wrote");
+        check(world.local(entity).position.y == 7.0F, "which is still on the entity");
+    }
+
+    void test_a_reload_that_will_not_compile_changes_nothing() {
+        section("A script that will not compile leaves the old one running");
+
+        // A person saves in the middle of an edit, and the file is briefly not
+        // Lua. Taking the game down for that would make the whole feature worse
+        // than restarting by hand.
+        sp::Host host;
+        check(load(host, kFirst, R"(
+            function on_update(s) end
+        )"),
+              "the good text compiles");
+
+        sc::World world;
+        (void)with_script(world, kFirst);
+        host.update(world, 0.0);
+        const std::size_t before = host.call_count(sp::Callback::Update);
+
+        check(!reload(host, kFirst, "function on_update(s) this is not lua end"),
+              "the broken text is refused");
+
+        settle_reload(host, world);
+        check(host.instance_count() == 1, "the instance was never torn down");
+        check(host.call_count(sp::Callback::Destroy) == 0, "so on_destroy did not run");
+        check(host.restart_count() == 0, "and nothing was restarted");
+        check(host.call_count(sp::Callback::Update) > before, "the old text is still running");
+        check(host.stopped_count() == 0, "and nothing stopped");
+    }
+
+    void test_a_reload_reaches_every_entity_sharing_the_script() {
+        section("Reloading one script restarts every entity running it");
+
+        sp::Host host;
+        // Both declare on_destroy, because the count below is what says the
+        // entity on the other script was never torn down. A script with no
+        // on_destroy is skipped and counts nothing, so the check would pass
+        // whether the instance was dropped or not.
+        const std::string_view shared = "function on_update(s) end\nfunction on_destroy() end\n";
+        check(load(host, kFirst, shared), "the shared script compiles");
+        check(load(host, kSecond, shared), "and the other one");
+
+        sc::World world;
+        (void)with_script(world, kFirst);
+        (void)with_script(world, kFirst);
+        (void)with_script(world, kFirst);
+        (void)with_script(world, kSecond);
+
+        host.update(world, 0.0);
+        check(host.instance_count() == 4, "four entities are running");
+
+        check(reload(host, kFirst, shared), "the shared script reloads");
+        settle_reload(host, world);
+
+        // Three and not one. A reload that reached whichever instance the map
+        // happened to hand back first would pass a count of instances and fail
+        // this.
+        check(host.restart_count() == 3, "all three entities sharing it restarted");
+        check(host.instance_count() == 4, "and every entity is running again");
+        check(host.call_count(sp::Callback::Destroy) == 3, "the entity on the other script "
+                                                           "was left alone");
+    }
+
+    void test_a_reload_revives_a_stopped_instance() {
+        section("Fixing a script and saving it starts the entity again");
+
+        // An error stops that instance and it is never called again, which is
+        // what keeps a broken script off the frame. Without this, the only way
+        // back is a scene reload, and the person who just fixed the file has no
+        // reason to expect that.
+        sp::Host host;
+        check(load(host, kFirst, "function on_update(s) error('boom') end\n"),
+              "the throwing script compiles");
+
+        sc::World world;
+        (void)with_script(world, kFirst);
+
+        host.update(world, 0.0);
+        check(host.stopped_count() == 1, "the instance stopped");
+
+        check(reload(host, kFirst, "function on_update(s) end\n"), "the fixed text loads");
+        settle_reload(host, world);
+
+        check(host.stopped_count() == 0, "the stopped instance is gone");
+        check(host.instance_count() == 1, "and the entity is running the new text");
+
+        const std::size_t before = host.call_count(sp::Callback::Update);
+        host.update(world, 5.0);
+        check(host.call_count(sp::Callback::Update) == before + 1, "and it updates again");
+    }
+
+    void test_a_plain_load_does_not_restart_anything() {
+        section("Loading a script the host already holds restarts nothing");
+
+        // load() is what startup uses, and it walks every cooked script. A load
+        // that looked like a reload would tear every instance down and build it
+        // again each time somebody called it.
+        sp::Host host;
+        const std::string_view text =
+            "function on_start() end\nfunction on_update(s) end\nfunction on_destroy() end\n";
+        check(load(host, kFirst, text), "the script compiles");
+
+        sc::World world;
+        (void)with_script(world, kFirst);
+        host.update(world, 0.0);
+
+        check(load(host, kFirst, text), "and it loads again");
+        settle_reload(host, world);
+
+        check(host.restart_count() == 0, "nothing restarted");
+        check(host.call_count(sp::Callback::Destroy) == 0, "and on_destroy never ran");
+        check(host.call_count(sp::Callback::Start) == 1, "and on_start ran once, at the start");
+    }
+
     void test_a_dead_entity_drops_its_instance() {
         section("An entity the world no longer holds loses its instance");
 
@@ -1402,6 +1648,13 @@ int main() {
     test_an_error_stops_that_instance_alone();
     test_a_script_that_will_not_compile_is_refused();
     test_a_dead_entity_drops_its_instance();
+    test_a_reload_restarts_the_instance();
+    test_a_reload_throws_the_script_table_away();
+    test_component_state_survives_a_reload();
+    test_a_reload_that_will_not_compile_changes_nothing();
+    test_a_reload_reaches_every_entity_sharing_the_script();
+    test_a_reload_revives_a_stopped_instance();
+    test_a_plain_load_does_not_restart_anything();
     test_stop_runs_destroy_on_everything();
     test_a_script_needs_no_callbacks();
     test_a_script_reads_a_component();

@@ -118,9 +118,9 @@ namespace engine::script {
         /**
          * @brief Compiles one script and keeps it under its identity.
          *
-         * Loading a GUID that is already loaded replaces the chunk. Any
-         * instance already running the old one keeps running it until the
-         * entity restarts, because M8.1 has no reload. Issue #264 adds one.
+         * Loading a GUID that is already loaded replaces the text. Any instance
+         * already running the old one keeps running it until the entity
+         * restarts. Use reload() to change what is already running.
          *
          * @param script The identity a ScriptComponent names.
          * @param name   A readable name for the log and for a Lua traceback,
@@ -132,10 +132,57 @@ namespace engine::script {
         [[nodiscard]] bool load(Guid script, std::string_view name,
                                 std::span<const std::byte> source);
 
+        /**
+         * @brief Loads a script again and restarts everything running it.
+         *
+         * **A reload restarts the instance. The script table is thrown away.**
+         * The next update() runs `on_destroy` on each old instance, builds a
+         * fresh environment, and runs `on_start` on it. So a reload is a destroy
+         * and a create, and nothing a script kept in its own table survives one.
+         *
+         * That is deliberate rather than a limit. Carrying a table across two
+         * versions of a chunk has no answer for a value whose shape changed, and
+         * the wrong answer there is a bug that looks like a game bug. **State
+         * that has to survive belongs on a component**, which a script reaches
+         * with `entity:get` and `entity:set`. A reload rebuilds no entity and
+         * touches no component, so component state carries across untouched.
+         *
+         * **A text that will not compile changes nothing.** The old text stays,
+         * every instance keeps running, and the message names the file and the
+         * line. So a save in the middle of an edit cannot take the game down.
+         *
+         * The restart lands on the next update() rather than inside this call,
+         * because `on_destroy` and `on_start` need the world and the services of
+         * a step and this call has neither. One step therefore passes with no
+         * instance, the same as changing which script an entity names.
+         *
+         * An instance an error had stopped is restarted too, so fixing a script
+         * and saving it brings the entity back without a scene reload.
+         *
+         * @param script The identity to load again.
+         * @param name   A readable name for the log and for a Lua traceback.
+         * @param source The new script text.
+         * @return True when the text compiled and the restart is pending. False
+         *         when it did not, in which case nothing changed.
+         */
+        [[nodiscard]] bool reload(Guid script, std::string_view name,
+                                  std::span<const std::byte> source);
+
         /// @brief Whether load() has accepted this identity.
         /// @param script The identity to look for.
         /// @return True when a chunk is held for it.
         [[nodiscard]] bool loaded(Guid script) const;
+
+        /**
+         * @brief How many instances a reload has restarted.
+         *
+         * A reload that names a script no entity runs restarts nothing, and a
+         * reload of a script five entities share restarts five. This is what
+         * measures that rather than asserting it.
+         *
+         * @return The count since the host was built.
+         */
+        [[nodiscard]] std::size_t restart_count() const;
 
         /**
          * @brief Brings the instances in step with the world, then runs one step.

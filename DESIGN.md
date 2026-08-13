@@ -1921,6 +1921,34 @@ skips it, and the portability is only why it stays skipped by default later.
 `luaL_loadbuffer` takes source or bytecode through one call, so a later precompile step
 changes the cooker alone. #258 holds it.
 
+**A reload restarts the script, and the script table is thrown away.** M8.5 settles this. The
+next fixed step runs `on_destroy` on the old instance, builds a fresh environment, and runs
+`on_start` on it. So a reload is a destroy and a create, which is one sentence to explain and
+one path in the code: the sync that already handles an entity changing which script it names
+handles this too.
+
+Carrying the table across was the alternative, and it has no answer for a value whose shape
+changed between the two versions. The wrong answer there is a bug that reads as a game bug, in
+the middle of the debugging session the reload existed to help. Throwing it away is wrong in an
+obvious way instead of a subtle one.
+
+**So state that has to survive belongs on a component, not in the script table.** A script
+reaches any reflected component with `entity:get` and `entity:set`, which M8.2 built. A reload
+rebuilds the Lua instance and no entity, so component state carries across untouched. The rule
+is therefore: the script table is scratch, and a component is storage.
+
+That rule is worth holding to for its own sake. State on a component is saved by the scene
+file, shown in the inspector, and reachable from C++. State in a script table is none of those
+things.
+
+**A text that will not compile changes nothing.** The old text keeps running and the message
+names the file and the line, so a save in the middle of an edit cannot take the game down. This
+is the pattern `MeshPass::reload_shaders` already uses for a pipeline that will not build.
+
+An instance an error had stopped is restarted by a reload as well. Without that, fixing a
+script and saving it would leave the entity dead until a scene reload, which nobody would
+predict.
+
 **The fixed step is the constraint the whole milestone works under.** #245 put the game logic
 on it, and M7 proved three offscreen runs byte-identical. Lua can lose that in two ways, and
 the two need different answers.
