@@ -16,6 +16,7 @@
 #include "platform/input.h"
 #include "scene/components.h"
 #include "scene/prefab.h"
+#include "scene/step_motion.h"
 #include "scene/world.h"
 #include "script/components.h"
 #include "script/host.h"
@@ -1320,6 +1321,116 @@ namespace {
         check(host.stopped_count() == 0, "and a step with no simulation answers nothing");
     }
 
+    /**
+     * Issue #284. A Transform written to a dynamic body must not freeze it.
+     *
+     * The write used to register the entity with `scene::StepMotion`, whose
+     * `begin_step` then put that pose back at the top of every step. The body
+     * kept integrating and its velocity read back correctly, so everything
+     * looked right except that the position never moved.
+     *
+     * The falling body is what makes this testable. A body standing still
+     * cannot tell a freeze apart from working correctly.
+     */
+    void test_a_transform_written_to_a_dynamic_body_does_not_freeze_it() {
+        section("A script writing a Transform to a dynamic body leaves it falling");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        engine::physics::register_components(components);
+        sp::Host host{ components };
+
+        // The write every step is the shape that used to freeze it, and it is
+        // what a person reaches for before learning about teleport().
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              entity:set("Transform", { position = vec3(0, 5, 0) })
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = { 0.0F, 5.0F, 0.0F } });
+        world.registry().emplace<engine::physics::RigidBody>(
+            entity, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        world.registry().emplace<engine::physics::BoxCollider>(entity,
+                                                               engine::physics::BoxCollider{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        sc::StepMotion motion;
+        constexpr double kStepSeconds = 1.0 / 60.0;
+        for (std::uint32_t i = 0; i < 60; ++i) {
+            motion.begin_step(world);
+            host.update(world, static_cast<double>(i + 1) * kStepSeconds,
+                        sp::Services{ .physics = &simulation, .motion = &motion });
+            simulation.step(world, static_cast<float>(kStepSeconds));
+        }
+
+        // The order the runtime uses, and the order is the whole bug. Both
+        // blend the same pair of steps, and StepMotion writes last, so a pose
+        // recorded there wins over the one the solver produced.
+        simulation.interpolate(world, 1.0F);
+        motion.interpolate(world, 1.0F);
+        world.update();
+
+        check(host.stopped_count() == 0, "the script ran every step");
+
+        // A second of gravity from rest is about 5 metres, and the body starts
+        // at 5. Reaching the floor is not the point. Moving at all is.
+        const float height = world.world_matrix(entity)[3][1];
+        check(height < 4.0F, "the body kept falling while the script wrote its Transform");
+
+        // The mechanism, not only the symptom. Recording it is what put the
+        // pose back at the top of every step.
+        check(motion.tracked() == 0, "and the write never reached StepMotion");
+    }
+
+    /**
+     * The same write, on a body the entity owns rather than the solver.
+     *
+     * A kinematic body reads its pose off the entity, so writing the Transform
+     * is the right way to move one. The guard must not take the interpolation
+     * away from those, or every script-moved lift would judder between steps.
+     */
+    void test_a_transform_written_to_a_kinematic_body_still_interpolates() {
+        section("A kinematic body keeps its step interpolation");
+
+        sc::ComponentRegistry components;
+        components.add<engine::Transform>();
+        engine::physics::register_components(components);
+        sp::Host host{ components };
+
+        check(load(host, kFirst, R"(
+            function on_update(s)
+              entity:set("Transform", { position = vec3(0, s, 0) })
+            end
+        )"),
+              "the script compiles");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = { 0.0F, 0.0F, 0.0F } });
+        world.registry().emplace<engine::physics::RigidBody>(
+            entity, engine::physics::RigidBody{ .type = engine::physics::BodyType::Kinematic });
+        world.registry().emplace<engine::physics::BoxCollider>(entity,
+                                                               engine::physics::BoxCollider{});
+        world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kFirst });
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        sc::StepMotion motion;
+        host.update(world, 1.0 / 60.0,
+                    sp::Services{ .physics = &simulation, .motion = &motion });
+
+        check(host.stopped_count() == 0, "the script ran");
+        check(motion.tracked() == 1, "the entity that owns its own pose is still tracked");
+    }
+
     void test_stop_does_not_reach_the_services_of_the_last_step() {
         section("A teardown reaches no service the caller did not pass to stop()");
 
@@ -1680,6 +1791,8 @@ int main() {
     test_the_services_follow_the_step();
     test_a_script_instances_a_prefab();
     test_the_physics_verbs_reach_a_script();
+    test_a_transform_written_to_a_dynamic_body_does_not_freeze_it();
+    test_a_transform_written_to_a_kinematic_body_still_interpolates();
     test_stop_does_not_reach_the_services_of_the_last_step();
     test_a_trigger_reaches_the_volume_and_not_the_visitor();
     test_a_contact_reaches_both_bodies();

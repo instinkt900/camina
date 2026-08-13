@@ -984,6 +984,18 @@ puts the authoritative pose back first, and the pose it holds is the one that co
 One alpha drives both blends. Two would let the game and the physics draw different instants of
 the same frame.
 
+**A dynamic body never reaches `StepMotion`, and a script that writes its Transform is told
+so.** The two mechanisms answer the same question, and only one of them can own a pose. The
+solver owns a dynamic body, and `StepMotion` writes last, so recording one there freezes it: the
+body integrates, the velocity reads back correctly, and the position stands still. Nothing else
+looks wrong, which is what made issue #284 expensive to find.
+
+So `script::Host` checks the body before it records. A dynamic body gets a warning naming the
+entity and pointing at `teleport`, and the pose is left to the solver. A static or a kinematic
+body is the other way round, because there the entity owns the pose and `step()` reads it, so
+those keep their interpolation. The warning is said once for each entity, because a script that
+writes a Transform usually does it on every step.
+
 **The same wall time is not the same number of steps.** In float, 288 frames of 1/144 sum to
 just under two seconds. That run takes 119 steps where a 30 Hz run takes 120. This is the frame delta accumulating and not the step drifting.
 

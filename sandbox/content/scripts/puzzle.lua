@@ -78,10 +78,8 @@ local function throw()
     end
 
     -- teleport and not a Transform write, even though the body has only just
-    -- been made. Writing the Transform of a body the solver owns hands the pose
-    -- to the frame blender, which then puts the crate back where it was thrown
-    -- on every step. The crate ends up hanging at the camera with a perfectly
-    -- good velocity and nothing to show for it. See issue #284.
+    -- been made. A dynamic body owns its pose, so the next step throws away
+    -- anything written to the component. The host warns when a script tries it.
     crate:teleport(from + forward * throw_offset)
     crate:set_velocity(forward * throw_speed)
 
