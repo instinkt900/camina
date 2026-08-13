@@ -62,7 +62,7 @@
             "value": "small crate"
           },
           "ScriptComponent": {
-            "script": "asset:scripts/heartbeat.lua"
+            "script": "asset:scripts/spin.lua"
           },
           "Spin": {
             "__version": 1,
@@ -180,6 +180,9 @@
             0.4,
             0.4
           ]
+        },
+        "ScriptComponent": {
+          "script": "asset:scripts/spin.lua"
         },
         "Spin": {
           "__version": 1,
@@ -334,12 +337,20 @@
           "__version": 1,
           "value": "goal volume"
         },
+        "Goal": {
+          "__version": 1,
+          "won": false,
+          "needed": 1
+        },
+        "ScriptComponent": {
+          "script": "asset:scripts/puzzle.lua"
+        },
         "Transform": {
           "__version": 1,
           "position": [
-            -1.4,
-            3.6,
-            -2.0
+            -3.4,
+            0.6,
+            -2.4
           ],
           "rotation": [
             1.0,
@@ -363,9 +374,9 @@
         "BoxCollider": {
           "__version": 2,
           "half_extents": [
-            1.0,
-            0.35,
-            1.0
+            1.3,
+            0.6,
+            1.3
           ],
           "is_trigger": true
         }

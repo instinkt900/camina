@@ -19,11 +19,6 @@ namespace sandbox {
 
     namespace {
 
-        constexpr float kTwoPi = 6.2831853F;
-
-        /// Below this an axis is too short to normalize without losing meaning.
-        constexpr float kShortestAxis = 1.0e-6F;
-
         /**
          * Reads every prefab the cooked tree holds, under the source path that
          * produced it.
@@ -116,6 +111,7 @@ namespace sandbox {
 
     void register_components(engine::scene::ComponentRegistry& registry) {
         registry.add<Spin>();
+        registry.add<Goal>();
     }
 
     bool load(const std::filesystem::path& content, const engine::assets::Content* cooked,
@@ -141,42 +137,6 @@ namespace sandbox {
 
         ENGINE_LOG_INFO("The sandbox loaded {} entities from {}.", world.size(), scene.string());
         return true;
-    }
-
-    std::size_t update(engine::scene::World& world, double seconds,
-                       engine::scene::StepMotion& motion) {
-        std::size_t moved = 0;
-
-        for (const auto [entity, spin] : world.registry().view<const Spin>().each()) {
-            if (spin.seconds_per_turn <= 0.0F) {
-                continue;
-            }
-
-            const float length = glm::length(spin.axis);
-            if (length < kShortestAxis) {
-                // Normalizing this would divide by nearly zero and fill the
-                // rotation with NaN, which then spreads through every child.
-                continue;
-            }
-
-            engine::Transform local = world.local(entity);
-            // The turn is worked out in double and narrowed once, at the end.
-            // A float loses whole steps of 1/60 somewhere past three days of
-            // running, and the angle is what would stop advancing.
-            const auto angle = static_cast<float>(
-                static_cast<double>(kTwoPi) * seconds / static_cast<double>(spin.seconds_per_turn));
-            local.rotation = glm::angleAxis(angle, spin.axis / length);
-            world.set_local(entity, local);
-
-            // The step owns this pose now, so the frame that draws between two
-            // steps blends it rather than showing the newest one. Without this
-            // a Spin would step at 60 Hz and hold still between, which is the
-            // judder a fixed step exists to remove.
-            motion.record(world, entity);
-            ++moved;
-        }
-
-        return moved;
     }
 
 } // namespace sandbox

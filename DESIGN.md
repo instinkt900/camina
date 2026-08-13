@@ -955,10 +955,11 @@ steps, which takes longer still. That is the spiral of death. The default is fiv
 `dropped_seconds()` reports the simulated time the run will never make up, so a machine that
 cannot keep up says so rather than quietly running slow.
 
-**The game logic is on the fixed step too**, which #245 closed. `sandbox::update` takes
-simulated seconds now, which is the step count times the step length, rather than the wall
-clock. So the game is a function of how many steps have run and of nothing else. A replay that
-feeds the same input lands on the same values.
+**The game logic is on the fixed step too**, which #245 closed. The game takes simulated
+seconds, which is the step count times the step length, rather than the wall clock. So the game
+is a function of how many steps have run and of nothing else. A replay that feeds the same
+input lands on the same values. M8.6 moved that logic into Lua and the rule went with it:
+`script::Host::update` takes the same simulated seconds.
 
 **`scene::StepMotion` is where the interpolation for a mover that is not a rigid body lives.**
 This is the design question #245 posed. `physics::Simulation` already blends the last two poses
@@ -1983,16 +1984,41 @@ events of one step only, so a frame that ran three steps and read them once woul
 third and throw the first two away. That would lose the events a puzzle cares about, and it
 would put the result back on the frame rate that #245 removed it from.
 
+**M8.6 closed the milestone, and two engine gaps turned up while authoring it.** A script had
+no way to reach the camera, and the throw is "throw where I am looking". And a prefab a script
+instanced carried its collider components and no body, because the simulation reads the world
+once at build and does not scan for new entities each step. So `script::CameraView` joins the
+services and `entity:add_body()` joins the curated surface.
+
+The reset needed a third. **A dynamic body owns its pose, so writing an entity transform does
+nothing to it**: the next step overwrites whatever the caller put there. `Simulation::teleport`
+is the only way to move one, and it stops the body dead, wakes it, and sets both halves of the
+pair `interpolate()` blends. Setting only the newer half draws the body sliding from where it
+used to be, across everything in between.
+
+**Destroying an entity from a script found a fourth.** The simulation held a body for an entity
+that no longer existed, and the next step read the RigidBody off it and died on an EnTT
+assertion. `Simulation::step` drops a body whose entity has gone before it reads any of them.
+Nothing did this while the game was C++, because nothing destroyed a body-carrying entity while
+the world was running.
+
+**Input edges and the fixed step are on different clocks, and that is not a rare race.** A
+press edge is the difference between two `Input::update` calls. The camera runs on the frame
+and the game runs on the fixed step, and a frame often runs no step at all. Offscreen it almost
+never does, so an edge raised and cleared between two steps is one the game never sees. The
+runtime therefore folds every device frame into what the next step reads, and keeps a second
+`platform::Input` on the step clock. One Input for both cannot work.
+
 **The done-when test is authoring, not porting.** The sandbox game logic today is `Spin` at 30
 lines, plus a crate throw that lives in the application rather than in the game. Moving those
 two proves the binding is complete. It does not prove the binding is pleasant, because a port
 already knows the answer it wants. So M8.6 also authors the physics puzzle §11 names, in Lua
 first and never in C++: a goal volume, a win, and a reset.
 
-The test moves with it. `tests/test_sandbox.cpp` calls `sandbox::update` today, and M8.6
-deletes that function. The replacement drives the puzzle through a cooked `.lua` and the
-script callbacks. A test that keeps a C++ entry point alive to call would pass while the
-binding did nothing.
+The test moved with it. `sandbox::update` and `throw_crate` are both gone, so
+`tests/test_sandbox.cpp` drives the puzzle through a cooked `.lua` and the script callbacks.
+There is no C++ entry point left for it to call, which is the point: a test that kept one alive
+would pass while the binding did nothing.
 
 ### M9 — Editor split
 `editor` and `runtime` as separate executables over `engine_core`. The game module links

@@ -38,6 +38,7 @@
 namespace engine::scene {
     class World;
     class PrefabLibrary;
+    class StepMotion;
 } // namespace engine::scene
 
 namespace engine::physics {
@@ -66,6 +67,22 @@ namespace engine::script {
     };
 
     /**
+     * @brief Where the view is, for a script that acts along the line of sight.
+     *
+     * The throw needs it, and nothing else does yet. A camera is the
+     * application's rather than the scene's today, so this is a pose handed over
+     * for the step rather than something a script can find in the world.
+     *
+     * A `scene::Camera` component is where this belongs once a scene carries a
+     * camera of its own. Then a script finds it the way it finds any entity, and
+     * this struct goes. See `DESIGN.md` §10 M9.
+     */
+    struct CameraView {
+        Vec3 position{ 0.0F, 0.0F, 0.0F }; ///< Where the view is, in world space.
+        Vec3 forward{ 0.0F, 0.0F, -1.0F }; ///< Which way it looks. A unit vector.
+    };
+
+    /**
      * @brief What a script may reach besides the world and its components.
      *
      * Every one is optional. A test that binds no physics passes none, and a
@@ -84,6 +101,20 @@ namespace engine::script {
         const platform::Input* input = nullptr;
         /// @brief Prefabs a script may instance. Null makes instancing fail.
         const scene::PrefabLibrary* prefabs = nullptr;
+        /// @brief The view pose. Null makes every camera read nil.
+        const CameraView* camera = nullptr;
+
+        /**
+         * @brief Where a transform a script writes is recorded for blending.
+         *
+         * A script runs on the fixed step and a frame draws between two of
+         * them, so an entity a script turns holds still and then jumps. This is
+         * what makes it move smoothly instead, the same way it does for a body
+         * the solver moves.
+         *
+         * Null skips the recording, which is what a test with no frames wants.
+         */
+        scene::StepMotion* motion = nullptr;
     };
 
     /**
@@ -274,14 +305,22 @@ namespace engine::script {
         [[nodiscard]] std::size_t call_count(Callback callback) const;
 
     private:
-        /// Binds the `entity` type, once, when the host is built.
+        /// Binds the `entity` type and its scene verbs, once, at build time.
         void bind_entity();
+
+        /// Adds the physics verbs to the `entity` type bind_entity() made.
+        /// Separate only because the two together are past what clang-tidy
+        /// allows one function, and the split falls on a real seam.
+        void bind_entity_physics();
 
         /// Binds the `world` table: find, create, destroy and instance.
         void bind_world();
 
         /// Binds the `input` table, by action name.
         void bind_input();
+
+        /// Binds the `camera` table: where the view is and which way it looks.
+        void bind_camera();
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

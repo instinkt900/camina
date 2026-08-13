@@ -6,6 +6,7 @@
 #include "platform/input.h"
 #include "scene/components.h"
 #include "scene/prefab.h"
+#include "scene/step_motion.h"
 #include "scene/world.h"
 #include "script/bindings.h"
 #include "script/components.h"
@@ -354,6 +355,16 @@ namespace engine::script {
             // it was and every child stays behind it.
             if (wrote && ops->owns_transform) {
                 world->mark_dirty(self.id);
+
+                // And the step owns the pose now, so a frame between two steps
+                // blends it rather than showing the newest one. Without this a
+                // script that turns something steps it at 60 Hz and holds it
+                // still in between, which is the judder a fixed step exists to
+                // remove. owns_transform rather than a name compare, because
+                // the registry already records which component this is.
+                if (self.context->services.motion != nullptr) {
+                    self.context->services.motion->record(*world, self.id);
+                }
             }
             return wrote;
         }
@@ -530,7 +541,13 @@ namespace engine::script {
         bind_math(impl_->lua);
         bind_random(impl_->lua);
 
+        // Each one named here rather than chained out of the last, so dropping
+        // one is visible in this list. bind_entity_physics() is the exception,
+        // because it adds to the type bind_entity() has to have made first.
         bind_entity();
+        bind_world();
+        bind_input();
+        bind_camera();
     }
 
     /**
@@ -598,57 +615,122 @@ namespace engine::script {
 
             // Where the entity ended up after the hierarchy composed, which is
             // not the local pose a script writes through get and set.
-            "world_position",
-            [](const EntityHandle& self) -> sol::optional<Vec3> {
+            "world_position", [](const EntityHandle& self) -> sol::optional<Vec3> {
                 const scene::World* world = world_of(self);
                 if (world == nullptr || !world->registry().valid(self.id)) {
                     return sol::nullopt;
                 }
                 const Mat4& matrix = world->world_matrix(self.id);
-                return Vec3{ matrix[3][0], matrix[3][1], matrix[3][2] };
-            },
+                return Vec3{ matrix[3][0], matrix[3][1], matrix[3][2] }; });
 
-            // Physics. Each one answers nil or false when the entity has no
-            // body, or when no simulation was passed this step.
-            "velocity",
-            [](const EntityHandle& self) -> sol::optional<Vec3> {
-                physics::Simulation* physics = physics_of(self);
-                Vec3 velocity{ 0.0F, 0.0F, 0.0F };
-                if (physics == nullptr || !physics->linear_velocity(self.id, velocity)) {
-                    return sol::nullopt;
-                }
-                return velocity;
-            },
+        bind_entity_physics();
+    }
 
-            "set_velocity",
-            [](const EntityHandle& self, const Vec3& velocity) {
-                physics::Simulation* physics = physics_of(self);
-                return physics != nullptr && physics->set_linear_velocity(self.id, velocity);
-            },
+    /**
+     * Adds the physics verbs to the type bind_entity() made.
+     *
+     * sol lets a usertype take members after it is created, so this is the same
+     * `entity` a script sees and not a second type. The split is only because
+     * the two halves together are past the cognitive complexity clang-tidy
+     * allows one function, and the seam between reading a scene and driving a
+     * solver is a real one.
+     *
+     * Each verb answers nil or false when the entity has no body, or when no
+     * simulation was passed this step.
+     */
+    void Host::bind_entity_physics() {
+        sol::usertype<EntityHandle> entity = impl_->lua["Entity"];
 
-            // A change of momentum rather than a speed, so a heavy body moves
-            // less for the same push. It wakes a sleeping body, because one
-            // that dropped the push would report nothing.
-            "impulse",
-            [](const EntityHandle& self, const Vec3& impulse) {
-                physics::Simulation* physics = physics_of(self);
-                return physics != nullptr && physics->apply_linear_impulse(self.id, impulse);
-            },
+        entity["velocity"] = [](const EntityHandle& self) -> sol::optional<Vec3> {
+            physics::Simulation* physics = physics_of(self);
+            Vec3 velocity{ 0.0F, 0.0F, 0.0F };
+            if (physics == nullptr || !physics->linear_velocity(self.id, velocity)) {
+                return sol::nullopt;
+            }
+            return velocity;
+        };
 
-            "is_awake",
-            [](const EntityHandle& self) {
-                physics::Simulation* physics = physics_of(self);
-                return physics != nullptr && physics->is_awake(self.id);
-            },
+        entity["set_velocity"] = [](const EntityHandle& self, const Vec3& velocity) {
+            physics::Simulation* physics = physics_of(self);
+            return physics != nullptr && physics->set_linear_velocity(self.id, velocity);
+        };
 
-            "wake",
-            [](const EntityHandle& self) {
-                physics::Simulation* physics = physics_of(self);
-                return physics != nullptr && physics->set_awake(self.id, true);
-            });
+        // A change of momentum rather than a speed, so a heavy body moves less
+        // for the same push. It wakes a sleeping body, because one that dropped
+        // the push would report nothing.
+        entity["impulse"] = [](const EntityHandle& self, const Vec3& impulse) {
+            physics::Simulation* physics = physics_of(self);
+            return physics != nullptr && physics->apply_linear_impulse(self.id, impulse);
+        };
 
-        bind_world();
-        bind_input();
+        entity["is_awake"] = [](const EntityHandle& self) {
+            physics::Simulation* physics = physics_of(self);
+            return physics != nullptr && physics->is_awake(self.id);
+        };
+
+        entity["wake"] = [](const EntityHandle& self) {
+            physics::Simulation* physics = physics_of(self);
+            return physics != nullptr && physics->set_awake(self.id, true);
+        };
+
+        // Writing the Transform does not do this. A dynamic body owns its pose
+        // and the next step overwrites whatever an entity carries, so a reset
+        // that set the component would put every crate back for one step and
+        // then lose them all again.
+        entity["teleport"] = [](const EntityHandle& self, const Vec3& position,
+                                const sol::optional<Quat>& rotation) {
+            physics::Simulation* physics = physics_of(self);
+            if (physics == nullptr) {
+                return false;
+            }
+            // Upright when the caller gives no rotation, which is what a reset
+            // wants and is one fewer thing to spell out.
+            return physics->teleport(self.id, position,
+                                     rotation.value_or(Quat{ 1.0F, 0.0F, 0.0F, 0.0F }));
+        };
+
+        // An entity a script just instanced carries the collider components and
+        // no body, because the simulation reads the world once at build and does
+        // not scan for new ones each step. Without this a thrown crate hangs in
+        // the air.
+        entity["add_body"] = [](const EntityHandle& self) {
+            scene::World* world = world_of(self);
+            physics::Simulation* physics = physics_of(self);
+            return world != nullptr && physics != nullptr && physics->add_body(*world, self.id);
+        };
+
+        entity["has_body"] = [](const EntityHandle& self) {
+            const physics::Simulation* physics = physics_of(self);
+            return physics != nullptr && physics->has_body(self.id);
+        };
+    }
+
+    /**
+     * Binds where the view is, which the throw reads.
+     *
+     * A free table rather than a method on `entity`, because the camera belongs
+     * to no entity. It is the application's today, so the pose arrives in the
+     * services for the step. Both read nil when nobody passed one, which is what
+     * a test that binds no camera gets.
+     */
+    void Host::bind_camera() {
+        const ScriptContext* context = &impl_->context;
+
+        sol::table camera = impl_->lua.create_named_table("camera");
+
+        camera.set_function("position", [context]() -> sol::optional<Vec3> {
+            if (context->services.camera == nullptr) {
+                return sol::nullopt;
+            }
+            return context->services.camera->position;
+        });
+
+        camera.set_function("forward", [context]() -> sol::optional<Vec3> {
+            if (context->services.camera == nullptr) {
+                return sol::nullopt;
+            }
+            return context->services.camera->forward;
+        });
     }
 
     Host::~Host() = default;

@@ -113,6 +113,28 @@ namespace engine::physics {
         bool set_linear_velocity(entt::entity entity, const Vec3& velocity);
 
         /**
+         * @brief Puts one entity's body somewhere, and stops it dead.
+         *
+         * This teleports. The body appears at @p position with no velocity and
+         * no spin, awake, and its contacts are worked out afresh where it lands.
+         * A reset is this and nothing else.
+         *
+         * **Writing the entity transform does not do this.** A dynamic body
+         * owns its pose, so step() overwrites whatever a caller put on the
+         * entity. This is the only way to move one.
+         *
+         * The pair of poses interpolate() blends is set to the new one, both
+         * halves. Without that the next frame would draw the body sliding from
+         * where it used to be, across everything in between.
+         *
+         * @param entity The entity to move. One with no body is ignored.
+         * @param position Where to put it, in world space.
+         * @param rotation How to turn it, in world space.
+         * @return True when the entity had a body to move.
+         */
+        bool teleport(entt::entity entity, const Vec3& position, const Quat& rotation);
+
+        /**
          * @brief Two entities that started or stopped touching.
          *
          * The same shape serves a trigger overlap and a contact. For an

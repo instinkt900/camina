@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/jobs.h"
 #include "math/transform.h"
+#include "assets/script.h"
 #include "physics/components.h"
 #include "physics/simulation.h"
 #include "sandbox/components.h"
@@ -18,7 +19,11 @@
 #include "scene/components.h"
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
+#include "scene/step_motion.h"
 #include "scene/world.h"
+#include "script/components.h"
+#include "script/host.h"
+#include "platform/input.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -31,12 +36,23 @@
 namespace {
 
     using test::check;
+    using test::section;
     namespace sc = engine::scene;
 
-    /// The registry the runtime builds: engine types first, then game types.
+    /**
+     * The registry the runtime builds, in the order it builds it.
+     *
+     * Physics and script register their own, the same way the game does, so a
+     * registry missing either one loads the shipped scene and drops every
+     * RigidBody, collider and ScriptComponent it carries. It says so once for
+     * each entity and carries on, which reads like noise rather than like the
+     * scene arriving half built. See issue #280.
+     */
     sc::ComponentRegistry make_registry() {
         sc::ComponentRegistry registry;
         sc::register_builtin_components(registry);
+        engine::physics::register_components(registry);
+        engine::script::register_components(registry);
         sandbox::register_components(registry);
         return registry;
     }
@@ -58,12 +74,15 @@ namespace {
     void test_registration() {
         sc::ComponentRegistry registry;
         sandbox::register_components(registry);
-        check(registry.size() == 1, "the game registers one component of its own");
+        check(registry.size() == 2, "the game registers two components of its own");
         check(registry.find("Spin") != nullptr, "Spin is findable by the name a file stores");
+        check(registry.find("Goal") != nullptr, "and so is the Goal the puzzle keeps its win on");
 
-        // The engine never names a game type. The game joins the same registry.
+        // The engine never names a game type. The game joins the same registry,
+        // and so do physics and script. Six built in, three physics, one script,
+        // and the game's own Spin and Goal.
         const sc::ComponentRegistry full = make_registry();
-        check(full.size() == 7, "the engine types and the game type share one registry");
+        check(full.size() == 12, "every subsystem and the game share one registry");
     }
 
     /**
@@ -221,11 +240,13 @@ namespace {
         sc::World world;
         check(load_shipped(world, registry, library),
               "the shipped content loads");
-        // Every prefab in the cooked tree, which is the hand-authored crate and
-        // the five the cooker wrote from a glTF node tree. The crate glTF is
+        // Every prefab in the cooked tree, which is the two hand-authored ones
+        // and the five the cooker wrote from a glTF node tree. The crate glTF is
         // one of those five, and nothing instances it, because crate.prefab
-        // wraps it. Registering it anyway is what "every prefab" means.
-        check(library.size() == 6, "every prefab in the cooked tree went into the library");
+        // wraps it. Registering it anyway is what "every prefab" means. The
+        // second hand-authored one is thrown_crate.prefab, which carries the
+        // body and the collider a thrown crate needs.
+        check(library.size() == 7, "every prefab in the cooked tree went into the library");
 
         // The room, seven crate instances of two entities each, one beacon,
         // seven for the flight helmet (the root the cooker added, and one for
@@ -268,65 +289,6 @@ namespace {
             }
         }
         return entt::null;
-    }
-
-    /**
-     * The shipped scene has to exercise the trigger by itself.
-     *
-     * A trigger nothing crosses is a trigger nobody tests. The goal volume sits
-     * under the M7.4 falling crate, so the sandbox reports an overlap on its own
-     * with nobody pressing a key. This is what says the placement is right, and
-     * arithmetic on the two positions is not: the crate is free to be deflected
-     * by whatever it lands among, and a scene edit that moves either one would
-     * pass a check that only compared the numbers in the file.
-     *
-     * It also pins the direction. The trigger has to be `a` and the crate `b`,
-     * and a swap would send every game event to the wrong object.
-     */
-    void test_the_goal_volume_catches_the_falling_crate() {
-        // Not make_registry(). That one leaves the physics types out, so a
-        // scene loaded through it drops every RigidBody and every collider and
-        // builds no bodies at all. See issue #280.
-        sc::ComponentRegistry registry = make_registry();
-        engine::physics::register_components(registry);
-
-        sc::PrefabLibrary library;
-        sc::World world;
-        check(load_shipped(world, registry, library), "the shipped content loads");
-
-        const entt::entity goal = find_by_name(world, "goal volume");
-        check(goal != entt::null, "the scene places a goal volume");
-
-        // Named rather than taken from whatever turns up in the events. Two
-        // different entities supplying the entry and the exit would otherwise
-        // pass, and that is not what this claims to check. It also pins the
-        // placement: the volume has to clear the resting stack, and an earlier
-        // one overlapped the top crate of it from the first step.
-        const entt::entity crate = find_by_name(world, "falling crate");
-        check(crate != entt::null, "and the M7.4 crate that drops through it");
-
-        engine::physics::Simulation simulation;
-        simulation.build(world);
-
-        // Two seconds at 60 Hz. The crate starts 1.4 metres above the volume and
-        // falls, so it is well past the far side long before the last step.
-        bool entered = false;
-        bool left = false;
-        for (std::uint32_t step = 0; step < 120; ++step) {
-            simulation.step(world, 1.0F / 60.0F);
-            for (const engine::physics::Simulation::Touch& touch : simulation.trigger_events()) {
-                check(touch.a == goal, "the goal volume is the trigger side of the event");
-                check(touch.b == crate, "and the falling crate is the only thing that crosses it");
-                if (touch.began) {
-                    entered = true;
-                } else {
-                    left = true;
-                }
-            }
-        }
-
-        check(entered, "the falling crate entered the goal volume");
-        check(left, "and the same crate came out the other side");
     }
 
     void test_scene_round_trips() {
@@ -451,78 +413,319 @@ namespace {
         check(checked_stack, "and the stacked crate was there to check");
     }
 
-    void test_update_turns_what_it_should() {
-        const sc::ComponentRegistry registry = make_registry();
+
+    // ---------------------------------------------------------------------
+    // The game, which is entirely Lua from M8.6.
+    //
+    // Every test below drives a cooked .lua through the script callbacks. None
+    // of them can be satisfied by a C++ entry point, because there is no longer
+    // one to call: sandbox::update and throw_crate are both gone. A test that
+    // kept one alive would pass while the binding did nothing, which is the one
+    // result worse than no test at all.
+    // ---------------------------------------------------------------------
+
+    /// Everything one step of the real game needs, built from the shipped tree.
+    struct Game {
+        sc::ComponentRegistry registry;
         sc::PrefabLibrary library;
-
         sc::World world;
-        check(load_shipped(world, registry, library),
-              "the shipped content loads");
+        engine::physics::Simulation simulation;
+        engine::script::Host host{ registry };
+        engine::platform::Input input;
+        engine::scene::StepMotion motion;
+        engine::script::CameraView camera;
+        double seconds = 0.0;
 
-        sc::StepMotion motion;
-        check(sandbox::update(world, 0.0, motion) == 2,
-              "the update moves both spinning entities");
-        check(motion.tracked() == 2, "and it recorded both, so a frame can blend them");
+        /// Every trigger overlap since the game started. The simulation keeps
+        /// the events of one step, so a check written after the run would read
+        /// an empty list and pass whatever happened.
+        std::vector<engine::physics::Simulation::Touch> triggers;
 
-        // The angle follows the elapsed time, so the same time gives the same
-        // rotation. A test can therefore state an exact value.
-        world.update();
-        std::vector<engine::Mat4> at_zero;
-        for (const auto [entity, spin] : world.registry().view<const sandbox::Spin>().each()) {
-            (void)spin;
-            at_zero.push_back(world.world_matrix(entity));
+        [[nodiscard]] engine::script::Services services() {
+            return engine::script::Services{ .physics = &simulation,
+                                             .input = &input,
+                                             .prefabs = &library,
+                                             .camera = &camera,
+                                             .motion = &motion };
         }
 
-        sandbox::update(world, 1.0, motion);
-        world.update();
-        std::size_t moved = 0;
-        std::size_t i = 0;
-        for (const auto [entity, spin] : world.registry().view<const sandbox::Spin>().each()) {
-            (void)spin;
-            if (world.world_matrix(entity) != at_zero.at(i)) {
-                ++moved;
+        /// One fixed step, in the order the runtime runs it.
+        void step() {
+            seconds += 1.0 / 60.0;
+            motion.begin_step(world);
+            host.update(world, seconds, services());
+            simulation.step(world, 1.0F / 60.0F);
+            host.deliver_physics_events(world, simulation, services());
+            for (const engine::physics::Simulation::Touch& touch : simulation.trigger_events()) {
+                triggers.push_back(touch);
             }
-            ++i;
-        }
-        check(moved == 2, "a second later both of them have turned");
 
-        // Going back to the same time gives the same matrices, which is what
-        // makes the elapsed-time form reproducible.
-        sandbox::update(world, 0.0, motion);
-        world.update();
-        std::size_t same = 0;
-        i = 0;
-        for (const auto [entity, spin] : world.registry().view<const sandbox::Spin>().each()) {
-            (void)spin;
-            if (world.world_matrix(entity) == at_zero.at(i)) {
-                ++same;
-            }
-            ++i;
+            // What a frame would do. Alpha of one draws the newest step with no
+            // blending, which is what a test with no frames wants: the entity
+            // transform is where the solver just put it, not part way there.
+            simulation.interpolate(world, 1.0F);
+            motion.interpolate(world, 1.0F);
+            world.update();
+
+            // The edges the last update() raised are finished, so an action
+            // pressed for one step is not pressed for the next.
+            input.update(engine::platform::InputFrame{});
         }
-        check(same == 2, "the same elapsed time gives the same rotation");
+
+        void run(std::uint32_t steps) {
+            for (std::uint32_t i = 0; i < steps; ++i) {
+                step();
+            }
+        }
+
+        /// Holds @p key down for the step that follows.
+        void press(engine::platform::Key key) {
+            engine::platform::InputFrame frame;
+            frame.keys.at(static_cast<std::size_t>(key)) = true;
+            input.update(frame);
+        }
+    };
+
+    /// Loads the shipped scene and every cooked script into a Game.
+    [[nodiscard]] bool start_game(Game& game) {
+        game.registry = make_registry();
+
+        // The same keys the runtime binds. A script names the action, so this is
+        // the only place a key appears.
+        game.input.bind("throw", engine::platform::Key::F);
+        game.input.bind("reset", engine::platform::Key::R);
+
+        engine::assets::Content cooked;
+        if (!cooked.open(sandbox::default_content_directory())) {
+            return false;
+        }
+        if (!sandbox::load(sandbox::default_content_directory(), &cooked, game.world,
+                           game.registry, game.library)) {
+            return false;
+        }
+
+        // Every cooked script, the way the runtime loads them: out of the
+        // manifest rather than out of a list somebody keeps up to date.
+        std::size_t loaded = 0;
+        for (const engine::assets::ManifestEntry& entry : cooked.manifest().entries) {
+            for (const engine::assets::ManifestOutput& output : entry.outputs) {
+                if (!std::string_view{ output.cooked }.ends_with(
+                        engine::assets::kScriptExtension)) {
+                    continue;
+                }
+                std::vector<std::byte> bytes;
+                if (cooked.read_bytes(output, bytes) &&
+                    game.host.load(output.guid, output.cooked, bytes)) {
+                    ++loaded;
+                }
+            }
+        }
+
+        game.simulation.build(game.world);
+        return loaded > 0;
     }
 
-    void test_update_refuses_a_bad_spin() {
-        sc::World world;
-        const entt::entity stopped = world.create();
-        world.registry().emplace<sandbox::Spin>(stopped,
-                                                sandbox::Spin{ .seconds_per_turn = 0.0F });
+    void test_spin_turns_what_it_should() {
+        section("spin.lua turns the entities the scene gives a Spin");
 
-        const entt::entity degenerate = world.create();
-        world.registry().emplace<sandbox::Spin>(
-            degenerate, sandbox::Spin{ .axis = { 0.0F, 0.0F, 0.0F }, .seconds_per_turn = 1.0F });
+        Game game;
+        check(start_game(game), "the shipped game starts");
 
-        sc::StepMotion motion;
-        check(sandbox::update(world, 1.0, motion) == 0, "neither entity turns");
-        check(motion.tracked() == 0, "and nothing was recorded to blend");
+        // Two entities carry a Spin, and each carries spin.lua beside it. The
+        // count is the point: a script that reached one of them would pass a
+        // check that only asked whether anything moved.
+        std::vector<entt::entity> spinners;
+        for (const auto [entity, spin] : game.world.registry().view<const sandbox::Spin>().each()) {
+            (void)spin;
+            spinners.push_back(entity);
+        }
+        check(spinners.size() == 2, "the scene carries two spinning entities");
 
-        world.update();
-        // A zero axis normalizes to NaN, and NaN spreads to every child through
-        // the matrix. Nothing here may produce one.
-        for (const auto entity : { stopped, degenerate }) {
-            const engine::Mat4& matrix = world.world_matrix(entity);
+        game.step();
+        game.world.update();
+        std::vector<engine::Mat4> first;
+        for (const entt::entity entity : spinners) {
+            first.push_back(game.world.world_matrix(entity));
+        }
+
+        game.run(60);
+        game.world.update();
+        std::size_t turned = 0;
+        for (std::size_t i = 0; i < spinners.size(); ++i) {
+            if (game.world.world_matrix(spinners.at(i)) != first.at(i)) {
+                ++turned;
+            }
+        }
+        check(turned == 2, "a second later both of them have turned");
+
+        // The step owns the pose, so a frame between two steps blends it rather
+        // than showing the newest. Without this a Spin steps at 60 Hz and holds
+        // still in between, which is the judder a fixed step exists to remove.
+        check(game.motion.tracked() == 2, "and both are recorded for blending");
+    }
+
+    void test_a_bad_spin_turns_nothing() {
+        section("spin.lua leaves a stopped or degenerate Spin alone");
+
+        Game game;
+        check(start_game(game), "the shipped game starts");
+
+        // Built here rather than shipped, because the scene has no reason to
+        // carry a broken one. The script is the shipped script all the same.
+        const engine::Guid spin_script =
+            game.world.registry()
+                .get<engine::script::ScriptComponent>(
+                    game.world.registry().view<const sandbox::Spin>().front())
+                .script;
+
+        const auto add = [&](const sandbox::Spin& spin) {
+            const entt::entity entity = game.world.create();
+            game.world.set_local(entity, engine::Transform{});
+            game.world.registry().emplace<sandbox::Spin>(entity, spin);
+            game.world.registry().emplace<engine::script::ScriptComponent>(
+                entity, engine::script::ScriptComponent{ spin_script });
+            return entity;
+        };
+
+        const entt::entity stopped = add(sandbox::Spin{ .seconds_per_turn = 0.0F });
+        const entt::entity degenerate =
+            add(sandbox::Spin{ .axis = { 0.0F, 0.0F, 0.0F }, .seconds_per_turn = 1.0F });
+
+        game.run(30);
+        game.world.update();
+
+        check(game.world.local(stopped).rotation == engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F },
+              "a turn of zero seconds leaves the entity alone");
+
+        // A zero axis normalized would fill the rotation with NaN, and NaN
+        // spreads to every child through the matrix.
+        for (const entt::entity entity : { stopped, degenerate }) {
+            const engine::Mat4& matrix = game.world.world_matrix(entity);
             check(matrix[0][0] == matrix[0][0], "the matrix holds no NaN");
         }
+    }
+
+    /// Where an entity ended up after the hierarchy composed.
+    [[nodiscard]] engine::Vec3 world_position(const sc::World& world, entt::entity entity) {
+        const engine::Mat4& matrix = world.world_matrix(entity);
+        return engine::Vec3{ matrix[3][0], matrix[3][1], matrix[3][2] };
+    }
+
+    /// How many entities carry this name.
+    [[nodiscard]] std::size_t count_named(const sc::World& world, std::string_view wanted) {
+        std::size_t found = 0;
+        for (const auto [entity, name] : world.registry().view<const sc::Name>().each()) {
+            (void)entity;
+            if (name.value == wanted) {
+                ++found;
+            }
+        }
+        return found;
+    }
+
+    void test_the_throw_makes_a_crate_that_falls() {
+        section("puzzle.lua throws a crate when the throw action fires");
+
+        Game game;
+        check(start_game(game), "the shipped game starts");
+        game.camera = engine::script::CameraView{ .position = { 0.0F, 3.0F, 4.0F },
+                                                  .forward = { 0.0F, 0.0F, -1.0F } };
+
+        game.run(2);
+        const std::size_t bodies = game.simulation.body_count();
+        check(count_named(game.world, "thrown crate") == 0, "nothing has been thrown yet");
+
+        game.press(engine::platform::Key::F);
+        game.step();
+
+        check(count_named(game.world, "thrown crate") == 1, "the throw made one crate");
+        check(game.simulation.body_count() == bodies + 1,
+              "and it has a body, so it is not hanging in the air");
+
+        // The press edge and not the key being down. A throw on every step would
+        // fill the room in one second.
+        game.run(10);
+        check(count_named(game.world, "thrown crate") == 1, "and one press throws one crate");
+    }
+
+    void test_a_crate_at_rest_in_the_goal_wins() {
+        section("puzzle.lua wins when a stack crate settles in the goal");
+
+        Game game;
+        check(start_game(game), "the shipped game starts");
+
+        const entt::entity goal = find_by_name(game.world, "goal volume");
+        const entt::entity crate = find_by_name(game.world, "stack crate 0");
+        check(goal != entt::null && crate != entt::null, "the goal and the stack are there");
+
+        // Put a crate in the goal and let it settle. teleport rather than a
+        // Transform write, because a dynamic body owns its pose.
+        game.run(2);
+        const engine::Vec3 target = world_position(game.world, goal);
+        check(game.simulation.teleport(crate,
+                                       engine::Vec3{ target.x, 0.5F, target.z },
+                                       engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
+              "the crate moves into the goal");
+
+        // Long enough for the body to come to rest, because the win waits for a
+        // crate to settle rather than firing as it passes through.
+        game.run(240);
+
+        check(!game.simulation.is_awake(crate), "the crate went to sleep in the goal");
+        check(game.host.stopped_count() == 0, "and no script raised an error");
+
+        // The win itself, read off the component the script keeps it on. A log
+        // line is what a player sees and nothing a test can check.
+        const auto* won = game.world.registry().try_get<const sandbox::Goal>(goal);
+        check(won != nullptr && won->won, "and the puzzle says it is won");
+        check(game.host.call_count(engine::script::Callback::Trigger) > 0,
+              "the goal volume reported the crate crossing into it");
+
+        // The direction, which the M8.4 test used to carry. The volume has to be
+        // the trigger side and the crate the visitor. A swap would send every
+        // game event to the wrong object, and puzzle.lua would never see a win.
+        bool named_both = false;
+        for (const engine::physics::Simulation::Touch& touch : game.triggers) {
+            named_both = named_both || (touch.a == goal && touch.b == crate);
+        }
+        check(named_both, "and it named the volume first and the crate second");
+    }
+
+    void test_the_reset_puts_the_room_back() {
+        section("puzzle.lua puts the crates back and clears what was thrown");
+
+        Game game;
+        check(start_game(game), "the shipped game starts");
+        game.camera = engine::script::CameraView{ .position = { 0.0F, 3.0F, 4.0F },
+                                                  .forward = { 0.0F, 0.0F, -1.0F } };
+
+        const entt::entity crate = find_by_name(game.world, "stack crate 2");
+        check(crate != entt::null, "the top of the stack is there");
+
+        game.run(2);
+        const engine::Vec3 home = world_position(game.world, crate);
+
+        // Knock it a long way from home, and throw something as well, so the
+        // reset has both kinds of work to undo.
+        check(game.simulation.teleport(crate, engine::Vec3{ 4.0F, 0.5F, 4.0F },
+                                       engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
+              "the crate is moved away");
+        game.press(engine::platform::Key::F);
+        game.step();
+        check(count_named(game.world, "thrown crate") == 1, "and a crate was thrown");
+
+        game.run(30);
+        check(glm::length(world_position(game.world, crate) - home) > 1.0F,
+              "the crate is nowhere near where it started");
+
+        game.press(engine::platform::Key::R);
+        game.step();
+        game.run(2);
+
+        check(glm::length(world_position(game.world, crate) - home) < 0.1F,
+              "the reset put the crate back where the scene had it");
+        check(count_named(game.world, "thrown crate") == 0,
+              "and took away what the throw had made");
     }
 
 } // namespace
@@ -541,14 +744,16 @@ int main() {
     test_saving_puts_the_references_back();
     test_overrides_reach_the_world();
 
-    // The physics world runs its solver on the scheduler, so the one test that
-    // steps it needs the pool up.
+    // The physics world runs its solver on the scheduler, so everything below
+    // that steps one needs the pool up.
     engine::jobs::init();
-    test_the_goal_volume_catches_the_falling_crate();
-    engine::jobs::shutdown();
 
-    std::printf("the game loop\n");
-    test_update_turns_what_it_should();
-    test_update_refuses_a_bad_spin();
+    std::printf("the game, which is entirely Lua\n");
+    test_spin_turns_what_it_should();
+    test_a_bad_spin_turns_nothing();
+    test_the_throw_makes_a_crate_that_falls();
+    test_a_crate_at_rest_in_the_goal_wins();
+    test_the_reset_puts_the_room_back();
+    engine::jobs::shutdown();
     return test::report();
 }
