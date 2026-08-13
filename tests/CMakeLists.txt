@@ -223,11 +223,17 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     )
 endif()
 
-# Rule 4.1. No file outside src/gfx/vulkan/ can include a Vulkan header.
+# Rule 4.1. No file outside src/gfx/vulkan/ can include a Vulkan header, and the
+# Box3D rule in DESIGN.md section 5 says the same of src/physics/.
 #
-# The check is a shell script, so it needs bash. A Windows machine without Git
-# Bash does not get the test. The vulkan-containment job in CI runs on Linux and
-# covers every push, so the rule still holds.
+# Two tests, because they measure different things. vulkan_containment says this
+# tree obeys the rule. containment_checks says the checks can still tell. A
+# check that fails open reports a clean tree either way, so the first test alone
+# proves nothing about the second. See issue #231.
+#
+# Both are shell scripts, so they need bash. A Windows machine without Git Bash
+# does not get them. The containment job in CI runs on Linux and covers every
+# push, so the rule still holds.
 find_program(BASH_EXE bash)
 if(BASH_EXE)
     add_test(
@@ -236,8 +242,19 @@ if(BASH_EXE)
                 ${CMAKE_SOURCE_DIR}/scripts/check-vulkan-containment.sh
                 ${CMAKE_SOURCE_DIR}
     )
+    add_test(
+        NAME box3d_containment
+        COMMAND ${CMAKE_COMMAND} -E env ${BASH_EXE}
+                ${CMAKE_SOURCE_DIR}/scripts/check-box3d-containment.sh
+                ${CMAKE_SOURCE_DIR}
+    )
+    add_test(
+        NAME containment_checks
+        COMMAND ${CMAKE_COMMAND} -E env ${BASH_EXE}
+                ${CMAKE_SOURCE_DIR}/tests/test_containment.sh
+    )
 else()
-    message(STATUS "bash not found, skipping the vulkan_containment test")
+    message(STATUS "bash not found, skipping the containment tests")
 endif()
 
 # M6.2. The moth_ui batching recorder. It names no Vulkan type and opens no
