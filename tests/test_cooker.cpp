@@ -20,6 +20,8 @@
 #include "cook.h"
 #include "document.h"
 #include "platform/paths.h"
+#include "scene/component_registry.h"
+#include "scene/references.h"
 
 #include <array>
 #include <chrono>
@@ -51,6 +53,7 @@ namespace {
                engine::assets::kShaderExtension;
     }
     namespace as = engine::assets;
+    namespace sc = engine::scene;
 
     std::filesystem::path scratch(std::string_view name) {
         const std::filesystem::path path =
@@ -1960,6 +1963,9 @@ void main() { out_color = push.model[0]; }
             R"({"mesh":"asset:models/crate.gltf#mesh:0"},"Name":{"value":"crate"}}}]})";
         write_file(source / "a.prefab", authored);
 
+        sc::ComponentRegistry types;
+        sc::register_builtin_components(types);
+
         const cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
         check(cooker::cook_all(options, result), "the cook works");
@@ -1977,7 +1983,7 @@ void main() { out_color = push.model[0]; }
         check(cooked["entities"][0]["components"]["MeshRenderer"]["mesh"] != "asset:models/crate.gltf#mesh:0",
               "the cooked document holds the identity, not the reference");
 
-        const std::size_t restored = as::restore_references(cooked, content.manifest());
+        const std::size_t restored = sc::restore_references(cooked, content.manifest(), types);
         check(restored == 1, "one reference goes back");
         check(cooked["entities"][0]["components"]["MeshRenderer"]["mesh"] ==
                   "asset:models/crate.gltf#mesh:0",
@@ -1987,6 +1993,94 @@ void main() { out_color = push.model[0]; }
         // that only looks like it might be one.
         check(cooked["entities"][0]["components"]["Name"]["value"] == "crate",
               "an ordinary string is untouched");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * Issue #81. A name that holds a cooked identity is not a reference.
+     *
+     * `Name.value` is an ordinary string, and the save walk used to read the
+     * text of every string in the document. So an entity a person named after
+     * a GUID the manifest knows came back from a save under a name nobody
+     * wrote. The walk reads the descriptors now, and `Name.value` carries no
+     * `reflect::AssetRef`.
+     */
+    void test_a_name_that_holds_an_identity_survives_a_save() {
+        const std::filesystem::path source = scratch("byfield/src");
+        const std::filesystem::path out = scratch("byfield/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+
+        nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.prefab"), nullptr, false);
+        check(!cooked.is_discarded(), "the cooked prefab parses");
+        if (cooked.is_discarded()) {
+            return;
+        }
+
+        // The very identity the mesh field holds, put in a name as well. That
+        // is the case the text walk could not tell apart.
+        const auto mesh = cooked["entities"][0]["components"]["MeshRenderer"]["mesh"];
+        cooked["entities"][0]["components"]["Name"] = { { "value", mesh } };
+
+        sc::ComponentRegistry types;
+        sc::register_builtin_components(types);
+        const std::size_t restored = sc::restore_references(cooked, content.manifest(), types);
+        check(restored == 1, "the mesh field alone goes back");
+        check(cooked["entities"][0]["components"]["Name"]["value"] == mesh,
+              "and the name keeps the identity a person typed into it");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A prefab instance holds its fields in a patch, and a patch is a document
+     * shape of its own. A walk that read only `components` would leave every
+     * reference an instance overrode as a raw GUID, and the sandbox scene is
+     * almost all instances.
+     */
+    void test_the_save_walk_reaches_an_instance_patch() {
+        const std::filesystem::path source = scratch("patch/src");
+        const std::filesystem::path out = scratch("patch/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.scene",
+                   R"({"entities":[{"prefab":"p.prefab","overrides":{"0":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:0"}}},)"
+                   R"("added":[{"parent":0,"components":{"MeshRenderer":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+
+        nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.scene"), nullptr, false);
+        check(!cooked.is_discarded(), "the cooked scene parses");
+        if (cooked.is_discarded()) {
+            return;
+        }
+
+        sc::ComponentRegistry types;
+        sc::register_builtin_components(types);
+        check(sc::restore_references(cooked, content.manifest(), types) == 2,
+              "the patch and the added entity both come back");
+        check(cooked["entities"][0]["overrides"]["0"]["MeshRenderer"]["mesh"] ==
+                  "asset:models/crate.gltf#mesh:0",
+              "the override reads as the path the source names");
+        check(cooked["entities"][0]["added"][0]["components"]["MeshRenderer"]["mesh"] ==
+                  "asset:models/crate.gltf#mesh:0",
+              "and so does the entity the instance added");
 
         test::remove_tree(source.parent_path());
     }
@@ -2660,6 +2754,8 @@ int main() {
     test_an_identity_reads_back_as_the_reference_that_named_it();
     test_a_part_with_a_sparse_index_reads_back();
     test_a_saved_document_keeps_its_references();
+    test_a_name_that_holds_an_identity_survives_a_save();
+    test_the_save_walk_reaches_an_instance_patch();
     test_a_document_that_will_not_parse_fails_the_cook();
     test_a_new_sidecar_cooks_the_document_that_names_it();
     return test::report();

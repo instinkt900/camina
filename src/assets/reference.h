@@ -13,12 +13,14 @@
  * The cooker reads a reference and writes a GUID. A tool that saves a document
  * a person will edit again does the opposite, or the save would replace every
  * name with the identity it resolved to and undo the whole point.
+ *
+ * This file knows one reference at a time. Which field of a document holds one
+ * is a question only the component descriptors answer, so the walk over a whole
+ * document lives in `scene/references.h`.
  */
 
 #include "assets/manifest.h"
 #include "core/guid.h"
-
-#include <nlohmann/json.hpp>
 
 #include <array>
 #include <cstdint>
@@ -118,25 +120,5 @@ namespace engine::assets {
      * manifest produced that identity.
      */
     [[nodiscard]] std::string reference_for(const Manifest& manifest, Guid guid);
-
-    /**
-     * @brief Puts every reference back into a document about to be written.
-     *
-     * A live document holds identities, because that is what the engine reads.
-     * A document a person edits again holds references, because an identity is
-     * derived and nobody chose it. This walks a document and replaces each
-     * string that is an identity the manifest knows with the reference naming
-     * it. It is the mirror of what the cooker does on the way in.
-     *
-     * @param document The document to change in place.
-     * @param manifest The manifest that says what produced what.
-     * @return How many strings were replaced.
-     *
-     * @warning This works on the text, so a string field that happens to hold
-     * an identity the manifest knows is replaced as well. A field says what it
-     * means through its type, and this reads only the text, which is the wrong
-     * granularity. Issue #81 routes it through the descriptors instead.
-     */
-    std::size_t restore_references(nlohmann::json& document, const Manifest& manifest);
 
 } // namespace engine::assets
