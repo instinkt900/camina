@@ -1,6 +1,9 @@
-# Runs clang-tidy as part of the compile step. ENGINE_ENABLE_CLANG_TIDY decides,
-# and a Debug build or a CI build turns it on by default. A RelWithDebInfo build
-# stays fast, which is what you want while iterating.
+# Runs clang-tidy as part of the compile step. ENGINE_ENABLE_CLANG_TIDY decides.
+# A Debug build or a CI build turns it on by default, and a RelWithDebInfo build
+# outside CI leaves it off to stay fast while iterating. MSVC is the exception
+# and defaults off whatever the build type, because clang-tidy reads a clang
+# command line and the MSVC driver passes flags it does not understand. The Linux
+# clang job covers every file, so nothing escapes review.
 #
 # The default is read once, on the first configure of a build directory. After
 # that the cache holds the answer. See the block above the option below for why
@@ -78,17 +81,53 @@ option(ENGINE_ENABLE_CLANG_TIDY
        "Run clang-tidy in the compile step"
        ${engine_clang_tidy_default})
 
-# Say which way it went, once for each configure. A gate that is off has to be
+# Refusing here beats accepting the flag and linting nothing. Reachable only when
+# somebody sets the option by hand, because the default above is off on MSVC.
+if(ENGINE_ENABLE_CLANG_TIDY AND MSVC)
+    message(FATAL_ERROR
+            "ENGINE_ENABLE_CLANG_TIDY is ON, but clang-tidy cannot read an MSVC "
+            "command line. Configure with -DENGINE_ENABLE_CLANG_TIDY=OFF.")
+endif()
+
+# Resolve the binary here rather than only in the function, so the report below
+# can tell what was asked for from what will actually run. "On" printed over a
+# build that lints nothing is the failure this whole file exists to prevent.
+#
+# A missing binary does not fail here. The function does that, and only for a
+# target that wants linting, so a docs-only configure still works with clang-tidy
+# absent. The docs job in .github/workflows/ci.yml is exactly that: it installs
+# Doxygen alone, and CI is set in its environment.
+#
+# The versioned name first. Unversioned resolves to clang-tidy 18 on a stock
+# Ubuntu noble and on the CI runner, which already carries an alternative that
+# update-alternatives does not outrank.
+#
+# The variable is named for the engine rather than called CLANG_TIDY_EXE, which
+# is what it used to be. find_program keeps a cache entry that already holds a
+# path and ignores NAMES entirely, so a build directory configured before that
+# change would hold on to the clang-tidy 18 it found then. A new name cannot
+# collide with that. Override it with -DENGINE_CLANG_TIDY_EXE=<path>.
+if(ENGINE_ENABLE_CLANG_TIDY)
+    find_program(ENGINE_CLANG_TIDY_EXE NAMES clang-tidy-19 clang-tidy)
+endif()
+
+# Say what will happen, once for each configure. A gate that is off has to be
 # visible, because a build that checked nothing looks exactly like a build that
 # checked everything.
-if(ENGINE_ENABLE_CLANG_TIDY)
-    message(STATUS "clang-tidy: on")
-elseif(MSVC AND NOT engine_clang_tidy_default)
-    message(STATUS "clang-tidy: off, because clang-tidy cannot read an MSVC command line")
-else()
+if(NOT ENGINE_ENABLE_CLANG_TIDY)
+    if(MSVC)
+        message(STATUS "clang-tidy: off, because clang-tidy cannot read an MSVC command line")
+    else()
+        message(STATUS
+                "clang-tidy: off, so nothing lints. "
+                "Configure with -DENGINE_ENABLE_CLANG_TIDY=ON to turn it on")
+    endif()
+elseif(NOT ENGINE_CLANG_TIDY_EXE)
     message(STATUS
-            "clang-tidy: off, so nothing lints. "
-            "Configure with -DENGINE_ENABLE_CLANG_TIDY=ON to turn it on")
+            "clang-tidy: off, because no clang-tidy binary was found. "
+            "Install clang-tidy-19, or set -DENGINE_CLANG_TIDY_EXE=<path>")
+else()
+    message(STATUS "clang-tidy: on, ${ENGINE_CLANG_TIDY_EXE}")
 endif()
 
 function(engine_enable_clang_tidy target)
@@ -96,30 +135,13 @@ function(engine_enable_clang_tidy target)
         return()
     endif()
 
-    if(MSVC)
-        # Reachable only when somebody sets the option by hand. Refusing loudly
-        # beats accepting the flag and linting nothing.
-        message(FATAL_ERROR
-                "ENGINE_ENABLE_CLANG_TIDY is ON, but clang-tidy cannot read an MSVC "
-                "command line. Configure with -DENGINE_ENABLE_CLANG_TIDY=OFF.")
-    endif()
-
-    # The versioned name first. Unversioned resolves to clang-tidy 18 on a stock
-    # Ubuntu noble and on the CI runner, which already carries an alternative
-    # that update-alternatives does not outrank.
-    #
-    # The variable is named for the engine rather than called CLANG_TIDY_EXE,
-    # which is what it used to be. find_program keeps a cache entry that already
-    # holds a path and ignores NAMES entirely, so a build directory configured
-    # before this change would hold on to the clang-tidy 18 it found then. A new
-    # name cannot collide with that. Override it with
-    # -DENGINE_CLANG_TIDY_EXE=<path>.
-    find_program(ENGINE_CLANG_TIDY_EXE NAMES clang-tidy-19 clang-tidy)
     if(NOT ENGINE_CLANG_TIDY_EXE)
+        # CI has no excuse for a missing clang-tidy. This lives here and not
+        # beside the resolve above, so that a configure which defines no target
+        # never reaches it. The report above has already said the gate is off.
         if(DEFINED ENV{CI})
             message(FATAL_ERROR "clang-tidy not found but required in CI")
         endif()
-        message(STATUS "clang-tidy not found, skipping for ${target}")
         return()
     endif()
 
