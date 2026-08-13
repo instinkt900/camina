@@ -150,7 +150,11 @@ namespace engine::scene {
          *
          * @param name The name a scene file uses.
          * @param path The file to read.
-         * @return True when the file parsed.
+         * @return True when the file read, parsed as JSON, and held a prefab
+         * this build can use. False when the file will not open, when the text
+         * is not JSON, and when the document parses but is not a prefab, which
+         * is add()'s half of the answer. The library is left alone in every
+         * failing case.
          */
         [[nodiscard]] bool add_file(std::string name, const std::filesystem::path& path);
 

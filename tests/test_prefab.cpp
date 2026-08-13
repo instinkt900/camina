@@ -218,11 +218,23 @@ namespace {
                   "loose crate",
               "and it holds what the file held");
 
+        // Counting entries is not enough on its own. A refusal that dropped the
+        // crate and left something else behind would keep the count at one, and
+        // so would one that overwrote the crate in place. So each case below
+        // names the prefab and reads a field out of it.
+        const auto crate_survived = [&library](const char* what) {
+            const sc::Prefab* found = library.find("crate");
+            check(found != nullptr && library.size() == 1, what);
+            check(found != nullptr && found->size() == 2 &&
+                      found->entities().at(0).components.at("Name").at("value") == "loose crate",
+                  "and the prefab it holds is untouched");
+        };
+
         // A file that is not there is the case an editor meets most, because a
         // person can rename or move one while the editor holds the name.
         check(!library.add_file("missing", dir / "not_there.prefab"),
               "a file that is not there is refused");
-        check(library.size() == 1, "and the library is left alone");
+        crate_survived("and the library still holds the crate alone");
 
         // Exceptions are off, per reflect/json.h, so a bad document comes back
         // discarded rather than thrown. Without this the parse would end the
@@ -233,7 +245,7 @@ namespace {
             file << "{ this is not json";
         }
         check(!library.add_file("broken", broken), "a file that is not JSON is refused");
-        check(library.size() == 1, "and that leaves the library alone too");
+        crate_survived("and that leaves the crate alone too");
 
         // A document that parses but is not a prefab has to fail in add(),
         // which is the half add_file() delegates to.
@@ -243,7 +255,14 @@ namespace {
             file << "[]";
         }
         check(!library.add_file("wrong", wrong), "valid JSON that is not a prefab is refused");
-        check(library.size() == 1, "and the library still holds the one that worked");
+        crate_survived("and the crate is still the one that worked");
+
+        // A refusal under a name the library already holds is the one that could
+        // overwrite. add() replaces on a name it knows, so this says the replace
+        // does not happen until the document is good.
+        check(!library.add_file("crate", wrong),
+              "a refused document does not replace the prefab of the same name");
+        crate_survived("and the crate that was already there is the one still there");
 
         test::remove_tree(dir);
     }
