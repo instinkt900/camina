@@ -1,6 +1,7 @@
 #include "cook.h"
 
 #include "core/log.h"
+#include "sandbox/game.h"
 
 #include <cstdio>
 #include <string_view>
@@ -47,6 +48,18 @@ int main(int argc, char** argv) {
         usage();
         return 2;
     }
+
+    // A scene names an asset in a field the descriptors mark, so the cooker has
+    // to know every component a document can carry. The engine's own are not
+    // enough: a game defines its own types, and one of them may name an asset.
+    //
+    // So this executable links the game and registers it, the way the runtime
+    // does. That is what makes the cooker specific to one game, and it is the
+    // same place a project system would choose one instead. See DESIGN.md
+    // section 6.
+    engine::scene::ComponentRegistry types = cooker::engine_components();
+    sandbox::register_components(types);
+    options.components = &types;
 
     cooker::Result result;
     const bool ok = cooker::cook_all(options, result);

@@ -357,7 +357,8 @@ engine/
     ui/                moth_ui IRenderer/IImage/IFont implementations, see §8
     audio/             IAudioDevice and the miniaudio implementation
   tools/
-    cooker/            source assets to cooked assets, separate executable
+    cooker/            source assets to cooked assets, separate executable.
+                       cooker_lib knows no game, the executable links one
   apps/
     editor/            engine_core with the ImGui editor
     runtime/           engine_core, loads a project and runs it
@@ -1210,6 +1211,30 @@ deriving from the source identity until it matches.
 
 That is why the syntax lives in `src/assets/reference.h` rather than in the cooker. Both ends
 need it, and a second copy would drift.
+
+**A field names an asset because it says so, not because of its text.** Both directions used
+to read the text of every string in the document. That is the wrong granularity. A field means
+something because of its type, so an entity named after a cooked GUID had its name replaced on
+save, and the scene then held a name nobody wrote.
+
+`reflect::AssetRef` marks a field that names an asset. `ComponentOps::reference_field_names`
+holds those names for each registered component, filled from the descriptors, and
+`scene::for_each_reference_field` is the one walk over a document that reads them. The cooker
+resolves through it and a save restores through it, so the two cannot disagree about what a
+reference is. The walk sits in `scene/` because it needs the component registry, and `assets/`
+cannot depend on `scene/`. The manifest arrives as a parameter instead.
+
+**So the cooker has to hold the descriptors of every component a document can carry.** The
+engine's own are not enough, because a game defines its own types and one of them may name an
+asset. `cooker_lib` therefore takes the registry as an input and knows no game, and the
+`cooker` executable links the game module and registers it, exactly as `apps/runtime` does.
+That makes the cooker specific to one game. It is the same compromise the runtime already
+makes, and it is one place rather than two when a project system chooses a game instead.
+
+A string that starts with `asset:` and sits anywhere else fails the cook, naming the document
+and the text. The resolve step never reaches it, so the alternative is a cooked document
+carrying text where the runtime reads a GUID. That covers a reference typed into an ordinary
+string field, and a component nobody registered.
 
 The scene a person edits is in the source tree, so that is where a save goes. Writing to the
 cooked tree looks like it worked, and the next cook throws it away. A build with no source

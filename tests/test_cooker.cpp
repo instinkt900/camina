@@ -19,7 +19,10 @@
 #include "check.h"
 #include "cook.h"
 #include "document.h"
+#include "core/guid.h"
 #include "platform/paths.h"
+#include "reflect/attributes.h"
+#include "reflect/reflect.h"
 #include "scene/component_registry.h"
 #include "scene/references.h"
 
@@ -35,7 +38,36 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
+
+namespace test_game {
+
+    /**
+     * A component the engine does not define, holding an asset reference.
+     *
+     * The sandbox stands in for a game everywhere else in this repository, and
+     * neither of its components names an asset. So the case that matters here
+     * has nothing to drive it: a cooker that knew only the engine's components
+     * would pass every test and still fail the first game that added one.
+     */
+    struct Billboard {
+        engine::Guid mesh; ///< The mesh it draws, named by identity.
+    };
+
+} // namespace test_game
+
+/// Field descriptors for the test game component.
+template <>
+struct engine::reflect::Describe<test_game::Billboard> {
+    static constexpr const char* name = "Billboard"; ///< The name a document stores.
+    /// @brief The one field, and it names an asset.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(
+            ENGINE_FIELD(test_game::Billboard, mesh, engine::reflect::AssetRef{}));
+    }
+};
 
 namespace {
 
@@ -2087,6 +2119,136 @@ void main() { out_color = push.model[0]; }
 
 
     /**
+     * Issue #81. The cooker resolves a game's components, not only the engine's.
+     *
+     * Which field names an asset comes from the descriptors now, so the cooker
+     * has to hold the descriptors of every component a document can carry. A
+     * game defines its own, and `tools/cooker/main.cpp` registers them for that
+     * reason. This is the property that makes the link worth its cost.
+     */
+    void test_a_game_component_resolves_its_reference() {
+        const std::filesystem::path source = scratch("gamecomp/src");
+        const std::filesystem::path out = scratch("gamecomp/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"Billboard":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
+
+        engine::scene::ComponentRegistry types = cooker::engine_components();
+        types.add<test_game::Billboard>();
+
+        const cooker::Options options{ .content = source, .out = out, .components = &types };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works with the game registered");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+
+        nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.prefab"), nullptr, false);
+        check(!cooked.is_discarded(), "the cooked prefab parses");
+        if (cooked.is_discarded()) {
+            return;
+        }
+
+        engine::Guid resolved;
+        check(engine::Guid::parse(cooked["entities"][0]["components"]["Billboard"]["mesh"]
+                                      .get<std::string>(),
+                                  resolved),
+              "the game component's field holds an identity now");
+        check(as::find_by_guid(content.manifest(), resolved) != nullptr,
+              "and that identity is one this cook produced");
+
+        // The way back agrees, because both directions read the same list.
+        check(sc::restore_references(cooked, content.manifest(), types) == 1,
+              "and the save side puts the same field back");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * The same document, cooked without the game registered.
+     *
+     * A cooker that did not know `Billboard` used to resolve the field anyway,
+     * because it read the text of every string. Reading the descriptors means
+     * it cannot, so the failure has to be loud. Passing the text through would
+     * write a cooked document the runtime reads as a GUID that will not parse.
+     */
+    void test_an_unregistered_component_fails_the_cook() {
+        const std::filesystem::path source = scratch("unknown/src");
+        const std::filesystem::path out = scratch("unknown/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"Billboard":)"
+                   R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
+
+        // No registry named, so the cooker uses the engine's own components.
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result),
+              "a reference the cooker cannot place fails the cook");
+        check(!std::filesystem::exists(out / "a.prefab"),
+              "and it writes no cooked document to be read later");
+
+        // The validate pass reads every document again, the skipped ones
+        // included. A document that already failed is left out of it, or one
+        // fault would be reported twice and counted as two.
+        check(result.failed == 1, "and one fault counts once");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A reference typed into a field that names no asset.
+     *
+     * `Name.value` is an ordinary string. The resolve leaves it alone, which is
+     * the whole point of reading the descriptors, so something has to say that
+     * the value will never resolve. Silence here would ship the text.
+     */
+    void test_a_reference_in_an_untagged_field_fails_the_cook() {
+        const std::filesystem::path source = scratch("untagged/src");
+        const std::filesystem::path out = scratch("untagged/out");
+        write_file(source / "models" / "crate.gltf", kMinimalGltf);
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"Name":)"
+                   R"({"value":"asset:models/crate.gltf"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(!cooker::cook_all(options, result), "a reference in a plain string fails the cook");
+        check(!std::filesystem::exists(out / "a.prefab"), "and nothing is written");
+        check(result.failed == 1, "and one fault counts once");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A name that only looks like a reference is not one.
+     *
+     * The check above must not turn every string beginning with six particular
+     * characters into a cook failure by accident. It fires on the prefix alone,
+     * so this holds it to text that really parses as a reference.
+     */
+    void test_a_name_that_is_not_a_reference_cooks() {
+        const std::filesystem::path source = scratch("lookalike/src");
+        const std::filesystem::path out = scratch("lookalike/out");
+        write_file(source / "a.prefab",
+                   R"({"entities":[{"components":{"Name":{"value":"assets go here"}}}]})");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "an ordinary name cooks");
+
+        nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.prefab"), nullptr, false);
+        check(!cooked.is_discarded(), "the cooked prefab parses");
+        if (!cooked.is_discarded()) {
+            check(cooked["entities"][0]["components"]["Name"]["value"] == "assets go here",
+                  "and it comes through unchanged");
+        }
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
      * An HDR panorama cooks to a cubemap that the runtime reader accepts.
      *
      * The reader checks the payload against what the header describes, so this
@@ -2756,6 +2918,10 @@ int main() {
     test_a_saved_document_keeps_its_references();
     test_a_name_that_holds_an_identity_survives_a_save();
     test_the_save_walk_reaches_an_instance_patch();
+    test_a_game_component_resolves_its_reference();
+    test_an_unregistered_component_fails_the_cook();
+    test_a_reference_in_an_untagged_field_fails_the_cook();
+    test_a_name_that_is_not_a_reference_cooks();
     test_a_document_that_will_not_parse_fails_the_cook();
     test_a_new_sidecar_cooks_the_document_that_names_it();
     return test::report();

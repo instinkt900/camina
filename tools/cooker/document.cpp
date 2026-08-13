@@ -2,10 +2,14 @@
 
 #include "assets/meta.h"
 #include "core/log.h"
+#include "scene/references.h"
 
 #include <nlohmann/json.hpp>
 
 #include <fstream>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace cooker {
 
@@ -68,105 +72,151 @@ namespace cooker {
             return true;
         }
 
-        /// Replaces every reference under a node with the identity it names.
-        [[nodiscard]] bool resolve_in_place(nlohmann::json& node,
+        /// Replaces the reference in every field that names an asset.
+        [[nodiscard]] bool resolve_in_place(nlohmann::json& document,
+                                            const engine::scene::ComponentRegistry& types,
                                             const std::filesystem::path& content_root,
                                             std::string_view where) {
-            if (node.is_object() || node.is_array()) {
-                for (auto& child : node) {
-                    if (!resolve_in_place(child, content_root, where)) {
+            bool sound = true;
+            engine::scene::for_each_reference_field(
+                document, types, [&](nlohmann::json& value) {
+                    const auto text = value.get<std::string>();
+                    if (!std::string_view{ text }.starts_with(kAssetPrefix)) {
+                        // A GUID already written out. That is what keeps a
+                        // document written before references existed readable,
+                        // and what carries an identity the save side could not
+                        // name back through unchanged.
+                        return true;
+                    }
+
+                    AssetReference reference;
+                    if (!parse_reference(text, reference)) {
+                        // It meant to be a reference and it will not read.
+                        // parse_reference has already said what is wrong.
+                        sound = false;
                         return false;
                     }
-                }
-                return true;
-            }
-            if (!node.is_string()) {
-                return true;
-            }
 
-            const auto text = node.get<std::string>();
-            if (!std::string_view{ text }.starts_with(kAssetPrefix)) {
-                // Every other string in the file, a name and a component type
-                // among them. A GUID already written out lands here too, which
-                // is what keeps a document written before this still readable.
-                return true;
-            }
-
-            AssetReference reference;
-            if (!parse_reference(text, reference)) {
-                // It meant to be a reference and it will not read.
-                // parse_reference has already said what is wrong with it.
-                return false;
-            }
-
-            engine::Guid guid;
-            if (!resolve(reference, content_root, where, guid)) {
-                return false;
-            }
-            node = guid.to_text();
-            return true;
+                    engine::Guid guid;
+                    if (!resolve(reference, content_root, where, guid)) {
+                        sound = false;
+                        return false;
+                    }
+                    value = guid.to_text();
+                    return true;
+                });
+            return sound;
         }
 
-        /// Collects every reference under a node, whole, and reports nothing.
-        void gather_references(const nlohmann::json& node, std::vector<AssetReference>& out) {
+        /// Collects every string under a node that reads as a reference.
+        void gather_strays(const nlohmann::json& node, std::vector<std::string>& out) {
             if (node.is_object() || node.is_array()) {
                 for (const auto& child : node) {
-                    gather_references(child, out);
+                    gather_strays(child, out);
                 }
                 return;
             }
             if (!node.is_string()) {
                 return;
             }
-            AssetReference reference;
-            if (parse_reference(node.get<std::string>(), reference)) {
-                out.push_back(std::move(reference));
+            auto text = node.get<std::string>();
+            if (std::string_view{ text }.starts_with(kAssetPrefix)) {
+                out.push_back(std::move(text));
             }
         }
 
-        /// Reads a document and gives back every reference in it.
-        [[nodiscard]] std::vector<AssetReference> references_of(const nlohmann::json& document) {
+        /**
+         * Reports a reference sitting where nothing will ever resolve it.
+         *
+         * Only a field marked `reflect::AssetRef` is resolved, so a reference
+         * anywhere else reaches the cooked tree as text and the runtime reads
+         * it as a GUID that will not parse. That used to work, because the
+         * resolve read the text of every string, and it is the granularity
+         * issue #81 took out.
+         *
+         * The document arrives by value, and the fields that do name an asset
+         * come out of the copy first. What is left is every place a resolve
+         * never reaches, whether the caller has resolved already or not.
+         */
+        [[nodiscard]] bool no_stray_references(nlohmann::json document,
+                                               const engine::scene::ComponentRegistry& types,
+                                               std::string_view where) {
+            engine::scene::for_each_reference_field(document, types,
+                                                    [](nlohmann::json& value) {
+                                                        value = nullptr;
+                                                        return true;
+                                                    });
+
+            std::vector<std::string> strays;
+            gather_strays(document, strays);
+            for (const std::string& text : strays) {
+                ENGINE_LOG_ERROR("{}: '{}' reads as a reference, and nothing resolves it "
+                                 "there. A reference goes in a field marked "
+                                 "reflect::AssetRef, on a component the cooker registers.",
+                                 where, text);
+            }
+            return strays.empty();
+        }
+
+        /// Reads a document and gives back the reference in every tagged field.
+        [[nodiscard]] std::vector<AssetReference> references_of(
+            nlohmann::json& document, const engine::scene::ComponentRegistry& types) {
             std::vector<AssetReference> out;
-            gather_references(document, out);
+            engine::scene::for_each_reference_field(document, types,
+                                                    [&](nlohmann::json& value) {
+                                                        AssetReference reference;
+                                                        if (parse_reference(
+                                                                value.get<std::string>(),
+                                                                reference)) {
+                                                            out.push_back(std::move(reference));
+                                                        }
+                                                        return true;
+                                                    });
             return out;
         }
 
     } // namespace
 
     void document_references(const std::filesystem::path& source,
+                             const engine::scene::ComponentRegistry& types,
                              std::vector<std::filesystem::path>& out) {
         std::ifstream file(source, std::ios::binary);
         if (!file) {
             return;
         }
-        const nlohmann::json document = nlohmann::json::parse(file, nullptr, false);
+        nlohmann::json document = nlohmann::json::parse(file, nullptr, false);
         if (document.is_discarded()) {
             return;
         }
-        for (const AssetReference& reference : references_of(document)) {
+        for (const AssetReference& reference : references_of(document, types)) {
             out.push_back(reference.source);
         }
     }
 
     bool validate_references(const std::filesystem::path& source,
                              const std::filesystem::path& content_root,
-                             const as::Manifest& manifest) {
+                             const as::Manifest& manifest,
+                             const engine::scene::ComponentRegistry& types) {
         std::ifstream file(source, std::ios::binary);
         if (!file) {
             return true;
         }
-        const nlohmann::json document = nlohmann::json::parse(file, nullptr, false);
+        nlohmann::json document = nlohmann::json::parse(file, nullptr, false);
         if (document.is_discarded()) {
             // The rule reports a document that will not parse. Saying it twice
             // would put the same failure in the log under two headings.
             return true;
         }
 
+        // A document the freshness check skipped never reached cook_document
+        // this run, so this is the only pass that reads it. A stray therefore
+        // has to be caught here as well as there.
+        bool sound = no_stray_references(document, types, source.string());
+
         // The references are read again rather than remembered from the cook,
         // because a document the cooker skipped was never resolved this run and
         // its references still have to hold.
-        bool sound = true;
-        for (const AssetReference& reference : references_of(document)) {
+        for (const AssetReference& reference : references_of(document, types)) {
             engine::Guid guid;
             if (!resolve(reference, content_root, source.string(), guid)) {
                 sound = false;
@@ -192,12 +242,18 @@ namespace cooker {
 
     bool cook_document(const std::filesystem::path& source,
                        const std::filesystem::path& destination,
-                       const std::filesystem::path& content_root) {
+                       const std::filesystem::path& content_root,
+                       const engine::scene::ComponentRegistry& types) {
         nlohmann::json document;
         if (!read_json(source, document)) {
             return false;
         }
-        if (!resolve_in_place(document, content_root, source.string())) {
+        if (!resolve_in_place(document, types, content_root, source.string())) {
+            return false;
+        }
+        // Before the write, so a document holding one produces no output. The
+        // runtime would read that text as a GUID and get nothing.
+        if (!no_stray_references(document, types, source.string())) {
             return false;
         }
 
