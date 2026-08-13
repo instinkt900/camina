@@ -1332,6 +1332,55 @@ namespace {
               "and the top of it");
     }
 
+    void a_trigger_draws_and_a_solid_shape_does_not_look_like_it() {
+        section("A trigger draws its wireframe, in a color of its own");
+
+        // A trigger is invisible twice over. It has no mesh, and it pushes
+        // nothing, so a trigger in the wrong place looks exactly like a trigger
+        // that is working. --physics-debug is the only thing that can show it.
+        //
+        // Box3D draws this, not the engine. It gives a sensor a broadphase proxy
+        // like any other shape and colors it wheat. Neither one is documented,
+        // so a submodule bump could drop either with nothing to say so. This is
+        // what would fail. See DESIGN.md section 5.
+        engine::physics::World world;
+        add_box_body(world, ph::BodyType::Static, Vec3{ 0.0F, -5.0F, 0.0F },
+                     Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize });
+
+        const engine::physics::BodyId trigger = world.add_body(
+            ph::BodyType::Static, Vec3{ 0.0F, 5.0F, 0.0F }, kUpright);
+        world.add_box(trigger, Vec3{ kBoxHalfSize, kBoxHalfSize, kBoxHalfSize },
+                      engine::physics::SurfaceMaterial{},
+                      engine::physics::ShapeOptions{ .is_trigger = true });
+
+        std::vector<ph::DebugLine> lines;
+        world.debug_lines(lines);
+
+        // The two boxes are ten metres apart, so the sign of the height says
+        // which shape a line belongs to with no ambiguity.
+        std::vector<Vec3> trigger_colors;
+        std::vector<Vec3> solid_colors;
+        for (const ph::DebugLine& line : lines) {
+            (line.from.y > 0.0F ? trigger_colors : solid_colors).push_back(line.color);
+        }
+
+        check(trigger_colors.size() == 12, "a trigger draws twelve edges, the same as a box");
+        check(solid_colors.size() == 12, "and the solid box beside it draws twelve");
+
+        // Drawn is not enough. A trigger that drew in the solid color would be
+        // a wireframe over a mesh that is not there, and a person would read it
+        // as a collider in the wrong place rather than as a trigger.
+        bool color_shared = false;
+        for (const Vec3& trigger_color : trigger_colors) {
+            for (const Vec3& solid_color : solid_colors) {
+                if (trigger_color == solid_color) {
+                    color_shared = true;
+                }
+            }
+        }
+        check(!color_shared, "and a trigger is never the color a solid shape draws in");
+    }
+
     void a_wireframe_follows_its_body() {
         section("A wireframe is where the solver has put the body");
 
@@ -1601,6 +1650,7 @@ int main() {
     a_resize_keeps_the_body_moving();
     a_box_draws_its_twelve_edges();
     a_sphere_draws_three_rings();
+    a_trigger_draws_and_a_solid_shape_does_not_look_like_it();
     a_wireframe_follows_its_body();
     a_velocity_reads_back();
     an_impulse_moves_a_body();

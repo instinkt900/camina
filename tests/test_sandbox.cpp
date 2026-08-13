@@ -8,7 +8,10 @@
 #include "assets/reference.h"
 #include "assets/texture.h"
 #include "check.h"
+#include "core/jobs.h"
 #include "math/transform.h"
+#include "physics/components.h"
+#include "physics/simulation.h"
 #include "sandbox/components.h"
 #include "sandbox/game.h"
 #include "scene/component_registry.h"
@@ -19,8 +22,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -227,12 +232,15 @@ namespace {
         // each of the six nodes the model holds), the three lights, three for
         // the glass (a cooker-added root and the two panes), eight for the
         // spheres (a cooker-added root and one for each roughness step), the
-        // one that carries the environment, and the floor body. Three of the
-        // crates are the M7.6 stack, one is the M7.4 crate that drops onto the
-        // floor body beside it, and one is the scaled crate of #237, which
-        // collides at the size it draws rather than at the size of its
-        // collider.
-        check(world.size() == 41, "the scene holds forty one entities");
+        // one that carries the environment, the floor body, and the goal volume.
+        // Three of the crates are the M7.6 stack, one is the M7.4 crate that
+        // drops onto the floor body beside it, and one is the scaled crate of
+        // #237, which collides at the size it draws rather than at the size of
+        // its collider.
+        //
+        // The goal volume is the M8.4 trigger. The M7.4 crate falls through it,
+        // so the sandbox exercises an overlap with nobody touching a key.
+        check(world.size() == 42, "the scene holds forty two entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
@@ -250,6 +258,70 @@ namespace {
         // spheres. The helmet is one instance rather than six hand-written
         // entities, which is what the node tree becoming a prefab bought.
         check(instances == 12, "twelve entities are prefab instances");
+    }
+
+    /// The first entity that carries this name, or null when none does.
+    [[nodiscard]] entt::entity find_by_name(const sc::World& world, std::string_view wanted) {
+        for (const auto [entity, name] : world.registry().view<const sc::Name>().each()) {
+            if (name.value == wanted) {
+                return entity;
+            }
+        }
+        return entt::null;
+    }
+
+    /**
+     * The shipped scene has to exercise the trigger by itself.
+     *
+     * A trigger nothing crosses is a trigger nobody tests. The goal volume sits
+     * under the M7.4 falling crate, so the sandbox reports an overlap on its own
+     * with nobody pressing a key. This is what says the placement is right, and
+     * arithmetic on the two positions is not: the crate is free to be deflected
+     * by whatever it lands among, and a scene edit that moves either one would
+     * pass a check that only compared the numbers in the file.
+     *
+     * It also pins the direction. The trigger has to be `a` and the crate `b`,
+     * and a swap would send every game event to the wrong object.
+     */
+    void test_the_goal_volume_catches_the_falling_crate() {
+        // Not make_registry(). That one leaves the physics types out, so a
+        // scene loaded through it drops every RigidBody and every collider and
+        // builds no bodies at all. See issue #280.
+        sc::ComponentRegistry registry = make_registry();
+        engine::physics::register_components(registry);
+
+        sc::PrefabLibrary library;
+        sc::World world;
+        check(load_shipped(world, registry, library), "the shipped content loads");
+
+        const entt::entity goal = find_by_name(world, "goal volume");
+        check(goal != entt::null, "the scene places a goal volume");
+
+        engine::physics::Simulation simulation;
+        simulation.build(world);
+
+        // Two seconds at 60 Hz. The crate starts 2.4 metres above the volume, so
+        // it reaches it in about 0.7 seconds and is well past it by the end.
+        bool entered = false;
+        bool left = false;
+        entt::entity visitor = entt::null;
+        for (std::uint32_t step = 0; step < 120; ++step) {
+            simulation.step(world, 1.0F / 60.0F);
+            for (const engine::physics::Simulation::Touch& touch : simulation.trigger_events()) {
+                check(touch.a == goal, "the goal volume is the trigger side of the event");
+                visitor = touch.b;
+                if (touch.began) {
+                    entered = true;
+                } else {
+                    left = true;
+                }
+            }
+        }
+
+        check(entered, "something crossed into the goal volume");
+        check(left, "and came out the other side");
+        check(visitor != entt::null && world.registry().valid(visitor),
+              "and the visitor is an entity the scene still holds");
     }
 
     void test_scene_round_trips() {
@@ -463,6 +535,13 @@ int main() {
     test_scene_round_trips();
     test_saving_puts_the_references_back();
     test_overrides_reach_the_world();
+
+    // The physics world runs its solver on the scheduler, so the one test that
+    // steps it needs the pool up.
+    engine::jobs::init();
+    test_the_goal_volume_catches_the_falling_crate();
+    engine::jobs::shutdown();
+
     std::printf("the game loop\n");
     test_update_turns_what_it_should();
     test_update_refuses_a_bad_spin();
