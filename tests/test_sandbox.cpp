@@ -297,19 +297,26 @@ namespace {
         const entt::entity goal = find_by_name(world, "goal volume");
         check(goal != entt::null, "the scene places a goal volume");
 
+        // Named rather than taken from whatever turns up in the events. Two
+        // different entities supplying the entry and the exit would otherwise
+        // pass, and that is not what this claims to check. It also pins the
+        // placement: the volume has to clear the resting stack, and an earlier
+        // one overlapped the top crate of it from the first step.
+        const entt::entity crate = find_by_name(world, "falling crate");
+        check(crate != entt::null, "and the M7.4 crate that drops through it");
+
         engine::physics::Simulation simulation;
         simulation.build(world);
 
-        // Two seconds at 60 Hz. The crate starts 2.4 metres above the volume, so
-        // it reaches it in about 0.7 seconds and is well past it by the end.
+        // Two seconds at 60 Hz. The crate starts 1.4 metres above the volume and
+        // falls, so it is well past the far side long before the last step.
         bool entered = false;
         bool left = false;
-        entt::entity visitor = entt::null;
         for (std::uint32_t step = 0; step < 120; ++step) {
             simulation.step(world, 1.0F / 60.0F);
             for (const engine::physics::Simulation::Touch& touch : simulation.trigger_events()) {
                 check(touch.a == goal, "the goal volume is the trigger side of the event");
-                visitor = touch.b;
+                check(touch.b == crate, "and the falling crate is the only thing that crosses it");
                 if (touch.began) {
                     entered = true;
                 } else {
@@ -318,10 +325,8 @@ namespace {
             }
         }
 
-        check(entered, "something crossed into the goal volume");
-        check(left, "and came out the other side");
-        check(visitor != entt::null && world.registry().valid(visitor),
-              "and the visitor is an entity the scene still holds");
+        check(entered, "the falling crate entered the goal volume");
+        check(left, "and the same crate came out the other side");
     }
 
     void test_scene_round_trips() {

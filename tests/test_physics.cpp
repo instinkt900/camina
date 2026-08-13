@@ -1367,17 +1367,31 @@ namespace {
         check(trigger_colors.size() == 12, "a trigger draws twelve edges, the same as a box");
         check(solid_colors.size() == 12, "and the solid box beside it draws twelve");
 
+        // Nothing below reads an empty list, because a Box3D that stopped
+        // drawing sensors is exactly what this test exists to catch and it must
+        // fail rather than crash.
+        if (trigger_colors.empty() || solid_colors.empty()) {
+            return;
+        }
+
         // Drawn is not enough. A trigger that drew in the solid color would be
         // a wireframe over a mesh that is not there, and a person would read it
         // as a collider in the wrong place rather than as a trigger.
+        //
+        // Two properties rather than one literal color. Which color Box3D picks
+        // is its own business, and pinning 0xF5DEB3 here would fail on a palette
+        // change that costs the picture nothing. What the picture needs is that
+        // the volume reads as one outline, and that it never reads as a collider.
+        bool one_color = true;
         bool color_shared = false;
         for (const Vec3& trigger_color : trigger_colors) {
+            one_color = one_color && trigger_color == trigger_colors.front();
             for (const Vec3& solid_color : solid_colors) {
-                if (trigger_color == solid_color) {
-                    color_shared = true;
-                }
+                color_shared = color_shared || trigger_color == solid_color;
             }
         }
+
+        check(one_color, "every edge of one trigger draws in the same color");
         check(!color_shared, "and a trigger is never the color a solid shape draws in");
     }
 
