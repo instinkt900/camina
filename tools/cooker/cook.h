@@ -58,6 +58,9 @@ namespace cooker {
          *
          * It defaults to @ref engine_components when it is null, which covers
          * a caller with no game of its own.
+         *
+         * @warning Nothing owns this. The registry has to outlive the call to
+         * @ref cook_all, which reads it for the whole run.
          */
         const engine::scene::ComponentRegistry* components = nullptr;
     };

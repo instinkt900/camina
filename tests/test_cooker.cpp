@@ -2150,10 +2150,14 @@ void main() { out_color = push.model[0]; }
             return;
         }
 
+        // check() records a failure and carries on, so get<std::string>() on a
+        // shape that is not there would throw and end the process. Every test
+        // after this one would then report nothing at all.
+        const nlohmann::json& field = cooked["entities"][0]["components"]["Billboard"]["mesh"];
+        check(field.is_string(), "the cooked prefab still holds the game component's field");
+
         engine::Guid resolved;
-        check(engine::Guid::parse(cooked["entities"][0]["components"]["Billboard"]["mesh"]
-                                      .get<std::string>(),
-                                  resolved),
+        check(field.is_string() && engine::Guid::parse(field.get<std::string>(), resolved),
               "the game component's field holds an identity now");
         check(as::find_by_guid(content.manifest(), resolved) != nullptr,
               "and that identity is one this cook produced");
