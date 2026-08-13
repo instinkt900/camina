@@ -55,12 +55,19 @@ check_containment() {
     # The prefix carries a trailing slash and the match is anchored to the
     # start, so a sibling directory whose name merely starts the same way, such
     # as src/gfx/vulkan_helpers/, is not the allowed one.
+    #
+    # The root comes off before the line number does. A grep record is
+    # path:line:text, and on Windows the path opens with a drive letter, so
+    # cutting at the first colon turns D:/a/camina/src/physics/world.cpp into
+    # D. Nothing then matches the allowed prefix and every file in the allowed
+    # directory reads as a violation. grep is given paths built from ${root}/,
+    # so every record starts with it and the colon that survives is grep's own.
     local violations=""
-    local record file relative
+    local record relative
     while IFS= read -r record; do
         [ -n "${record}" ] || continue
-        file="${record%%:*}"
-        relative="${file#"${root}/"}"
+        relative="${record#"${root}/"}"
+        relative="${relative%%:*}"
         case "${relative}" in
             "${allowed}"*) continue ;;
         esac

@@ -132,6 +132,31 @@ write_file "${lookalike}/src/physics_debug/draw.cpp" '#include <box3d/box3d.h>'
 expect_exit "${vulkan_check}" "${lookalike}" 1 "src/gfx/vulkan_helpers/ is not src/gfx/vulkan/"
 expect_exit "${box3d_check}" "${lookalike}" 1 "and src/physics_debug/ is not src/physics/"
 
+# A Windows checkout sits at a path like D:/a/camina/camina, so every grep record
+# opens with a drive letter and carries a colon before grep's own. Cutting the
+# record at the first colon then yields "D", which matches no allowed prefix, and
+# every file inside the allowed directory reads as a violation.
+#
+# A directory named D: is legal here too, which is what makes the case
+# reproducible away from Windows. Without this the fixtures all sat under a
+# mktemp path with no colon in it, and CI on Windows was the first thing to know.
+echo "containment: a root whose path holds a colon"
+drive="${fixture}/D:/camina"
+mkdir -p "${drive}/src/gfx/vulkan" "${drive}/src/physics" "${drive}/src/render"
+write_file "${drive}/src/gfx/vulkan/vk_device.cpp" '#include <volk.h>'
+write_file "${drive}/src/physics/world.cpp" '#include <box3d/box3d.h>'
+expect_exit "${vulkan_check}" "${drive}" 0 \
+    "a colon in the root does not hide the allowed directory"
+expect_exit "${box3d_check}" "${drive}" 0 "and the Box3D check agrees"
+
+echo "containment: a violation under a root whose path holds a colon"
+drive_bad="${fixture}/E:/camina"
+mkdir -p "${drive_bad}/src/gfx/vulkan" "${drive_bad}/src/physics"
+write_file "${drive_bad}/src/render/mesh_pass.cpp" '#include <volk.h>'
+write_file "${drive_bad}/src/scene/world.cpp" '#include <box3d/box3d.h>'
+expect_exit "${vulkan_check}" "${drive_bad}" 1 "and a real violation under it still fails"
+expect_exit "${box3d_check}" "${drive_bad}" 1 "for the Box3D check as well"
+
 # An indented directive is still a directive.
 echo "containment: an indented include"
 indented="$(case_dir indented)"
