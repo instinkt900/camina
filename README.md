@@ -10,7 +10,7 @@ behind each decision. Read [CLAUDE.md](CLAUDE.md) for the working rules.
 
 ## Status
 
-M0 through M7 are complete. M8, scripting, is in progress.
+M0 through M8 are complete. M9, the editor split, is next.
 
 The runtime draws a scene of glTF models through Vulkan, shaded by Cook-Torrance
 metallic-roughness and lit by an HDR environment through the split sum approximation. A
@@ -24,10 +24,15 @@ EnTT world with a transform hierarchy and prefab instances.
 Box3D runs on the engine job system at a fixed step, and a frame interpolates between the
 last two steps. A stack of crates stands, and a crate thrown at it knocks it over.
 
-Lua is the newest part. A script runs on the same fixed step, reads and writes any reflected
-component by name, and reaches the world, prefabs, physics and input through a small
-hand-written surface. What M8 has left is the script side of physics triggers, script hot
-reload, and moving the sandbox game logic into Lua.
+**The sandbox game is Lua, all of it.** A script runs on the same fixed step, reads and writes
+any reflected component by name, and reaches the world, prefabs, physics, input and the camera
+through a small hand-written surface. A trigger volume reports what crossed it and a contact
+reports what touched what, both on the step where it happened. Editing a script changes the
+running game, and a text that will not compile leaves the old one running.
+
+The game itself is a physics puzzle in two files. `spin.lua` turns what the scene gives a Spin,
+and `puzzle.lua` owns the throw, the win and the reset. Neither `sandbox::update` nor a C++
+throw exists any more, so the tests drive cooked scripts through the callbacks.
 
 See DESIGN.md section 10 for the milestone list, and CLAUDE.md for the detail of what has
 landed.
