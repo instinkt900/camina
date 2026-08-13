@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -185,6 +187,65 @@ namespace {
 
         library.clear();
         check(library.size() == 0, "clear empties the library");
+    }
+
+    /**
+     * Reads a prefab from a loose file rather than from a document.
+     *
+     * add_file() lost its last caller when prefab registration became
+     * data-driven, so nothing exercised a path that opens a file from disk.
+     * The function stays because an editor opens a prefab a person just put in
+     * a directory, and no cooker has run over it yet. That is M9 work, and a
+     * public function with no caller and no test breaks quietly in the
+     * meantime. See issue #185.
+     */
+    void test_add_file() {
+        const std::filesystem::path dir =
+            std::filesystem::temp_directory_path() / "camina_test_prefab";
+        test::remove_tree(dir);
+        std::filesystem::create_directories(dir);
+
+        const std::filesystem::path good = dir / "crate.prefab";
+        {
+            std::ofstream file(good, std::ios::binary | std::ios::trunc);
+            file << crate_document("loose crate", 1.0F).dump();
+        }
+
+        sc::PrefabLibrary library;
+        check(library.add_file("crate", good), "a prefab reads from a file");
+        check(library.size() == 1, "and it goes into the library");
+        check(crate_of(library).entities().at(0).components.at("Name").at("value") ==
+                  "loose crate",
+              "and it holds what the file held");
+
+        // A file that is not there is the case an editor meets most, because a
+        // person can rename or move one while the editor holds the name.
+        check(!library.add_file("missing", dir / "not_there.prefab"),
+              "a file that is not there is refused");
+        check(library.size() == 1, "and the library is left alone");
+
+        // Exceptions are off, per reflect/json.h, so a bad document comes back
+        // discarded rather than thrown. Without this the parse would end the
+        // process instead of reporting.
+        const std::filesystem::path broken = dir / "broken.prefab";
+        {
+            std::ofstream file(broken, std::ios::binary | std::ios::trunc);
+            file << "{ this is not json";
+        }
+        check(!library.add_file("broken", broken), "a file that is not JSON is refused");
+        check(library.size() == 1, "and that leaves the library alone too");
+
+        // A document that parses but is not a prefab has to fail in add(),
+        // which is the half add_file() delegates to.
+        const std::filesystem::path wrong = dir / "wrong.prefab";
+        {
+            std::ofstream file(wrong, std::ios::binary | std::ios::trunc);
+            file << "[]";
+        }
+        check(!library.add_file("wrong", wrong), "valid JSON that is not a prefab is refused");
+        check(library.size() == 1, "and the library still holds the one that worked");
+
+        test::remove_tree(dir);
     }
 
     void test_override_patch() {
@@ -658,6 +719,7 @@ int main() {
     std::printf("parsing\n");
     test_parse();
     test_library();
+    test_add_file();
     std::printf("overrides\n");
     test_override_patch();
     std::printf("instances\n");

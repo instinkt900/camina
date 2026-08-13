@@ -138,6 +138,16 @@ namespace engine::scene {
 
         /**
          * @brief Reads a prefab from a `.prefab` file.
+         *
+         * Nothing in the engine calls this. Prefab registration became
+         * data-driven and reads every prefab through the manifest instead, so
+         * the last caller went with it.
+         *
+         * It stays because the editor in M9 opens a prefab a person has just
+         * put in a directory, before any cooker has run over it, and no other
+         * entry point reads a loose file. `tests/test_prefab.cpp` covers it, so
+         * the path does not rot while it waits. See issue #185.
+         *
          * @param name The name a scene file uses.
          * @param path The file to read.
          * @return True when the file parsed.
