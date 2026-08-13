@@ -449,14 +449,62 @@ Box3D turned out to need nothing patched. What it did cost is four things that h
 out of its source: gravity is -10 rather than -9.8, a sleeping body ignores a velocity of zero
 silently, the debug wireframe of a shape is cached by the application through a callback on the
 world definition, and a hull stores half-edges so every edge is in the array twice. `DESIGN.md`
-section 5 holds all four.
+section 5 holds all four. M8.4 found three more, so that section now carries seven.
 
-Verified on 2026-08-11 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
+**M8 is complete, and the sandbox game is Lua.** M8.0 put input in `platform/`, because every
+read sat inline in `apps/runtime/main.cpp` and a script API over that would have inherited an
+SDL shape. M8.1 added the host and the cook rule, M8.2 gave a script any reflected component by
+name, and M8.3 the curated surface: the world, prefabs, physics, input, math and logging, each
+chosen one call at a time.
+
+M8.4 built the two things physics owed the milestone. A trigger volume is a reflected collider
+that reports an overlap and pushes nothing, and a contact reports what touched what. Both report
+on the step where they happened, and one step reports all of them. **A trigger overlap goes to
+the volume alone and a contact goes to both bodies**, because a trigger has a direction and a
+contact has none that Box3D promises. `--physics-debug` shows a trigger in wheat, which needed
+no engine code: Box3D gives a sensor a broadphase proxy like any other shape and colors it
+differently, and neither half is documented.
+
+M8.5 is hot reload. **A reload restarts the script and the script table goes with it.** Carrying
+a table across two versions has no answer for a value whose shape changed, so the rule is that
+the script table is scratch and a component is storage. A component survives a reload untouched,
+and it is saved by the scene file and shown in the inspector besides. A text that will not
+compile keeps the old one running and reports once.
+
+M8.6 closed it. `sandbox::update` and `throw_crate` are both gone, and `tests/test_sandbox.cpp`
+drives cooked `.lua` through the callbacks because there is no C++ entry point left to call.
+
+**Authoring the game found four engine gaps that C++ had hidden.** A script could not reach the
+camera. A prefab a script instanced got no body, because the simulation reads the world once at
+build. A dynamic body ignores a transform written from a script, so `Simulation::teleport` is
+the only way to move one. And a destroyed entity left a stale body that killed the next step on
+an EnTT assertion.
+
+**Input edges and the fixed step are on different clocks.** A press edge is the difference
+between two `Input::update` calls, and a frame often runs no step at all. Offscreen it almost
+never does, so an edge raised and cleared between two steps is one the game never sees. The
+runtime folds every device frame into what the next step reads and keeps a second
+`platform::Input` on the step clock.
+
+**A script writing a Transform to a dynamic body freezes it, and everything else reads as
+working.** The write registers the entity with `StepMotion`, whose `begin_step` then restores
+that pose every step. The body keeps integrating, the velocity reads back correctly, and only
+the position stands still. `teleport` is the right verb. Issue #284 holds the warning that does
+not exist yet.
+
+Verified on 2026-08-13 with Clang 19, CMake 3.28.3, and Conan 2.31.1, on an NVIDIA
 GeForce MX250 with the Khronos validation layer active. A texture and a scene reloaded
 together in a running program, with no validation message. Two blended panes drew over the
 opaque scene with no validation message either. Synchronization validation reports nothing over
 300 frames offscreen and 200 windowed, on the sandbox and on Intel Sponza, and nothing over 300
 offscreen frames with the physics wireframe drawing.
+
+**The simulation is still deterministic with the game in Lua.** Three offscreen runs of the same
+command, with a crate thrown on a fixed frame and the solver on eight workers, produce
+byte-identical images. `math.random` is seeded from a fixed value and the clock-seeded spelling
+is taken away, so a script cannot undo that by accident. `pairs` is the one thing an author has
+to know about: Lua 5.4 seeds its string hash from the clock, so a string-keyed walk is not
+reproducible. Use `ipairs` and a list when the order decides anything.
 
 The build produces no compiler warnings and no clang-tidy findings, over the whole tree with
 the gate on. It carried sixteen warnings at M7.1, which was issue #179, and the lint gate was

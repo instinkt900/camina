@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M7 complete, M8 next
-Last updated: 2026-08-11
+Status: M8 complete, M9 next
+Last updated: 2026-08-13
 
 ---
 
