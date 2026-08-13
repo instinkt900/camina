@@ -2064,6 +2064,17 @@ compiles with `WITH_EDITOR` off and drops the editor code. See rule 4.3.
 
 Play-in-editor through world snapshot and restore, which M2 and M3 already provide.
 ImGuizmo. An asset browser, a hierarchy panel, and an inspector panel.
+
+The editor runs the ImGui docking branch, which `conanfile.py` already pins for this
+reason. Panels dock and tab inside the main window, and a panel dragged out of it becomes
+an OS window of its own. Multi-viewport is in scope rather than deferred, because the
+backends do most of it: ImGui creates the extra SDL windows and their swapchains, so
+`platform::Window` keeps its one window and `gfx::Device` keeps its one surface.
+
+Docking and the saved layout are chosen per application, not in `gfx::`. The editor wants
+both. The runtime debug overlay wants neither, and its windows open at fixed places so a
+run always starts from the same layout.
+
 **Done when:** you build a level in the editor, press play, and ship it as a runtime build.
 
 ### M10 — Game UI
