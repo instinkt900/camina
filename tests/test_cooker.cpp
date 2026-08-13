@@ -143,22 +143,23 @@ namespace {
     void test_cook_and_skip() {
         const std::filesystem::path source = scratch("skip/src");
         const std::filesystem::path out = scratch("skip/out");
-        // A file with no rule of its own, so this stays a test of the copy
-        // rule and of the manifest. A scene and a prefab have a rule now.
-        write_file(source / "one.dat", "{}");
-        write_file(source / "nested" / "two.dat", "{}");
+        // A rule that copies the bytes, so this stays a test of the manifest
+        // rather than of any one format. Every file the cooker touches has a
+        // rule now, and a script is the simplest of them. See issue #178.
+        write_file(source / "one.lua", "{}");
+        write_file(source / "nested" / "two.lua", "{}");
 
         cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
         check(cooker::cook_all(options, result), "the first cook works");
         check(result.cooked == 2 && result.skipped == 0, "and it cooks both assets");
-        check(std::filesystem::exists(out / "one.dat"), "the asset landed");
-        check(std::filesystem::exists(out / "nested" / "two.dat"),
+        check(std::filesystem::exists(out / "one.lua"), "the asset landed");
+        check(std::filesystem::exists(out / "nested" / "two.lua"),
               "and so did the one in a subdirectory");
 
         // The sidecars are what make an identity survive. A first cook writes
         // them into the source tree, next to the asset.
-        check(std::filesystem::exists(as::meta_path(source / "one.dat")),
+        check(std::filesystem::exists(as::meta_path(source / "one.lua")),
               "the first cook wrote a sidecar");
 
         cooker::Result second;
@@ -166,18 +167,18 @@ namespace {
         check(second.cooked == 0 && second.skipped == 2, "and it cooks nothing");
 
         // Touching a file moves its time but not its bytes.
-        std::filesystem::last_write_time(source / "one.dat",
+        std::filesystem::last_write_time(source / "one.lua",
                                          std::filesystem::file_time_type::clock::now());
         cooker::Result touched;
         check(cooker::cook_all(options, touched), "a touched tree cooks");
         check(touched.cooked == 0 && touched.skipped == 2, "and a new time alone cooks nothing");
 
         // A real change cooks that asset, and only that asset.
-        write_file(source / "one.dat", "{\"changed\":true}");
+        write_file(source / "one.lua", "{\"changed\":true}");
         cooker::Result changed;
         check(cooker::cook_all(options, changed), "a changed tree cooks");
         check(changed.cooked == 1 && changed.skipped == 1, "and it cooks only what changed");
-        check(read_file(out / "one.dat") == "{\"changed\":true}",
+        check(read_file(out / "one.lua") == "{\"changed\":true}",
               "the new bytes reached the output");
 
         // --force is the escape hatch when somebody distrusts the manifest.
@@ -1137,6 +1138,98 @@ void main() { out_color = push.model[0]; }
         test::remove_tree(source.parent_path());
     }
 
+    /**
+     * A rule is what makes a file content, and a build tool has none.
+     *
+     * A generator script sits beside the model it writes. It used to fall past
+     * every rule onto the copy path, which gave it an identity, wrote a sidecar
+     * next to it in the **source** tree, and copied it where nothing reads it.
+     * The sidecar is the part that bit: a clean checkout went dirty the first
+     * time anybody ran the runtime. See issue #178.
+     */
+    void test_a_file_with_no_rule_is_not_content() {
+        const std::filesystem::path source = scratch("norule/src");
+        const std::filesystem::path out = scratch("norule/out");
+        write_file(source / "one.scene", "{}");
+        write_file(source / "generate.py", "print('writes room.gltf')");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+        check(result.cooked == 1, "and it cooks the scene alone");
+
+        check(!std::filesystem::exists(as::meta_path(source / "generate.py")),
+              "no sidecar appeared next to the generator in the source tree");
+        check(!std::filesystem::exists(out / "generate.py"),
+              "and the generator did not reach the cooked tree");
+
+        as::Content content;
+        check(content.open(out), "the cooked directory opens");
+        check(content.find("generate.py") == nullptr,
+              "and the manifest does not name the generator");
+
+        // The source tree holds what it held. A cook must not add to it.
+        check(std::filesystem::exists(source / "generate.py"),
+              "the generator itself is untouched");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A font and a layout have a consumer, so both earn a rule.
+     *
+     * Both rules copy the bytes. That is enough to make them content by
+     * declaration rather than by falling past every other rule, which is what
+     * issue #178 asks for. src/ui/font_factory.h opens the face by the name the
+     * source had, so the cooked name has to match. Issue #211 turns the layout
+     * into a cooked type later.
+     */
+    void test_a_font_and_a_layout_are_content() {
+        const std::filesystem::path source = scratch("uiassets/src");
+        const std::filesystem::path out = scratch("uiassets/out");
+        write_file(source / "ui" / "fonts" / "body.ttf", "not a real face");
+        write_file(source / "ui" / "main.mothui", "{\"layout\":true}");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+        check(result.cooked == 2, "and it cooks both");
+
+        check(std::filesystem::exists(out / "ui" / "fonts" / "body.ttf"),
+              "the face reached the cooked tree under its own name");
+        check(std::filesystem::exists(out / "ui" / "main.mothui"),
+              "and so did the layout");
+        check(read_file(out / "ui" / "main.mothui") == "{\"layout\":true}",
+              "and the layout went through unchanged");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A rule matches whatever case the extension is written in.
+     *
+     * Half the rule predicates lowered the extension themselves and half never
+     * did, so `SKY.HDR` cooked and `MAIN.SCENE` did not. That used to end in the
+     * copy path, which put the file in the cooked tree unchanged and mostly went
+     * unnoticed. With the copy path gone it would end in no rule at all, and the
+     * asset would leave the cooked tree with nothing said. See issue #178.
+     */
+    void test_a_rule_ignores_the_case_of_the_extension() {
+        const std::filesystem::path source = scratch("shouty/src");
+        const std::filesystem::path out = scratch("shouty/out");
+        write_file(source / "ONE.SCENE", "{}");
+        write_file(source / "BODY.TTF", "not a real face");
+
+        const cooker::Options options{ .content = source, .out = out };
+        cooker::Result result;
+        check(cooker::cook_all(options, result), "the cook works");
+        check(result.cooked == 2, "and an upper case extension still finds its rule");
+        check(std::filesystem::exists(out / "ONE.SCENE"), "the scene reached the cooked tree");
+        check(std::filesystem::exists(out / "BODY.TTF"), "and so did the face");
+
+        test::remove_tree(source.parent_path());
+    }
+
     void test_bad_input() {
         const std::filesystem::path out = scratch("bad/out");
         cooker::Result result;
@@ -1150,7 +1243,7 @@ void main() { out_color = push.model[0]; }
     void test_content_reads_what_the_cooker_wrote() {
         const std::filesystem::path source = scratch("read/src");
         const std::filesystem::path out = scratch("read/out");
-        write_file(source / "one.dat", "{}");
+        write_file(source / "one.lua", "{}");
 
         const cooker::Options options{ .content = source, .out = out };
         cooker::Result result;
@@ -1160,7 +1253,7 @@ void main() { out_color = push.model[0]; }
         check(content.open(out), "the cooked directory opens");
         check(content.manifest().entries.size() == 1, "and it holds one entry");
 
-        const as::ManifestEntry* entry = content.find("one.dat");
+        const as::ManifestEntry* entry = content.find("one.lua");
         check(entry != nullptr, "an asset is findable by its source path");
         check(entry != nullptr && entry->outputs.size() == 1, "and a copy writes one file");
 
@@ -1181,7 +1274,7 @@ void main() { out_color = push.model[0]; }
         // The same bytes read by source path, which is the first lookup a caller
         // makes before it has a GUID.
         std::vector<std::byte> by_source;
-        check(content.read_bytes("one.dat", by_source),
+        check(content.read_bytes("one.lua", by_source),
               "the same bytes read by source path");
         check(by_source == bytes, "and they are the same bytes");
 
@@ -2515,6 +2608,9 @@ int main() {
     test_duplicate_identity_is_refused();
     test_a_shell_metacharacter_name_still_cooks();
     test_documentation_is_not_an_asset();
+    test_a_file_with_no_rule_is_not_content();
+    test_a_font_and_a_layout_are_content();
+    test_a_rule_ignores_the_case_of_the_extension();
     test_bad_input();
     test::section("shader reflection");
     test_the_cooker_reflects_what_a_shader_reads();

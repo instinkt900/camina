@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <system_error>
 #include <vector>
@@ -36,7 +37,8 @@ namespace cooker {
             Mesh,        ///< glTF through cgltf, out as one cooked mesh for each mesh.
             Document,    ///< A scene or a prefab, with its asset references resolved.
             Script,      ///< Lua source text, copied. See src/assets/script.h.
-            Copy,        ///< No rule yet. The bytes go through unchanged.
+            Font,        ///< A TrueType face, copied. src/ui/font.h opens it by name.
+            Layout,      ///< A moth_ui layout, copied. Issue #211 makes it a real type.
         };
 
         /// Whether a file is a scene or a prefab, which name assets by path.
@@ -49,8 +51,43 @@ namespace cooker {
             return extension == as::kScriptExtension;
         }
 
-        [[nodiscard]] Rule rule_for(const std::filesystem::path& source) {
+        /// Whether a file is a font face the UI loads.
+        [[nodiscard]] bool is_font_extension(std::string_view extension) {
+            return extension == ".ttf";
+        }
+
+        /// Whether a file is a moth_ui layout.
+        [[nodiscard]] bool is_layout_extension(std::string_view extension) {
+            return extension == ".mothui";
+        }
+
+        /// An extension in lower case, so a rule matches whatever a file shouts.
+        [[nodiscard]] std::string lowered_extension(const std::filesystem::path& source) {
             const std::string extension = source.extension().string();
+            std::string lower;
+            lower.reserve(extension.size());
+            for (const char c : extension) {
+                lower.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+            }
+            return lower;
+        }
+
+        /**
+         * The rule for this file, or nothing when it is not content.
+         *
+         * A rule is what makes a file content. Anything with a consumer earns
+         * one, even when the rule only copies the bytes, and a file with no rule
+         * is a build tool or a note. It gets no identity, no sidecar, and no
+         * place in the cooked tree. See issue #178.
+         *
+         * The extension is lowered first. Half the predicates below lower it
+         * again on their own and half never did, so `SKY.HDR` cooked and
+         * `MAIN.SCENE` did not. That gap used to end in the copy path, which
+         * put the file in the cooked tree unchanged. Now it ends in no rule at
+         * all, and the file would leave the cooked tree without a word.
+         */
+        [[nodiscard]] std::optional<Rule> rule_for(const std::filesystem::path& source) {
+            const std::string extension = lowered_extension(source);
             if (is_shader_extension(extension)) {
                 return Rule::Shader;
             }
@@ -77,28 +114,13 @@ namespace cooker {
             if (is_script_extension(extension)) {
                 return Rule::Script;
             }
-            return Rule::Copy;
-        }
-
-        /**
-         * Whether a file is documentation rather than content.
-         *
-         * A content directory holds a note saying where a model came from and
-         * what its license is. That note belongs next to the files it
-         * describes, and it is not an asset. A file with no extension counts
-         * too, which covers LICENSE and COPYING.
-         */
-        [[nodiscard]] bool is_documentation(const std::filesystem::path& relative) {
-            const std::string extension = relative.extension().string();
-            if (extension.empty()) {
-                return true;
+            if (is_font_extension(extension)) {
+                return Rule::Font;
             }
-            std::string lower;
-            lower.reserve(extension.size());
-            for (const char c : extension) {
-                lower.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+            if (is_layout_extension(extension)) {
+                return Rule::Layout;
             }
-            return lower == ".md" || lower == ".txt";
+            return std::nullopt;
         }
 
         /// The name a rule adds to the source name, or nothing for a copy.
@@ -123,7 +145,10 @@ namespace cooker {
             case Rule::Script:
                 // The same. A cooked script is the source text, so the cooked
                 // file is a .lua and a person can read it in the cooked tree.
-            case Rule::Copy:
+            case Rule::Font:
+            case Rule::Layout:
+                // Both go through unchanged, and both are opened by the name the
+                // source had. src/ui/font_factory.h names the face by path.
                 break;
             }
             return "";
@@ -269,7 +294,10 @@ namespace cooker {
                 // The bytes go through unchanged, the same as a copy. The rule
                 // exists so that a script is content by declaration, and so
                 // that issue #258 has a place to add a precompile step.
-            case Rule::Copy:
+            case Rule::Font:
+            case Rule::Layout:
+                // The same again. Issue #211 turns the layout into a cooked
+                // type, and this rule is where that step will go.
                 break;
             }
             return single(
@@ -299,12 +327,12 @@ namespace cooker {
                 if (relative.extension() == as::kMetaExtension) {
                     continue;
                 }
-                // Documentation is not an asset either. A content directory
-                // holds a note saying where a model came from and what its
-                // license is, and that note belongs next to the files it
-                // describes. Cooking it would give it a GUID and copy it where
-                // nothing reads it.
-                if (is_documentation(relative)) {
+                // A file with no rule is not content. A generator script, a
+                // README, and a license note all live in a content directory
+                // and none of them is an asset. Cooking one gave it a GUID,
+                // wrote a sidecar next to it in the source tree, and copied it
+                // where nothing reads it. See issue #178.
+                if (!rule_for(relative)) {
                     continue;
                 }
                 out.push_back(relative);
@@ -512,7 +540,12 @@ namespace cooker {
                                           const as::Manifest& previous, const Named& named,
                                           bool same_cooker, as::ManifestEntry& entry) {
             const std::filesystem::path source = options.content / relative;
-            const Rule rule = rule_for(relative);
+            // gather() drops every file with no rule, so this always holds.
+            const std::optional<Rule> found = rule_for(relative);
+            if (!found) {
+                return Outcome::Failed;
+            }
+            const Rule rule = *found;
 
             // An image goes through image_meta(), which fills in the color
             // space guess for a sidecar it has to write. The glTF rule calls
