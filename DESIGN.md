@@ -118,8 +118,8 @@ a diff against one directory, not against the whole engine.
 patched once. The whole of it is one flag moved out of the root CMakeLists, and the containment
 script has never had anything to report.
 
-Four things it did cost, each of which had to be read out of the source rather than out of the
-documentation:
+Seven things it did cost, each of which had to be read out of the source rather than out of the
+documentation. M7 found the first four, and M8.4 found the last three:
 
 - **Gravity is −10, not −9.8.** The documentation says one and the code says the other. §3
   holds the check that pins it.
@@ -133,6 +133,19 @@ documentation:
   at all. It also culls the debug draw against a 100 metre box before it reports anything.
 - **A hull stores half-edges**, so every edge is in the array twice and a wireframe that draws
   them all draws itself twice over.
+- **A shape reports no event unless it asks for one.** `enableSensorEvents` and
+  `enableContactEvents` are off by default, because the bookkeeping costs something for every
+  shape in the world. Both belong on the shape that is **not** the sensor, which is what the
+  Box3D comment on `b3Shape_EnableSensorEvents` says. A world whose sensors alone carry the
+  flag reports nothing, and nothing says why.
+- **A destroyed shape still arrives in an end event.** Box3D reports the end of an overlap when
+  a shape goes away, so the id a reader gets can already be dead. `b3Shape_IsValid` is what
+  that is for. A reader that skips the check reads the user data of a freed shape.
+- **A sensor draws like any other shape, and Box3D colors it wheat.** A sensor gets a
+  broadphase proxy the same as a solid shape, so `b3World_Draw` reaches it with no extra call,
+  and `DrawQueryCallback` gives it `b3_colorWheat` rather than the solid color. So
+  `--physics-debug` shows a trigger, and shows it apart from a collider, with no engine code.
+  Neither half is documented, so `tests/test_physics.cpp` pins both.
 
 **The solver is deterministic across threads.** Three offscreen runs of the sandbox, with a
 crate thrown at a stack on a fixed frame and the solver split over eight job system workers,

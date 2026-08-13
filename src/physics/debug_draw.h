@@ -13,6 +13,12 @@
  * The point is to see what the solver thinks is there, not what we believe we
  * told it, and those two disagreeing is exactly the bug worth finding.
  *
+ * **A trigger draws here too, and it draws in wheat rather than in the solid
+ * color.** A trigger is invisible twice over, because it carries no mesh and it
+ * pushes nothing, so a trigger in the wrong place looks the same as a trigger
+ * that works. This is the only thing that shows one. Box3D does both halves and
+ * documents neither, so `tests/test_physics.cpp` pins them. See `DESIGN.md` §5.
+ *
  * Nothing here names a Box3D type, so `render/` can draw these with no physics
  * headers anywhere near it.
  */
