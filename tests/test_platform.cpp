@@ -22,6 +22,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -357,7 +358,20 @@ namespace {
         }
         check(std::filesystem::exists(file), "and a file can be written into it");
 
-        test::remove_tree(directory);
+        // The file this test wrote, and then the directory only when it is the
+        // one this test asked for. A version of preferences_directory() that
+        // answered with the parent would fail the check above and still reach
+        // here, and removing that tree would take the layout of somebody's
+        // editor with it.
+        //
+        // The error_code form of both, because remove() throws on a directory
+        // that still holds something. Anything else in there belongs to
+        // somebody else, and leaving it is the answer rather than the failure.
+        std::error_code failed;
+        std::filesystem::remove(file, failed);
+        if (directory.filename() == "camina_test_paths") {
+            std::filesystem::remove(directory, failed);
+        }
     }
 
     /// Writes the arguments after the file name, one to a line.

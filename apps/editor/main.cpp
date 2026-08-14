@@ -24,10 +24,11 @@
 #include <imgui.h>
 
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
+#include <system_error>
 #include <span>
 #include <string>
 #include <string_view>
@@ -76,6 +77,32 @@ namespace {
         ENGINE_LOG_INFO("  --help              Print this and stop.");
     }
 
+    /**
+     * Reads a whole number, and reports whether the whole of it parsed.
+     *
+     * `std::from_chars` rather than strtoull, for the reason parse_count() in
+     * apps/runtime/main.cpp gives: strtoull takes a leading sign and negates it,
+     * so `--frames -1` would arrive as the largest unsigned value and read as a
+     * run that never stops. It also stops at the first character it cannot use,
+     * so `12bad` would parse as 12 and `nope` as 0, which is the value that
+     * means "run until you quit".
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the count. Untouched unless the whole value parsed.
+     * @return True when it parsed. On false the caller stops the program.
+     */
+    [[nodiscard]] bool parse_count(std::string_view text, std::uint64_t& out) {
+        const char* last = text.data() + text.size();
+        std::uint64_t value = 0;
+        const std::from_chars_result parsed = std::from_chars(text.data(), last, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != last) {
+            ENGINE_LOG_CRITICAL("--frames wants a whole number, and {} is not one.", text);
+            return false;
+        }
+        out = value;
+        return true;
+    }
+
     /// Reads the command line. An unknown option stops the program, because a
     /// misspelled one that is ignored looks like an option that did nothing.
     [[nodiscard]] bool parse_options(int argc, char** argv, Options& out) {
@@ -92,7 +119,9 @@ namespace {
             } else if (arg == "--no-vsync") {
                 out.vsync = false;
             } else if (arg == "--frames" && i + 1 < argc) {
-                out.frames = std::strtoull(argv[++i], nullptr, 10);
+                if (!parse_count(argv[++i], out.frames)) {
+                    return false;
+                }
             } else {
                 ENGINE_LOG_CRITICAL("Unknown option: {}", arg);
                 print_usage();
