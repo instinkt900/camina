@@ -1929,7 +1929,12 @@ namespace {
             return true;
         }
 
-        result = engine::gfx::imgui_init(runtime.device, runtime.window.native());
+        // No docking and no layout file. The panels below open at the constants
+        // near the top of this file, so a run always starts the same way, and
+        // an overlay that dropped an imgui.ini beside the executable would
+        // surprise people. The editor asks for both. See DESIGN.md section 10.
+        const engine::gfx::ImGuiDesc imgui_desc{ .sdl_window = runtime.window.native() };
+        result = engine::gfx::imgui_init(runtime.device, imgui_desc);
         if (!engine::gfx::succeeded(result)) {
             ENGINE_LOG_CRITICAL("The overlay did not start: {}",
                                 engine::gfx::result_name(result));

@@ -25,6 +25,35 @@ namespace engine::gfx {
     struct CommandList;
 
     /**
+     * @brief Settings for imgui_init(), chosen by the application.
+     *
+     * Docking and the saved layout are the two settings the editor and the
+     * runtime answer differently, so neither is decided here. The editor wants
+     * both. The runtime debug overlay wants neither, because its windows open
+     * at fixed places and a run always starts from the same layout. See
+     * DESIGN.md section 10, M9.
+     */
+    struct ImGuiDesc {
+        /// @brief The SDL window handle, from platform::Window::native().
+        void* sdl_window = nullptr;
+
+        /// @brief Whether a window can dock into another one.
+        ///
+        /// The dockspace itself belongs to the application, because only the
+        /// application knows what else is on screen. This flag is what lets it
+        /// build one.
+        bool docking = false;
+
+        /**
+         * @brief Where ImGui saves the window layout, or null to save none.
+         *
+         * @warning ImGui keeps the pointer rather than a copy of the text, so
+         * the string must outlive imgui_shutdown().
+         */
+        const char* ini_path = nullptr;
+    };
+
+    /**
      * @brief Starts ImGui and attaches it to the window and the device.
      *
      * The overlay draws into the swapchain image with dynamic rendering, so it
@@ -32,13 +61,13 @@ namespace engine::gfx {
      * formats the rest of the frame uses.
      *
      * @param device The device that owns the swapchain.
-     * @param sdl_window The SDL window handle, from platform::Window::native().
+     * @param desc The window and the per-application settings.
      * @return Result::Success, or the reason the overlay did not start.
      *
      * @warning Call this after create_device() and destroy it with
      * imgui_shutdown() before destroy_device().
      */
-    [[nodiscard]] Result imgui_init(Device* device, void* sdl_window);
+    [[nodiscard]] Result imgui_init(Device* device, const ImGuiDesc& desc);
 
     /**
      * @brief Releases everything imgui_init() built.

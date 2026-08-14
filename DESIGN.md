@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M8 complete, M9 next
-Last updated: 2026-08-13
+Status: M8 complete, M9 in progress
+Last updated: 2026-08-14
 
 ---
 
@@ -2073,7 +2073,15 @@ backends do most of it: ImGui creates the extra SDL windows and their swapchains
 
 Docking and the saved layout are chosen per application, not in `gfx::`. The editor wants
 both. The runtime debug overlay wants neither, and its windows open at fixed places so a
-run always starts from the same layout.
+run always starts from the same layout. `gfx::ImGuiDesc` carries the two answers.
+
+The editor writes its `imgui.ini` under `platform::preferences_directory`, which is where
+the platform puts the settings of one user. Nothing goes beside the executable, because an
+installed program usually sits where the user cannot write.
+
+ImGuizmo has no package the editor can take. Every recipe on Conan Center pins
+`imgui/1.90.5`, which conflicts with the docking branch, so M9.1 took the requirement out
+to make the option resolve. Issue #308 holds the two ways out, and M9.5 needs one of them.
 
 **Done when:** you build a level in the editor, press play, and ship it as a runtime build.
 

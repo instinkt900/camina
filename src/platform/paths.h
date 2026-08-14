@@ -29,4 +29,21 @@ namespace engine::platform {
      */
     [[nodiscard]] std::filesystem::path cooked_content_root();
 
+    /**
+     * @brief Where this program may write the settings of one user.
+     *
+     * The platform decides what that is, and the three answers do not look
+     * alike. The directory is created when it is not there yet.
+     *
+     * A program that ships writes nothing next to its executable, because an
+     * installed one usually sits where the user cannot write. So a layout file,
+     * a window position, or anything else a session leaves behind goes here.
+     *
+     * @param application The program name, which is the last part of the path.
+     * @return The directory, with a trailing separator removed. It is empty
+     * when the platform will not say, and the caller then decides what to do
+     * without one.
+     */
+    [[nodiscard]] std::filesystem::path preferences_directory(const char* application);
+
 } // namespace engine::platform

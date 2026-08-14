@@ -12,6 +12,7 @@
 // splits it, so that test is the only thing that proves the quoting.
 
 #include "check.h"
+#include "platform/paths.h"
 #include "platform/process.h"
 #include "platform/watch.h"
 
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -326,6 +328,52 @@ namespace {
         check(same, "and each one arrived exactly as it was sent");
     }
 
+    /**
+     * M9.1. The editor saves its layout here, and nothing else in the engine
+     * writes outside the build tree, so this is the one place that must be a
+     * real directory the program may write to.
+     *
+     * The name is a test name rather than "editor", so a run never touches the
+     * settings of somebody's editor. The directory is removed on the way out.
+     */
+    void test_the_preferences_directory_is_there_and_writable() {
+        const std::filesystem::path directory =
+            pf::preferences_directory("camina_test_paths");
+        check(!directory.empty(), "the platform says where the settings of this user go");
+        if (directory.empty()) {
+            return;
+        }
+
+        // A path with a trailing separator joins as "dir//name" and its
+        // filename() is empty, so both of these are what a caller relies on.
+        check(directory.filename() == "camina_test_paths",
+              "the last part of the path is the application name");
+        check(std::filesystem::is_directory(directory),
+              "the directory is created rather than only named");
+
+        const std::filesystem::path file = directory / "layout.ini";
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            out << "one";
+        }
+        check(std::filesystem::exists(file), "and a file can be written into it");
+
+        // The file this test wrote, and then the directory only when it is the
+        // one this test asked for. A version of preferences_directory() that
+        // answered with the parent would fail the check above and still reach
+        // here, and removing that tree would take the layout of somebody's
+        // editor with it.
+        //
+        // The error_code form of both, because remove() throws on a directory
+        // that still holds something. Anything else in there belongs to
+        // somebody else, and leaving it is the answer rather than the failure.
+        std::error_code failed;
+        std::filesystem::remove(file, failed);
+        if (directory.filename() == "camina_test_paths") {
+            std::filesystem::remove(directory, failed);
+        }
+    }
+
     /// Writes the arguments after the file name, one to a line.
     int child_args(int argc, char** argv) {
         std::ofstream file(argv[2], std::ios::binary | std::ios::trunc);
@@ -360,6 +408,9 @@ int main(int argc, char** argv) {
     test_a_change_that_undoes_itself_reports_nothing();
     test_the_interval_keeps_a_poll_from_walking();
     test_several_files_report_together();
+
+    test::section("paths");
+    test_the_preferences_directory_is_there_and_writable();
 
     test::section("process");
     test_a_program_that_is_not_there_does_not_run();
