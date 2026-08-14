@@ -506,6 +506,18 @@ is taken away, so a script cannot undo that by accident. `pairs` is the one thin
 to know about: Lua 5.4 seeds its string hash from the clock, so a string-keyed walk is not
 reproducible. Use `ipairs` and a list when the order decides anything.
 
+**M9 is in progress. M9.1 gives `apps/editor/` a program that builds and runs.** It is the
+shell and nothing more: a window, the ImGui overlay, a menu bar, and a dockspace over the
+whole work area. `ENGINE_WITH_EDITOR` is defined for that target and for no other one.
+`with_editor=True` used to fail the configure, because the directory was not there and no CI
+job ever turned the option on. Two jobs turn it on now.
+
+Docking and the saved layout are per-application settings, so `gfx::ImGuiDesc` carries them
+and `gfx::` decides neither. The editor asks for both and the runtime overlay asks for
+neither. `platform::preferences_directory` is where the editor's `imgui.ini` goes, which is
+`~/.local/share/camina/editor/` on Linux. A layout survives a restart, and the runtime
+overlay still writes no file at all.
+
 The build produces no compiler warnings and no clang-tidy findings, over the whole tree with
 the gate on. It carried sixteen warnings at M7.1, which was issue #179, and the lint gate was
 reading almost nothing, which was issue #242. Both are closed.
@@ -660,8 +672,9 @@ Two traps, both of which have produced a false green:
 - **A bare `length > 0` exits far too early.** The review bot registers before the workflow
   jobs do, so the loop sees one finished check and reports success before the build starts.
   Require the expected count, which is **seven**: `format`, `docs`, `containment`, and
-  four `build` jobs. The build matrix is two platforms times game UI off and on, and the job
-  names carry which, for example `build (linux-clang, ui=true)`.
+  four `build` jobs. The build matrix is two platforms times both options off and both on,
+  and the job names carry which, for example
+  `build (linux-clang, ui=true, editor=true)`.
 
 Make the loop print the per-check result it decided on, so a wrong exit is visible in the
 event rather than hidden behind the word "success". After the monitor reports, **query the
@@ -1080,9 +1093,24 @@ Conan options: `with_editor`, `with_ui`, `with_lua`, `with_audio`. Every one def
 to False and turns on at its milestone. `with_ui` needs moth_ui in the local Conan
 cache, because it is not on Conan Center.
 
+**Turning an option on does not reach a build directory that already exists.** Conan
+writes each option into the toolchain as a cache variable, and CMake keeps the value
+the cache already holds. So `conan install -o "&:with_editor=True"` followed by
+`cmake --preset` reports success and builds nothing new. Pass the variable on the
+configure line as well, or delete the build directory:
+
+```bash
+cmake --preset conan-relwithdebinfo -DENGINE_WITH_EDITOR=ON
+```
+
+CI never sees this, because a runner starts from an empty checkout.
+
 ImGui itself is not behind `with_editor`. Hard rule 3 says the editor is an application
 and not a build mode, and the M2 inspector runs as a debug overlay in the runtime. The
-option still gates ImGuizmo and, from M9, the editor application.
+option gates the editor application, and it gated ImGuizmo until M9.1 took that
+requirement out. Every ImGuizmo recipe on Conan Center pins `imgui/1.90.5`, which
+conflicts with the docking branch, so asking for it stopped the option resolving at
+all. Issue #308 holds it, and M9.5 needs the answer.
 
 Note: the enkiTS package installs its headers under a subdirectory. Include
 `<enkiTS/TaskScheduler.h>`, not `<TaskScheduler.h>`.

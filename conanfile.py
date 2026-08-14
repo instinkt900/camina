@@ -97,8 +97,10 @@ class CaminaConan(ConanFile):
         # call rather than a process spawn. Only the cooker links it.
         self.requires("shaderc/2025.3")
 
-        if self.options.with_editor:
-            self.requires("imguizmo/1.83")
+        # M9.5 wants ImGuizmo, and it has no package yet. Every ImGuizmo recipe
+        # on Conan Center requires imgui/1.90.5, which conflicts with the
+        # docking branch above, so asking for it stopped with_editor=True from
+        # resolving at all. Issue #308 holds the two ways out.
 
         if self.options.with_lua:
             # sol2/3.5.0 requires lua/5.4.6, and it is the newest sol2 on Conan

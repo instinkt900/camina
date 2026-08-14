@@ -56,7 +56,7 @@ jobs:
   # section 2. Every step below runs under bash, including on Windows, so that
   # one script serves both legs.
   build:
-    name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }})
+    name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }}, editor=${{ matrix.with_editor }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -65,6 +65,7 @@ jobs:
           - os: ubuntu-24.04
             profile: linux-clang
             with_ui: false
+            with_editor: false
             # The xorg/system recipe needs about 35 X11 and XCB development
             # packages. Conan defaults tools.system.package_manager:mode to
             # "check", so it stops and asks the user to install them. On a
@@ -77,21 +78,31 @@ jobs:
           - os: windows-2022
             profile: windows-msvc
             with_ui: false
+            with_editor: false
             conan_conf: ""
           # Game UI on, so src/ui and moth_ui are compiled. Both platforms,
           # because each catches something the other cannot. Linux runs
           # clang-tidy, which the MSVC job skips. Windows is the only MSVC
           # compile of src/ui anywhere, and no developer here has a Windows
           # machine to try it on. See issue #201.
+          #
+          # M9.1 turns the editor on in these two legs rather than in two legs
+          # of its own. apps/editor was missing for eight milestones and
+          # with_editor=True did not even configure, because no job ever turned
+          # it on. It costs one more executable here and no extra job, and it
+          # covers both compilers. The legs above keep the option off, so a
+          # release build that drops the editor is still built every run.
           - os: ubuntu-24.04
             profile: linux-clang
             with_ui: true
+            with_editor: true
             conan_conf: >-
               -c tools.system.package_manager:mode=install
               -c tools.system.package_manager:sudo=True
           - os: windows-2022
             profile: windows-msvc
             with_ui: true
+            with_editor: true
             conan_conf: ""
 
     defaults:
@@ -163,13 +174,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.conan2/p
-          key: conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-${{ hashFiles('conanfile.py') }}
+          key: conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-editor${{ matrix.with_editor }}-${{ hashFiles('conanfile.py') }}
           # Fall back to the same profile with the other option state. The
           # packages live under ~/.conan2/p keyed by package id, so sharing is
           # safe and the unused ones simply sit there. Without this fallback a
           # new key starts cold and builds the whole dependency tree from
           # source, which is how the first run of this job failed.
           restore-keys: |
+            conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-editor${{ matrix.with_editor }}-
             conan-${{ matrix.profile }}-ui${{ matrix.with_ui }}-
             conan-${{ matrix.profile }}-
 
@@ -178,6 +190,7 @@ jobs:
           conan install . -pr:h profiles/${{ matrix.profile }} \
             -pr:b profiles/${{ matrix.profile }} -b missing \
             -o "&:with_ui=${{ matrix.with_ui && 'True' || 'False' }}" \
+            -o "&:with_editor=${{ matrix.with_editor && 'True' || 'False' }}" \
             ${{ matrix.conan_conf }}
 
       - name: Configure

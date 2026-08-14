@@ -68,8 +68,8 @@ namespace engine::gfx {
 
     } // namespace
 
-    Result imgui_init(Device* device, void* sdl_window) {
-        if (device == nullptr || sdl_window == nullptr) {
+    Result imgui_init(Device* device, const ImGuiDesc& desc) {
+        if (device == nullptr || desc.sdl_window == nullptr) {
             return Result::ErrorInit;
         }
         if (g_started) {
@@ -90,12 +90,16 @@ namespace engine::gfx {
         // what a caller expects: a widget is really taking the keyboard, such
         // as an open text field. Navigation still works.
         io.ConfigNavCaptureKeyboard = false;
-        // The overlay has no home directory to write to, and a stray imgui.ini
-        // next to the executable surprises people. M9 gives the editor a real
-        // settings path.
-        io.IniFilename = nullptr;
+        // The application decides both. The runtime overlay passes no path, so
+        // it writes no file and its windows open where its constants put them.
+        // The editor passes one under the user preferences directory, and its
+        // panels come back where the last session left them.
+        io.IniFilename = desc.ini_path;
+        if (desc.docking) {
+            io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        }
 
-        if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window*>(sdl_window))) {
+        if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window*>(desc.sdl_window))) {
             ENGINE_LOG_ERROR("The ImGui SDL3 backend did not start.");
             ImGui::DestroyContext();
             return Result::ErrorInit;
@@ -134,8 +138,10 @@ namespace engine::gfx {
         }
 
         g_started = true;
-        ENGINE_LOG_INFO("The ImGui overlay started with {} swapchain images.",
-                        device->images.size());
+        ENGINE_LOG_INFO("The ImGui overlay started with {} swapchain images. Docking is {}, "
+                        "and the layout file is {}.",
+                        device->images.size(), desc.docking ? "on" : "off",
+                        desc.ini_path != nullptr ? desc.ini_path : "none");
         return Result::Success;
     }
 
