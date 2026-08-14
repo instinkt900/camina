@@ -65,9 +65,12 @@ namespace engine::editor {
      *
      * @param settings The settings to edit, changed in place.
      * @param file Where the two buttons save and load.
+     * @param open Cleared when the user closes the panel, which also draws the
+     * close button. Pass null for a panel the user cannot close.
      * @return True when the user changed a field this frame.
      */
-    bool draw_view_panel(ViewSettings& settings, const std::filesystem::path& file);
+    bool draw_view_panel(ViewSettings& settings, const std::filesystem::path& file,
+                         bool* open = nullptr);
 
     /**
      * @brief Draws the entity hierarchy, and lets the user pick one out of it.
@@ -82,10 +85,12 @@ namespace engine::editor {
      * @param scene_path The source scene to save to, or empty for no save.
      * @param content The open cooked content, which turns an identity back into
      * the reference a person wrote.
+     * @param open Cleared when the user closes the panel. Pass null for a panel
+     * the user cannot close.
      */
     void draw_world_panel(const scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path,
-                          const assets::Content& content);
+                          const assets::Content& content, bool* open = nullptr);
 
     /**
      * @brief Draws every component the selected entity carries.
@@ -98,8 +103,10 @@ namespace engine::editor {
      * @param world The world holding the entity. An edit marks it dirty, so
      * this takes it by reference.
      * @param selected The entity to show, or entt::null for none.
+     * @param open Cleared when the user closes the panel. Pass null for a panel
+     * the user cannot close.
      */
-    void draw_inspector_panel(scene::World& world, entt::entity selected);
+    void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open = nullptr);
 
     /**
      * @brief Writes the world out as a source scene.

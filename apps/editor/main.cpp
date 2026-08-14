@@ -2,13 +2,19 @@
 // of the runtime, which is what rule 4.3 in DESIGN.md asks for. The game module
 // links into both, so this program knows the project types and can show them.
 //
-// M9.1 is the shell: a window, the ImGui overlay with docking on, a menu bar,
-// and a layout that survives a restart. It draws no scene yet. M9.3 puts the
-// scene in the central node of the dockspace, and M9.2 brings the panels that
-// live in apps/runtime/main.cpp today.
+// M9.1 built the shell: a window, the ImGui overlay with docking on, a menu
+// bar, and a layout that survives a restart. M9.2 opened the cooked content,
+// read the scene, and docked the three panels out of src/editor/ around an
+// empty middle.
+//
+// That middle is empty on purpose. M9.3 draws the scene into it, and the
+// camera in the view panel is the camera it will use.
 
+#include "assets/content.h"
 #include "core/log.h"
 #include "core/version.h"
+#include "editor/panels.h"
+#include "editor/view_settings.h"
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "physics/components.h"
@@ -16,12 +22,17 @@
 #include "platform/window.h"
 #include "render/render_graph.h"
 #include "sandbox/game.h"
+#include "reflect/json.h"
 #include "scene/component_registry.h"
+#include "scene/world.h"
 #if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
 #endif
 
 #include <imgui.h>
+// The dock builder is internal API. It is the only way to give a first run a
+// layout, and every ImGui docking example uses it. See build_default_layout().
+#include <imgui_internal.h>
 
 #include <array>
 #include <charconv>
@@ -63,6 +74,8 @@ namespace {
     struct Options {
         /// How many frames to draw before stopping. Zero runs until the user quits.
         std::uint64_t frames = 0;
+        /// The cooked content to open. Empty takes the game's own directory.
+        std::string content;
         bool validation = true;       ///< The Khronos validation layer.
         bool sync_validation = false; ///< The barrier checks on top of it.
         bool vsync = true;
@@ -70,6 +83,7 @@ namespace {
 
     void print_usage() {
         ENGINE_LOG_INFO("Usage: editor [options]");
+        ENGINE_LOG_INFO("  --content <dir>     Open this cooked content instead of the game's.");
         ENGINE_LOG_INFO("  --frames <n>        Stop after n frames. 0 runs until you quit.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
@@ -122,6 +136,8 @@ namespace {
                 if (!parse_count(argv[++i], out.frames)) {
                     return false;
                 }
+            } else if (arg == "--content" && i + 1 < argc) {
+                out.content = argv[++i];
             } else {
                 ENGINE_LOG_CRITICAL("Unknown option: {}", arg);
                 print_usage();
@@ -134,7 +150,9 @@ namespace {
     /// Which panels are open. ImGui saves this shape in the layout file, and
     /// these are the states a fresh installation starts from.
     struct Panels {
-        bool components = true;
+        bool world = true;
+        bool inspector = true;
+        bool view = true;
         bool demo = false;
         bool about = false;
     };
@@ -150,6 +168,18 @@ namespace {
         /// What state each graph resource is in. Only the frame color is used
         /// today, and the array is the length derive_barriers() asks for.
         std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
+
+        /// The cooked content the scene reads. Open, or empty when there is none.
+        engine::assets::Content content;
+        /// The entities. Empty when no scene loaded, and the panels then say so.
+        engine::scene::World world;
+        /// The camera and the exposure. Nothing draws the scene until M9.3, so
+        /// only the panel reads these today.
+        engine::editor::ViewSettings view;
+        /// What the inspector shows, or entt::null for nothing.
+        entt::entity selected = entt::null;
+        /// The source scene the World panel saves to, or empty for no source tree.
+        std::filesystem::path source_scene;
     };
 
     /**
@@ -246,7 +276,9 @@ namespace {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
-            ImGui::MenuItem("Components", nullptr, &panels.components);
+            ImGui::MenuItem("World", nullptr, &panels.world);
+            ImGui::MenuItem("Inspector", nullptr, &panels.inspector);
+            ImGui::MenuItem("View settings", nullptr, &panels.view);
             ImGui::Separator();
             ImGui::MenuItem("ImGui Demo", nullptr, &panels.demo);
             ImGui::EndMenu();
@@ -256,35 +288,6 @@ namespace {
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
-    }
-
-    /**
-     * Lists the component types the registry knows.
-     *
-     * This is the smallest honest use of the game module: the engine registers
-     * what it defines, the game registers what it defines, and both appear
-     * here. So the list is also the proof that one game compiles into two
-     * applications.
-     */
-    void draw_components_window(bool& open) {
-        if (!ImGui::Begin("Components", &open)) {
-            ImGui::End();
-            return;
-        }
-
-        const engine::scene::ComponentRegistry& registry = engine::scene::components();
-        ImGui::Text("%zu component types are registered.", registry.size());
-        ImGui::Separator();
-
-        for (const engine::scene::ComponentOps& ops : registry.all()) {
-            if (ImGui::TreeNode(ops.name)) {
-                for (const char* field : ops.field_names) {
-                    ImGui::BulletText("%s", field);
-                }
-                ImGui::TreePop();
-            }
-        }
-        ImGui::End();
     }
 
     void draw_about_window(bool& open) {
@@ -297,25 +300,101 @@ namespace {
         ImGui::End();
     }
 
+    /**
+     * Puts each panel in its place, on a run that has no layout to restore.
+     *
+     * Without this every panel opens at the same spot and the last one drawn
+     * buries the rest. The runtime overlay has the same problem and answers it
+     * with fixed positions. The editor docks instead, so its answer is a
+     * default layout.
+     *
+     * This runs once, on a first run alone. `DockBuilderGetNode` returns a node
+     * as soon as the layout file holds one, so a person who moved a panel keeps
+     * it there for every later run.
+     *
+     * The middle is left empty on purpose. M9.3 draws the scene into that
+     * central node.
+     *
+     * @param dockspace The dockspace to fill.
+     */
+    void build_default_layout(ImGuiID dockspace) {
+        if (ImGui::DockBuilderGetNode(dockspace) != nullptr) {
+            return;
+        }
+
+        constexpr float kSideColumn = 0.22F; ///< How much width each side takes.
+        constexpr float kViewShare = 0.45F;  ///< How much of the left column the view takes.
+
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
+        // The work area and not the whole viewport, or the top row of panels
+        // sits over the main menu bar.
+        ImGui::DockBuilderSetNodePos(dockspace, viewport->WorkPos);
+        ImGui::DockBuilderSetNodeSize(dockspace, viewport->WorkSize);
+
+        // Each split returns the node in the direction asked for and writes the
+        // rest into the second output. Reading both matters: a node that has
+        // been split is a parent, and docking a window into a parent rather
+        // than into one of its leaves does not place the window.
+        ImGuiID centre = dockspace;
+        ImGuiID left = 0;
+        ImGuiID right = 0;
+        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, kSideColumn, &left, &centre);
+        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, kSideColumn, &right, &centre);
+
+        ImGuiID left_top = 0;
+        ImGuiID left_bottom = 0;
+        ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, kViewShare, &left_bottom, &left_top);
+
+        ImGui::DockBuilderDockWindow("World", left_top);
+        ImGui::DockBuilderDockWindow("View", left_bottom);
+        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderFinish(dockspace);
+        ENGINE_LOG_INFO("No saved layout, so the editor built the default one.");
+    }
+
     /// Draws every panel of one frame, inside the open ImGui frame.
-    void draw_ui(Panels& panels, bool& running) {
+    void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(panels, running);
 
         // The whole work area is one dockspace, so a panel docks anywhere in
         // the window. The central node passes through to what the frame drew
         // behind it, which is the clear color today and the scene at M9.3.
-        ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
+        //
+        // The id is ours rather than the one DockSpaceOverViewport picks, so
+        // that the builder below can name the same node.
+        const ImGuiID dockspace = ImGui::GetID("CaminaEditorDockspace");
+        build_default_layout(dockspace);
+        ImGui::DockSpaceOverViewport(dockspace, ImGui::GetMainViewport(),
                                      ImGuiDockNodeFlags_PassthruCentralNode);
 
-        if (panels.components) {
-            draw_components_window(panels.components);
+        // The same three panels the runtime overlay draws, from src/editor/.
+        // Nothing here places them: the dockspace does that, and the layout
+        // file remembers where the user put each one.
+        if (panels.world) {
+            engine::editor::draw_world_panel(editor.world, editor.selected, editor.source_scene,
+                                             editor.content, &panels.world);
         }
+        if (panels.inspector) {
+            engine::editor::draw_inspector_panel(editor.world, editor.selected,
+                                                 &panels.inspector);
+        }
+        if (panels.view) {
+            (void)engine::editor::draw_view_panel(editor.view, engine::editor::kViewSettingsFile,
+                                                  &panels.view);
+        }
+
         if (panels.about) {
             draw_about_window(panels.about);
         }
         if (panels.demo) {
             ImGui::ShowDemoWindow(&panels.demo);
         }
+
+        // After the panels, because an edit in the inspector goes around
+        // World::set_local() and leaves the matrices stale. The runtime does
+        // the same thing in the same place and for the same reason.
+        editor.world.update();
     }
 
     /// What one pass through the render loop achieved.
@@ -375,7 +454,7 @@ namespace {
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
         engine::gfx::imgui_new_frame();
-        draw_ui(panels, running);
+        draw_ui(editor, panels, running);
 
         engine::render::GraphSchedule schedule;
         if (!derive_frame_barriers(editor.states, schedule)) {
@@ -453,6 +532,54 @@ namespace {
         return true;
     }
 
+    /**
+     * Works out where the source scene is, so the World panel can save one.
+     *
+     * The cooked tree is not it. Writing there looks like it worked and the next
+     * cook throws the file away, so the panel disables its button rather than
+     * offering that. The path cannot be worked out from the running program, so
+     * the build passes it in the same way it does for the runtime.
+     *
+     * @return The source content directory, or empty when it is not there. A
+     * build moved away from its source tree gets the empty answer.
+     */
+    [[nodiscard]] std::filesystem::path game_source_directory() {
+        const std::filesystem::path source{ ENGINE_GAME_CONTENT_SOURCE };
+        std::error_code error;
+        return std::filesystem::is_directory(source, error) ? source : std::filesystem::path{};
+    }
+
+    /**
+     * Opens the cooked content and reads the opening scene into the world.
+     *
+     * A failure here is not fatal. The editor opens either way, and the panels
+     * then show an empty world rather than nothing at all. That is the right
+     * answer for a program somebody starts before they have cooked anything.
+     */
+    void load_world(Editor& editor, const Options& options) {
+        const std::filesystem::path content = options.content.empty()
+                                                  ? sandbox::default_content_directory()
+                                                  : std::filesystem::path{ options.content };
+
+        if (!editor.content.open(content)) {
+            ENGINE_LOG_ERROR("No cooked content at {}. Build the cooker target. The editor "
+                             "opens with an empty world.",
+                             content.string());
+            return;
+        }
+
+        if (!sandbox::load(content, &editor.content, editor.world)) {
+            ENGINE_LOG_ERROR("The scene did not load, so the world is empty.");
+            return;
+        }
+
+        const std::filesystem::path source = game_source_directory();
+        if (!source.empty()) {
+            editor.source_scene = source / sandbox::kSceneFile;
+        }
+        ENGINE_LOG_INFO("Opened {} with {} entities.", content.string(), editor.world.size());
+    }
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -486,6 +613,18 @@ int main(int argc, char** argv) {
         stop(editor);
         engine::log::shutdown();
         return 1;
+    }
+
+    // After the components are registered, or the scene loses every component
+    // nobody claimed. Nothing draws the world yet, so this needs no device.
+    load_world(editor, options);
+
+    // A view file next to the executable wins over the defaults, so the editor
+    // opens where the last session left the camera. The runtime reads the same
+    // file, which is what makes a camera set here the camera the game starts on.
+    if (std::filesystem::exists(engine::editor::kViewSettingsFile) &&
+        engine::reflect::load_json(engine::editor::kViewSettingsFile, editor.view)) {
+        ENGINE_LOG_INFO("Read {}.", engine::editor::kViewSettingsFile);
     }
 
     const bool ok = run_frames(editor, options);

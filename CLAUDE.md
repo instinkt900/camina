@@ -518,6 +518,27 @@ neither. `platform::preferences_directory` is where the editor's `imgui.ini` goe
 `~/.local/share/camina/editor/` on Linux. A layout survives a restart, and the runtime
 overlay still writes no file at all.
 
+**M9.2 moved the panels into `src/editor/`, and both applications draw them.** The view,
+the hierarchy, the inspector, and the material block table are one copy in `engine_core`
+now, not code inside the `main.cpp` of one application. They are not behind `WITH_EDITOR`,
+because the inspector has been the runtime debug overlay since M2. `DESIGN.md` §6 holds the
+reasoning.
+
+A panel places itself nowhere. The runtime overlay calls `place_next_panel` for its fixed
+layout, and the editor docks. A panel header names no ImGui type, so a program that never
+opens a window still compiles.
+
+The editor opens the cooked content, reads the scene, and shows 42 entities of the sandbox.
+The World panel saves the source scene, and that round trip is clean: a save, a cook, and an
+offscreen capture give back the same image byte for byte. The written file is much longer
+than the hand-authored one, because a save writes the whole instance record rather than the
+short form a person typed.
+
+A first run with no `imgui.ini` builds a default layout through the ImGui dock builder.
+Without it all three panels open at one spot and bury each other. **Read both outputs of
+`DockBuilderSplitNode`.** A node that has been split is a parent, and docking a window into
+a parent rather than into a leaf leaves the window floating where it started.
+
 The build produces no compiler warnings and no clang-tidy findings, over the whole tree with
 the gate on. It carried sixteen warnings at M7.1, which was issue #179, and the lint gate was
 reading almost nothing, which was issue #242. Both are closed.
