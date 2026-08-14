@@ -8,16 +8,16 @@
 #include "core/profile.h"
 #include "core/timestep.h"
 #include "core/version.h"
+#include "editor/panels.h"
+#include "editor/view_settings.h"
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "math/conventions.h"
 #include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
-#include "reflect/inspector.h"
 #include "reflect/json.h"
 #include "reflect/registry.h"
-#include "render/material_cache.h"
 #include "render/mesh_pass.h"
 #include "render/shadow_pass.h"
 #include "render/tonemap_pass.h"
@@ -32,10 +32,7 @@
 #include "script/host.h"
 #endif
 #include "scene/prefab.h"
-#include "scene/references.h"
-#include "scene/scene_file.h"
 #include "scene/step_motion.h"
-#include "scene/components.h"
 #include "scene/world.h"
 
 #if defined(ENGINE_WITH_UI)
@@ -59,7 +56,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -99,19 +95,24 @@ namespace {
     /// the startup rather than the renderer.
     constexpr std::size_t kFrameStatsWarmup = 60;
 
-    /// Where each window opens. The overlay writes no imgui.ini, so a run
-    /// always starts from this layout and a move lasts until the program ends.
-    /// Without these all three open at the same place, and the last one drawn
-    /// buries the rest. M9 gives the editor a real settings path.
+    /// Where each window opens. This overlay does not dock and writes no
+    /// imgui.ini, so a run always starts from this layout and a move lasts
+    /// until the program ends. Without these all three open at the same place,
+    /// and the last one drawn buries the rest. The editor docks instead, and it
+    /// places nothing.
     constexpr float kPanelMargin = 16.0F;
     constexpr float kPanelWidth = 340.0F;
     constexpr float kViewHeight = 320.0F;
     constexpr float kWorldHeight = 380.0F;
     constexpr float kInspectorHeight = 460.0F;
 
+    /// The panels and the view state are shared with the editor now. See
+    /// src/editor/ and DESIGN.md section 6.
+    using engine::editor::ViewSettings;
+
     /// Where the view settings go. The working directory, so a run is easy to redo.
     /// The scene itself lives in the sandbox content directory, not here.
-    constexpr const char* kViewPath = "view.json";
+    constexpr const char* kViewPath = engine::editor::kViewSettingsFile;
 
     struct Options {
         std::uint64_t max_frames = 0; ///< 0 means run until the user quits.
@@ -408,118 +409,6 @@ namespace {
         }
     }
 
-    /**
-     * How the runtime looks at the world, and nothing about the world itself.
-     *
-     * The entities live in a scene::World that the sandbox loads. This struct
-     * holds only the camera and the clear color, and it stays because it is the
-     * M2 demonstration: the inspector builds its widgets from the descriptors
-     * below, and the serializer writes the same fields to view.json. Neither one
-     * names a field by hand.
-     */
-    struct ViewSettings {
-        std::string name = "sandbox view";
-        engine::Vec3 clear_color{ 0.25F, 0.25F, 0.3F };
-
-        /// Where the camera stands. Saved, so a run opens where the last one stopped.
-        engine::Vec3 camera_position{ 0.0F, 2.8F, 6.0F };
-        /// Degrees around +Y. Zero looks down -Z, which is forward per DESIGN.md section 3.
-        float camera_yaw = 0.0F;
-        /// Degrees up from the horizon. Clamped, so the camera never rolls over the top.
-        float camera_pitch = -8.0F;
-
-        float fov_degrees = 60.0F;
-        float move_speed = 6.0F;
-        float look_sensitivity = 0.12F;
-
-        /**
-         * A linear scale on the scene before the ACES curve. One is neutral.
-         *
-         * It lives here rather than on the camera because it is a property of
-         * the view and this struct is what the view already is. A
-         * `scene::Camera` field is where it belongs once a scene carries more
-         * than one camera, which nothing does yet.
-         */
-        float exposure = 1.0F;
-
-        /**
-         * How many physics steps make one second.
-         *
-         * The simulation advances at this rate whatever the frame rate is, so
-         * the same scene behaves the same way on two machines. See
-         * engine::FixedTimestep and DESIGN.md section 9.
-         */
-        float physics_hz = engine::kDefaultStepHz;
-
-        /**
-         * How many steps one frame runs before it drops the time it owes.
-         *
-         * A frame slower than one step leaves time owed, and paying all of it
-         * back makes the next frame slower still. This is the ceiling that
-         * stops that. The frame report says how much time it discarded.
-         */
-        std::uint32_t max_physics_steps = engine::kDefaultMaxStepsPerFrame;
-
-        /**
-         * Whether to draw the physics wireframe over the frame.
-         *
-         * Off by default. A collider is invisible, and this is what makes one
-         * that does not match its mesh a five second answer.
-         */
-        bool physics_debug = false;
-
-        std::uint64_t frames_drawn = 0;
-    };
-
-} // namespace
-
-// The description sits outside the anonymous namespace, because a template
-// specialization has to live in the namespace of the template it specializes.
-// The numbers in a Range are the description. Naming each slider bound would
-// give twelve constants that each appear once, and would push the number away
-// from the field it belongs to.
-// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-template <>
-struct engine::reflect::Describe<ViewSettings> {
-    static constexpr const char* name = "ViewSettings";
-    static constexpr auto fields() {
-        return std::make_tuple(
-            ENGINE_FIELD(ViewSettings, name, Tooltip{ "Saved with the view settings" }),
-            ENGINE_FIELD(ViewSettings, clear_color, Range{ 0.0, 1.0, 0.01 },
-                         Tooltip{ "Linear, not sRGB" }),
-            ENGINE_FIELD(ViewSettings, camera_position, Range{ -100.0, 100.0, 0.05 },
-                         Category{ "Camera" }, Tooltip{ "Meters. Hold the right mouse button and use WASD" }),
-            ENGINE_FIELD(ViewSettings, camera_yaw, Range{ -180.0, 180.0, 0.5 },
-                         Category{ "Camera" }, Tooltip{ "Degrees around up. Zero looks down -Z" }),
-            ENGINE_FIELD(ViewSettings, camera_pitch, Range{ -89.0, 89.0, 0.5 },
-                         Category{ "Camera" }, Tooltip{ "Degrees above the horizon" }),
-            ENGINE_FIELD(ViewSettings, fov_degrees, Range{ 20.0, 120.0, 0.5 }, Category{ "Camera" }),
-            ENGINE_FIELD(ViewSettings, move_speed, Range{ 0.5, 40.0, 0.1 }, Category{ "Camera" },
-                         Tooltip{ "Meters each second. Hold shift to go faster" }),
-            ENGINE_FIELD(ViewSettings, look_sensitivity, Range{ 0.01, 1.0, 0.01 },
-                         Category{ "Camera" }, Tooltip{ "Degrees for each mouse count" }),
-            ENGINE_FIELD(ViewSettings, exposure, Range{ 0.05, 8.0, 0.01 },
-                         Tooltip{ "Scales the scene before the ACES curve. One is neutral" }),
-            // Live, so a person can drag the rate down and watch the blend hold
-            // the motion together. That is the fastest way to see what the
-            // interpolation is for.
-            ENGINE_FIELD(ViewSettings, physics_hz, Range{ 1.0, 240.0, 1.0 },
-                         Category{ "Physics" },
-                         Tooltip{ "Simulation steps each second, whatever the frame rate" }),
-            ENGINE_FIELD(ViewSettings, max_physics_steps, Range{ 1.0, 32.0, 1.0 },
-                         Category{ "Physics" },
-                         Tooltip{ "Steps one frame runs before it drops the time it owes" }),
-            ENGINE_FIELD(ViewSettings, physics_debug, Category{ "Physics" },
-                         Tooltip{ "Draw every collider as a wireframe, from what Box3D reports" }),
-            // ReadOnly keeps the editor from changing it. Transient keeps it out
-            // of the file. The two attributes are read by different consumers,
-            // and neither consumer knows about the other.
-            ENGINE_FIELD(ViewSettings, frames_drawn, ReadOnly{}, Transient{}, Category{ "Debug" }));
-    }
-};
-// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-
-namespace {
 
     /**
      * Reads an option that carries no value.
@@ -617,61 +506,6 @@ namespace {
                                   : std::filesystem::path{ options.watch };
         std::error_code error;
         return std::filesystem::is_directory(source, error) ? source : std::filesystem::path{};
-    }
-
-    /**
-     * Writes the scene where a person edits it, references and all.
-     *
-     * The world holds identities, because that is what the engine reads. The
-     * source document holds references, because an identity is derived and
-     * nobody chose it. Writing the world straight out would replace every
-     * reference with the GUID it resolved to, which undoes the reason a scene
-     * may name an asset by path at all.
-     */
-    bool write_scene_source(const std::filesystem::path& path, const engine::scene::World& world,
-                            const engine::assets::Content& content) {
-        nlohmann::json document = engine::scene::save_scene(world);
-        const std::size_t restored =
-            engine::scene::restore_references(document, content.manifest());
-
-        // Through a temporary in the same directory, then a rename. Writing
-        // over the scene directly means a disk that fills up, or a close that
-        // fails, leaves a person with half a scene and no copy of the whole
-        // one. The rename is what makes the swap all or nothing, and it is
-        // only reached once the bytes are down.
-        std::filesystem::path staged = path;
-        staged += ".writing";
-
-        {
-            std::ofstream file(staged, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                ENGINE_LOG_ERROR("Could not open {} for writing.", staged.string());
-                return false;
-            }
-            constexpr int kIndent = 2;
-            file << document.dump(kIndent) << '\n';
-            file.close();
-            if (!file) {
-                ENGINE_LOG_ERROR("Could not write {}, so {} is untouched.", staged.string(),
-                                 path.string());
-                std::error_code ignored;
-                std::filesystem::remove(staged, ignored);
-                return false;
-            }
-        }
-
-        std::error_code error;
-        std::filesystem::rename(staged, path, error);
-        if (error) {
-            ENGINE_LOG_ERROR("Could not put {} in place of {}. {}", staged.string(),
-                             path.string(), error.message());
-            std::error_code ignored;
-            std::filesystem::remove(staged, ignored);
-            return false;
-        }
-
-        ENGINE_LOG_INFO("Wrote {}, with {} asset references put back.", path.string(), restored);
-        return true;
     }
 
     /**
@@ -812,235 +646,6 @@ namespace {
                                               engine::world_up);
 
         return projection * view;
-    }
-
-    /// Opens a window where it belongs, and lets the user move it for this run.
-    bool begin_panel(const char* name, ImVec2 position, ImVec2 size) {
-        ImGui::SetNextWindowPos(position, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
-        return ImGui::Begin(name);
-    }
-
-    /**
-     * Draws the view window: the generated inspector and the save and load
-     * buttons.
-     *
-     * Nothing here names a field of ViewSettings. Add a field to the struct and
-     * to its description, and it appears in this window and in the file.
-     */
-    void draw_view_window(ViewSettings& settings) {
-        ENGINE_PROFILE_ZONE_N("draw_view_window");
-
-        if (begin_panel("View", { kPanelMargin, kPanelMargin },
-                        { kPanelWidth, kViewHeight })) {
-            if (engine::reflect::inspect(settings)) {
-                // A real editor marks the document dirty here. The demo only
-                // needs to show that the inspector reports a change.
-                ENGINE_LOG_TRACE("The user changed the view.");
-            }
-
-            ImGui::Separator();
-
-            if (ImGui::Button("Save")) {
-                if (engine::reflect::save_json(kViewPath, settings)) {
-                    ENGINE_LOG_INFO("Wrote {}.", kViewPath);
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Load")) {
-                if (engine::reflect::load_json(kViewPath, settings)) {
-                    ENGINE_LOG_INFO("Read {}.", kViewPath);
-                }
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", kViewPath);
-        }
-        ImGui::End();
-    }
-
-    /// What the label for one entity says in the tree.
-    std::string entity_label(const entt::registry& entities, entt::entity entity) {
-        const auto* named = entities.try_get<engine::scene::Name>(entity);
-        std::string label = named != nullptr ? named->value : std::string{ "unnamed" };
-        if (entities.all_of<engine::scene::PrefabInstance>(entity)) {
-            label += "  [" + entities.get<engine::scene::PrefabInstance>(entity).prefab + "]";
-        }
-        return label;
-    }
-
-    /// Draws one entity and everything under it, and reports a click.
-    void draw_entity_node(const engine::scene::World& world, entt::entity entity,
-                          entt::entity& selected) {
-        const entt::registry& entities = world.registry();
-        const engine::scene::Hierarchy& node = entities.get<engine::scene::Hierarchy>(entity);
-
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-                                   ImGuiTreeNodeFlags_SpanAvailWidth |
-                                   ImGuiTreeNodeFlags_DefaultOpen;
-        if (node.child_count == 0) {
-            flags |= ImGuiTreeNodeFlags_Leaf;
-        }
-        if (entity == selected) {
-            flags |= ImGuiTreeNodeFlags_Selected;
-        }
-
-        // The entity value is the identity here. Two entities can share a name,
-        // and ImGui needs the labels to differ.
-        ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
-        const bool open = ImGui::TreeNodeEx("node", flags, "%s",
-                                            entity_label(entities, entity).c_str());
-        // A press and a release inside one frame make ImGui hold the click for
-        // two frames, so guard on a real change rather than logging twice.
-        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen() && selected != entity) {
-            selected = entity;
-            ENGINE_LOG_TRACE("Selected entity {}.", entt::to_integral(entity));
-        }
-        if (open) {
-            for (entt::entity child = node.first_child; child != entt::null;
-                 child = entities.get<engine::scene::Hierarchy>(child).next_sibling) {
-                draw_entity_node(world, child, selected);
-            }
-            ImGui::TreePop();
-        }
-        ImGui::PopID();
-    }
-
-    /**
-     * Draws the hierarchy, and lets the user pick an entity out of it.
-     *
-     * This window reads the world the sandbox loaded. It names no game type, so
-     * a different game in the same runtime shows the same tree.
-     */
-    void draw_world_window(const engine::scene::World& world, entt::entity& selected,
-                           const std::filesystem::path& scene_path,
-                           const engine::assets::Content& content) {
-        ENGINE_PROFILE_ZONE_N("draw_world_window");
-
-        if (begin_panel("World", { kPanelMargin, (2 * kPanelMargin) + kViewHeight },
-                        { kPanelWidth, kWorldHeight })) {
-            ImGui::Text("Entities: %zu", world.size());
-            ImGui::Text("Matrices rebuilt last frame: %zu", world.rebuilt_last_update());
-
-            // Without a source tree there is nowhere to save that a person
-            // would find again. Writing into the cooked tree looks like it
-            // worked and the next cook throws it away.
-            const bool can_save = !scene_path.empty();
-            ImGui::BeginDisabled(!can_save);
-            if (ImGui::Button("Save scene") && can_save) {
-                // Every prefab instance collapses again here, so what the user
-                // changed comes back as an override rather than as entities.
-                if (!write_scene_source(scene_path, world, content)) {
-                    ENGINE_LOG_ERROR("The scene did not write to {}.", scene_path.string());
-                }
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            // The whole path, because which of the two trees this writes to is
-            // the thing worth knowing.
-            ImGui::TextDisabled("%s", can_save ? scene_path.string().c_str()
-                                               : "no source tree, so there is nowhere to save");
-            if (can_save && ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("The source scene. The cooker turns it into what runs.");
-            }
-
-            ImGui::Separator();
-
-            const entt::registry& entities = world.registry();
-            for (const auto [entity, node] :
-                 entities.view<const engine::scene::Hierarchy>().each()) {
-                if (node.parent == entt::null) {
-                    draw_entity_node(world, entity, selected);
-                }
-            }
-        }
-        ImGui::End();
-    }
-
-    /**
-     * Draws every component the selected entity carries.
-     *
-     * Nothing here names a component type. The registry holds a function that
-     * already knows the type, and it calls reflect::inspect() through it. Add a
-     * described component to the registry and it appears in this window, game
-     * types included.
-     */
-    /**
-     * Draws the material block layout that mesh.frag declares.
-     *
-     * The renderer validates these against the shader at startup, and a
-     * person editing a material needs to see the names and the types the
-     * shader expects. The values come from the cooked material asset, and
-     * editing them needs a material source that does not exist yet. Issue
-     * #102 records that decision.
-     */
-    void draw_material_block_info() {
-        if (!ImGui::CollapsingHeader("Material block", ImGuiTreeNodeFlags_DefaultOpen)) {
-            return;
-        }
-
-        ImGui::TextDisabled("What mesh.frag expects. The values come from the cooked glTF.");
-        ImGui::Separator();
-
-        if (!ImGui::BeginTable("material_params", 3,
-                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            return;
-        }
-        ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Type");
-        ImGui::TableSetupColumn("Offset");
-        ImGui::TableHeadersRow();
-
-        for (const engine::render::MaterialUniformMember& member :
-             engine::render::material_uniform_layout()) {
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(member.name);
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(engine::render::param_type_name(member.type));
-            ImGui::TableNextColumn();
-            ImGui::Text("%u", member.offset);
-        }
-        ImGui::EndTable();
-    }
-
-    void draw_inspector_window(engine::scene::World& world, entt::entity selected) {
-        ENGINE_PROFILE_ZONE_N("draw_inspector_window");
-
-        if (begin_panel("Inspector", { (2 * kPanelMargin) + kPanelWidth, kPanelMargin },
-                        { kPanelWidth, kInspectorHeight })) {
-            if (selected == entt::null || !world.registry().valid(selected)) {
-                ImGui::TextDisabled("Pick an entity in the World window.");
-                ImGui::End();
-                return;
-            }
-
-            ImGui::Text("%s", entity_label(world.registry(), selected).c_str());
-            ImGui::Separator();
-
-            bool moved = false;
-            for (const engine::scene::ComponentOps& ops : engine::scene::components().all()) {
-                if (!ops.has(world.registry(), selected)) {
-                    continue;
-                }
-                ImGui::PushID(ops.name);
-                if (ImGui::CollapsingHeader(ops.name, ImGuiTreeNodeFlags_DefaultOpen)) {
-                    moved = ops.inspect(world.registry(), selected) || moved;
-                }
-                ImGui::PopID();
-            }
-
-            const auto* renderer = world.registry().try_get<engine::scene::MeshRenderer>(selected);
-            if (renderer != nullptr && renderer->mesh.valid()) {
-                draw_material_block_info();
-            }
-
-            if (moved) {
-                // The edit went through the registry, so it went around
-                // set_local(). World says to mark the subtree, or the matrices
-                // stay stale and only a later move would put them right.
-                world.mark_dirty(selected);
-            }
-        }
-        ImGui::End();
     }
 
     engine::gfx::Extent2D window_extent(const engine::platform::Window& window) {
@@ -1358,10 +963,23 @@ namespace {
         // leaves an ImGui frame half open.
         if (context.overlay) {
             engine::gfx::imgui_new_frame();
-            draw_view_window(settings);
-            draw_world_window(world, *context.selected, context.source_scene,
-                              *context.game_content);
-            draw_inspector_window(world, *context.selected);
+            // The panels are shared with the editor and place themselves
+            // nowhere, so this overlay says where each one opens. The editor
+            // docks them instead and calls none of this.
+            engine::editor::place_next_panel(kPanelMargin, kPanelMargin, kPanelWidth,
+                                             kViewHeight);
+            if (engine::editor::draw_view_panel(settings, kViewPath)) {
+                // A real editor marks the document dirty here. The overlay only
+                // needs to show that the inspector reports a change.
+                ENGINE_LOG_TRACE("The user changed the view.");
+            }
+            engine::editor::place_next_panel(kPanelMargin, (2 * kPanelMargin) + kViewHeight,
+                                             kPanelWidth, kWorldHeight);
+            engine::editor::draw_world_panel(world, *context.selected, context.source_scene,
+                                             *context.game_content);
+            engine::editor::place_next_panel((2 * kPanelMargin) + kPanelWidth, kPanelMargin,
+                                             kPanelWidth, kInspectorHeight);
+            engine::editor::draw_inspector_panel(world, *context.selected);
         }
 
         // An edit in the inspector went around set_local(), so the matrices are

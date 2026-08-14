@@ -346,6 +346,8 @@ engine/
     math/              glm wrapper, transform, AABB, frustum, conventions.h
     reflect/           field descriptors, attributes, type registry, and the
                        two consumers: the ImGui inspector and JSON
+    editor/            the panels both applications draw, and the view state
+                       they edit. Not behind WITH_EDITOR, see below
     platform/          SDL3 window, input, filesystem, dynamic library loading
     gfx/               PUBLIC render interface: handles, descs, command list
       vulkan/          the ONLY place vulkan.h is legal (rule 4.1)
@@ -365,6 +367,30 @@ engine/
   tests/
   sandbox/             the small game you build next to the engine
 ```
+
+### `src/editor/` is not behind `WITH_EDITOR`
+
+The panels are in `src/editor/` and they compile into `engine_core`, so both
+applications link them. M9.2 put them there, and the reason is rule 4.3: the editor is
+an application and not a build mode. The inspector has run as a debug overlay in the
+runtime since M2, so a panel that only the editor could draw would take that overlay
+away.
+
+So `src/editor/` means "authoring and inspection, for whichever application asks", not
+"code a release build drops". ImGui is already an unconditional dependency of
+`engine_core` for the same reason, and `WITH_EDITOR` gates the `apps/editor/`
+application alone.
+
+Two things follow. A panel header names no ImGui type, the way `reflect/inspector.h`
+does, so a program that never opens a window still compiles. And a panel places itself
+nowhere: the runtime overlay calls `place_next_panel` to open its windows at fixed
+places, and the editor lets its dockspace decide. Neither layout is written into the
+panel.
+
+`editor::ViewSettings` lives here as well. It is the camera, the exposure, and the
+simulation rate of one view, which both applications need and which an offscreen run
+with no window reads too. It sits beside the panel that edits it rather than in the
+`main.cpp` of one application, which is where it was until M9.2.
 
 ---
 
