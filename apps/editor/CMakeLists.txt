@@ -17,5 +17,14 @@ target_link_libraries(editor PRIVATE
 # consumer, in issue #305.
 target_compile_definitions(editor PRIVATE ENGINE_WITH_EDITOR)
 
+# Where the source content is, which the running program cannot work out. The
+# World panel saves the scene a person edits, and that is this tree rather than
+# the cooked one beside the executable. A build moved away from its source tree
+# gets a directory that is not there, and the panel then disables its save
+# button. apps/runtime does the same thing for hot reload.
+target_compile_definitions(editor PRIVATE
+    ENGINE_GAME_CONTENT_SOURCE="${CMAKE_SOURCE_DIR}/sandbox/content"
+)
+
 engine_set_warnings(editor)
 engine_enable_clang_tidy(editor)

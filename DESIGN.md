@@ -392,6 +392,13 @@ simulation rate of one view, which both applications need and which an offscreen
 with no window reads too. It sits beside the panel that edits it rather than in the
 `main.cpp` of one application, which is where it was until M9.2.
 
+**The editor builds a default layout on a first run.** Three panels that place
+themselves nowhere all open at the same spot, and the last one drawn buries the rest.
+The runtime answers that with fixed positions. The editor docks, so its answer is a
+layout: the hierarchy and the view settings on the left, the inspector on the right,
+and the middle left empty for the M9.3 viewport. It runs once. As soon as `imgui.ini`
+holds a node for the dockspace, the layout a person arranged is the one they get.
+
 ---
 
 ## 7. Reflection

@@ -122,11 +122,12 @@ namespace engine::editor {
         ImGui::SetNextWindowSize(ImVec2{ width, height }, ImGuiCond_FirstUseEver);
     }
 
-    bool draw_view_panel(ViewSettings& settings, const std::filesystem::path& file) {
+    bool draw_view_panel(ViewSettings& settings, const std::filesystem::path& file,
+                         bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_view_panel");
 
         bool changed = false;
-        if (ImGui::Begin("View")) {
+        if (ImGui::Begin("View", open)) {
             changed = reflect::inspect(settings);
 
             ImGui::Separator();
@@ -151,11 +152,11 @@ namespace engine::editor {
     }
 
     void draw_world_panel(const scene::World& world, entt::entity& selected,
-                          const std::filesystem::path& scene_path,
-                          const assets::Content& content) {
+                          const std::filesystem::path& scene_path, const assets::Content& content,
+                          bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_world_panel");
 
-        if (ImGui::Begin("World")) {
+        if (ImGui::Begin("World", open)) {
             ImGui::Text("Entities: %zu", world.size());
             ImGui::Text("Matrices rebuilt last frame: %zu", world.rebuilt_last_update());
 
@@ -191,10 +192,10 @@ namespace engine::editor {
         ImGui::End();
     }
 
-    void draw_inspector_panel(scene::World& world, entt::entity selected) {
+    void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_inspector_panel");
 
-        if (ImGui::Begin("Inspector")) {
+        if (ImGui::Begin("Inspector", open)) {
             if (selected == entt::null || !world.registry().valid(selected)) {
                 ImGui::TextDisabled("Pick an entity in the World window.");
                 ImGui::End();
