@@ -23,6 +23,7 @@ add_library(engine_core STATIC
     gfx/types.cpp
     reflect/registry.cpp
     reflect/inspector.cpp
+    editor/panels.cpp
     gfx/vulkan/vk_device.cpp
     gfx/vulkan/vk_swapchain.cpp
     gfx/vulkan/vk_frame.cpp
