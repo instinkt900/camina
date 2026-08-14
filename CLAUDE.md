@@ -682,6 +682,13 @@ state once by hand** and report from that, not from the monitor's summary.
 
 ### Reading the review
 
+**The automated review is a nice-to-have. It is not a gate.** CodeRabbit is an extra pair
+of eyes, and the user reviews every pull request either way. So a pull request without an
+automated review is a normal pull request, not a blocked one.
+
+Read it when it arrives, and answer it. Do not treat its absence as a problem, do not
+apologize for it, and do not hold work back for it.
+
 A review is spread over three endpoints. Checking one or two and finding nothing proves
 nothing:
 
@@ -698,9 +705,12 @@ gh api repos/<owner>/<repo>/issues/<N>/comments  # top-level, where the walkthro
 Never treat it as a pass.
 
 **A rate limit ends the wait.** CodeRabbit posts its own limit as a top-level comment, with
-a reset time. When it does, stop the monitor, say the review did not run, and hand back.
-Do not wait for the reset, and do not poll for it. Whether an automated review is worth
-waiting for is the user's call, not yours.
+a reset time. When it does, stop the monitor, say that the automated review will not run
+for this pull request, and carry on. Do not wait for the reset, and do not poll for it.
+
+A rate limit says nothing about the pull request. It means one automated tool was busy,
+and that tool is a nicety. Report it in one line, in the same way you report that a run
+used no cache. Whether to ask for the review later is the user's call, not yours.
 
 ### Answering the review
 
