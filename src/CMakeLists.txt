@@ -38,6 +38,7 @@ add_library(engine_core STATIC
     render/render_graph.cpp
     render/shader_bindings.cpp
     render/texture_cache.cpp
+    render/scene_renderer.cpp
     render/tonemap_pass.cpp
     render/debug_line_pass.cpp
     physics/components.cpp
