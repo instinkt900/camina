@@ -14,6 +14,7 @@
  */
 
 #include "assets/content.h"
+#include "platform/input.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
 #include "scene/world.h"
@@ -84,6 +85,42 @@ namespace sandbox {
      * @return The cooked content directory for this game.
      */
     [[nodiscard]] std::filesystem::path default_content_directory();
+
+    /// @brief The action a script reads to throw a crate from the camera.
+    inline constexpr const char* kThrowAction = "throw";
+
+    /// @brief The action a script reads to put the puzzle back as it was.
+    inline constexpr const char* kResetAction = "reset";
+
+    /**
+     * @brief The key the throw is bound to.
+     *
+     * Named because `runtime --throw-at-frame` holds down the same key the
+     * binding reads, rather than calling the throw. A hook that went around the
+     * input module would drive a path the game never takes.
+     */
+    inline constexpr engine::platform::Key kThrowKey = engine::platform::Key::F;
+
+    /// @brief The key the reset is bound to.
+    inline constexpr engine::platform::Key kResetKey = engine::platform::Key::R;
+
+    /**
+     * @brief Binds the keys the game's own actions read.
+     *
+     * A script names an action and never a key, which is what issue #207 asked
+     * for. The key is what an application owns, so the binding cannot live in a
+     * script. It lives here rather than in one `main.cpp` because both
+     * applications run this game: the runtime plays it, and the editor plays it
+     * in a viewport panel. Two copies of the table would let the same key do
+     * two different things.
+     *
+     * The camera actions are not here. They belong to whichever application
+     * flies a camera, and the game reads none of them.
+     *
+     * @param input The input to bind on. The runtime binds the one the fixed
+     * step reads, which is engine::play::Session::input().
+     */
+    void bind_actions(engine::platform::Input& input);
 
     /**
      * @brief Registers the component types the game defines.

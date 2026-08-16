@@ -421,21 +421,15 @@ namespace {
         constexpr const char* kDown = "move_down";
         constexpr const char* kSprint = "sprint";
         constexpr const char* kLook = "look";
-        constexpr const char* kThrow = "throw";
-        constexpr const char* kReset = "reset";
     } // namespace action
-
-    /// The key the throw is bound to. Named once, because --throw-at-frame has
-    /// to hold down the same one the binding reads.
-    constexpr engine::platform::Key kThrowKey = engine::platform::Key::F;
 
     /**
      * Binds the runtime's own actions.
      *
-     * The camera actions belong to the application. The throw and the reset
-     * belong to the game, and puzzle.lua reads both by name. The binding stays
-     * here because a key is what the application owns: a script names the
-     * action and never the key, which is what issue #207 asked for.
+     * The camera actions alone. The throw and the reset belong to the game, and
+     * `sandbox::bind_actions` binds those on the input the fixed step reads.
+     * Two applications run this game now, so one copy of the game's table is
+     * what keeps a key doing one thing.
      */
     void bind_actions(engine::platform::Input& input) {
         using engine::platform::Key;
@@ -450,8 +444,6 @@ namespace {
         input.bind(action::kSprint, Key::LeftShift);
         input.bind(action::kSprint, Key::RightShift);
         input.bind(action::kLook, MouseButton::Right);
-        input.bind(action::kThrow, kThrowKey);
-        input.bind(action::kReset, Key::R);
     }
 
     /**
@@ -1500,7 +1492,7 @@ namespace {
         // the game never takes. input.h calls this the replay shape: write a
         // frame out and feed it back. See DESIGN.md section 9.
         if (options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame) {
-            state.keys.at(static_cast<std::size_t>(kThrowKey)) = true;
+            state.keys.at(static_cast<std::size_t>(sandbox::kThrowKey)) = true;
         }
 
         runtime.input.update(state);
@@ -1770,9 +1762,9 @@ int main(int argc, char** argv) {
     // The game on the fixed step: the clock, the bodies, and the scripts.
     engine::play::Session session;
 
-    // The same actions as the frame input, on the step clock. The game reads
-    // this one, and the camera reads the other. See play/session.h.
-    bind_actions(session.input());
+    // The game's own actions, on the step clock. The camera reads the frame
+    // input instead, which start() bound. See play/session.h.
+    sandbox::bind_actions(session.input());
 
     // Before the first step, so an entity that names a script finds it loaded
     // rather than reporting it missing on the first frame.

@@ -125,11 +125,14 @@ namespace engine::play {
          * @brief Runs `on_destroy` on every instance and drops them all.
          *
          * Call this before the world goes away. The bodies stay, because the
-         * caller decides whether the next world is a reload or a restore.
+         * caller decides whether the next world is a reload or a restore. So a
+         * teardown that pushes a body or reads a velocity reaches a live one,
+         * which is why this hands `on_destroy` the same services a step gets.
          *
          * @param world The world the instances belong to.
+         * @param view Where the camera stands, for a teardown that reads it.
          */
-        void stop_scripts(scene::World& world);
+        void stop_scripts(scene::World& world, const View& view = {});
 
         /**
          * @brief Folds one device frame into what the next step reads.
