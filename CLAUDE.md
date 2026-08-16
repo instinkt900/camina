@@ -539,6 +539,29 @@ Without it all three panels open at one spot and bury each other. **Read both ou
 `DockBuilderSplitNode`.** A node that has been split is a parent, and docking a window into
 a parent rather than into a leaf leaves the window floating where it started.
 
+**M9.3 draws the scene into a Viewport panel.** M9.3a moved the shadow, cull, mesh, and
+tonemap passes out of `apps/runtime/main.cpp` into `render::SceneRenderer`, so both
+applications draw a scene through one copy of the pass order and the barriers. M9.3b gave
+the editor its own target: `editor::Viewport` owns the image the scene is tonemapped into,
+and the panel shows it at the size a person dragged the edges to.
+
+**M9.4 plays the scene in the editor.** M9.4a lifted the fixed step into
+`engine::play::Session` in `src/play/`, which owns the clock, the solver, the script host,
+and the input on that clock. The runtime drives it and its picture did not move by one
+byte. M9.4b added `editor::PlayMode`: play snapshots the world with `scene::save_scene`,
+stop reads that document back, and pause holds the steps without dropping the session.
+`tests/test_editor.cpp` drives the shipped sandbox scene through a session that throws a
+crate, and the stopped world writes out the same document it started from.
+
+**Two traps the restore has to respect, and both are answered by ordering.** Stop drops the
+session before it reads the world back, because writing a transform onto a live dynamic
+body does nothing (#284). And both ends of a session replace every entity, so the selection
+is dropped at each one: EnTT hands the same numbers out again.
+
+**The game's key bindings are in `sandbox::bind_actions` now**, not in the runtime's
+`main.cpp`. Two applications run this game, and two copies of the table would let one key do
+two different things. The camera bindings stay with whichever application flies a camera.
+
 The build produces no compiler warnings and no clang-tidy findings, over the whole tree with
 the gate on. It carried sixteen warnings at M7.1, which was issue #179, and the lint gate was
 reading almost nothing, which was issue #242. Both are closed.
