@@ -69,3 +69,47 @@ set_source_files_properties(${box3d_sources}
         SKIP_LINTING ON
         COMPILE_OPTIONS "$<IF:$<C_COMPILER_ID:MSVC>,/w,-w>"
 )
+
+# ImGuizmo. The gizmo the editor puts on the selected entity, in M9.5.
+#
+# Behind ENGINE_WITH_EDITOR, because the editor application is the only thing
+# that draws one. Rule 4.3 says the editor is an application rather than a build
+# mode, and this is the option that gates that application. A runtime build
+# compiles none of it.
+#
+# It is a submodule rather than a Conan package because no usable package
+# exists. Both recipes on Conan Center, imguizmo/1.83 and
+# imguizmo/cci.20231114, require imgui/1.90.5, and this engine is on the
+# docking branch of 1.92. Conan then refuses the whole graph, which is what
+# stopped with_editor=True from configuring at all. See issue #308 and
+# DESIGN.md section 5.
+#
+# One source file of the several the repository ships. The sequencer, the
+# curve editor, the gradient widget, and the graph editor are separate tools
+# that the editor does not use, and each one is more code to compile and to
+# keep compiling.
+if(ENGINE_WITH_EDITOR)
+    set(imguizmo_root "${CMAKE_CURRENT_SOURCE_DIR}/imguizmo")
+
+    if(NOT EXISTS "${imguizmo_root}/src/ImGuizmo.cpp")
+        message(FATAL_ERROR
+            "third_party/imguizmo is empty. Run:\n"
+            "  git submodule update --init --recursive")
+    endif()
+
+    add_library(imguizmo STATIC "${imguizmo_root}/src/ImGuizmo.cpp")
+
+    target_include_directories(imguizmo SYSTEM PUBLIC "${imguizmo_root}/src")
+
+    # PUBLIC, because ImGuizmo.h includes imgui.h, so every consumer needs the
+    # same headers this was built against.
+    target_link_libraries(imguizmo PUBLIC imgui::imgui)
+
+    # Third-party code, so the engine warning set and clang-tidy stay off it,
+    # the same as bc7enc and the VMA implementation file. SKIP_LINTING is a
+    # source file property rather than a target property.
+    set_source_files_properties("${imguizmo_root}/src/ImGuizmo.cpp" PROPERTIES
+        SKIP_LINTING ON
+        COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
+    )
+endif()

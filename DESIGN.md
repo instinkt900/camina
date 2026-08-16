@@ -225,9 +225,15 @@ rule is the only thing that prevents it.
 The macro name matches the Conan option `with_editor` and matches Unreal, so one name
 means one thing across the build, the package, and the code.
 
-**4.4 — Vendor only what you patch.**
-A dependency goes in `third_party/` only if you may need to patch it. Everything else comes
-from Conan. Today this rule covers two entries.
+**4.4 — Vendor only what Conan cannot give you.**
+A dependency goes in `third_party/` only when you may need to patch it, or when no package
+manager entry can be used at all. Everything else comes from Conan. Today this rule covers
+three entries.
+
+"No entry that can be used" is stricter than "not on Conan Center". A recipe that exists and
+pins a dependency this engine cannot take is the same problem: `imguizmo` on Conan Center
+requires `imgui/1.90.5`, and the editor is on the docking branch of 1.92, so Conan refuses
+the graph. See §5.
 
 **4.5 — Reflect once, consume many times.**
 Every system that enumerates the fields of a type goes through `reflect/`. Do not write a
@@ -259,7 +265,6 @@ separates what the engine needs from what was interesting to design.
 | `shaderc` | 2025.3 | GLSL to SPIR-V |
 | `spirv-reflect` | latest | Descriptor layout reflection |
 | `imgui` | 1.92.x-docking | Editor UI |
-| `imguizmo` | latest | Editor manipulators |
 | `sol2` | latest | Lua binding |
 | `lua` | 5.4.x | Scripting |
 | `nlohmann_json` | latest | Serialization |
@@ -273,6 +278,7 @@ separates what the engine needs from what was interesting to design.
 |---|---|
 | `box3d` | Alpha. You will read it, patch it, and update it often |
 | `bc7enc_rdo` | Not in Conan Center. Two files |
+| `imguizmo` | Every Conan Center recipe pins `imgui/1.90.5`, and this engine is on `1.92.8-docking`. One source file, built behind `with_editor` |
 
 ### Excluded on purpose
 

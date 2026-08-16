@@ -972,12 +972,18 @@ here, consider whether moth_ui wants the same change.
   requirement in `conanfile.py`. Conan Center has no binary for our profile, so the first
   install builds shaderc, glslang, and SPIRV-Tools from source. That takes several minutes
   once, then the cache serves it. Issue #43 holds the reasons to link `libshaderc` instead.
-- **Submodules.** `third_party/bc7enc_rdo` is the first one and `third_party/box3d` is the
-  second. A fresh clone needs `git submodule update --init --recursive`. Both
-  `third_party/bc7enc/CMakeLists.txt` and `third_party/CMakeLists.txt` fail the build with
-  that command in the message when the directory is empty. Only `bc7enc.cpp` is compiled
-  out of bc7enc_rdo. The rest of that repository holds an ISPC kernel, a PNG reader, and a
-  DDS writer that we do not use.
+- **Submodules.** There are three: `third_party/bc7enc_rdo`, `third_party/box3d`, and
+  `third_party/imguizmo`. A fresh clone needs `git submodule update --init --recursive`.
+  Both `third_party/bc7enc/CMakeLists.txt` and `third_party/CMakeLists.txt` fail the build
+  with that command in the message when the directory is empty. Only `bc7enc.cpp` is
+  compiled out of bc7enc_rdo. The rest of that repository holds an ISPC kernel, a PNG
+  reader, and a DDS writer that we do not use.
+- **ImGuizmo is vendored because no Conan package can be used**, which closed #308.
+  `imguizmo/1.83` and `imguizmo/cci.20231114` both require `imgui/1.90.5`, and this engine
+  is on `1.92.8-docking`, so Conan refused the graph and `with_editor=True` would not
+  configure. The submodule compiles against 1.92 with no patch. Only `src/ImGuizmo.cpp` is
+  built, behind `ENGINE_WITH_EDITOR`, and the editor is the only target that links it. Rule
+  4.4 was widened to say this: vendor what Conan cannot give you, not only what you patch.
 - **Box3D builds from `third_party/box3d/src`, not from the Box3D root.** The root
   CMakeLists is written for a top-level build. It sets the static MSVC runtime, and
   `profiles/windows-msvc` asks Conan for the dynamic one. MSVC does not link objects that
