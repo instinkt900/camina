@@ -7,6 +7,7 @@
 #include "core/profile.h"
 #include "core/timestep.h"
 #include "core/version.h"
+#include "editor/fly_camera.h"
 #include "editor/panels.h"
 #include "editor/view_settings.h"
 #include "gfx/device.h"
@@ -24,10 +25,12 @@
 #include "physics/components.h"
 #include "physics/simulation.h"
 #include "render/debug_line_pass.h"
+#include "scene/camera.h"
 #include "scene/component_registry.h"
 #if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
 #endif
+#include "scene/components.h"
 #include "scene/prefab.h"
 #include "scene/world.h"
 
@@ -65,15 +68,9 @@ namespace {
     /// About one frame at 60 Hz. Long enough to idle, short enough to wake fast.
     constexpr int kMinimizedSleepMs = 16;
 
+    // The pitch limits, the sprint factor, and the shortest move went to
+    // editor/fly_camera.cpp with the camera itself, in M9.5a.
 
-    /// Straight up and straight down have no usable basis, so stop short of both.
-    constexpr float kLowestPitch = -89.0F;
-    constexpr float kHighestPitch = 89.0F;
-    constexpr float kFullTurnDegrees = 360.0F;
-    /// Below this the movement keys cancel out and there is nothing to normalize.
-    constexpr float kShortestMove = 1.0e-4F;
-    /// How much faster shift makes the camera.
-    constexpr float kSprintFactor = 4.0F;
     /// The largest step one frame may apply. A stall must not teleport the camera.
     constexpr float kLongestFrame = 0.1F;
 
@@ -137,7 +134,7 @@ namespace {
          */
         engine::gfx::Extent2D resolution{ 0, 0 };
         /**
-         * The exposure to apply, or zero to keep whatever view.json holds.
+         * The exposure to apply, or zero to keep the scene camera's own.
          *
          * Zero rather than one as the "not given" value, because one is a
          * setting somebody may want and this has to tell the two apart. An
@@ -411,102 +408,120 @@ namespace {
         return std::filesystem::is_directory(source, error) ? source : std::filesystem::path{};
     }
 
-    /// The action names the runtime binds. One name for one thing, per §3.
-    namespace action {
-        constexpr const char* kForward = "move_forward";
-        constexpr const char* kBack = "move_back";
-        constexpr const char* kLeft = "move_left";
-        constexpr const char* kRight = "move_right";
-        constexpr const char* kUp = "move_up";
-        constexpr const char* kDown = "move_down";
-        constexpr const char* kSprint = "sprint";
-        constexpr const char* kLook = "look";
-    } // namespace action
+    /**
+     * The camera the runtime draws through, and the fly camera that steers it.
+     *
+     * The pose lives on an entity now, so this holds the entity and the two
+     * angles a fly camera keeps of its own. A scene reload builds new entities,
+     * and rebind() then writes the flown pose onto the new camera rather than
+     * throwing a person back to where the file says. Losing your viewpoint
+     * every time you save a script is not a hot reload anybody wants.
+     */
+    struct CameraBinding {
+        entt::entity entity = entt::null;
+        engine::editor::FlyCamera fly;
+        /**
+         * True once the pose came from a camera entity, or was flown from one.
+         *
+         * The fallback pose is not one of those. Without this, a first scene
+         * that carries no camera would seed the fallback, and the next reload
+         * that did carry one would take that hard-coded pose for a flown one
+         * and write it over the authored camera. Nobody flew it, and the
+         * authored viewpoint would be gone with no report.
+         */
+        bool from_entity = false;
+        /// From --exposure. Zero leaves the scene's own exposure alone.
+        float exposure_override = 0.0F;
+    };
 
     /**
-     * Binds the runtime's own actions.
+     * Points the binding at the camera of this world.
      *
-     * The camera actions alone. The throw and the reset belong to the game, and
-     * `sandbox::bind_actions` binds those on the input the fixed step reads.
-     * Two applications run this game now, so one copy of the game's table is
-     * what keeps a key doing one thing.
+     * Call it once at startup and again after anything replaces the entities.
+     *
+     * @param binding The binding to point.
+     * @param world The world to search.
      */
-    void bind_actions(engine::platform::Input& input) {
-        using engine::platform::Key;
-        using engine::platform::MouseButton;
+    void bind_camera(CameraBinding& binding, engine::scene::World& world) {
+        binding.entity = engine::scene::primary_camera(world);
 
-        input.bind(action::kForward, Key::W);
-        input.bind(action::kBack, Key::S);
-        input.bind(action::kLeft, Key::A);
-        input.bind(action::kRight, Key::D);
-        input.bind(action::kUp, Key::E);
-        input.bind(action::kDown, Key::Q);
-        input.bind(action::kSprint, Key::LeftShift);
-        input.bind(action::kSprint, Key::RightShift);
-        input.bind(action::kLook, MouseButton::Right);
-    }
-
-    /**
-     * Moves and turns the camera from the keyboard and the mouse.
-     *
-     * The right mouse button holds the look. While it is down the pointer is
-     * captured, so a drag never runs out of screen.
-     *
-     * ImGui gets first refusal on both devices, so typing in a field does not
-     * fly the camera away. That gate is applied in platform::sample() now, so
-     * this function sees a frame with the taken parts already cleared.
-     */
-    void update_camera(const engine::platform::Window& window,
-                       const engine::platform::Input& input, ViewSettings& settings,
-                       float delta_seconds) {
-        const bool looking = input.held(action::kLook);
-
-        // The pointer stays put while the look is held, so the drag has no edge.
-        engine::platform::set_relative_mouse(window, looking);
-
-        if (looking) {
-            const engine::Vec2 delta = input.mouse_delta();
-            settings.camera_yaw -= delta.x * settings.look_sensitivity;
-            settings.camera_pitch -= delta.y * settings.look_sensitivity;
-            // Straight up would make the forward vector and world up parallel,
-            // and lookAt has no basis to build from a pair like that.
-            settings.camera_pitch = std::clamp(settings.camera_pitch, kLowestPitch, kHighestPitch);
-            settings.camera_yaw = std::remainder(settings.camera_yaw, kFullTurnDegrees);
-        }
-
-        const engine::Vec3 forward = camera_forward(settings);
-        const engine::Vec3 right = glm::normalize(glm::cross(forward, engine::world_up));
-
-        engine::Vec3 wanted{ 0.0F, 0.0F, 0.0F };
-        if (input.held(action::kForward)) {
-            wanted += forward;
-        }
-        if (input.held(action::kBack)) {
-            wanted -= forward;
-        }
-        if (input.held(action::kRight)) {
-            wanted += right;
-        }
-        if (input.held(action::kLeft)) {
-            wanted -= right;
-        }
-        if (input.held(action::kUp)) {
-            wanted += engine::world_up;
-        }
-        if (input.held(action::kDown)) {
-            wanted -= engine::world_up;
-        }
-
-        if (glm::length(wanted) < kShortestMove) {
+        if (binding.entity == entt::null) {
+            if (!binding.from_entity) {
+                const float speed = binding.fly.move_speed;
+                const float sensitivity = binding.fly.look_sensitivity;
+                binding.fly = engine::editor::fallback_fly_camera();
+                binding.fly.move_speed = speed;
+                binding.fly.look_sensitivity = sensitivity;
+            }
+            ENGINE_LOG_WARN("The scene carries no Camera, so the runtime draws from its own "
+                            "fallback view. Add a Camera component to an entity.");
             return;
         }
 
-        const float speed =
-            settings.move_speed * (input.held(action::kSprint) ? kSprintFactor : 1.0F);
-        settings.camera_position += glm::normalize(wanted) * speed * delta_seconds;
+        if (binding.from_entity) {
+            // The world is new and the person is not. Put them back where they
+            // were flying rather than where the file says.
+            world.set_local(binding.entity, engine::editor::fly_transform(binding.fly));
+        } else {
+            // Including the case where the last scene had no camera at all. The
+            // fallback pose is nobody's viewpoint, so an authored one wins.
+            engine::editor::seed_fly_camera(binding.fly, world.local(binding.entity));
+            binding.from_entity = true;
+        }
+
+        if (binding.exposure_override > 0.0F) {
+            // A reload reads the authored exposure back, so the override is
+            // applied again rather than once at startup.
+            world.registry().get<engine::scene::Camera>(binding.entity).exposure =
+                binding.exposure_override;
+        }
     }
 
-    /// The aspect ratio of an image, for engine::editor::view_projection().
+    /**
+     * The exposure the frame tonemaps with.
+     *
+     * A scene with no camera honours --exposure too. A capture run asked for
+     * that number and there is no component to write it to, so dropping it
+     * would make the flag depend on whether the scene carried a camera.
+     *
+     * @param world The world the camera entity belongs to.
+     * @param binding The camera, and the override the command line asked for.
+     * @return The scale the tonemap applies before its curve.
+     */
+    [[nodiscard]] float camera_exposure(const engine::scene::World& world,
+                                        const CameraBinding& binding) {
+        if (binding.entity == entt::null) {
+            return binding.exposure_override > 0.0F ? binding.exposure_override : 1.0F;
+        }
+        return world.registry().get<const engine::scene::Camera>(binding.entity).exposure;
+    }
+
+    /**
+     * Drops a camera entity that no longer exists, and finds another.
+     *
+     * A script can destroy any entity, the camera included, and a destroyed one
+     * leaves a handle that names nothing. Reading a component off it asserts in
+     * a build with assertions and reads freed storage in a release build.
+     *
+     * This costs one validity test for each frame, and it does the search again
+     * only on the frame where the entity went away.
+     *
+     * @param binding The binding to check.
+     * @param world The world the entity belonged to.
+     */
+    void keep_camera_live(CameraBinding& binding, engine::scene::World& world) {
+        if (binding.entity != entt::null && !world.registry().valid(binding.entity)) {
+            ENGINE_LOG_WARN("The camera entity was destroyed while the game ran.");
+            // The camera somebody was flying has gone, so whatever is found
+            // next is taken as it was authored rather than dragged to where the
+            // dead one stood. This is not the reload case, where keeping the
+            // viewpoint is the whole point.
+            binding.from_entity = false;
+            bind_camera(binding, world);
+        }
+    }
+
+    /// The aspect ratio of an image, for the camera matrix.
     /// A zero height reads as square rather than dividing by zero.
     [[nodiscard]] float aspect_ratio(engine::gfx::Extent2D extent) {
         return extent.height == 0 ? 1.0F
@@ -723,6 +738,8 @@ namespace {
         engine::render::DebugLinePass* debug_lines = nullptr;
         /// The entity the inspector edits, or entt::null for none.
         entt::entity* selected = nullptr;
+        /// The camera the frame draws through, or entt::null for the fallback.
+        const CameraBinding* camera = nullptr;
         /// The cooked game content directory, which holds the scene and the prefabs.
         std::filesystem::path content;
         /// The scene a person edits, or empty when no source tree is there.
@@ -792,11 +809,24 @@ namespace {
         // info.extent, not the requested one. The device can settle on a
         // different size, and the cluster grid has to agree with the fragment
         // shader about which cell a pixel is in.
-        const engine::Mat4 clip_from_world =
-            engine::editor::view_projection(settings, aspect_ratio(info.extent));
+        const CameraBinding& camera = *context.camera;
+        engine::Mat4 clip_from_world{ 1.0F };
+        engine::Vec3 camera_position{ 0.0F, 0.0F, 0.0F };
+        if (camera.entity == entt::null) {
+            clip_from_world = engine::editor::fly_clip_from_world(
+                camera.fly, aspect_ratio(info.extent), engine::editor::kFallbackFov,
+                engine::kDefaultNearPlane);
+            camera_position = camera.fly.position;
+        } else {
+            clip_from_world =
+                engine::scene::clip_from_world(world, camera.entity, aspect_ratio(info.extent));
+            engine::Vec3 forward{ 0.0F, 0.0F, -1.0F };
+            engine::scene::camera_pose(world, camera.entity, camera_position, forward);
+        }
+
         const engine::render::SceneView view{
             .clip_from_world = clip_from_world,
-            .camera_position = settings.camera_position,
+            .camera_position = camera_position,
             .clear_color = { settings.clear_color.r, settings.clear_color.g,
                              settings.clear_color.b, 1.0F },
             .extent = info.extent,
@@ -815,7 +845,7 @@ namespace {
         // neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
-        context.scene->draw_tonemap(info.commands, settings.exposure);
+        context.scene->draw_tonemap(info.commands, camera_exposure(world, camera));
 
         // M7.5. The physics wireframe, after the curve so the color Box3D chose
         // is the color on screen, and under the UI so a panel is never hidden
@@ -1042,7 +1072,8 @@ namespace {
      * flight before it frees anything, which cannot happen inside one.
      */
     void apply_hot_reload(Runtime& runtime, const FrameContext& context,
-                          engine::scene::World& world, engine::play::Session& session) {
+                          engine::scene::World& world, engine::play::Session& session,
+                          CameraBinding& camera) {
         std::vector<engine::assets::AssetChange> changed;
 
         // The engine tree holds the two shaders and the split sum lookup table.
@@ -1112,11 +1143,15 @@ namespace {
             // The bodies of the scene that just went away, so nothing steps a
             // body whose entity no longer exists.
             session.build(world);
+            bind_camera(camera, world);
             return;
         }
         // The entities are new, so every body is stale. build() throws the old
         // ones away and reads the scene again.
         session.build(world);
+        // The entities are new, so the camera entity is too. This also puts the
+        // person back where they were flying.
+        bind_camera(camera, world);
         ENGINE_LOG_INFO("The scene was read again. The world holds {} entities.", world.size());
     }
 
@@ -1145,7 +1180,7 @@ namespace {
         // Bound whether or not a window opened. An offscreen run reads every
         // action as false, and binding costs nothing, so the two paths stay the
         // same shape.
-        bind_actions(runtime.input);
+        engine::editor::bind_fly_actions(runtime.input);
 
         const engine::gfx::DeviceDesc device_desc{
             .window = options.offscreen ? nullptr : runtime.window.native(),
@@ -1374,6 +1409,7 @@ namespace {
     /// @param options The command line.
     /// @param world The scene a reload rebuilds.
     /// @param session The game a reload rebuilds the bodies and the scripts of.
+    /// @param camera The camera binding a reload points at the new entities.
     /// @param last_extent The size the swapchain was built for. A rebuild
     ///                    replaces it.
     /// @param last_frame The time the last frame ran. A wait moves it, so the
@@ -1381,7 +1417,7 @@ namespace {
     /// @return What the caller should do with this frame.
     FrameStart begin_frame(Runtime& runtime, const FrameContext& context, const Options& options,
                            engine::scene::World& world, engine::play::Session& session,
-                           engine::gfx::Extent2D& last_extent,
+                           CameraBinding& camera, engine::gfx::Extent2D& last_extent,
                            std::chrono::steady_clock::time_point& last_frame) {
         if (!options.offscreen && runtime.window.minimized()) {
             // poll() does not block, so without this the loop pins one core
@@ -1393,7 +1429,7 @@ namespace {
 
         // Between frames, because freeing a resource waits for the frames
         // in flight and a frame cannot wait for itself.
-        apply_hot_reload(runtime, context, world, session);
+        apply_hot_reload(runtime, context, world, session, camera);
 
         // Offscreen the size is fixed for the whole run, which is the point of
         // it. Nothing resizes, so nothing rebuilds. The window reports its new
@@ -1503,10 +1539,39 @@ namespace {
         session.feed_input(state);
     }
 
+    /**
+     * Flies the scene camera for one frame.
+     *
+     * The panel tunes how fast a person flies, and the camera itself is an
+     * entity in the scene since M9.5a. So the speed comes from the settings and
+     * the pose goes back to the world.
+     *
+     * A world with no camera still flies: the fallback view moves the same way,
+     * and there is simply nothing to write it to.
+     *
+     * @param runtime The window to capture the pointer in, and the input.
+     * @param settings Where the speed and the sensitivity are kept.
+     * @param camera The binding to move.
+     * @param world The world to write the new pose into.
+     * @param delta_seconds How much wall time this frame took.
+     */
+    void fly_camera(Runtime& runtime, const ViewSettings& settings, CameraBinding& camera,
+                    engine::scene::World& world, float delta_seconds) {
+        camera.fly.move_speed = settings.move_speed;
+        camera.fly.look_sensitivity = settings.look_sensitivity;
+
+        const bool moved = engine::editor::update_fly_camera(camera.fly, runtime.window,
+                                                             runtime.input, delta_seconds);
+        if (moved && camera.entity != entt::null) {
+            world.set_local(camera.entity, engine::editor::fly_transform(camera.fly));
+        }
+    }
+
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
-                    engine::scene::World& world, engine::play::Session& session) {
+                    engine::scene::World& world, engine::play::Session& session,
+                    CameraBinding& camera) {
         // The settings own the rate. This reads them here and again each frame,
         // because the inspector can move either one while the program runs.
         session.set_rate_hz(settings.physics_hz);
@@ -1540,7 +1605,7 @@ namespace {
             frame_arena.reset();
 
             const FrameStart start =
-                begin_frame(runtime, context, options, world, session, last_extent,
+                begin_frame(runtime, context, options, world, session, camera, last_extent,
                             last_frame);
             if (start == FrameStart::Failed) {
                 return false;
@@ -1557,7 +1622,7 @@ namespace {
             last_frame = now;
 
             update_input(runtime, context, options, session, frame);
-            update_camera(runtime.window, runtime.input, settings, delta);
+            fly_camera(runtime, settings, camera, world, delta);
 
             // The game and the solver both run on the fixed step now, so this
             // is one call rather than two. The frame composes the matrices and
@@ -1571,8 +1636,20 @@ namespace {
             session.set_max_steps(settings.max_physics_steps);
 
             const auto step_started = std::chrono::steady_clock::now();
-            session.advance(world, engine::play::View{ .position = settings.camera_position, .forward = camera_forward(settings) },
-                            delta);
+            // The game plays through the scene camera, so a script that acts
+            // along the line of sight reads that one. Before M9.5a this was the
+            // application's own view, which meant the throw followed whoever
+            // was flying rather than the camera the level ships with.
+            engine::play::View view{ .position = camera.fly.position,
+                                     .forward = engine::editor::fly_forward(camera.fly) };
+            if (camera.entity != entt::null) {
+                engine::scene::camera_pose(world, camera.entity, view.position, view.forward);
+            }
+            session.advance(world, view, delta);
+
+            // After the step, because that is where a script can destroy an
+            // entity, and before anything below reads the camera.
+            keep_camera_live(camera, world);
             physics_stats.add(std::chrono::duration<double, std::milli>(
                                   std::chrono::steady_clock::now() - step_started)
                                   .count());
@@ -1680,9 +1757,11 @@ int main(int argc, char** argv) {
         settings.physics_hz = options.physics_hz;
         ENGINE_LOG_INFO("Physics steps at {} Hz, from --physics-hz.", settings.physics_hz);
     }
-    if (options.exposure > 0.0F) {
-        settings.exposure = options.exposure;
-    }
+    // Held rather than applied, because the camera it belongs to is in a scene
+    // that has not loaded yet, and because a reload reads the authored exposure
+    // back over it. bind_camera applies it both times.
+    CameraBinding camera;
+    camera.exposure_override = options.exposure;
 
     // The engine registers what it defines, then the game registers what it
     // defines. A scene loaded before this loses every component nobody claimed.
@@ -1794,11 +1873,16 @@ int main(int argc, char** argv) {
         .session = &session,
         .debug_lines = &runtime.debug_lines,
         .selected = &selected,
+        .camera = &camera,
         .content = content,
         .source_scene = source.empty() ? std::filesystem::path{} : source / sandbox::kSceneFile,
     };
 
-    const bool ok = run_frames(runtime, context, options, frame_arena, settings, world, session);
+    // After the world loads, because the camera is an entity in it now.
+    bind_camera(camera, world);
+
+    const bool ok =
+        run_frames(runtime, context, options, frame_arena, settings, world, session, camera);
 
     stop(runtime);
     engine::jobs::shutdown();

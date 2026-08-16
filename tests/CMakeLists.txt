@@ -192,6 +192,15 @@ endif()
 
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
+# M9.5a. The camera the scene plays through, and the fly camera that steers one.
+# Neither opens a device, so this runs anywhere.
+add_executable(test_camera test_camera.cpp)
+target_link_libraries(test_camera PRIVATE engine::core)
+engine_set_warnings(test_camera)
+engine_enable_clang_tidy(test_camera)
+
+add_test(NAME camera COMMAND test_camera)
+
 # M9.4. Play-in-editor. This links the game, because the restore has to survive
 # what a real scene does: bodies that fall and scripts that create entities.
 add_executable(test_editor test_editor.cpp)

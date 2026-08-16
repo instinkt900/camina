@@ -31,10 +31,17 @@ namespace engine::editor {
     inline constexpr const char* kViewSettingsFile = "view.json";
 
     /**
-     * @brief The camera, the exposure, and the simulation rate of one view.
+     * @brief How fast a view flies, and the simulation rate it runs at.
      *
      * It holds how a program looks at the world and never the world itself.
      * The entities live in a scene::World that the game loads.
+     *
+     * **The camera is not here any more.** M9.5a made it `scene::Camera`, a
+     * component on an entity, so a level carries its own viewpoint and can be
+     * shipped with it. What is left is the speed a person flies at, which
+     * belongs to the person, and the rate the simulation steps at.
+     * `editor::FlyCamera` in `editor/fly_camera.h` is what these two numbers
+     * drive.
      *
      * @warning An offscreen run with no window reads this as well, so nothing
      * here may depend on ImGui or on a window existing.
@@ -43,26 +50,8 @@ namespace engine::editor {
         std::string name = "sandbox view";      ///< Saved with the settings.
         Vec3 clear_color{ 0.25F, 0.25F, 0.3F }; ///< Linear, not sRGB.
 
-        /// @brief Where the camera stands. Saved, so a run opens where the last one stopped.
-        Vec3 camera_position{ 0.0F, 2.8F, 6.0F };
-        /// @brief Degrees around +Y. Zero looks down -Z, which is forward per DESIGN.md section 3.
-        float camera_yaw = 0.0F;
-        /// @brief Degrees up from the horizon. Clamped, so the camera never rolls over the top.
-        float camera_pitch = -8.0F;
-
-        float fov_degrees = 60.0F;      ///< Vertical field of view.
         float move_speed = 6.0F;        ///< Meters each second.
         float look_sensitivity = 0.12F; ///< Degrees for each mouse count.
-
-        /**
-         * @brief A linear scale on the scene before the ACES curve. One is neutral.
-         *
-         * It lives here rather than on the camera because it is a property of
-         * the view and this struct is what the view already is. A
-         * `scene::Camera` field is where it belongs once a scene carries more
-         * than one camera, which nothing does yet.
-         */
-        float exposure = 1.0F;
 
         /**
          * @brief How many physics steps make one second.
@@ -93,50 +82,6 @@ namespace engine::editor {
         std::uint64_t frames_drawn = 0; ///< Read only, and never saved.
     };
 
-    /**
-     * @brief Which way the camera looks, from its yaw and its pitch.
-     *
-     * A yaw of zero looks down -Z, which DESIGN.md section 3 calls forward.
-     * Pitch lifts from the horizon.
-     *
-     * @param settings The view to read.
-     * @return A unit vector in world space.
-     */
-    [[nodiscard]] inline Vec3 camera_forward(const ViewSettings& settings) {
-        const float yaw = glm::radians(settings.camera_yaw);
-        const float pitch = glm::radians(settings.camera_pitch);
-        const float flat = std::cos(pitch);
-        return glm::normalize(
-            Vec3{ -flat * std::sin(yaw), std::sin(pitch), -flat * std::cos(yaw) });
-    }
-
-    /**
-     * @brief The camera of this view, as clip space from world space.
-     *
-     * A model matrix is not part of this: each entity supplies its own, and
-     * scene::World has already composed it. Reverse-Z means the near plane maps
-     * to depth 1, and perspective_reverse_z already negates the Y row for
-     * Vulkan clip space.
-     *
-     * It takes the aspect ratio rather than a size, because the two
-     * applications measure that from different things. The runtime uses the
-     * swapchain and the editor uses the panel the scene draws into.
-     *
-     * @param settings The view to read.
-     * @param aspect Width divided by height of the image the scene renders
-     * into. A value at or below zero is refused with 1, which is square.
-     * @return The matrix the passes take as the camera.
-     */
-    [[nodiscard]] inline Mat4 view_projection(const ViewSettings& settings, float aspect) {
-        const Mat4 projection = perspective_reverse_z(glm::radians(settings.fov_degrees),
-                                                      aspect > 0.0F ? aspect : 1.0F,
-                                                      kDefaultNearPlane);
-        const Mat4 view = glm::lookAt(settings.camera_position,
-                                      settings.camera_position + camera_forward(settings),
-                                      world_up);
-        return projection * view;
-    }
-
 } // namespace engine::editor
 
 // The numbers in a Range are the description. Naming each slider bound would
@@ -157,21 +102,10 @@ struct engine::reflect::Describe<engine::editor::ViewSettings> {
             ENGINE_FIELD(ViewSettings, name, Tooltip{ "Saved with the view settings" }),
             ENGINE_FIELD(ViewSettings, clear_color, Range{ 0.0, 1.0, 0.01 },
                          Tooltip{ "Linear, not sRGB" }),
-            ENGINE_FIELD(ViewSettings, camera_position, Range{ -100.0, 100.0, 0.05 },
-                         Category{ "Camera" },
-                         Tooltip{ "Meters. Hold the right mouse button and use WASD" }),
-            ENGINE_FIELD(ViewSettings, camera_yaw, Range{ -180.0, 180.0, 0.5 },
-                         Category{ "Camera" }, Tooltip{ "Degrees around up. Zero looks down -Z" }),
-            ENGINE_FIELD(ViewSettings, camera_pitch, Range{ -89.0, 89.0, 0.5 },
-                         Category{ "Camera" }, Tooltip{ "Degrees above the horizon" }),
-            ENGINE_FIELD(ViewSettings, fov_degrees, Range{ 20.0, 120.0, 0.5 },
-                         Category{ "Camera" }),
             ENGINE_FIELD(ViewSettings, move_speed, Range{ 0.5, 40.0, 0.1 }, Category{ "Camera" },
                          Tooltip{ "Meters each second. Hold shift to go faster" }),
             ENGINE_FIELD(ViewSettings, look_sensitivity, Range{ 0.01, 1.0, 0.01 },
                          Category{ "Camera" }, Tooltip{ "Degrees for each mouse count" }),
-            ENGINE_FIELD(ViewSettings, exposure, Range{ 0.05, 8.0, 0.01 },
-                         Tooltip{ "Scales the scene before the ACES curve. One is neutral" }),
             // Live, so a person can drag the rate down and watch the blend hold
             // the motion together. That is the fastest way to see what the
             // interpolation is for.

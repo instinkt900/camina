@@ -85,13 +85,13 @@ namespace {
         check(registry.find("Goal") != nullptr, "and so is the Goal the puzzle keeps its win on");
 
         // The engine never names a game type. The game joins the same registry,
-        // and so do physics and script. Six built in, three physics, the game's
-        // own Spin and Goal, and the one ScriptComponent when Lua is in.
+        // and so do physics and script. Seven built in, three physics, the
+        // game's own Spin and Goal, and the one ScriptComponent when Lua is in.
         const sc::ComponentRegistry full = make_registry();
 #if defined(ENGINE_WITH_LUA)
-        constexpr std::size_t kExpected = 12;
+        constexpr std::size_t kExpected = 13;
 #else
-        constexpr std::size_t kExpected = 11;
+        constexpr std::size_t kExpected = 12;
 #endif
         check(full.size() == kExpected, "every subsystem and the game share one registry");
     }
@@ -272,7 +272,8 @@ namespace {
         //
         // The goal volume is the M8.4 trigger. The M7.4 crate falls through it,
         // so the sandbox exercises an overlap with nobody touching a key.
-        check(world.size() == 42, "the scene holds forty two entities");
+        // Forty three since M9.5a, which added the camera the game plays through.
+        check(world.size() == 43, "the scene holds forty three entities");
 
         const std::vector<std::string> found = names(world);
         check(holds(found, "crate"), "a crate that took the prefab name is there");
