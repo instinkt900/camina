@@ -725,6 +725,16 @@ gh api repos/<owner>/<repo>/issues/<N>/comments  # top-level, where the walkthro
 **An empty result means "not yet", never "clear".** Say that the review has not arrived.
 Never treat it as a pass.
 
+**CodeRabbit does not review this repository on its own.** It posts a top-level comment
+saying the review is available on request, because it asks for a manual trigger on a
+repository with fewer than 10 stars. So a pull request here normally gets no review at
+all, and that is the expected state rather than a fault.
+
+Read that comment for what it is and carry on. **Do not comment `@coderabbitai review`
+without being asked.** Triggering it writes a public comment on the user's repository,
+and whether an automated review is worth having on a given pull request is their call.
+Say in one line that no review will run unless they ask for one.
+
 **A rate limit ends the wait.** CodeRabbit posts its own limit as a top-level comment, with
 a reset time. When it does, stop the monitor, say that the automated review will not run
 for this pull request, and carry on. Do not wait for the reset, and do not poll for it.
