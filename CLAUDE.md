@@ -558,6 +558,24 @@ session before it reads the world back, because writing a transform onto a live 
 body does nothing (#284). And both ends of a session replace every entity, so the selection
 is dropped at each one: EnTT hands the same numbers out again.
 
+**M9.5a moved the camera into the scene.** `scene::Camera` is a reflected component, the
+pose is the entity's transform, and `scene::primary_camera` picks the one a game plays
+through. `editor::ViewSettings` keeps only the fly speed and the simulation rate, and
+`view.json` no longer carries a camera at all. The sandbox scene carries a camera entity,
+and both applications draw through it.
+
+**The camera choice is by entity, not by the order EnTT hands them over.** A view iterates
+a pool, and that order is neither creation order nor stable across a component being added
+or removed. A scene file builds entities in the order it lists them, so the smallest entity
+is the first camera somebody wrote. A test with two primary cameras caught this.
+
+**That change moved the picture by 133 pixels of 921,600, by at most 2 of 255.** The view
+matrix is the inverse of the world matrix now rather than a `lookAt` built from a yaw and a
+pitch, and those two round differently. Every differing pixel is on a geometry edge. A wrong
+pose moves the whole frame, so this is the shape of a rounding change rather than a mistake.
+Measure a later camera change against `--offscreen --frames 120` and expect byte equality
+from here on.
+
 **The game's key bindings are in `sandbox::bind_actions` now**, not in the runtime's
 `main.cpp`. Two applications run this game, and two copies of the table would let one key do
 two different things. The camera bindings stay with whichever application flies a camera.

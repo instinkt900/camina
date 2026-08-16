@@ -14,6 +14,8 @@
 #include "assets/content.h"
 #include "core/log.h"
 #include "core/version.h"
+#include "editor/fly_camera.h"
+#include "editor/fly_camera.h"
 #include "editor/panels.h"
 #include "editor/play_mode.h"
 #include "editor/view_settings.h"
@@ -29,7 +31,11 @@
 #include "sandbox/game.h"
 #include "core/jobs.h"
 #include "reflect/json.h"
+#include "scene/camera.h"
+#include "scene/camera.h"
 #include "scene/component_registry.h"
+#include "scene/components.h"
+#include "scene/components.h"
 #include "scene/world.h"
 #if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
@@ -209,6 +215,12 @@ namespace {
         engine::editor::ViewSettings view;
         /// What the inspector shows, or entt::null for nothing.
         entt::entity selected = entt::null;
+        /// The camera the scene is drawn through, or entt::null for none.
+        /// M9.5a moved it into the scene, so it is an entity rather than a
+        /// struct. M9.5b gives the editor a free view of its own.
+        entt::entity camera = entt::null;
+        /// What the viewport draws through when the scene carries no camera.
+        engine::editor::FlyCamera fallback_camera;
         /// M9.4. The play session, and the authored world it goes back to.
         engine::editor::PlayMode play;
         /// Whether the Viewport panel held the focus on the last frame. A
@@ -248,7 +260,35 @@ namespace {
         return extent;
     }
 
-    /// The aspect ratio of an image, for engine::editor::view_projection().
+    /**
+     * Where the camera goes when a scene carries none.
+     *
+     * The editor opens on an empty world before anything is loaded, and a
+     * person may open a scene that has no camera in it. Both draw from here.
+     */
+    constexpr engine::Vec3 kFallbackCameraPosition{ 0.0F, 2.8F, 6.0F };
+    constexpr float kFallbackCameraPitch = -8.0F;
+
+    /// The vertical field of view a fallback camera uses.
+    constexpr float kFallbackFov = 60.0F;
+
+    /**
+     * Points the editor at the camera of its world.
+     *
+     * Call it after anything replaces the entities: the first load, and the
+     * stop of a play session, which reads the world back from a snapshot.
+     *
+     * @param editor Everything the program owns.
+     */
+    void bind_camera(Editor& editor) {
+        editor.camera = engine::scene::primary_camera(editor.world);
+        if (editor.camera == entt::null) {
+            editor.fallback_camera.position = kFallbackCameraPosition;
+            editor.fallback_camera.pitch = kFallbackCameraPitch;
+        }
+    }
+
+    /// The aspect ratio of an image, for the camera matrix.
     /// A zero height reads as square rather than dividing by zero.
     [[nodiscard]] float aspect_ratio(engine::gfx::Extent2D extent) {
         return extent.height == 0 ? 1.0F
@@ -464,6 +504,9 @@ namespace {
         case PlayRequest::Stop:
             editor.selected = entt::null;
             editor.play.stop(editor.world);
+            // The snapshot built new entities, so the camera of the world
+            // before the session is not the camera of the world after it.
+            bind_camera(editor);
             break;
         case PlayRequest::None:
             break;
@@ -590,10 +633,23 @@ namespace {
         // so what a person sees in the panel is the whole picture and not a
         // stretched one.
         const engine::gfx::Extent2D scene_extent = editor.viewport.extent();
+        const float aspect = aspect_ratio(scene_extent);
+
+        engine::Mat4 clip_from_world = engine::editor::fly_clip_from_world(
+            editor.fallback_camera, aspect, kFallbackFov, engine::kDefaultNearPlane);
+        engine::Vec3 camera_position = editor.fallback_camera.position;
+        float exposure = 1.0F;
+        if (editor.camera != entt::null) {
+            clip_from_world = engine::scene::clip_from_world(editor.world, editor.camera, aspect);
+            engine::Vec3 forward{ 0.0F, 0.0F, -1.0F };
+            engine::scene::camera_pose(editor.world, editor.camera, camera_position, forward);
+            exposure =
+                editor.world.registry().get<const engine::scene::Camera>(editor.camera).exposure;
+        }
+
         const engine::render::SceneView view{
-            .clip_from_world =
-                engine::editor::view_projection(editor.view, aspect_ratio(scene_extent)),
-            .camera_position = editor.view.camera_position,
+            .clip_from_world = clip_from_world,
+            .camera_position = camera_position,
             .clear_color = { editor.view.clear_color.r, editor.view.clear_color.g,
                              editor.view.clear_color.b, 1.0F },
             .extent = scene_extent,
@@ -612,7 +668,7 @@ namespace {
         constexpr engine::gfx::ColorRGBA kSceneClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         if (engine::gfx::cmd_begin_color_rendering(info.commands, editor.viewport.target(),
                                                    kSceneClear, false)) {
-            editor.scene.draw_tonemap(info.commands, editor.view.exposure);
+            editor.scene.draw_tonemap(info.commands, exposure);
             engine::gfx::cmd_end_rendering(info.commands);
         }
 
@@ -795,11 +851,18 @@ namespace {
                 session->set_rate_hz(editor.view.physics_hz);
                 session->set_max_steps(editor.view.max_physics_steps);
             }
-            editor.play.advance(editor.world,
-                                engine::play::View{ .position = editor.view.camera_position,
-                                                    .forward = engine::editor::camera_forward(
-                                                        editor.view) },
-                                delta);
+            // The game plays through the scene camera, not through whatever the
+            // editor is looking at. That is the point of the split M9.5a made:
+            // a throw aimed along the editor view is a game the player cannot
+            // reproduce.
+            engine::play::View view{ .position = editor.fallback_camera.position,
+                                     .forward =
+                                         engine::editor::fly_forward(editor.fallback_camera) };
+            if (editor.camera != entt::null) {
+                engine::scene::camera_pose(editor.world, editor.camera, view.position,
+                                           view.forward);
+            }
+            editor.play.advance(editor.world, view, delta);
 
             // The frame after this one is the last, so this is where the
             // capture has to be asked for.
@@ -874,6 +937,7 @@ namespace {
         if (!source.empty()) {
             editor.source_scene = source / sandbox::kSceneFile;
         }
+        bind_camera(editor);
         ENGINE_LOG_INFO("Opened {} with {} entities.", content.string(), editor.world.size());
     }
 

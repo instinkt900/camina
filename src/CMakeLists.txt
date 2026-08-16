@@ -23,6 +23,7 @@ add_library(engine_core STATIC
     gfx/types.cpp
     reflect/registry.cpp
     reflect/inspector.cpp
+    editor/fly_camera.cpp
     editor/panels.cpp
     editor/play_mode.cpp
     editor/viewport.cpp
@@ -48,6 +49,7 @@ add_library(engine_core STATIC
     physics/simulation.cpp
     physics/world.cpp
     play/session.cpp
+    scene/camera.cpp
     scene/step_motion.cpp
     scene/world.cpp
     scene/component_registry.cpp

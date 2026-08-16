@@ -556,6 +556,33 @@
           }
         }
       }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "camera"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            2.8,
+            6.0
+          ],
+          "rotation": [
+            0.9975640502598242,
+            -0.0697564737441253,
+            0.0,
+            0.0
+          ]
+        },
+        "Camera": {
+          "fov_degrees": 60.0,
+          "near_plane": 0.1,
+          "exposure": 1.0,
+          "primary": true
+        }
+      }
     }
   ]
 }

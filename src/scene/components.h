@@ -133,6 +133,64 @@ namespace engine::scene {
         float range = kDefaultLightRange;
     };
 
+    /// @brief The vertical field of view a new Camera opens with, in degrees.
+    inline constexpr float kDefaultFovDegrees = 60.0F;
+
+    /**
+     * @brief The camera a scene plays through.
+     *
+     * The pose is the entity's world transform, so a camera is moved and turned
+     * by moving and turning its entity, the same way a light is. It looks down
+     * its own -Z and its up is its own +Y, which is what `DESIGN.md` §3 calls
+     * forward and up. This component carries what a transform cannot.
+     *
+     * **A scene owns its camera, and the editor does not.** Until M9.5 the only
+     * camera was `editor::ViewSettings` in a file beside the executable, which
+     * meant a level could not carry its own viewpoint. The editor flies a free
+     * view of its own now, and it never writes to this.
+     *
+     * A scale on a camera entity reaches the view matrix, because the view is
+     * the inverse of the world matrix. That is a strange thing to author and
+     * nothing refuses it.
+     *
+     * @warning Adding this to an entity does not make the game play through it.
+     * `primary_camera()` picks one, and `primary` is how a scene with several
+     * says which.
+     */
+    struct Camera {
+        /// @brief The vertical field of view, in degrees.
+        float fov_degrees = kDefaultFovDegrees;
+
+        /**
+         * @brief How near the near plane is, in meters.
+         *
+         * There is no far plane. The projection is an infinite reverse-Z one,
+         * which is what gives the depth range its precision. See
+         * `math/conventions.h`.
+         */
+        float near_plane = kDefaultNearPlane;
+
+        /**
+         * @brief A linear scale on the scene before the ACES curve. One is
+         *        neutral.
+         *
+         * It is on the camera because it is what that camera makes of the light
+         * it receives, and because a level has to be able to ship its own.
+         * `runtime --exposure` still overrides it for one run.
+         */
+        float exposure = 1.0F;
+
+        /**
+         * @brief Whether the game plays through this one.
+         *
+         * A scene with one camera needs no thought about this. A scene with
+         * several plays through the first one that has it set, and reports the
+         * choice, because silently picking one of several is how a person ends
+         * up debugging the wrong camera.
+         */
+        bool primary = true;
+    };
+
     /**
      * @brief The cubemap every surface in the scene reflects.
      *
@@ -154,6 +212,32 @@ namespace engine::scene {
     };
 
 } // namespace engine::scene
+
+// The numbers in a Range are the description, the same as every other component
+// below.
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+/// @brief Describes Camera for the inspector and for scene files.
+template <>
+struct engine::reflect::Describe<engine::scene::Camera> {
+    /// @brief The type name a scene file stores.
+    static constexpr const char* name = "Camera";
+
+    /// @brief Every field, in the order the inspector shows them.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        using engine::scene::Camera;
+        return std::make_tuple(
+            ENGINE_FIELD(Camera, fov_degrees, Range{ 20.0, 120.0, 0.5 },
+                         Tooltip{ "Vertical field of view, in degrees" }),
+            ENGINE_FIELD(Camera, near_plane, Range{ 0.01, 10.0, 0.01 },
+                         Tooltip{ "Meters. There is no far plane" }),
+            ENGINE_FIELD(Camera, exposure, Range{ 0.05, 8.0, 0.01 },
+                         Tooltip{ "Scales the scene before the ACES curve. One is neutral" }),
+            ENGINE_FIELD(Camera, primary,
+                         Tooltip{ "The game plays through the first camera that has this" }));
+    }
+};
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
 /// @brief Describes Name for the inspector and for scene files.
 template <>

@@ -352,7 +352,8 @@ engine/
     gfx/               PUBLIC render interface: handles, descs, command list
       vulkan/          the ONLY place vulkan.h is legal (rule 4.1)
     render/            render graph, PBR passes, materials, culling, content/
-    scene/             EnTT world, transform hierarchy, serialization, prefabs
+    scene/             EnTT world, transform hierarchy, serialization, prefabs,
+                       the camera a scene plays through
     physics/           box3d integration, the solver, debug draw
     script/            sol2 bindings, ScriptComponent, hot reload
     play/              the fixed step a game runs on: the clock, the solver,
@@ -405,6 +406,11 @@ the dockspace, the layout a person arranged is the one they get.
 scene is tonemapped into and the binding ImGui draws it through, and it names no ImGui
 type and no Vulkan type, the same way the panels do. §9 holds why the scene renders at
 the size of the panel and why the rebuild waits for the top of a frame.
+
+`editor::FlyCamera` is here as well, and it is the clearest case of what this directory
+means. It is a free-fly camera: two angles, a point, and the keys that move them. The
+runtime flies the scene camera with it and the editor flies its own view with it, so it
+belongs to neither application and to no scene.
 
 `editor::PlayMode` is here for the same reason. It is play-in-editor: a snapshot of the
 world, a `play::Session` over it, and the restore that puts the authored scene back. M9.4
@@ -1022,6 +1028,23 @@ seconds, which is the step count times the step length, rather than the wall clo
 is a function of how many steps have run and of nothing else. A replay that feeds the same
 input lands on the same values. M8.6 moved that logic into Lua and the rule went with it:
 `script::Host::update` takes the same simulated seconds.
+
+**The scene owns the camera, and `editor::ViewSettings` no longer does.** M9.5a made
+`scene::Camera` a reflected component. The pose is the entity's transform, so a camera is
+moved and turned the way a light is, and the component carries the field of view, the near
+plane, and the exposure. `scene::primary_camera` picks the one a game plays through.
+
+Two things follow that are worth writing down. **The choice is by entity, not by the order
+EnTT hands the cameras over**: a pool order is neither creation order nor stable, so a scene
+with two cameras would otherwise answer differently after any component was added anywhere.
+And **the view matrix is the inverse of the world matrix** rather than a `lookAt` built from
+two angles, which is what keeps a camera under a moving parent correct and what lets a
+camera carry roll.
+
+The picture moved by 133 pixels of 921,600 when this landed, by at most 2 of 255, all of it
+on geometry edges. That is the arithmetic changing and not the camera: a matrix inverse
+rounds differently from the `lookAt` the runtime built before, and the authored quaternion is
+a different route to the same pose. A wrong pose moves the whole frame rather than its edges.
 
 **`play::Session` is that whole step in one place**, which M9.4a moved out of
 `apps/runtime/main.cpp`. It owns the clock, the solver, the script host, the step input, and
@@ -2184,6 +2207,18 @@ compiles with `WITH_EDITOR` off and drops the editor code. See rule 4.3.
 
 Play-in-editor through world snapshot and restore, which M2 and M3 already provide.
 ImGuizmo. An asset browser, a hierarchy panel, and an inspector panel.
+
+**The scene owns the camera it plays through, and the editor owns a separate one.**
+`scene::Camera` is a reflected component, so a level carries its viewpoint the way it
+carries its lights, and a script that acts along the line of sight reads the camera the
+game plays through. The editor camera is a free-fly view that belongs to the person rather
+than to the scene, and it is saved beside `imgui.ini` rather than in the project.
+
+Both were one struct until M9.5: `editor::ViewSettings` held the only camera, both
+applications read it, and it lived in a file beside the executable. A level whose viewpoint
+lives there is not a level anybody can ship, which is what M9.8 asks for. The editor
+viewport keeps showing the editor camera while a session plays, so a person can fly around
+a running game.
 
 The editor runs the ImGui docking branch, which `conanfile.py` already pins for this
 reason. Panels dock and tab inside the main window, and a panel dragged out of it becomes
