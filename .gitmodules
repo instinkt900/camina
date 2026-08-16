@@ -4,3 +4,6 @@
 [submodule "third_party/box3d"]
 	path = third_party/box3d
 	url = https://github.com/erincatto/box3d
+[submodule "third_party/imguizmo"]
+	path = third_party/imguizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo

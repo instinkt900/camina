@@ -15,11 +15,16 @@ set_source_files_properties(../screenshot.cpp PROPERTIES
 # applications. The editor opens its own ImGui windows, so it needs the ImGui
 # headers as well as the engine.
 # stb is for the screenshot encoder alone.
+# imguizmo is the vendored submodule rather than a Conan package, for the reason
+# third_party/CMakeLists.txt and DESIGN.md section 5 give: every recipe on Conan
+# Center pins an ImGui this engine cannot take. It is linked here and nowhere
+# else, because the editor application is the only thing that draws a gizmo.
 target_link_libraries(editor PRIVATE
     engine::core
     camina::sandbox
     SDL3::SDL3
     imgui::imgui
+    imguizmo
     stb::stb
 )
 
