@@ -198,4 +198,42 @@ namespace engine::gfx {
         }
     }
 
+    ImGuiTextureId imgui_texture_id(Device* device, TextureHandle texture) {
+        if (!g_started || device == nullptr) {
+            ENGINE_LOG_ERROR("imgui_texture_id needs a device and a running overlay.");
+            return kInvalidImGuiTexture;
+        }
+
+        const TextureEntry* entry = vk::resolve_texture(*device, texture);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("imgui_texture_id received a stale or null handle.");
+            return kInvalidImGuiTexture;
+        }
+
+        // The view that covers the whole image, which is the one a sampler
+        // reads. A layer view is for rendering into one layer and ImGui draws
+        // the picture rather than a slice of it.
+        //
+        // The layout is what the image will be in when ImGui records, not what
+        // it is in now. The caller issues that barrier.
+        const VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(
+            entry->sampler, entry->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (set == VK_NULL_HANDLE) {
+            ENGINE_LOG_ERROR("The overlay has no descriptor left to bind a texture with. It "
+                             "holds {}, and the font is one of them.",
+                             kImGuiTextureSlots);
+            return kInvalidImGuiTexture;
+        }
+        // A VkDescriptorSet is already a 64-bit handle on every platform we
+        // build for, and ImGui itself stores it in an ImTextureID the same way.
+        return reinterpret_cast<ImGuiTextureId>(set);
+    }
+
+    void imgui_release_texture(ImGuiTextureId id) {
+        if (!g_started || id == kInvalidImGuiTexture) {
+            return;
+        }
+        ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(id));
+    }
+
 } // namespace engine::gfx

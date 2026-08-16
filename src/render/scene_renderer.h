@@ -72,6 +72,15 @@ namespace engine::render {
          * draws into rather than the size of the window.
          */
         gfx::Extent2D extent{};
+        /**
+         * @brief Where the tonemapped picture goes.
+         *
+         * A null handle writes the swapchain image, which is what a program
+         * that fills the window with the scene wants. An editor passes the
+         * image it shows in a panel, and then it calls issue_output_barriers()
+         * before anything samples that image.
+         */
+        gfx::TextureHandle output;
     };
 
     /**
@@ -187,6 +196,35 @@ namespace engine::render {
         void draw_tonemap(gfx::CommandList* commands, float exposure);
 
         /**
+         * @brief Issues the barriers a pass that samples the output needs.
+         *
+         * Only a caller that gave SceneView::output an image of its own needs
+         * this. It moves that image from a color target to a shader read, and
+         * the swapchain image to a color target, so an overlay can draw the
+         * picture and land in the frame.
+         *
+         * A frame that tonemapped straight into the swapchain has nothing to
+         * do here, and calling it does nothing.
+         *
+         * @param commands The open command list, outside a rendering scope.
+         *
+         * @warning Call this after draw_tonemap() and after the scope over the
+         * output image has closed. A barrier inside a rendering scope is
+         * invalid.
+         */
+        void issue_output_barriers(gfx::CommandList* commands);
+
+        /**
+         * @brief Forgets what state the output image was in.
+         *
+         * A caller owns that image and rebuilds it when its panel resizes. The
+         * replacement carries no history, so there is nothing for the next
+         * frame's first barrier to order against. Without this the graph would
+         * order the new image against what the old one was doing.
+         */
+        void reset_output_state();
+
+        /**
          * @brief What one pass cost on the GPU, for the frame before this one.
          *
          * @param pass Which pass to report. ScenePass::Count reads as zero.
@@ -211,13 +249,21 @@ namespace engine::render {
         [[nodiscard]] TonemapPass& tonemap() { return tonemap_; }
 
     private:
+        /// Which image each graph resource is, for the ones a frame does not own.
+        using GraphTextures = std::array<gfx::TextureHandle, kFrameResourceCount>;
+
         /**
          * Works out the barriers this frame needs, from what each pass declared.
          *
+         * @param output Where the tonemap writes, or a null handle for the
+         * swapchain image. A valid handle adds the pass that samples it.
          * @param out Receives the schedule.
          * @return False when the declarations were refused.
          */
-        [[nodiscard]] bool derive_frame_barriers(GraphSchedule& out);
+        [[nodiscard]] bool derive_frame_barriers(gfx::TextureHandle output, GraphSchedule& out);
+
+        /// Which image each resource is, for issue_pass_barriers().
+        [[nodiscard]] GraphTextures graph_textures() const;
 
         gfx::Device* device_ = nullptr;
         /// Renders the directional light's depth, which the mesh pass samples.
@@ -236,6 +282,17 @@ namespace engine::render {
          * barrier has to order against.
          */
         std::array<gfx::ResourceState, kFrameResourceCount> states_{};
+
+        /**
+         * The barriers of the frame being recorded.
+         *
+         * Held between draw_scene() and issue_output_barriers(), because the
+         * pass that samples the output has to wait for the caller to close its
+         * rendering scope. Empty for a frame that wrote the swapchain.
+         */
+        GraphSchedule schedule_;
+        /// Which image the tonemap wrote, or null for the swapchain image.
+        gfx::TextureHandle output_;
 
         /// GPU time for the last frame, one entry for each ScenePass.
         std::array<double, kScenePassCount> gpu_pass_ns_{};

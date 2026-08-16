@@ -14,7 +14,7 @@
 #include <cstdio>
 #include <vector>
 
-namespace runtime {
+namespace apps {
 
     namespace {
 
@@ -73,4 +73,4 @@ namespace runtime {
         return true;
     }
 
-} // namespace runtime
+} // namespace apps

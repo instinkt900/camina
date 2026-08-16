@@ -24,6 +24,8 @@
 
 #include "core/entt.h"
 #include "editor/view_settings.h"
+#include "gfx/imgui.h"
+#include "gfx/types.h"
 
 #include <entt/entity/fwd.hpp>
 
@@ -107,6 +109,31 @@ namespace engine::editor {
      * the user cannot close.
      */
     void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open = nullptr);
+
+    /**
+     * @brief Draws the rendered scene inside a panel.
+     *
+     * The picture fills the panel, so the camera aspect follows what the user
+     * dragged the edges to and nothing is stretched or letterboxed.
+     *
+     * The size it reports is what the panel wants, not what the picture is. A
+     * target cannot be rebuilt while a frame is recording, so the caller
+     * compares the two at the top of the next frame and rebuilds there. One
+     * frame of a dragged edge therefore shows the old picture stretched, which
+     * is the usual answer and is invisible at a normal frame rate.
+     *
+     * @param picture The image to draw, from gfx::imgui_texture_id().
+     * kInvalidImGuiTexture draws a message instead, which is what a panel shows
+     * before the first target is built.
+     * @param size The size of @p picture, so it draws at its own resolution.
+     * @param wanted Receives the size of the panel content area. Left untouched
+     * when the panel is closed or collapsed, so a hidden panel never asks for a
+     * target of zero.
+     * @param open Cleared when the user closes the panel. Pass null for a panel
+     * the user cannot close.
+     */
+    void draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
+                             gfx::Extent2D& wanted, bool* open = nullptr);
 
     /**
      * @brief Writes the world out as a source scene.

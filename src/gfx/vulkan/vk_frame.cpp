@@ -445,7 +445,7 @@ namespace engine::gfx {
     }
 
     bool cmd_begin_color_rendering(CommandList* commands, TextureHandle color_target,
-                                   const ColorRGBA& clear_color) {
+                                   const ColorRGBA& clear_color, bool attach_depth) {
         ENGINE_CHECK(commands != nullptr, "cmd_begin_color_rendering needs a command list.");
         Device& device = *commands->owner;
 
@@ -472,16 +472,22 @@ namespace engine::gfx {
         // The frame's own depth image, not one of the caller's. A scene pass
         // needs depth and there is only ever one, so nothing would be gained by
         // asking for it here. Reverse-Z clears to 0, the far plane.
+        //
+        // A pass that neither reads nor writes depth attaches none. Its
+        // pipeline then declares no depth format, and Vulkan compares the two
+        // at every draw, so attaching one anyway is an error rather than waste.
         VkRenderingAttachmentInfo depth{};
-        depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth.imageView = device.depth_view;
-        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depth.clearValue.depthStencil.depth = 0.0F;
+        if (attach_depth) {
+            depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            depth.imageView = device.depth_view;
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depth.clearValue.depthStencil.depth = 0.0F;
 
-        ENGINE_ASSERT(device.depth_view != VK_NULL_HANDLE,
-                      "A frame is open but the depth attachment is missing.");
+            ENGINE_ASSERT(device.depth_view != VK_NULL_HANDLE,
+                          "A frame is open but the depth attachment is missing.");
+        }
 
         VkRenderingInfo info{};
         info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -492,7 +498,7 @@ namespace engine::gfx {
         info.layerCount = 1;
         info.colorAttachmentCount = 1;
         info.pColorAttachments = &color;
-        info.pDepthAttachment = &depth;
+        info.pDepthAttachment = attach_depth ? &depth : nullptr;
 
         vkCmdBeginRendering(commands->buffer, &info);
 

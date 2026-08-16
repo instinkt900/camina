@@ -32,17 +32,18 @@ namespace engine::render {
         /**
          * @brief What the pass reads and writes, for the render graph.
          *
-         * It reads the scene color the mesh pass wrote and writes the swapchain
-         * image. It also writes the frame depth, which it does not draw with:
-         * the rendering scope attaches the depth image and clears it, and a
-         * declaration that left that out would be a write the graph never
-         * ordered. See issue #143.
+         * It reads the scene color the mesh pass wrote and writes whichever
+         * image the caller maps it down into. It touches no depth image, which
+         * is what #143 closed: the triangle covers every pixel and neither
+         * tests depth nor writes it.
          *
-         * The span points at storage with static lifetime.
+         * The spans point at storage with static lifetime.
          *
+         * @param target Where the picture goes. kFrameColor fills the window,
+         * and kViewportColor puts it in an image an editor shows in a panel.
          * @return The declaration.
          */
-        [[nodiscard]] static PassDesc declare();
+        [[nodiscard]] static PassDesc declare(ResourceId target = kFrameColor);
 
         /**
          * @brief Builds the target, the pipeline, and the set that binds them.

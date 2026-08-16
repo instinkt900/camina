@@ -250,6 +250,10 @@ namespace engine::gfx {
      * @param commands The command list from begin_frame().
      * @param color The image to render into, from create_color_target().
      * @param clear_color The linear color to clear to.
+     * @param attach_depth Whether to attach the frame depth image. A pass that
+     * neither reads nor writes depth passes false, and its pipeline then
+     * declares no depth format. The two have to agree, because Vulkan compares
+     * them at every draw.
      * @return True when the scope is open. False means the handle was null or
      * stale and no scope was opened.
      *
@@ -258,16 +262,22 @@ namespace engine::gfx {
      * invalid, so a caller that ignores the result turns a bad handle into
      * undefined behavior.
      *
-     * @warning @p color must already be in ResourceState::ColorTarget and the
-     * frame depth image in ResourceState::DepthTarget. The caller issues the
-     * barriers the render graph derived.
+     * @warning @p color must already be in ResourceState::ColorTarget, and the
+     * frame depth image in ResourceState::DepthTarget when @p attach_depth is
+     * true. The caller issues the barriers the render graph derived.
+
+     * @warning The render area is the size of @p color, and it has to fit
+     * inside every attachment. So a target larger than the window needs
+     * @p attach_depth false, because the frame depth image is the size of the
+     * window.
      *
      * @warning The pipeline that draws here must declare the same
      * ColorTargetFormat the target holds. Close the scope with
      * cmd_end_rendering().
      */
     [[nodiscard]] bool cmd_begin_color_rendering(CommandList* commands, TextureHandle color,
-                                                 const ColorRGBA& clear_color);
+                                                 const ColorRGBA& clear_color,
+                                                 bool attach_depth = true);
 
     /**
      * @brief Opens dynamic rendering into a depth image and no color image.

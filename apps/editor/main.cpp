@@ -7,20 +7,23 @@
 // read the scene, and docked the three panels out of src/editor/ around an
 // empty middle.
 //
-// That middle is empty on purpose. M9.3 draws the scene into it, and the
-// camera in the view panel is the camera it will use.
+// M9.3 fills that middle. The scene renders into an image of its own through
+// render::SceneRenderer, the same passes the runtime draws, and the Viewport
+// panel shows that image. The camera in the view panel is the camera it uses.
 
 #include "assets/content.h"
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/panels.h"
 #include "editor/view_settings.h"
+#include "editor/viewport.h"
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "physics/components.h"
 #include "platform/paths.h"
 #include "platform/window.h"
-#include "render/render_graph.h"
+#include "render/scene_renderer.h"
+#include "../screenshot.h"
 #include "sandbox/game.h"
 #include "reflect/json.h"
 #include "scene/component_registry.h"
@@ -34,13 +37,11 @@
 // layout, and every ImGui docking example uses it. See build_default_layout().
 #include <imgui_internal.h>
 
-#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <system_error>
-#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -66,8 +67,8 @@ namespace {
     /// How long to wait before polling again while the window is minimized.
     constexpr int kMinimizedSleepMs = 16;
 
-    /// The editor draws nothing behind the panels yet, so the frame clears to
-    /// one flat color. M9.3 puts the scene here.
+    /// What the frame clears to behind the panels. The scene has its own image
+    /// and its own clear color, so this shows through the gaps alone.
     constexpr engine::gfx::ColorRGBA kFrameClear{ 0.05F, 0.05F, 0.06F, 1.0F };
 
     /// What the command line asked for.
@@ -76,6 +77,8 @@ namespace {
         std::uint64_t frames = 0;
         /// The cooked content to open. Empty takes the game's own directory.
         std::string content;
+        /// Where to write the last frame as a PNG. Empty writes none.
+        std::string screenshot;
         bool validation = true;       ///< The Khronos validation layer.
         bool sync_validation = false; ///< The barrier checks on top of it.
         bool vsync = true;
@@ -85,6 +88,7 @@ namespace {
         ENGINE_LOG_INFO("Usage: editor [options]");
         ENGINE_LOG_INFO("  --content <dir>     Open this cooked content instead of the game's.");
         ENGINE_LOG_INFO("  --frames <n>        Stop after n frames. 0 runs until you quit.");
+        ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
         ENGINE_LOG_INFO("  --no-vsync          Present without waiting for the display.");
@@ -138,6 +142,8 @@ namespace {
                 }
             } else if (arg == "--content" && i + 1 < argc) {
                 out.content = argv[++i];
+            } else if (arg == "--screenshot" && i + 1 < argc) {
+                out.screenshot = argv[++i];
             } else {
                 ENGINE_LOG_CRITICAL("Unknown option: {}", arg);
                 print_usage();
@@ -153,6 +159,7 @@ namespace {
         bool world = true;
         bool inspector = true;
         bool view = true;
+        bool viewport = true;
         bool demo = false;
         bool about = false;
     };
@@ -165,16 +172,25 @@ namespace {
         /// copy, so this string has to live as long as the overlay does.
         std::string layout_path;
         bool overlay = false; ///< True once ImGui owns resources on the device.
-        /// What state each graph resource is in. Only the frame color is used
-        /// today, and the array is the length derive_barriers() asks for.
-        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
+
+        /// The engine's own cooked assets: the shaders and the split sum table.
+        engine::assets::Content engine_content;
+        /// The shadow, cull, mesh, and tonemap passes. The same ones the
+        /// runtime draws, which is what keeps the two pictures the same.
+        engine::render::SceneRenderer scene;
+        /// The image the scene is tonemapped into, and what the panel shows.
+        engine::editor::Viewport viewport;
+        /// The size the Viewport panel reported on the last frame. The target
+        /// follows it at the top of the next one, because an image cannot be
+        /// rebuilt while a frame is recording.
+        engine::gfx::Extent2D wanted_viewport{};
 
         /// The cooked content the scene reads. Open, or empty when there is none.
         engine::assets::Content content;
         /// The entities. Empty when no scene loaded, and the panels then say so.
         engine::scene::World world;
-        /// The camera and the exposure. Nothing draws the scene until M9.3, so
-        /// only the panel reads these today.
+        /// The camera and the exposure, which the panel edits and the scene
+        /// renders through.
         engine::editor::ViewSettings view;
         /// What the inspector shows, or entt::null for nothing.
         entt::entity selected = entt::null;
@@ -203,7 +219,31 @@ namespace {
                                       static_cast<std::uint32_t>(window.size().y) };
     }
 
+    /// What the device renders at, which is not always the size that was asked
+    /// for. A surface can refuse a size, and the viewport target is clamped to
+    /// this because the frame depth image is this size.
+    [[nodiscard]] engine::gfx::Extent2D device_extent(engine::gfx::Device* device) {
+        engine::gfx::Extent2D extent{};
+        (void)engine::gfx::capture_frame(device, nullptr, 0, &extent);
+        return extent;
+    }
+
+    /// The aspect ratio of an image, for engine::editor::view_projection().
+    /// A zero height reads as square rather than dividing by zero.
+    [[nodiscard]] float aspect_ratio(engine::gfx::Extent2D extent) {
+        return extent.height == 0 ? 1.0F
+                                  : static_cast<float>(extent.width) /
+                                        static_cast<float>(extent.height);
+    }
+
     [[nodiscard]] bool start(Editor& editor, const Options& options) {
+        // The engine content tree holds the shaders, so it opens before the
+        // device builds a pipeline out of them.
+        if (!editor.engine_content.open(engine::platform::cooked_content_root() / "engine")) {
+            ENGINE_LOG_CRITICAL("The engine content is missing. Build the cooker target.");
+            return false;
+        }
+
         const engine::platform::WindowDesc window_desc{ .title = kWindowTitle };
         if (!editor.window.create(window_desc)) {
             return false;
@@ -237,6 +277,22 @@ namespace {
         }
         editor.overlay = true;
 
+        // The scene passes, after the device. The image they tonemap into is
+        // the size the swapchain settled on rather than the size asked for.
+        const engine::gfx::Extent2D extent = device_extent(editor.device);
+        if (!editor.scene.create(editor.device, editor.engine_content, extent)) {
+            ENGINE_LOG_CRITICAL("The scene passes did not build, so nothing can draw.");
+            return false;
+        }
+
+        // After the overlay, because the binding the panel draws through comes
+        // out of the pool the overlay owns.
+        if (!editor.viewport.create(editor.device, extent, extent)) {
+            ENGINE_LOG_CRITICAL("The viewport target did not build.");
+            return false;
+        }
+        editor.wanted_viewport = editor.viewport.extent();
+
         // ImGui reads every event, and the window still acts on the ones it owns.
         editor.window.set_event_hook(
             [](const void* event, void* /*user*/) { engine::gfx::imgui_process_event(event); },
@@ -250,6 +306,10 @@ namespace {
             engine::gfx::device_wait_idle(editor.device);
         }
         editor.window.set_event_hook(nullptr, nullptr);
+        // Before the overlay goes, because the binding it holds is the
+        // overlay's to return.
+        editor.viewport.destroy();
+        editor.scene.destroy();
         if (editor.overlay) {
             engine::gfx::imgui_shutdown(editor.device);
         }
@@ -276,6 +336,7 @@ namespace {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("Viewport", nullptr, &panels.viewport);
             ImGui::MenuItem("World", nullptr, &panels.world);
             ImGui::MenuItem("Inspector", nullptr, &panels.inspector);
             ImGui::MenuItem("View settings", nullptr, &panels.view);
@@ -312,8 +373,7 @@ namespace {
      * as soon as the layout file holds one, so a person who moved a panel keeps
      * it there for every later run.
      *
-     * The middle is left empty on purpose. M9.3 draws the scene into that
-     * central node.
+     * The Viewport goes in the middle, which is what the two side splits leave.
      *
      * @param dockspace The dockspace to fill.
      */
@@ -349,6 +409,7 @@ namespace {
         ImGui::DockBuilderDockWindow("World", left_top);
         ImGui::DockBuilderDockWindow("View", left_bottom);
         ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Viewport", centre);
         ImGui::DockBuilderFinish(dockspace);
         ENGINE_LOG_INFO("No saved layout, so the editor built the default one.");
     }
@@ -358,8 +419,8 @@ namespace {
         draw_menu_bar(panels, running);
 
         // The whole work area is one dockspace, so a panel docks anywhere in
-        // the window. The central node passes through to what the frame drew
-        // behind it, which is the clear color today and the scene at M9.3.
+        // the window. The central node passes through to the clear color, which
+        // shows wherever no panel covers it.
         //
         // The id is ours rather than the one DockSpaceOverViewport picks, so
         // that the builder below can name the same node.
@@ -368,9 +429,17 @@ namespace {
         ImGui::DockSpaceOverViewport(dockspace, ImGui::GetMainViewport(),
                                      ImGuiDockNodeFlags_PassthruCentralNode);
 
-        // The same three panels the runtime overlay draws, from src/editor/.
-        // Nothing here places them: the dockspace does that, and the layout
-        // file remembers where the user put each one.
+        // The panels, from src/editor/. Nothing here places them: the
+        // dockspace does that, and the layout file remembers where the user put
+        // each one.
+        //
+        // The viewport first, because what it reports is what the next frame
+        // renders at, and the sooner that is known the shorter the mismatch.
+        if (panels.viewport) {
+            engine::editor::draw_viewport_panel(editor.viewport.picture(),
+                                                editor.viewport.extent(),
+                                                editor.wanted_viewport, &panels.viewport);
+        }
         if (panels.world) {
             engine::editor::draw_world_panel(editor.world, editor.selected, editor.source_scene,
                                              editor.content, &panels.world);
@@ -405,36 +474,18 @@ namespace {
     };
 
     /**
-     * Works out the barriers this frame needs.
+     * Records and presents one frame.
      *
-     * One pass, which writes the swapchain image. begin_frame() leaves that
-     * image in ResourceState::Undefined and the graph is what moves it, the
-     * same way the runtime does it. Going through the graph for one pass buys
-     * nothing today and keeps the shape M9.3 needs.
+     * @param editor Everything the program owns.
+     * @param panels Which panels are open.
+     * @param running Cleared when the user asked to stop.
+     * @param capture Whether to keep a copy of this frame, for --screenshot.
+     * The request has to go in before end_frame() presents, because after that
+     * the presentation engine owns the image.
+     * @return What the frame achieved.
      */
-    [[nodiscard]] bool derive_frame_barriers(
-        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states,
-        engine::render::GraphSchedule& out) {
-        const std::array writes{ engine::render::ResourceWrite{
-            engine::render::kFrameColor, engine::gfx::ResourceState::ColorTarget } };
-        const std::array passes{ engine::render::PassDesc{ .name = "editor overlay",
-                                                           .reads = {},
-                                                           .writes = writes } };
-
-        // A new image on almost every acquire, so it carries no state from the
-        // frame before.
-        states[engine::render::kFrameColor.index] = engine::gfx::ResourceState::Undefined;
-        if (!engine::render::derive_barriers(passes, states, out)) {
-            ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
-            return false;
-        }
-        for (std::size_t i = 0; i < states.size(); ++i) {
-            states[i] = out.final_states[i];
-        }
-        return true;
-    }
-
-    [[nodiscard]] FrameOutcome draw_frame(Editor& editor, Panels& panels, bool& running) {
+    [[nodiscard]] FrameOutcome draw_frame(Editor& editor, Panels& panels, bool& running,
+                                          bool capture) {
         engine::gfx::FrameInfo info;
         engine::gfx::Result result = engine::gfx::begin_frame(editor.device, &info);
         if (result == engine::gfx::Result::OutOfDate) {
@@ -451,25 +502,63 @@ namespace {
             return FrameOutcome::Failed;
         }
 
+        // Resets the timestamp pool and reads what the frame before it wrote. A
+        // pool that is written without a reset is a validation error, not a
+        // wrong number.
+        editor.scene.begin_frame(info.commands);
+
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
         engine::gfx::imgui_new_frame();
         draw_ui(editor, panels, running);
 
-        engine::render::GraphSchedule schedule;
-        if (!derive_frame_barriers(editor.states, schedule)) {
+        // The scene, into the image the panel shows. The same four passes the
+        // runtime draws, and the same barriers, because both go through
+        // render::SceneRenderer.
+        //
+        // The camera aspect comes from the target rather than from the window,
+        // so what a person sees in the panel is the whole picture and not a
+        // stretched one.
+        const engine::gfx::Extent2D scene_extent = editor.viewport.extent();
+        const engine::render::SceneView view{
+            .clip_from_world =
+                engine::editor::view_projection(editor.view, aspect_ratio(scene_extent)),
+            .camera_position = editor.view.camera_position,
+            .clear_color = { editor.view.clear_color.r, editor.view.clear_color.g,
+                             editor.view.clear_color.b, 1.0F },
+            .extent = scene_extent,
+            .output = editor.viewport.target(),
+        };
+        if (!editor.scene.draw_scene(info.commands, editor.world, editor.content, view)) {
             return FrameOutcome::Failed;
         }
-        for (const engine::render::GraphBarrier& barrier : schedule.passes[0].before) {
-            engine::gfx::cmd_frame_barrier(info.commands, engine::gfx::FrameTarget::Color,
-                                           barrier.before, barrier.after);
+
+        // Black, because the full-screen triangle covers every pixel of the
+        // target. The clear color a person picked belongs to the scene image
+        // inside the renderer.
+        // No depth, because the triangle neither reads nor writes it and the
+        // tonemap pipeline declares no depth format. The frame depth image is
+        // also the size of the window rather than of the panel.
+        constexpr engine::gfx::ColorRGBA kSceneClear{ 0.0F, 0.0F, 0.0F, 1.0F };
+        if (engine::gfx::cmd_begin_color_rendering(info.commands, editor.viewport.target(),
+                                                   kSceneClear, false)) {
+            editor.scene.draw_tonemap(info.commands, editor.view.exposure);
+            engine::gfx::cmd_end_rendering(info.commands);
         }
 
-        // No depth. Nothing draws geometry yet, and the overlay neither reads
-        // nor writes it.
+        // Moves the picture to a shader read, so the overlay can sample it, and
+        // the swapchain image to a color target.
+        editor.scene.issue_output_barriers(info.commands);
+
+        // No depth. The overlay draws flat, and the scene has its own depth
+        // inside the passes above.
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
         engine::gfx::imgui_render(info.commands);
         engine::gfx::cmd_end_rendering(info.commands);
+
+        if (capture) {
+            engine::gfx::request_capture(editor.device);
+        }
 
         result = engine::gfx::end_frame(editor.device);
         if (result == engine::gfx::Result::OutOfDate) {
@@ -481,6 +570,65 @@ namespace {
             return FrameOutcome::Failed;
         }
         return FrameOutcome::Drawn;
+    }
+
+    /**
+     * Makes the two scene images match what the Viewport panel asked for.
+     *
+     * Both are rebuilt together, because the passes render into the half float
+     * one at the size the tonemap writes out. Sizing them apart would render
+     * the scene at one aspect and show it at another.
+     *
+     * This belongs at the top of a frame and never in the middle of one. A
+     * rebuild waits for the device, because a frame in flight may still be
+     * reading the old image and the overlay may still hold its binding.
+     *
+     * @param editor Everything the program owns.
+     * @return False when a rebuild failed, which leaves nothing to draw into.
+     */
+    [[nodiscard]] bool resize_scene_images(Editor& editor) {
+        const engine::editor::ViewportChange change =
+            editor.viewport.ensure(editor.wanted_viewport, device_extent(editor.device));
+        if (change == engine::editor::ViewportChange::Failed) {
+            return false;
+        }
+        if (change != engine::editor::ViewportChange::Rebuilt) {
+            return true;
+        }
+        if (!editor.scene.resize(editor.viewport.extent())) {
+            return false;
+        }
+        // A new image carries no history, so there is nothing for the next
+        // frame's first barrier to order against.
+        editor.scene.reset_output_state();
+        return true;
+    }
+
+    /**
+     * Rebuilds the swapchain when the window changed size.
+     *
+     * @param editor Everything the program owns.
+     * @param last The size the swapchain was built at, updated when it changes.
+     * @param out_rebuilt Set when the swapchain was replaced, which means this
+     * frame has no image to draw into and the caller skips it.
+     * @return False when the swapchain did not rebuild.
+     */
+    [[nodiscard]] bool follow_window_size(Editor& editor, engine::gfx::Extent2D& last,
+                                          bool& out_rebuilt) {
+        const engine::gfx::Extent2D extent = window_extent(editor.window);
+        out_rebuilt = false;
+        if (extent.width == last.width && extent.height == last.height) {
+            return true;
+        }
+        const engine::gfx::Result result = engine::gfx::device_resize(editor.device, extent);
+        if (!engine::gfx::succeeded(result)) {
+            ENGINE_LOG_CRITICAL("The swapchain did not rebuild: {}",
+                                engine::gfx::result_name(result));
+            return false;
+        }
+        last = extent;
+        out_rebuilt = true;
+        return true;
     }
 
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
@@ -498,22 +646,30 @@ namespace {
                 continue;
             }
 
-            const engine::gfx::Extent2D extent = window_extent(editor.window);
-            if (extent.width != last_extent.width || extent.height != last_extent.height) {
-                const engine::gfx::Result result =
-                    engine::gfx::device_resize(editor.device, extent);
-                if (!engine::gfx::succeeded(result)) {
-                    ENGINE_LOG_CRITICAL("The swapchain did not rebuild: {}",
-                                        engine::gfx::result_name(result));
-                    return false;
-                }
-                last_extent = extent;
-                // The swapchain was just rebuilt, so this frame has no image to
-                // draw into. Drawing now would see OutOfDate and rebuild again.
+            bool swapchain_rebuilt = false;
+            if (!follow_window_size(editor, last_extent, swapchain_rebuilt)) {
+                return false;
+            }
+            if (swapchain_rebuilt) {
+                // This frame has no image to draw into. Drawing now would see
+                // OutOfDate and rebuild again. The scene images follow the
+                // panel rather than the window, and the next frame clamps the
+                // panel to the new size.
                 continue;
             }
 
-            const FrameOutcome outcome = draw_frame(editor, panels, running);
+            // Before the frame opens. The panel asked for this size on the
+            // frame before, so one frame of a dragged edge shows the old
+            // picture, which is invisible at a normal frame rate.
+            if (!resize_scene_images(editor)) {
+                return false;
+            }
+
+            // The frame after this one is the last, so this is where the
+            // capture has to be asked for.
+            const bool capture = !options.screenshot.empty() && options.frames > 0 &&
+                                 frame + 1 >= options.frames;
+            const FrameOutcome outcome = draw_frame(editor, panels, running, capture);
             if (outcome == FrameOutcome::Failed) {
                 return false;
             }
@@ -523,6 +679,11 @@ namespace {
 
             ++frame;
             if (options.frames > 0 && frame >= options.frames) {
+                // Before the loop ends, because the copy this reads belongs to
+                // the frame that just presented.
+                if (!options.screenshot.empty()) {
+                    (void)apps::write_screenshot(editor.device, options.screenshot);
+                }
                 ENGINE_LOG_INFO("Stopping after {} frames, as --frames asked.", frame);
                 break;
             }
