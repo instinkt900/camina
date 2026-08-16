@@ -766,6 +766,20 @@ A rate limit says nothing about the pull request. It means one automated tool wa
 and that tool is a nicety. Report it in one line, in the same way you report that a run
 used no cache. Whether to ask for the review later is the user's call, not yours.
 
+### Check the review surfaces before every push to an open pull request
+
+**A review can arrive at any time, so read all three endpoints immediately before
+you push again.** This is not the same as reading the review once when it lands. A
+push that ignores waiting comments looks like an answer to them, and the next
+reviewer cannot tell which findings were considered and which were missed.
+
+This matters more now that the review is triggered by hand. The review does not
+arrive on a schedule you can predict from the push, and it may land hours later,
+against a commit that is no longer the head of the branch.
+
+So the order is: gather the CI failures, read the three endpoints, decide on every
+finding, then push once.
+
 ### Answering the review
 
 Verify each finding against the code before acting on it. A finding can be wrong, and
