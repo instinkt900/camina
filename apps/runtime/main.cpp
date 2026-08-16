@@ -1,6 +1,5 @@
 #include "assets/hot_reload.h"
 #include "assets/manifest.h"
-#include "assets/script.h"
 #include "core/arena.h"
 #include "core/frame_stats.h"
 #include "core/jobs.h"
@@ -13,6 +12,7 @@
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "math/conventions.h"
+#include "play/session.h"
 #include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
@@ -27,10 +27,8 @@
 #include "scene/component_registry.h"
 #if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
-#include "script/host.h"
 #endif
 #include "scene/prefab.h"
-#include "scene/step_motion.h"
 #include "scene/world.h"
 
 #if defined(ENGINE_WITH_UI)
@@ -726,8 +724,9 @@ namespace {
         const engine::assets::Content* engine_content = nullptr;
         ViewSettings* settings = nullptr;
         engine::scene::World* world = nullptr;
-        /// The bodies of the scene. A scene reload builds them again.
-        engine::physics::Simulation* simulation = nullptr;
+        /// The game on the fixed step: the clock, the bodies, and the scripts.
+        /// A scene reload builds the bodies again.
+        engine::play::Session* session = nullptr;
         /// M7.5. Draws the wireframe of those bodies when the toggle is on.
         engine::render::DebugLinePass* debug_lines = nullptr;
         /// The entity the inspector edits, or entt::null for none.
@@ -830,9 +829,9 @@ namespace {
         // is the color on screen, and under the UI so a panel is never hidden
         // by it. It tests no depth, so a collider inside geometry still shows,
         // which is the case somebody is usually hunting.
-        if (settings.physics_debug && context.simulation != nullptr &&
+        if (settings.physics_debug && context.session != nullptr &&
             context.debug_lines != nullptr) {
-            context.simulation->world().debug_lines(g_debug_lines);
+            context.session->simulation().world().debug_lines(g_debug_lines);
             context.debug_lines->draw(info.commands, clip_from_world, g_debug_lines);
         }
 
@@ -918,38 +917,11 @@ namespace {
         engine::assets::HotReload engine_reload;
         /// M8.0. Keyboard and mouse, sampled once for each frame. Every reader
         /// asks it for an action by name rather than reading a device.
+        ///
+        /// This is the frame clock. The game reads a second one on the fixed
+        /// step, which `play::Session` owns for the reason its header gives.
         engine::platform::Input input;
 
-        /**
-         * The same actions, on the fixed step instead of on the frame.
-         *
-         * A press edge is the difference between two update() calls, so which
-         * clock update() runs on decides who can see one. The camera runs on
-         * the frame and reads `input`. The game runs on the fixed step and
-         * reads this.
-         *
-         * One Input for both cannot work. A frame often runs no step at all,
-         * and offscreen it almost never does, so an edge raised and cleared
-         * between two steps is one the game never sees. That is not a rare
-         * race: it is what --throw-at-frame does every time.
-         */
-        engine::platform::Input step_input;
-
-        /// Every device state since the last step, folded together. A key that
-        /// was down on any frame in between is down for the step that follows.
-        engine::platform::InputFrame pending;
-
-        /// What the device actually read on the last frame, which is what
-        /// `pending` goes back to once a step has taken it.
-        engine::platform::InputFrame latest;
-#if defined(ENGINE_WITH_LUA)
-        /// M8.1. The interpreter, and one instance for each scripted entity.
-        engine::script::Host script;
-
-        /// The view pose a script reads. Rewritten at the top of every step,
-        /// because a script holds the services only for the call they arrive on.
-        engine::script::CameraView camera;
-#endif
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
 
@@ -1072,53 +1044,13 @@ namespace {
     }
 
     /**
-     * Loads every changed script again, and restarts what was running it.
-     *
-     * A script that will not compile is reported by reload() and changes
-     * nothing, so the entity carries on with the text it already had. That is
-     * what makes saving in the middle of an edit safe.
-     *
-     * **A script the manifest no longer holds is left alone.** Its bytes are
-     * already in this process and the entities running it keep running it.
-     * Deleting a source file during a session should not stop a game, and the
-     * next start reports the entity as naming a script nobody loaded.
-     *
-     * @param runtime Holds the open content and the host.
-     * @param changed What the cook reported.
-     */
-    void reload_scripts(Runtime& runtime,
-                        const std::vector<engine::assets::AssetChange>& changed) {
-#if defined(ENGINE_WITH_LUA)
-        for (const engine::assets::AssetChange& change : changed) {
-            if (change.gone || !std::string_view{ change.cooked }.ends_with(
-                                   engine::assets::kScriptExtension)) {
-                continue;
-            }
-
-            std::vector<std::byte> bytes;
-            if (!runtime.game_content.read_bytes(change.guid, bytes)) {
-                ENGINE_LOG_ERROR("{} cooked and will not read, so it was not loaded again.",
-                                 change.cooked);
-                continue;
-            }
-            if (runtime.script.reload(change.guid, change.cooked, bytes)) {
-                ENGINE_LOG_INFO("{} was read again.", change.cooked);
-            }
-        }
-#else
-        (void)runtime;
-        (void)changed;
-#endif
-    }
-
-    /**
      * Cooks whatever changed and swaps it in.
      *
      * Call this between frames. MeshPass::reload() waits for the frames in
      * flight before it frees anything, which cannot happen inside one.
      */
     void apply_hot_reload(Runtime& runtime, const FrameContext& context,
-                          engine::scene::World& world, engine::scene::StepMotion& motion) {
+                          engine::scene::World& world, engine::play::Session& session) {
         std::vector<engine::assets::AssetChange> changed;
 
         // The engine tree holds the two shaders and the split sum lookup table.
@@ -1164,7 +1096,7 @@ namespace {
         }
 
         runtime.scene.mesh().reload(identities_of(changed));
-        reload_scripts(runtime, changed);
+        session.reload_scripts(runtime.game_content, changed);
         // A mesh or a texture swapped in behind the entities that name it, so
         // the world stands and whatever was selected is still that entity.
         if (!world_was_built_from(changed)) {
@@ -1175,7 +1107,7 @@ namespace {
         // holds the pose of everything the game moved, keyed by entity, and
         // EnTT hands the same numbers out again after a clear.
         *context.selected = entt::null;
-        motion.clear();
+        session.motion().clear();
         world.clear();
         engine::scene::prefabs().clear();
 
@@ -1187,12 +1119,12 @@ namespace {
                              "and save it again.");
             // The bodies of the scene that just went away, so nothing steps a
             // body whose entity no longer exists.
-            context.simulation->build(world);
+            session.build(world);
             return;
         }
         // The entities are new, so every body is stale. build() throws the old
         // ones away and reads the scene again.
-        context.simulation->build(world);
+        session.build(world);
         ENGINE_LOG_INFO("The scene was read again. The world holds {} entities.", world.size());
     }
 
@@ -1222,7 +1154,6 @@ namespace {
         // action as false, and binding costs nothing, so the two paths stay the
         // same shape.
         bind_actions(runtime.input);
-        bind_actions(runtime.step_input);
 
         const engine::gfx::DeviceDesc device_desc{
             .window = options.offscreen ? nullptr : runtime.window.native(),
@@ -1435,223 +1366,6 @@ namespace {
     }
 
 
-    /**
-     * Everything the fixed step owns, which outlives any one frame.
-     *
-     * The clock, the simulated clock reading the game runs on, and the poses a
-     * frame blends for whatever the game moved. Bundled because all three
-     * advance together and none of them means anything alone.
-     */
-    struct StepState {
-        engine::FixedTimestep clock;      ///< Turns a frame delta into whole steps.
-        engine::scene::StepMotion motion; ///< What the game moved, and where it was before.
-        double seconds = 0.0;             ///< Simulated seconds since the run began.
-    };
-
-#if defined(ENGINE_WITH_LUA)
-    /**
-     * Reads every cooked script in the game tree into the host.
-     *
-     * This walks the manifest rather than a list the game holds, the same way
-     * sandbox::add_prefabs() does. A game that named its scripts in C++ could
-     * load only its own content tree, and a tree the runtime never saw at build
-     * time is exactly what `--content` points at.
-     *
-     * A script that will not compile is reported by load() and skipped. The
-     * rest still load, because one broken script should not take the others
-     * down with it.
-     *
-     * @param runtime Holds the open content and the host to fill.
-     */
-    void load_scripts(Runtime& runtime) {
-        std::size_t loaded = 0;
-        std::size_t failed = 0;
-
-        for (const engine::assets::ManifestEntry& entry :
-             runtime.game_content.manifest().entries) {
-            for (const engine::assets::ManifestOutput& output : entry.outputs) {
-                if (!std::string_view{ output.cooked }.ends_with(
-                        engine::assets::kScriptExtension)) {
-                    continue;
-                }
-
-                std::vector<std::byte> bytes;
-                if (!runtime.game_content.read_bytes(output, bytes)) {
-                    ENGINE_LOG_ERROR("{} is in the manifest and will not read.", output.cooked);
-                    ++failed;
-                    continue;
-                }
-                if (runtime.script.load(output.guid, output.cooked, bytes)) {
-                    ++loaded;
-                } else {
-                    ++failed;
-                }
-            }
-        }
-
-        ENGINE_LOG_INFO("Loaded {} script(s), {} failed.", loaded, failed);
-    }
-#endif
-
-#if defined(ENGINE_WITH_LUA)
-    /**
-     * What a script may reach on this step.
-     *
-     * Built for each call rather than held, so a reload that builds a new
-     * simulation cannot leave a script driving the old one. See issue #273.
-     *
-     * The camera pose goes in because the throw is a script now and it throws
-     * along the line of sight. The view belongs to the application rather than
-     * to the scene, so it is handed over for the step. A `scene::Camera`
-     * component is where it belongs once a scene carries one.
-     *
-     * @param runtime Holds the input and the host.
-     * @param simulation The simulation this step ran on.
-     * @param settings Where the camera stands and which way it looks.
-     * @param motion Where a transform a script writes is recorded for blending.
-     * @return The services to pass to the host.
-     */
-    [[nodiscard]] engine::script::Services
-    step_services(Runtime& runtime, engine::physics::Simulation& simulation,
-                  const ViewSettings& settings, engine::scene::StepMotion& motion) {
-        runtime.camera = engine::script::CameraView{ .position = settings.camera_position,
-                                                     .forward = camera_forward(settings) };
-        return engine::script::Services{
-            .physics = &simulation,
-            .input = &runtime.step_input,
-            .prefabs = &engine::scene::prefabs(),
-            .camera = &runtime.camera,
-            .motion = &motion,
-        };
-    }
-#endif
-
-    /**
-     * Runs the game logic for one fixed step.
-     *
-     * **Every line of it is Lua**, which M8.6 closed. The seconds are simulated
-     * seconds and never the wall clock, which is what keeps a run reproducible.
-     * See DESIGN.md section 9 and issue #245.
-     *
-     * @param runtime Holds the script host.
-     * @param world The scene to run.
-     * @param state The simulated seconds and the poses a frame blends.
-     * @param settings Where the camera stands, which the throw reads.
-     * @param simulation The bodies a script may push.
-     */
-    void run_game_step(Runtime& runtime, engine::scene::World& world, StepState& state,
-                       const ViewSettings& settings,
-                       engine::physics::Simulation& simulation) {
-#if defined(ENGINE_WITH_LUA)
-        // Passed on each step rather than held, so a reload that builds a new
-        // simulation cannot leave a script driving the old one. See issue #273.
-        runtime.script.update(world, state.seconds,
-                              step_services(runtime, simulation, settings, state.motion));
-#else
-        (void)runtime;
-        (void)world;
-        (void)state;
-        (void)settings;
-        (void)simulation;
-#endif
-    }
-
-    /**
-     * Hands the scripts what the step that just ran reported.
-     *
-     * This runs inside the step loop and not once for each frame. The simulation
-     * keeps the events of one step only, so a frame that ran three steps and
-     * read them once would report the third and throw the first two away. An
-     * overlap lost because two things happened in one frame is the kind nobody
-     * reproduces. See issue #263.
-     *
-     * @param runtime Holds the script host.
-     * @param world The world the events name.
-     * @param simulation The simulation that has just stepped.
-     * @param settings Where the camera stands, which a callback may read.
-     * @param motion Where a transform a callback writes is recorded.
-     */
-    void report_physics_events(Runtime& runtime, engine::scene::World& world,
-                               engine::physics::Simulation& simulation,
-                               const ViewSettings& settings,
-                               engine::scene::StepMotion& motion) {
-#if defined(ENGINE_WITH_LUA)
-        runtime.script.deliver_physics_events(
-            world, simulation, step_services(runtime, simulation, settings, motion));
-#else
-        (void)runtime;
-        (void)world;
-        (void)simulation;
-#endif
-    }
-
-    /**
-     * Runs the whole steps this frame owes, then blends the pose it draws.
-     *
-     * Physics runs after the game, because the game moves the kinematic bodies
-     * and the solver has to see this step's positions.
-     *
-     * @param runtime Passed through to the game step, which needs the scripts.
-     * @param state The clock, the simulated seconds, and the game poses.
-     * @param settings Where the step rate and the ceiling are kept.
-     * @param simulation The bodies to step.
-     * @param world The scene to read and to write the drawn pose into.
-     * @param delta_seconds How much wall time this frame took.
-     * @param stats Receives what the whole of it cost on the CPU.
-     */
-    void advance_simulation(Runtime& runtime, StepState& state, const ViewSettings& settings,
-                            engine::physics::Simulation& simulation, engine::scene::World& world,
-                            float delta_seconds, engine::FrameStats& stats) {
-        // The inspector can move both of these while the program runs, so they
-        // are read each frame rather than at startup. Neither call throws away
-        // the time already accumulated.
-        state.clock.set_rate_hz(settings.physics_hz);
-        state.clock.set_max_steps(settings.max_physics_steps);
-
-        const auto started = std::chrono::steady_clock::now();
-        for (std::uint32_t left = state.clock.advance(delta_seconds); left > 0; --left) {
-            ENGINE_PROFILE_ZONE_N("fixed step");
-
-            // The actions the game reads move to this step, and the fold starts
-            // again from whatever the device last read. So a key held across
-            // several steps stays held, and a key tapped and let go between two
-            // of them still raises exactly one edge.
-            runtime.step_input.update(runtime.pending);
-            runtime.pending = runtime.latest;
-
-            // The game reads the pose the last step left rather than the blend
-            // the last frame drew. Without this the motion of a frame that fell
-            // between two steps feeds back in and compounds.
-            state.motion.begin_step(world);
-
-            // Simulated seconds, which is what makes a run reproducible. A
-            // double all the way to the game. A float resolves steps of 1/60
-            // until about three days of running, and then two steps in a row
-            // land on the same number and the game stops advancing. See #245.
-            state.seconds += static_cast<double>(state.clock.step_seconds());
-
-            // The game moves things, then the solver runs. A kinematic body the
-            // game drives has to carry its new transform into the step, so this
-            // order is the one that works.
-            run_game_step(runtime, world, state, settings, simulation);
-            simulation.step(world, state.clock.step_seconds());
-
-            // Inside the loop, because the simulation keeps one step of events.
-            // Reading them after the loop would report the last step alone.
-            report_physics_events(runtime, world, simulation, settings, state.motion);
-        }
-
-        // One alpha for both, because they blend the same pair of steps. Two
-        // would let the game and the physics draw different instants.
-        const float alpha = state.clock.alpha();
-        simulation.interpolate(world, alpha);
-        state.motion.interpolate(world, alpha);
-
-        stats.add(
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
-                .count());
-    }
-
     /// What the start of a frame decided. A frame that cannot draw yet says so,
     /// rather than falling through to a draw that has nothing to draw into.
     enum class FrameStart {
@@ -1667,13 +1381,14 @@ namespace {
     /// @param context What a frame draws with.
     /// @param options The command line.
     /// @param world The scene a reload rebuilds.
+    /// @param session The game a reload rebuilds the bodies and the scripts of.
     /// @param last_extent The size the swapchain was built for. A rebuild
     ///                    replaces it.
     /// @param last_frame The time the last frame ran. A wait moves it, so the
     ///                   next delta does not count the idle time.
     /// @return What the caller should do with this frame.
     FrameStart begin_frame(Runtime& runtime, const FrameContext& context, const Options& options,
-                           engine::scene::World& world, engine::scene::StepMotion& motion,
+                           engine::scene::World& world, engine::play::Session& session,
                            engine::gfx::Extent2D& last_extent,
                            std::chrono::steady_clock::time_point& last_frame) {
         if (!options.offscreen && runtime.window.minimized()) {
@@ -1686,7 +1401,7 @@ namespace {
 
         // Between frames, because freeing a resource waits for the frames
         // in flight and a frame cannot wait for itself.
-        apply_hot_reload(runtime, context, world, motion);
+        apply_hot_reload(runtime, context, world, session);
 
         // Offscreen the size is fixed for the whole run, which is the point of
         // it. Nothing resizes, so nothing rebuilds. The window reports its new
@@ -1766,7 +1481,7 @@ namespace {
      * a panel. platform/ sits below gfx/, so the module cannot ask on its own.
      */
     void update_input(Runtime& runtime, const FrameContext& context, const Options& options,
-                      std::uint64_t frame) {
+                      engine::play::Session& session, std::uint64_t frame) {
         engine::platform::InputFrame state;
         if (options.offscreen) {
             // No devices offscreen, so every key starts up.
@@ -1793,25 +1508,17 @@ namespace {
         // And fold it into what the next step will read. A key down on any
         // frame since the last step is down for that step, so an edge cannot
         // fall between two of them and go unseen.
-        runtime.latest = state;
-        for (std::size_t i = 0; i < state.keys.size(); ++i) {
-            runtime.pending.keys.at(i) = runtime.pending.keys.at(i) || state.keys.at(i);
-        }
-        for (std::size_t i = 0; i < state.mouse_buttons.size(); ++i) {
-            runtime.pending.mouse_buttons.at(i) =
-                runtime.pending.mouse_buttons.at(i) || state.mouse_buttons.at(i);
-        }
-        runtime.pending.focused = runtime.pending.focused || state.focused;
+        session.feed_input(state);
     }
 
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     bool run_frames(Runtime& runtime, const FrameContext& context, const Options& options,
                     engine::Arena& frame_arena, ViewSettings& settings,
-                    engine::scene::World& world, engine::physics::Simulation& simulation) {
+                    engine::scene::World& world, engine::play::Session& session) {
         // The settings own the rate. This reads them here and again each frame,
         // because the inspector can move either one while the program runs.
-        StepState step;
-        step.clock = engine::FixedTimestep(settings.physics_hz, settings.max_physics_steps);
+        session.set_rate_hz(settings.physics_hz);
+        session.set_max_steps(settings.max_physics_steps);
 
         std::uint64_t frame = 0;
         auto started = std::chrono::steady_clock::now();
@@ -1841,7 +1548,7 @@ namespace {
             frame_arena.reset();
 
             const FrameStart start =
-                begin_frame(runtime, context, options, world, step.motion, last_extent,
+                begin_frame(runtime, context, options, world, session, last_extent,
                             last_frame);
             if (start == FrameStart::Failed) {
                 return false;
@@ -1857,13 +1564,26 @@ namespace {
             const float delta = frame_delta(options, last_frame, now);
             last_frame = now;
 
-            update_input(runtime, context, options, frame);
+            update_input(runtime, context, options, session, frame);
             update_camera(runtime.window, runtime.input, settings, delta);
 
             // The game and the solver both run on the fixed step now, so this
             // is one call rather than two. The frame composes the matrices and
             // draws after it. Reversing those two would draw a frame behind.
-            advance_simulation(runtime, step, settings, simulation, world, delta, physics_stats);
+            //
+            // The rate and the ceiling are read each frame rather than at
+            // startup, because the inspector can move either one while the
+            // program runs. Neither call throws away the time already
+            // accumulated.
+            session.set_rate_hz(settings.physics_hz);
+            session.set_max_steps(settings.max_physics_steps);
+
+            const auto step_started = std::chrono::steady_clock::now();
+            session.advance(world, engine::play::View{ .position = settings.camera_position, .forward = camera_forward(settings) },
+                            delta);
+            physics_stats.add(std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - step_started)
+                                  .count());
 
             // Arm the capture before the frame that will be the last one, because
             // the copy happens inside end_frame() while this side still owns the
@@ -1917,7 +1637,7 @@ namespace {
         // GPU split that report_frame_time prints. The two are different
         // domains and the labels say so: the solver runs on the CPU.
         report_frame_time(stats, options, *context.scene);
-        report_physics(step.clock, physics_stats);
+        report_physics(session.clock(), physics_stats);
         return true;
     }
 
@@ -2047,17 +1767,21 @@ int main(int argc, char** argv) {
     start_hot_reload(runtime, options);
     const std::filesystem::path source = game_source_directory(options);
 
-#if defined(ENGINE_WITH_LUA)
+    // The game on the fixed step: the clock, the bodies, and the scripts.
+    engine::play::Session session;
+
+    // The same actions as the frame input, on the step clock. The game reads
+    // this one, and the camera reads the other. See play/session.h.
+    bind_actions(session.input());
+
     // Before the first step, so an entity that names a script finds it loaded
     // rather than reporting it missing on the first frame.
-    load_scripts(runtime);
-#endif
+    session.load_scripts(runtime.game_content);
 
     // After the world loads, because a body starts where its entity sits. It is
     // also after jobs::init(), because the solver runs on the job system and
     // the world asks it how many workers there are.
-    engine::physics::Simulation simulation;
-    simulation.build(world);
+    session.build(world);
 
     entt::entity selected = entt::null;
     const FrameContext context{
@@ -2075,14 +1799,14 @@ int main(int argc, char** argv) {
         .engine_content = &runtime.engine_content,
         .settings = &settings,
         .world = &world,
-        .simulation = &simulation,
+        .session = &session,
         .debug_lines = &runtime.debug_lines,
         .selected = &selected,
         .content = content,
         .source_scene = source.empty() ? std::filesystem::path{} : source / sandbox::kSceneFile,
     };
 
-    const bool ok = run_frames(runtime, context, options, frame_arena, settings, world, simulation);
+    const bool ok = run_frames(runtime, context, options, frame_arena, settings, world, session);
 
     stop(runtime);
     engine::jobs::shutdown();

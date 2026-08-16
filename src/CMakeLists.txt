@@ -46,6 +46,7 @@ add_library(engine_core STATIC
     physics/conventions.cpp
     physics/simulation.cpp
     physics/world.cpp
+    play/session.cpp
     scene/step_motion.cpp
     scene/world.cpp
     scene/component_registry.cpp
