@@ -258,18 +258,6 @@ namespace {
     }
 
     /**
-     * Where the camera goes when a scene carries none.
-     *
-     * The editor opens on an empty world before anything is loaded, and a
-     * person may open a scene that has no camera in it. Both draw from here.
-     */
-    constexpr engine::Vec3 kFallbackCameraPosition{ 0.0F, 2.8F, 6.0F };
-    constexpr float kFallbackCameraPitch = -8.0F;
-
-    /// The vertical field of view a fallback camera uses.
-    constexpr float kFallbackFov = 60.0F;
-
-    /**
      * Points the editor at the camera of its world.
      *
      * Call it after anything replaces the entities: the first load, and the
@@ -280,8 +268,25 @@ namespace {
     void bind_camera(Editor& editor) {
         editor.camera = engine::scene::primary_camera(editor.world);
         if (editor.camera == entt::null) {
-            editor.fallback_camera.position = kFallbackCameraPosition;
-            editor.fallback_camera.pitch = kFallbackCameraPitch;
+            // The same pose the runtime falls back to, from one place, so a
+            // scene with no camera looks the same in both programs.
+            editor.fallback_camera = engine::editor::fallback_fly_camera();
+        }
+    }
+
+    /**
+     * Drops a camera entity that no longer exists, and finds another.
+     *
+     * A session runs the game, and a script can destroy any entity. A destroyed
+     * one leaves a handle that names nothing, and reading a component off it
+     * asserts in this build and reads freed storage in a release one.
+     *
+     * @param editor Everything the program owns.
+     */
+    void keep_camera_live(Editor& editor) {
+        if (editor.camera != entt::null && !editor.world.registry().valid(editor.camera)) {
+            ENGINE_LOG_WARN("The camera entity was destroyed while the session ran.");
+            bind_camera(editor);
         }
     }
 
@@ -474,9 +479,15 @@ namespace {
     /**
      * Acts on what the play bar asked for.
      *
-     * The selection is dropped at both ends of a session, because a play and a
-     * stop both replace every entity and EnTT hands the same numbers out again.
-     * An entity kept across one of those lines names whoever took its number.
+     * **A stop replaces every entity and a play does not.** Play snapshots the
+     * world and runs the entities that are already there, so a handle survives
+     * it. Stop reads the snapshot into an empty world, and EnTT hands the same
+     * numbers out again, so a handle kept across that line names whoever took
+     * its number. That is why the camera is bound again on a stop alone.
+     *
+     * The selection is dropped at both ends even so. A session moves and
+     * destroys things, and an inspector still pointed at a crate that has been
+     * thrown across the room is not what anybody meant by selected.
      *
      * @param editor Everything the program owns.
      * @param request What the user clicked.
@@ -632,8 +643,10 @@ namespace {
         const engine::gfx::Extent2D scene_extent = editor.viewport.extent();
         const float aspect = aspect_ratio(scene_extent);
 
-        engine::Mat4 clip_from_world = engine::editor::fly_clip_from_world(
-            editor.fallback_camera, aspect, kFallbackFov, engine::kDefaultNearPlane);
+        engine::Mat4 clip_from_world =
+            engine::editor::fly_clip_from_world(editor.fallback_camera, aspect,
+                                                engine::editor::kFallbackFov,
+                                                engine::kDefaultNearPlane);
         engine::Vec3 camera_position = editor.fallback_camera.position;
         float exposure = 1.0F;
         if (editor.camera != entt::null) {
@@ -860,6 +873,10 @@ namespace {
                                            view.forward);
             }
             editor.play.advance(editor.world, view, delta);
+
+            // After the step, because that is where a script can destroy an
+            // entity, and before the frame below reads the camera.
+            keep_camera_live(editor);
 
             // The frame after this one is the last, so this is where the
             // capture has to be asked for.

@@ -558,7 +558,12 @@ session before it reads the world back, because writing a transform onto a live 
 body does nothing (#284). And both ends of a session replace every entity, so the selection
 is dropped at each one: EnTT hands the same numbers out again.
 
-**M9.5a moved the camera into the scene.** `scene::Camera` is a reflected component, the
+**M9.5a moved the camera into the scene, and both applications draw through it.** The
+editor has no camera of its own yet, which is M9.5b and issue #322. `editor::FlyCamera` is
+input state: the runtime steers the scene camera with it, and both applications fall back
+to it when a scene carries no camera.
+
+**M9.5a in detail.** `scene::Camera` is a reflected component, the
 pose is the entity's transform, and `scene::primary_camera` picks the one a game plays
 through. `editor::ViewSettings` keeps only the fly speed and the simulation rate, and
 `view.json` no longer carries a camera at all. The sandbox scene carries a camera entity,

@@ -40,8 +40,14 @@ namespace engine::scene {
      * and a camera that changes on its own is a bad afternoon.
      *
      * **This reports what it chose when a scene holds more than one.** It says
-     * so once for each call, so a caller that runs it every frame reports every
-     * frame. Callers hold the answer for a frame rather than asking twice.
+     * so once for each call.
+     *
+     * @warning Call this when the world changes, not once for each frame. Both
+     * applications call it where they bind a camera: at load, after a scene
+     * reload, after a play session stops, and when the entity it holds is
+     * destroyed under it. A caller that asked every frame would report every
+     * frame and search the pool every frame, and neither answer changes until
+     * an entity does.
      *
      * @param world The world to search.
      * @return The camera entity, or `entt::null` when the scene carries none.

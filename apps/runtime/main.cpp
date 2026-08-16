@@ -409,19 +409,6 @@ namespace {
     }
 
     /**
-     * Where the camera goes when a scene carries none.
-     *
-     * A scene with no camera still draws, from here, rather than refusing to
-     * open. These were the ViewSettings defaults until M9.5a moved the camera
-     * into the scene.
-     */
-    constexpr engine::Vec3 kFallbackCameraPosition{ 0.0F, 2.8F, 6.0F };
-    constexpr float kFallbackCameraPitch = -8.0F;
-
-    /// The vertical field of view and the near plane a fallback camera uses.
-    constexpr float kFallbackFov = 60.0F;
-
-    /**
      * The camera the runtime draws through, and the fly camera that steers it.
      *
      * The pose lives on an entity now, so this holds the entity and the two
@@ -433,8 +420,16 @@ namespace {
     struct CameraBinding {
         entt::entity entity = entt::null;
         engine::editor::FlyCamera fly;
-        /// False until the fly camera has taken a pose from somewhere.
-        bool seeded = false;
+        /**
+         * True once the pose came from a camera entity, or was flown from one.
+         *
+         * The fallback pose is not one of those. Without this, a first scene
+         * that carries no camera would seed the fallback, and the next reload
+         * that did carry one would take that hard-coded pose for a flown one
+         * and write it over the authored camera. Nobody flew it, and the
+         * authored viewpoint would be gone with no report.
+         */
+        bool from_entity = false;
         /// From --exposure. Zero leaves the scene's own exposure alone.
         float exposure_override = 0.0F;
     };
@@ -451,23 +446,27 @@ namespace {
         binding.entity = engine::scene::primary_camera(world);
 
         if (binding.entity == entt::null) {
-            if (!binding.seeded) {
-                binding.fly.position = kFallbackCameraPosition;
-                binding.fly.pitch = kFallbackCameraPitch;
-                binding.seeded = true;
-                ENGINE_LOG_WARN("The scene carries no Camera, so the runtime draws from its "
-                                "own fallback view. Add a Camera component to an entity.");
+            if (!binding.from_entity) {
+                const float speed = binding.fly.move_speed;
+                const float sensitivity = binding.fly.look_sensitivity;
+                binding.fly = engine::editor::fallback_fly_camera();
+                binding.fly.move_speed = speed;
+                binding.fly.look_sensitivity = sensitivity;
             }
+            ENGINE_LOG_WARN("The scene carries no Camera, so the runtime draws from its own "
+                            "fallback view. Add a Camera component to an entity.");
             return;
         }
 
-        if (binding.seeded) {
+        if (binding.from_entity) {
             // The world is new and the person is not. Put them back where they
             // were flying rather than where the file says.
             world.set_local(binding.entity, engine::editor::fly_transform(binding.fly));
         } else {
+            // Including the case where the last scene had no camera at all. The
+            // fallback pose is nobody's viewpoint, so an authored one wins.
             engine::editor::seed_fly_camera(binding.fly, world.local(binding.entity));
-            binding.seeded = true;
+            binding.from_entity = true;
         }
 
         if (binding.exposure_override > 0.0F) {
@@ -478,12 +477,48 @@ namespace {
         }
     }
 
-    /// The exposure the frame tonemaps with, from the camera or from the default.
-    [[nodiscard]] float camera_exposure(const engine::scene::World& world, entt::entity camera) {
-        if (camera == entt::null) {
-            return 1.0F;
+    /**
+     * The exposure the frame tonemaps with.
+     *
+     * A scene with no camera honours --exposure too. A capture run asked for
+     * that number and there is no component to write it to, so dropping it
+     * would make the flag depend on whether the scene carried a camera.
+     *
+     * @param world The world the camera entity belongs to.
+     * @param binding The camera, and the override the command line asked for.
+     * @return The scale the tonemap applies before its curve.
+     */
+    [[nodiscard]] float camera_exposure(const engine::scene::World& world,
+                                        const CameraBinding& binding) {
+        if (binding.entity == entt::null) {
+            return binding.exposure_override > 0.0F ? binding.exposure_override : 1.0F;
         }
-        return world.registry().get<const engine::scene::Camera>(camera).exposure;
+        return world.registry().get<const engine::scene::Camera>(binding.entity).exposure;
+    }
+
+    /**
+     * Drops a camera entity that no longer exists, and finds another.
+     *
+     * A script can destroy any entity, the camera included, and a destroyed one
+     * leaves a handle that names nothing. Reading a component off it asserts in
+     * a build with assertions and reads freed storage in a release build.
+     *
+     * This costs one validity test for each frame, and it does the search again
+     * only on the frame where the entity went away.
+     *
+     * @param binding The binding to check.
+     * @param world The world the entity belonged to.
+     */
+    void keep_camera_live(CameraBinding& binding, engine::scene::World& world) {
+        if (binding.entity != entt::null && !world.registry().valid(binding.entity)) {
+            ENGINE_LOG_WARN("The camera entity was destroyed while the game ran.");
+            // The camera somebody was flying has gone, so whatever is found
+            // next is taken as it was authored rather than dragged to where the
+            // dead one stood. This is not the reload case, where keeping the
+            // viewpoint is the whole point.
+            binding.from_entity = false;
+            bind_camera(binding, world);
+        }
     }
 
     /// The aspect ratio of an image, for the camera matrix.
@@ -779,7 +814,8 @@ namespace {
         engine::Vec3 camera_position{ 0.0F, 0.0F, 0.0F };
         if (camera.entity == entt::null) {
             clip_from_world = engine::editor::fly_clip_from_world(
-                camera.fly, aspect_ratio(info.extent), kFallbackFov, engine::kDefaultNearPlane);
+                camera.fly, aspect_ratio(info.extent), engine::editor::kFallbackFov,
+                engine::kDefaultNearPlane);
             camera_position = camera.fly.position;
         } else {
             clip_from_world =
@@ -809,7 +845,7 @@ namespace {
         // neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
-        context.scene->draw_tonemap(info.commands, camera_exposure(world, camera.entity));
+        context.scene->draw_tonemap(info.commands, camera_exposure(world, camera));
 
         // M7.5. The physics wireframe, after the curve so the color Box3D chose
         // is the color on screen, and under the UI so a panel is never hidden
@@ -1610,6 +1646,10 @@ namespace {
                 engine::scene::camera_pose(world, camera.entity, view.position, view.forward);
             }
             session.advance(world, view, delta);
+
+            // After the step, because that is where a script can destroy an
+            // entity, and before anything below reads the camera.
+            keep_camera_live(camera, world);
             physics_stats.add(std::chrono::duration<double, std::milli>(
                                   std::chrono::steady_clock::now() - step_started)
                                   .count());

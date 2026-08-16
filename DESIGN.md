@@ -408,9 +408,14 @@ type and no Vulkan type, the same way the panels do. §9 holds why the scene ren
 the size of the panel and why the rebuild waits for the top of a frame.
 
 `editor::FlyCamera` is here as well, and it is the clearest case of what this directory
-means. It is a free-fly camera: two angles, a point, and the keys that move them. The
-runtime flies the scene camera with it and the editor flies its own view with it, so it
+means. It is a free-fly camera: two angles, a point, and the keys that move them. It is
+input state and never a camera in its own right. The runtime steers the scene camera with
+it, and both applications fall back to it for a scene that carries no camera at all. So it
 belongs to neither application and to no scene.
+
+**Today both applications draw through `scene::primary_camera`.** M9.5b gives the editor a
+free view of its own, flown with this and separate from the camera the game plays through.
+Issue #322 holds it.
 
 `editor::PlayMode` is here for the same reason. It is play-in-editor: a snapshot of the
 world, a `play::Session` over it, and the restore that puts the authored scene back. M9.4
@@ -2208,17 +2213,19 @@ compiles with `WITH_EDITOR` off and drops the editor code. See rule 4.3.
 Play-in-editor through world snapshot and restore, which M2 and M3 already provide.
 ImGuizmo. An asset browser, a hierarchy panel, and an inspector panel.
 
-**The scene owns the camera it plays through, and the editor owns a separate one.**
-`scene::Camera` is a reflected component, so a level carries its viewpoint the way it
-carries its lights, and a script that acts along the line of sight reads the camera the
-game plays through. The editor camera is a free-fly view that belongs to the person rather
-than to the scene, and it is saved beside `imgui.ini` rather than in the project.
+**The scene owns the camera it plays through, and the editor gets a separate one.** Both
+were one struct until M9.5: `editor::ViewSettings` held the only camera, both applications
+read it, and it lived in a file beside the executable. A level whose viewpoint lives there
+is not a level anybody can ship, which is what M9.8 asks for.
 
-Both were one struct until M9.5: `editor::ViewSettings` held the only camera, both
-applications read it, and it lived in a file beside the executable. A level whose viewpoint
-lives there is not a level anybody can ship, which is what M9.8 asks for. The editor
-viewport keeps showing the editor camera while a session plays, so a person can fly around
-a running game.
+M9.5a is the first half and it has landed. `scene::Camera` is a reflected component, so a
+level carries its viewpoint the way it carries its lights, and a script that acts along the
+line of sight reads the camera the game plays through. Both applications draw through it.
+
+M9.5b is the second half. The editor gets a free-fly view that belongs to the person rather
+than to the scene, saved beside `imgui.ini` rather than in the project. The viewport then
+keeps showing that view while a session plays, so a person can fly around a running game
+while the game keeps playing through its own camera.
 
 The editor runs the ImGui docking branch, which `conanfile.py` already pins for this
 reason. Panels dock and tab inside the main window, and a panel dragged out of it becomes

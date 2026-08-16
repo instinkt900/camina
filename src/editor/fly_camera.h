@@ -73,6 +73,31 @@ namespace engine::editor {
         float look_sensitivity = 0.12F;
     };
 
+    /**
+     * @brief Where a fly camera stands when a scene carries no camera.
+     *
+     * Both applications draw a camera-less scene from here, so a scene with no
+     * `scene::Camera` looks the same in the editor and in the runtime. Two
+     * copies of these numbers would drift with no build error, and the picture
+     * would then depend on which program opened the scene.
+     *
+     * They are the `ViewSettings` defaults the engine used before M9.5a moved
+     * the camera into the scene.
+     */
+    inline constexpr Vec3 kFallbackPosition{ 0.0F, 2.8F, 6.0F };
+
+    /// @brief The pitch of that fallback view, in degrees below the horizon.
+    inline constexpr float kFallbackPitch = -8.0F;
+
+    /// @brief The vertical field of view of that fallback view, in degrees.
+    inline constexpr float kFallbackFov = 60.0F;
+
+    /// @brief A fly camera at the fallback pose.
+    /// @return The camera to draw a scene with no camera of its own through.
+    [[nodiscard]] inline FlyCamera fallback_fly_camera() {
+        return FlyCamera{ .position = kFallbackPosition, .pitch = kFallbackPitch };
+    }
+
     /// @brief Which way a fly camera looks.
     /// @param camera The camera to read.
     /// @return A unit vector in the camera's space.
