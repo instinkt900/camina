@@ -353,8 +353,10 @@ engine/
       vulkan/          the ONLY place vulkan.h is legal (rule 4.1)
     render/            render graph, PBR passes, materials, culling, content/
     scene/             EnTT world, transform hierarchy, serialization, prefabs
-    physics/           box3d integration, fixed-step loop, debug draw
+    physics/           box3d integration, the solver, debug draw
     script/            sol2 bindings, ScriptComponent, hot reload
+    play/              the fixed step a game runs on: the clock, the solver,
+                       the scripts, and the input on that clock. See §9
     assets/            runtime asset DB, handles, streaming, hot reload
     ui/                moth_ui IRenderer/IImage/IFont implementations, see §8
     audio/             IAudioDevice and the miniaudio implementation
@@ -999,6 +1001,19 @@ seconds, which is the step count times the step length, rather than the wall clo
 is a function of how many steps have run and of nothing else. A replay that feeds the same
 input lands on the same values. M8.6 moved that logic into Lua and the rule went with it:
 `script::Host::update` takes the same simulated seconds.
+
+**`play::Session` is that whole step in one place**, which M9.4a moved out of
+`apps/runtime/main.cpp`. It owns the clock, the solver, the script host, the step input, and
+the poses a frame blends, and `advance()` runs the steps one frame owes. The order inside it
+carries rules that were each paid for once: the game runs before the solver so a kinematic
+body carries its new transform into the step, the physics events are read inside the loop
+because the simulation keeps one step of them, and one alpha blends both so the game and the
+physics draw the same instant.
+
+The editor plays a scene as well as the runtime, and a second copy of that loop would let the
+two applications run the same game differently. That is the one thing play-in-editor cannot
+do. It is its own directory rather than part of `scene/` or `physics/`, because it sits above
+both and above `script/`, and none of those three knows about the others.
 
 **`scene::StepMotion` is where the interpolation for a mover that is not a rigid body lives.**
 This is the design question #245 posed. `physics::Simulation` already blends the last two poses
