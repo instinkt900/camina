@@ -18,9 +18,7 @@
 #include "platform/window.h"
 #include "reflect/json.h"
 #include "reflect/registry.h"
-#include "render/mesh_pass.h"
-#include "render/shadow_pass.h"
-#include "render/tonemap_pass.h"
+#include "render/scene_renderer.h"
 #include "screenshot.h"
 #include "sandbox/game.h"
 #include "physics/components.h"
@@ -317,99 +315,6 @@ namespace {
         out = value;
     }
 
-    /// Which pass in the schedule is which. The order here is the order they run.
-    constexpr std::size_t kShadowPassIndex = 0;
-    /// The cluster cull. It sits between the shadow pass and the mesh pass
-    /// because it is a compute dispatch, and one cannot happen inside a
-    /// rendering scope.
-    constexpr std::size_t kCullPassIndex = 1;
-    constexpr std::size_t kMeshPassIndex = 2;
-    constexpr std::size_t kTonemapPassIndex = 3;
-
-    /**
-     * Works out every barrier this frame needs.
-     *
-     * The pass list is built fresh each frame rather than kept, because a
-     * declaration is a handful of spans over static storage and building it
-     * costs nothing. Keeping it would mean invalidating it whenever a pass
-     * changed what it touches.
-     *
-     * @param states What state each resource is in. Read and then updated, so
-     * the shadow map carries its state into the next frame.
-     * @param out The schedule. issue_pass_barriers() reads it one pass at a time.
-     * @return False when a declaration was refused, which is a programming
-     * error rather than a run-time condition.
-     */
-    [[nodiscard]] bool derive_frame_barriers(
-        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states,
-        engine::render::GraphSchedule& out) {
-        const std::array passes{ engine::render::ShadowPass::declare(),
-                                 engine::render::MeshPass::declare_cull(),
-                                 engine::render::MeshPass::declare(),
-                                 engine::render::TonemapPass::declare() };
-
-        // The two frame targets start over every frame. The swapchain image is a
-        // different image on almost every acquire, and the depth image is
-        // scratch that nothing reads across a frame boundary.
-        states[engine::render::kFrameColor.index] = engine::gfx::ResourceState::Undefined;
-        states[engine::render::kFrameDepth.index] = engine::gfx::ResourceState::Undefined;
-        // The shadow map, the scene color, and the cluster grid do not. Each is
-        // shared across the frames in flight, so the state the last frame left
-        // it in is what the barrier has to order against. Calling one Undefined
-        // here would derive a barrier that waits on the stage the new state
-        // uses, and what it has to wait for is the previous frame's fragment
-        // shader reading it. That is a write after read, and it is the same
-        // hazard #125 found on the shared depth image.
-
-        if (!engine::render::derive_barriers(passes, states, out)) {
-            ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
-            return false;
-        }
-
-        // Carry the shadow map's state into the next frame. The graph works this
-        // out already, which is what final_states is for.
-        for (std::size_t i = 0; i < states.size(); ++i) {
-            states[i] = out.final_states[i];
-        }
-        return true;
-    }
-
-    /// Which image each graph resource is, for the ones the frame does not own.
-    /// The two frame targets are null here, because an enum names those.
-    using GraphTextures =
-        std::array<engine::gfx::TextureHandle, engine::render::kFrameResourceCount>;
-
-    /// Puts the barriers one pass needs into the command list.
-    void issue_pass_barriers(engine::gfx::CommandList* commands,
-                             const engine::render::GraphSchedule& schedule, std::size_t pass,
-                             const GraphTextures& textures) {
-        if (pass >= schedule.passes.size()) {
-            return;
-        }
-        for (const engine::render::GraphBarrier& barrier : schedule.passes[pass].before) {
-            if (barrier.resource == engine::render::kClusterGrid) {
-                // A buffer, so there is no layout to change and nothing to
-                // name. gfx::cmd_buffer_barrier is a global memory barrier, and
-                // the two states carry the whole dependency.
-                engine::gfx::cmd_buffer_barrier(commands, barrier.before, barrier.after);
-                continue;
-            }
-            const engine::gfx::TextureHandle texture = textures[barrier.resource.index];
-            if (texture.valid()) {
-                // Not a frame target, so it is named by a handle rather than by
-                // an enum. See gfx::cmd_texture_barrier.
-                engine::gfx::cmd_texture_barrier(commands, texture, barrier.before, barrier.after);
-                continue;
-            }
-            const engine::gfx::FrameTarget target =
-                barrier.resource == engine::render::kFrameDepth
-                    ? engine::gfx::FrameTarget::Depth
-                    : engine::gfx::FrameTarget::Color;
-            engine::gfx::cmd_frame_barrier(commands, target, barrier.before, barrier.after);
-        }
-    }
-
-
     /**
      * Reads an option that carries no value.
      *
@@ -506,20 +411,6 @@ namespace {
                                   : std::filesystem::path{ options.watch };
         std::error_code error;
         return std::filesystem::is_directory(source, error) ? source : std::filesystem::path{};
-    }
-
-    /**
-     * Which way the camera looks, from its yaw and pitch.
-     *
-     * Yaw of zero looks down -Z, which DESIGN.md section 3 calls forward. Pitch
-     * lifts from the horizon. The result is a unit vector.
-     */
-    engine::Vec3 camera_forward(const ViewSettings& settings) {
-        const float yaw = glm::radians(settings.camera_yaw);
-        const float pitch = glm::radians(settings.camera_pitch);
-        const float flat = std::cos(pitch);
-        return glm::normalize(engine::Vec3{ -flat * std::sin(yaw), std::sin(pitch),
-                                            -flat * std::cos(yaw) });
     }
 
     /// The action names the runtime binds. One name for one thing, per §3.
@@ -625,27 +516,12 @@ namespace {
         settings.camera_position += glm::normalize(wanted) * speed * delta_seconds;
     }
 
-    /**
-     * Builds the matrix that turns a world position into clip space.
-     *
-     * A model matrix is not part of this: each entity supplies its own, and
-     * scene::World has already composed it. Reverse-Z means the near plane maps
-     * to depth 1, and perspective_reverse_z already negates the Y row for
-     * Vulkan clip space.
-     */
-    engine::Mat4 view_projection(const ViewSettings& settings, engine::gfx::Extent2D extent) {
-        const float aspect = extent.height == 0
-                                 ? 1.0F
-                                 : static_cast<float>(extent.width) /
-                                       static_cast<float>(extent.height);
-        const engine::Mat4 projection = engine::perspective_reverse_z(
-            glm::radians(settings.fov_degrees), aspect, engine::kDefaultNearPlane);
-
-        const engine::Mat4 view = glm::lookAt(settings.camera_position,
-                                              settings.camera_position + camera_forward(settings),
-                                              engine::world_up);
-
-        return projection * view;
+    /// The aspect ratio of an image, for engine::editor::view_projection().
+    /// A zero height reads as square rather than dividing by zero.
+    [[nodiscard]] float aspect_ratio(engine::gfx::Extent2D extent) {
+        return extent.height == 0 ? 1.0F
+                                  : static_cast<float>(extent.width) /
+                                        static_cast<float>(extent.height);
     }
 
     engine::gfx::Extent2D window_extent(const engine::platform::Window& window) {
@@ -669,15 +545,11 @@ namespace {
      *
      * @param device The device to resize.
      * @param extent The size to ask for.
-     * @param tonemap The pass that owns the scene color target.
-     * @param states The carried resource states, which this resets for the
-     * image it replaced.
+     * @param scene The renderer that owns the scene color target.
      * @return True when the swapchain and the target now match @p extent.
      */
-    bool rebuild_swapchain(
-        engine::gfx::Device* device, engine::gfx::Extent2D extent,
-        engine::render::TonemapPass& tonemap,
-        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>& states) {
+    bool rebuild_swapchain(engine::gfx::Device* device, engine::gfx::Extent2D extent,
+                           engine::render::SceneRenderer& scene) {
         const engine::gfx::Result result = engine::gfx::device_resize(device, extent);
         if (!engine::gfx::succeeded(result)) {
             ENGINE_LOG_CRITICAL("The swapchain did not rebuild: {}",
@@ -688,12 +560,7 @@ namespace {
         // What the device settled on, which is not always what was asked for.
         // A surface can refuse a size, and the target has to match the frame
         // rather than the request.
-        if (!tonemap.resize(device_extent(device))) {
-            ENGINE_LOG_CRITICAL("The scene color target did not rebuild, so nothing can draw.");
-            return false;
-        }
-        states[engine::render::kSceneColor.index] = engine::gfx::ResourceState::Undefined;
-        return true;
+        return scene.resize(device_extent(device));
     }
 
     /// What one pass through the render loop achieved.
@@ -836,10 +703,8 @@ namespace {
     /// What draw_frame() needs that does not change from one frame to the next.
     struct FrameContext {
         engine::gfx::Device* device = nullptr;
-        engine::render::MeshPass* mesh_pass = nullptr;
-        engine::render::ShadowPass* shadow_pass = nullptr;
-        /// Owns the scene color target and writes the frame out.
-        engine::render::TonemapPass* tonemap_pass = nullptr;
+        /// The shadow, cull, mesh, and tonemap passes, and the barriers between them.
+        engine::render::SceneRenderer* scene = nullptr;
 #if defined(ENGINE_WITH_UI)
         /// M6.2. Draws a moth_ui recording over the tonemapped frame.
         engine::ui::UiPass* ui_pass = nullptr;
@@ -855,10 +720,6 @@ namespace {
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
-        /// What state each graph resource is in. The shadow map carries its
-        /// state across frames, so this outlives one frame.
-        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount>*
-            resource_states = nullptr;
         /// The game content tree, which holds the cooked meshes.
         const engine::assets::Content* game_content = nullptr;
         /// The engine content tree, which holds the cooked shaders.
@@ -877,65 +738,11 @@ namespace {
         std::filesystem::path source_scene;
     };
 
-    /// Where each pass writes its pair of timestamps. A pass writes the first
-    /// slot before it records and the second after, so the difference is what
-    /// it cost. The cull pair is last because it was added last, and these
-    /// number the slots rather than the order the passes run.
-    constexpr std::uint32_t kShadowTimestamp = 0;
-    constexpr std::uint32_t kMeshTimestamp = 2;
-    constexpr std::uint32_t kTonemapTimestamp = 4;
-    constexpr std::uint32_t kCullTimestamp = 6;
-    /// How many slots the four pairs take. The pool holds far more.
-    constexpr std::uint32_t kTimestampCount = 8;
-
-    /// GPU time for the last frame, in nanoseconds, one entry for each pass in
-    /// the order the constants above declare them.
-    std::array<double, kTimestampCount / 2> g_gpu_pass_ns{};
-
     /// The physics wireframe of the current frame. Kept here rather than in the
     /// frame arena because it holds its memory between frames, so a frame with
     /// the toggle on allocates nothing after the first one. A frame with it off
     /// never touches this at all.
     std::vector<engine::physics::DebugLine> g_debug_lines;
-    /// The GPU timestamp period, in nanoseconds per tick.
-    float g_timestamp_period = 0.0F;
-    /// True after the first frame's pool reset, so reads are valid.
-    bool g_timestamps_ready = false;
-
-    /// Resets the timestamp pool at the start of the frame and reads results
-    /// from the previous one, once they are ready.
-    void read_gpu_timestamps(engine::gfx::Device* device, engine::gfx::FrameInfo& info) {
-        engine::gfx::cmd_reset_timestamps(info.commands);
-
-        if (!g_timestamps_ready) {
-            g_timestamps_ready = true;
-            return;
-        }
-
-        if (g_timestamp_period == 0.0F) {
-            g_timestamp_period = engine::gfx::timestamp_period(device);
-        }
-        if (g_timestamp_period <= 0.0F) {
-            return;
-        }
-
-        std::array<std::uint64_t, kTimestampCount> ticks{};
-        if (!engine::gfx::read_timestamps(device, 0, kTimestampCount, ticks.data())) {
-            return;
-        }
-
-        // Each pass wrote a pair, and the difference is what it cost. The slot
-        // constant gives the index as well as the pair, so a pass added later
-        // cannot put the value in one place and read it from another.
-        const double period = static_cast<double>(g_timestamp_period);
-        const auto elapsed = [&ticks, period](std::uint32_t first) {
-            return static_cast<double>(ticks[first + 1] - ticks[first]) * period;
-        };
-        g_gpu_pass_ns[kShadowTimestamp / 2] = elapsed(kShadowTimestamp);
-        g_gpu_pass_ns[kMeshTimestamp / 2] = elapsed(kMeshTimestamp);
-        g_gpu_pass_ns[kTonemapTimestamp / 2] = elapsed(kTonemapTimestamp);
-        g_gpu_pass_ns[kCullTimestamp / 2] = elapsed(kCullTimestamp);
-    }
 
     FrameOutcome draw_frame(const FrameContext& context, engine::gfx::Extent2D extent,
                             engine::gfx::Extent2D& out_extent) {
@@ -947,17 +754,16 @@ namespace {
         engine::gfx::Result result = engine::gfx::begin_frame(device, &info);
 
         if (result == engine::gfx::Result::OutOfDate) {
-            return rebuild_swapchain(device, extent, *context.tonemap_pass,
-                                     *context.resource_states)
-                       ? FrameOutcome::Skipped
-                       : FrameOutcome::Failed;
+            return rebuild_swapchain(device, extent, *context.scene) ? FrameOutcome::Skipped
+                                                                     : FrameOutcome::Failed;
         }
         if (!engine::gfx::succeeded(result)) {
             ENGINE_LOG_CRITICAL("begin_frame failed: {}", engine::gfx::result_name(result));
             return FrameOutcome::Failed;
         }
 
-        read_gpu_timestamps(device, info);
+        // Resets the timestamp pool and reads what the frame before it wrote.
+        context.scene->begin_frame(info.commands);
 
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
@@ -987,96 +793,34 @@ namespace {
         // what keeps the frame the user sees current with the frame they edited.
         world.update();
 
-        // The render graph, before anything opens a rendering scope. begin_frame
-        // leaves the frame images in Undefined and this is what moves them,
-        // because the graph is what knows which pass needs them and in what
-        // state.
+        // The scene, into the half float image the renderer owns. Every pass and
+        // every barrier between them is in there, because the editor draws the
+        // same four passes into a panel and a second copy of that order would
+        // have to be kept in step by hand.
         //
-        // Three passes now. Each declares what it touches, and the barriers that
-        // move the shadow map and the scene color from a target to a shader read
-        // fall out of the declarations rather than being written by hand here.
-        engine::render::GraphSchedule schedule;
-        if (!derive_frame_barriers(*context.resource_states, schedule)) {
+        // info.extent, not the requested one. The device can settle on a
+        // different size, and the cluster grid has to agree with the fragment
+        // shader about which cell a pixel is in.
+        const engine::Mat4 clip_from_world =
+            engine::editor::view_projection(settings, aspect_ratio(info.extent));
+        const engine::render::SceneView view{
+            .clip_from_world = clip_from_world,
+            .camera_position = settings.camera_position,
+            .clear_color = { settings.clear_color.r, settings.clear_color.g,
+                             settings.clear_color.b, 1.0F },
+            .extent = info.extent,
+        };
+        if (!context.scene->draw_scene(info.commands, world, *context.game_content, view)) {
             return FrameOutcome::Failed;
         }
 
-        // Which image each resource is. The two frame targets stay null, because
-        // an enum names those and the handle table is how the rest are found.
-        GraphTextures textures{};
-        textures[engine::render::kShadowMap.index] = context.shadow_pass->map();
-        textures[engine::render::kSceneColor.index] = context.tonemap_pass->target();
-
-        // The shadow pass first, because the mesh pass reads what it wrote. Its
-        // barriers go in before it records, and its own rendering scope opens
-        // and closes inside draw().
-        const engine::Mat4 clip_from_world = view_projection(settings, info.extent);
-
-        issue_pass_barriers(info.commands, schedule, kShadowPassIndex, textures);
-        engine::gfx::cmd_write_timestamp(info.commands, kShadowTimestamp);
-        context.shadow_pass->draw(info.commands, world, *context.game_content,
-                                  context.mesh_pass->meshes(), clip_from_world);
-        engine::gfx::cmd_write_timestamp(info.commands, kShadowTimestamp + 1);
-        context.mesh_pass->set_shadow_view(context.shadow_pass->light_view_projections(),
-                                           context.shadow_pass->cascade_splits(),
-                                           context.shadow_pass->cascade_biases(),
-                                           context.shadow_pass->has_light());
-
-        // The cluster cull, which is a pass of its own. It runs here rather than
-        // inside the mesh pass because a compute dispatch cannot happen inside a
-        // rendering scope. Its barrier moves the cluster grid from the read the
-        // last frame left it in to a compute write.
-        issue_pass_barriers(info.commands, schedule, kCullPassIndex, textures);
-        engine::gfx::cmd_write_timestamp(info.commands, kCullTimestamp);
-        const engine::render::ClusterView cluster_view{
-            .z_near = engine::kDefaultNearPlane,
-            .viewport_width = static_cast<float>(info.extent.width),
-            .viewport_height = static_cast<float>(info.extent.height),
-        };
-        context.mesh_pass->cull(info.commands, world, *context.game_content, clip_from_world,
-                                settings.camera_position, cluster_view);
-        engine::gfx::cmd_write_timestamp(info.commands, kCullTimestamp + 1);
-
-        // Then the mesh pass barriers, which include moving the shadow map from
-        // a depth target to something a shader can read, and the cluster grid
-        // from the compute write to a fragment read.
-        issue_pass_barriers(info.commands, schedule, kMeshPassIndex, textures);
-
-        const engine::gfx::ColorRGBA clear{ settings.clear_color.r, settings.clear_color.g,
-                                            settings.clear_color.b, 1.0F };
-        // Into the half float scene image, not the swapchain. An 8-bit sRGB
-        // image would clip every value above 1 as the fragment shader wrote it.
-        //
-        // A draw or an end outside a rendering scope is invalid, so nothing is
-        // recorded when the scope did not open. The frame then reaches the
-        // tonemap pass with a scene image nobody drew into, which is a black
-        // picture rather than undefined behavior.
-        if (engine::gfx::cmd_begin_color_rendering(info.commands, context.tonemap_pass->target(),
-                                                   clear)) {
-            // Every entity that names a mesh draws it, and that is now every
-            // entity that draws at all. This is the pipeline made visible: the
-            // geometry comes from a cooked file that a glTF produced, and
-            // nothing here knows which file that was.
-            engine::gfx::cmd_write_timestamp(info.commands, kMeshTimestamp);
-            context.mesh_pass->draw(info.commands, world, *context.game_content,
-                                    settings.camera_position);
-            engine::gfx::cmd_write_timestamp(info.commands, kMeshTimestamp + 1);
-
-            engine::gfx::cmd_end_rendering(info.commands);
-        }
-
-        // Then the frame itself. The tonemap pass reads the scene image and
-        // writes the swapchain, and the barrier that moves the scene image to a
-        // shader read is the one the graph derived from the pair.
-        issue_pass_barriers(info.commands, schedule, kTonemapPassIndex, textures);
-
-        // Black, because the full-screen triangle covers every pixel. The clear
-        // color a person picked belongs to the scene image above. The pass
-        // attaches no depth, because the triangle neither reads nor writes it.
+        // Then the frame itself. Black, because the full-screen triangle covers
+        // every pixel. The clear color a person picked belongs to the scene
+        // image above. The scope attaches no depth, because the triangle
+        // neither reads nor writes it.
         constexpr engine::gfx::ColorRGBA kFrameClear{ 0.0F, 0.0F, 0.0F, 1.0F };
         engine::gfx::cmd_begin_rendering(info.commands, kFrameClear, false);
-        engine::gfx::cmd_write_timestamp(info.commands, kTonemapTimestamp);
-        context.tonemap_pass->draw(info.commands, settings.exposure);
-        engine::gfx::cmd_write_timestamp(info.commands, kTonemapTimestamp + 1);
+        context.scene->draw_tonemap(info.commands, settings.exposure);
 
         // M7.5. The physics wireframe, after the curve so the color Box3D chose
         // is the color on screen, and under the UI so a panel is never hidden
@@ -1114,8 +858,7 @@ namespace {
         if (result == engine::gfx::Result::OutOfDate) {
             // The frame did present. The swapchain is now stale or suboptimal, and
             // the window size alone does not report that, so rebuild here.
-            if (!rebuild_swapchain(device, extent, *context.tonemap_pass,
-                                   *context.resource_states)) {
+            if (!rebuild_swapchain(device, extent, *context.scene)) {
                 return FrameOutcome::Failed;
             }
         } else if (!engine::gfx::succeeded(result)) {
@@ -1138,11 +881,9 @@ namespace {
         engine::gfx::Device* device = nullptr;
         /// The engine's own cooked assets: the two shaders and the split sum table.
         engine::assets::Content engine_content;
-        engine::render::MeshPass mesh;
-        /// Renders the directional light's depth, which the mesh pass samples.
-        engine::render::ShadowPass shadow;
-        /// Owns the half float image the scene renders into, and writes it out.
-        engine::render::TonemapPass tonemap;
+        /// The shadow, cull, mesh, and tonemap passes, and the barriers between
+        /// them. It owns the half float image the scene renders into.
+        engine::render::SceneRenderer scene;
 #if defined(ENGINE_WITH_UI)
         /// M6.2. The moth_ui drawing surface and the pass that draws it.
         engine::ui::Renderer ui_renderer;
@@ -1163,9 +904,6 @@ namespace {
         /// draws on its own.
         std::shared_ptr<moth_ui::Node> ui_layout;
 #endif
-        /// Carried across frames, because the shadow map and the scene color are
-        /// each one image that every frame in flight shares.
-        std::array<engine::gfx::ResourceState, engine::render::kFrameResourceCount> states{};
         /// M7.5. Draws the physics wireframe. Costs nothing while it is off.
         engine::render::DebugLinePass debug_lines;
         /// The game's cooked assets, which today means the meshes a scene names.
@@ -1410,12 +1148,10 @@ namespace {
             }
 
             if (had_shader) {
-                (void)runtime.mesh.reload_shaders(runtime.engine_content);
-                (void)runtime.shadow.reload_shaders(runtime.engine_content);
-                (void)runtime.tonemap.reload_shaders(runtime.engine_content);
+                (void)runtime.scene.reload_shaders(runtime.engine_content);
             }
             if (had_brdf) {
-                (void)runtime.mesh.reload_brdf_lut(runtime.engine_content);
+                (void)runtime.scene.mesh().reload_brdf_lut(runtime.engine_content);
             }
         }
 
@@ -1423,7 +1159,7 @@ namespace {
             return;
         }
 
-        runtime.mesh.reload(identities_of(changed));
+        runtime.scene.mesh().reload(identities_of(changed));
         reload_scripts(runtime, changed);
         // A mesh or a texture swapped in behind the entities that name it, so
         // the world stands and whatever was selected is still that entity.
@@ -1502,19 +1238,17 @@ namespace {
             return false;
         }
 
-        // The shadow pass first. The mesh pass binds its map into every frame
-        // descriptor set, so the map has to exist before those sets are built.
-        if (!runtime.shadow.create(runtime.device, runtime.engine_content)) {
-            return false;
-        }
-
-        if (!runtime.mesh.create(runtime.device, runtime.engine_content, runtime.shadow.map())) {
+        // Every scene pass, and the scene image they render into. After the
+        // device, because that image is the size the swapchain settled on
+        // rather than the size that was asked for.
+        if (!runtime.scene.create(runtime.device, runtime.engine_content,
+                                  device_extent(runtime.device))) {
             return false;
         }
 
         // Before the first cull, so the grid is allocated once at the size this
         // asks for rather than at the default and then again.
-        runtime.mesh.set_cluster_cell_ceiling(options.cluster_cell_lights);
+        runtime.scene.mesh().set_cluster_cell_ceiling(options.cluster_cell_lights);
 
 #if defined(ENGINE_WITH_UI)
         // M6.2. Built after the engine content tree is read, because the
@@ -1525,13 +1259,6 @@ namespace {
             ENGINE_LOG_ERROR("The UI pass did not build. Game UI will not draw.");
         }
 #endif
-
-        // After the device, because the target is the size the swapchain
-        // settled on rather than the size that was asked for.
-        if (!runtime.tonemap.create(runtime.device, runtime.engine_content,
-                                    device_extent(runtime.device))) {
-            return false;
-        }
 
         // M7.5. It draws inside the tonemap scope, so it is built beside it.
         if (!runtime.debug_lines.create(runtime.device, runtime.engine_content)) {
@@ -1577,11 +1304,6 @@ namespace {
         if (runtime.overlay) {
             engine::gfx::imgui_shutdown(runtime.device);
         }
-        // Before the device goes. MeshPass frees buffers, textures, and a
-        // pipeline through the device, and its destructor runs when Runtime
-        // goes out of scope, which is after this function returns.
-        runtime.mesh.destroy();
-        runtime.shadow.destroy();
 #if defined(ENGINE_WITH_UI)
         // Outermost first. The node tree holds an IImage and an IFont, those
         // hold texture handles, and the two factories own the textures. So the
@@ -1597,7 +1319,10 @@ namespace {
         runtime.ui_pass.destroy();
 #endif
         runtime.debug_lines.destroy();
-        runtime.tonemap.destroy();
+        // Before the device goes. The passes free buffers, textures, and
+        // pipelines through the device, and their destructors run when Runtime
+        // goes out of scope, which is after this function returns.
+        runtime.scene.destroy();
         if (runtime.device != nullptr) {
             engine::gfx::destroy_device(runtime.device);
         }
@@ -1669,7 +1394,8 @@ namespace {
                         clock.dropped_seconds(), clock.drop_events(), clock.max_steps());
     }
 
-    void report_frame_time(const engine::FrameStats& stats, const Options& options) {
+    void report_frame_time(const engine::FrameStats& stats, const Options& options,
+                           const engine::render::SceneRenderer& scene) {
         if (stats.counted() == 0) {
             ENGINE_LOG_INFO("No frame time to report. A run needs more than {} frames.",
                             kFrameStatsWarmup);
@@ -1685,15 +1411,17 @@ namespace {
 
         // Nanoseconds to milliseconds.
         constexpr double kToMilliseconds = 1e-6;
-        if (std::ranges::any_of(g_gpu_pass_ns, [](double ns) { return ns > 0.0; })) {
-            // In the order they run, which is not the order the slots number.
-            // The cull is what says whether the cluster grid pays for itself.
+        const double shadow_ns = scene.gpu_pass_ns(engine::render::ScenePass::Shadow);
+        const double cull_ns = scene.gpu_pass_ns(engine::render::ScenePass::Cull);
+        const double mesh_ns = scene.gpu_pass_ns(engine::render::ScenePass::Mesh);
+        const double tonemap_ns = scene.gpu_pass_ns(engine::render::ScenePass::Tonemap);
+        if (shadow_ns > 0.0 || cull_ns > 0.0 || mesh_ns > 0.0 || tonemap_ns > 0.0) {
+            // In the order they run. The cull is what says whether the cluster
+            // grid pays for itself.
             ENGINE_LOG_INFO("gpu passes | shadow {:.3f} ms | cull {:.3f} ms | mesh {:.3f} ms | "
                             "tonemap {:.3f} ms",
-                            g_gpu_pass_ns[kShadowTimestamp / 2] * kToMilliseconds,
-                            g_gpu_pass_ns[kCullTimestamp / 2] * kToMilliseconds,
-                            g_gpu_pass_ns[kMeshTimestamp / 2] * kToMilliseconds,
-                            g_gpu_pass_ns[kTonemapTimestamp / 2] * kToMilliseconds);
+                            shadow_ns * kToMilliseconds, cull_ns * kToMilliseconds,
+                            mesh_ns * kToMilliseconds, tonemap_ns * kToMilliseconds);
         }
 
         if (options.vsync) {
@@ -1965,7 +1693,7 @@ namespace {
             return FrameStart::Draw;
         }
 
-        if (!rebuild_swapchain(runtime.device, extent, runtime.tonemap, runtime.states)) {
+        if (!rebuild_swapchain(runtime.device, extent, runtime.scene)) {
             return FrameStart::Failed;
         }
         last_extent = extent;
@@ -2180,11 +1908,11 @@ namespace {
         }
 
         ENGINE_LOG_INFO("Camina Engine stopped after {} frames.", frame);
-        report_scene_counts(*context.mesh_pass, *context.shadow_pass);
+        report_scene_counts(context.scene->mesh(), context.scene->shadow());
         // After the frame time, so the physics cost reads beside the per-pass
         // GPU split that report_frame_time prints. The two are different
         // domains and the labels say so: the solver runs on the CPU.
-        report_frame_time(stats, options);
+        report_frame_time(stats, options, *context.scene);
         report_physics(step.clock, physics_stats);
         return true;
     }
@@ -2330,9 +2058,7 @@ int main(int argc, char** argv) {
     entt::entity selected = entt::null;
     const FrameContext context{
         .device = runtime.device,
-        .mesh_pass = &runtime.mesh,
-        .shadow_pass = &runtime.shadow,
-        .tonemap_pass = &runtime.tonemap,
+        .scene = &runtime.scene,
 #if defined(ENGINE_WITH_UI)
         .ui_pass = &runtime.ui_pass,
         .ui_renderer = &runtime.ui_renderer,
@@ -2341,7 +2067,6 @@ int main(int argc, char** argv) {
         .ui_layout = runtime.ui_layout.get(),
 #endif
         .overlay = runtime.overlay,
-        .resource_states = &runtime.states,
         .game_content = &runtime.game_content,
         .engine_content = &runtime.engine_content,
         .settings = &settings,

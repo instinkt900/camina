@@ -1573,6 +1573,22 @@ and putting the barrier logic behind the same wall would repeat the mistake at t
 costs most. Barrier derivation is where a renderer hides bugs that appear on one vendor and no
 other, so it is the part that most needs a test with no device in it.
 
+**`render::SceneRenderer` holds the pass order, and an application holds the frame.** Which
+passes a frame runs, what each one declares, and where the barriers between them go is one
+answer. It sat inline in the frame loop of `apps/runtime` until M9.3, which was fine while one
+program drew a scene. The editor draws the same four passes into a panel, so a second copy of
+that order would have to be kept in step by hand.
+
+The split is between the scene and the frame. `SceneRenderer` owns the shadow pass, the mesh
+pass, the tonemap pass, the carried resource states, and the GPU timestamps. It draws a
+`scene::World` through a `SceneView` that carries the camera and the size, and it names no
+window and no swapchain. The application opens the frame, decides what the tonemapped picture
+is written into, and draws whatever goes over it.
+
+The tonemap is a call of its own for that reason. The physics wireframe, the game UI, and the
+ImGui overlay all draw in the same rendering scope, after the curve, and only the application
+knows which of them it has.
+
 **The environment is a cubemap an entity names, and it arrives before the lighting that reads
 it.** The cooker turns an equirectangular `.hdr` panorama into six faces with a mip chain, and
 `scene::Environment` names the result by GUID. One frame binds one cubemap, so the first entity

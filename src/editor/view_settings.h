@@ -93,6 +93,50 @@ namespace engine::editor {
         std::uint64_t frames_drawn = 0; ///< Read only, and never saved.
     };
 
+    /**
+     * @brief Which way the camera looks, from its yaw and its pitch.
+     *
+     * A yaw of zero looks down -Z, which DESIGN.md section 3 calls forward.
+     * Pitch lifts from the horizon.
+     *
+     * @param settings The view to read.
+     * @return A unit vector in world space.
+     */
+    [[nodiscard]] inline Vec3 camera_forward(const ViewSettings& settings) {
+        const float yaw = glm::radians(settings.camera_yaw);
+        const float pitch = glm::radians(settings.camera_pitch);
+        const float flat = std::cos(pitch);
+        return glm::normalize(
+            Vec3{ -flat * std::sin(yaw), std::sin(pitch), -flat * std::cos(yaw) });
+    }
+
+    /**
+     * @brief The camera of this view, as clip space from world space.
+     *
+     * A model matrix is not part of this: each entity supplies its own, and
+     * scene::World has already composed it. Reverse-Z means the near plane maps
+     * to depth 1, and perspective_reverse_z already negates the Y row for
+     * Vulkan clip space.
+     *
+     * It takes the aspect ratio rather than a size, because the two
+     * applications measure that from different things. The runtime uses the
+     * swapchain and the editor uses the panel the scene draws into.
+     *
+     * @param settings The view to read.
+     * @param aspect Width divided by height of the image the scene renders
+     * into. A value at or below zero is refused with 1, which is square.
+     * @return The matrix the passes take as the camera.
+     */
+    [[nodiscard]] inline Mat4 view_projection(const ViewSettings& settings, float aspect) {
+        const Mat4 projection = perspective_reverse_z(glm::radians(settings.fov_degrees),
+                                                      aspect > 0.0F ? aspect : 1.0F,
+                                                      kDefaultNearPlane);
+        const Mat4 view = glm::lookAt(settings.camera_position,
+                                      settings.camera_position + camera_forward(settings),
+                                      world_up);
+        return projection * view;
+    }
+
 } // namespace engine::editor
 
 // The numbers in a Range are the description. Naming each slider bound would
