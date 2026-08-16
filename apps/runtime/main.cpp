@@ -19,7 +19,7 @@
 #include "reflect/json.h"
 #include "reflect/registry.h"
 #include "render/scene_renderer.h"
-#include "screenshot.h"
+#include "../screenshot.h"
 #include "sandbox/game.h"
 #include "physics/components.h"
 #include "physics/simulation.h"
@@ -809,6 +809,10 @@ namespace {
             .clear_color = { settings.clear_color.r, settings.clear_color.g,
                              settings.clear_color.b, 1.0F },
             .extent = info.extent,
+            // A null handle, because the runtime fills the window with the
+            // scene and the tonemap writes the swapchain image itself. The
+            // editor passes the image its panel shows.
+            .output = {},
         };
         if (!context.scene->draw_scene(info.commands, world, *context.game_content, view)) {
             return FrameOutcome::Failed;
@@ -1743,7 +1747,7 @@ namespace {
         }
         ENGINE_LOG_INFO("Frame limit of {} reached. Exiting.", options.max_frames);
         if (!options.screenshot.empty()) {
-            (void)runtime::write_screenshot(runtime.device, options.screenshot);
+            (void)apps::write_screenshot(runtime.device, options.screenshot);
         }
         return true;
     }

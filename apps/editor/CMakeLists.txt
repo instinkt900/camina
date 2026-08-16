@@ -1,15 +1,26 @@
 add_executable(editor
     main.cpp
+    ../screenshot.cpp
+)
+
+# stb_image_write carries its own implementation, and screenshot.cpp asks for it.
+# The header is third-party code we do not patch, so the engine warning set and
+# clang-tidy stay off that file. apps/runtime does the same for the same file.
+set_source_files_properties(../screenshot.cpp PROPERTIES
+    SKIP_LINTING ON
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
 )
 
 # The same two libraries the runtime links, which is rule 4.3: one game, two
 # applications. The editor opens its own ImGui windows, so it needs the ImGui
 # headers as well as the engine.
+# stb is for the screenshot encoder alone.
 target_link_libraries(editor PRIVATE
     engine::core
     camina::sandbox
     SDL3::SDL3
     imgui::imgui
+    stb::stb
 )
 
 # Rule 4.3 again. The macro removes editor-only code from every other target,

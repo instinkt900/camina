@@ -16,6 +16,9 @@ namespace engine::render {
         constexpr std::size_t kCullPassIndex = 1;
         constexpr std::size_t kMeshPassIndex = 2;
         constexpr std::size_t kTonemapPassIndex = 3;
+        /// The pass that samples the output image. Declared only when the
+        /// tonemap wrote an image of the caller's rather than the swapchain.
+        constexpr std::size_t kOutputPassIndex = 4;
 
         /**
          * Where one pass writes its pair of timestamps.
@@ -35,7 +38,8 @@ namespace engine::render {
         /// How many slots the pairs take together.
         constexpr std::uint32_t kTimestampCount = static_cast<std::uint32_t>(kScenePassCount) * 2U;
 
-        /// Which image each graph resource is, for the ones a frame does not own.
+        /// The table SceneRenderer::graph_textures() builds, named here so the
+        /// free function below can take one.
         using GraphTextures = std::array<gfx::TextureHandle, kFrameResourceCount>;
 
         /**
@@ -153,9 +157,29 @@ namespace engine::render {
         }
     }
 
-    bool SceneRenderer::derive_frame_barriers(GraphSchedule& out) {
-        const std::array passes{ ShadowPass::declare(), MeshPass::declare_cull(),
-                                 MeshPass::declare(), TonemapPass::declare() };
+    bool SceneRenderer::derive_frame_barriers(gfx::TextureHandle output, GraphSchedule& out) {
+        // The pass that samples the output, for a frame that tonemapped into an
+        // image of the caller's. It is the overlay in the editor, and a runtime
+        // frame never declares it because the tonemap wrote the swapchain
+        // itself.
+        static constexpr std::array<ResourceRead, 1> kOutputReads{ {
+            { kViewportColor, gfx::ResourceState::ShaderRead },
+        } };
+        static constexpr std::array<ResourceWrite, 1> kOutputWrites{ {
+            { kFrameColor, gfx::ResourceState::ColorTarget },
+        } };
+
+        const bool to_viewport = output.valid();
+        const ResourceId target = to_viewport ? kViewportColor : kFrameColor;
+
+        std::array<PassDesc, kOutputPassIndex + 1> passes{
+            ShadowPass::declare(), MeshPass::declare_cull(), MeshPass::declare(),
+            TonemapPass::declare(target),
+            PassDesc{ .name = "output", .reads = kOutputReads, .writes = kOutputWrites }
+        };
+        const std::span<const PassDesc> declared{ passes.data(),
+                                                  to_viewport ? passes.size()
+                                                              : passes.size() - 1 };
 
         // The two frame targets start over every frame. The swapchain image is
         // a different image on almost every acquire, and the depth image is
@@ -170,7 +194,7 @@ namespace engine::render {
         // shader reading it. That is a write after read, and it is the same
         // hazard #125 found on the shared depth image.
 
-        if (!derive_barriers(passes, states_, out)) {
+        if (!derive_barriers(declared, states_, out)) {
             ENGINE_LOG_CRITICAL("The frame declarations were refused, so no barrier is safe.");
             return false;
         }
@@ -183,28 +207,38 @@ namespace engine::render {
         return true;
     }
 
+    SceneRenderer::GraphTextures SceneRenderer::graph_textures() const {
+        // The two frame targets stay null, because an enum names those and the
+        // handle table is how the rest are found. The cluster grid is a buffer
+        // and needs no handle for the same reason.
+        GraphTextures textures{};
+        textures[kShadowMap.index] = shadow_.map();
+        textures[kSceneColor.index] = tonemap_.target();
+        textures[kViewportColor.index] = output_;
+        return textures;
+    }
+
+    void SceneRenderer::reset_output_state() {
+        states_[kViewportColor.index] = gfx::ResourceState::Undefined;
+    }
+
     bool SceneRenderer::draw_scene(gfx::CommandList* commands, const scene::World& world,
                                    const assets::Content& content, const SceneView& view) {
         // The render graph, before anything opens a rendering scope.
         // gfx::begin_frame() leaves the frame images in Undefined and this is
         // what moves them, because the graph is what knows which pass needs
         // them and in what state.
-        GraphSchedule schedule;
-        if (!derive_frame_barriers(schedule)) {
+        output_ = view.output;
+        if (!derive_frame_barriers(output_, schedule_)) {
             return false;
         }
 
-        // Which image each resource is. The two frame targets stay null,
-        // because an enum names those and the handle table is how the rest are
-        // found.
-        GraphTextures textures{};
-        textures[kShadowMap.index] = shadow_.map();
-        textures[kSceneColor.index] = tonemap_.target();
+        const GraphTextures textures = graph_textures();
 
         // The shadow pass first, because the mesh pass reads what it wrote. Its
         // barriers go in before it records, and its own rendering scope opens
         // and closes inside draw().
-        issue_pass_barriers(commands, schedule, kShadowPassIndex, textures);
+        issue_pass_barriers(commands, schedule_, kShadowPassIndex, textures);
         gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Shadow));
         shadow_.draw(commands, world, content, mesh_.meshes(), view.clip_from_world);
         gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Shadow) + 1);
@@ -215,7 +249,7 @@ namespace engine::render {
         // than inside the mesh pass because a compute dispatch cannot happen
         // inside a rendering scope. Its barrier moves the cluster grid from the
         // read the last frame left it in to a compute write.
-        issue_pass_barriers(commands, schedule, kCullPassIndex, textures);
+        issue_pass_barriers(commands, schedule_, kCullPassIndex, textures);
         gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Cull));
         const ClusterView cluster_view{
             .z_near = kDefaultNearPlane,
@@ -229,7 +263,7 @@ namespace engine::render {
         // Then the mesh pass barriers, which include moving the shadow map from
         // a depth target to something a shader can read, and the cluster grid
         // from the compute write to a fragment read.
-        issue_pass_barriers(commands, schedule, kMeshPassIndex, textures);
+        issue_pass_barriers(commands, schedule_, kMeshPassIndex, textures);
 
         // Into the half float scene image, not the swapchain. An 8-bit sRGB
         // image would clip every value above 1 as the fragment shader wrote it.
@@ -254,8 +288,15 @@ namespace engine::render {
         // image to a shader read. They go in here rather than in draw_tonemap,
         // because a barrier inside a rendering scope is invalid and the caller
         // has that scope open by then.
-        issue_pass_barriers(commands, schedule, kTonemapPassIndex, textures);
+        issue_pass_barriers(commands, schedule_, kTonemapPassIndex, textures);
         return true;
+    }
+
+    void SceneRenderer::issue_output_barriers(gfx::CommandList* commands) {
+        if (!output_.valid()) {
+            return;
+        }
+        issue_pass_barriers(commands, schedule_, kOutputPassIndex, graph_textures());
     }
 
     void SceneRenderer::draw_tonemap(gfx::CommandList* commands, float exposure) {

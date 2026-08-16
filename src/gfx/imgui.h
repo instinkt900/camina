@@ -19,10 +19,25 @@
 
 #include "gfx/types.h"
 
+#include <cstdint>
+
 namespace engine::gfx {
 
     struct Device;
     struct CommandList;
+
+    /**
+     * @brief What ImGui calls a texture, as a number the caller passes back.
+     *
+     * ImGui names its own type for this and rule 4.1 keeps the backend out of
+     * every header above `gfx::`. So a caller takes one of these from
+     * imgui_texture_id() and hands it to ImGui::Image(), and nothing in
+     * between has to know what is inside it.
+     */
+    using ImGuiTextureId = std::uint64_t;
+
+    /// @brief The value imgui_texture_id() returns when it could not bind one.
+    inline constexpr ImGuiTextureId kInvalidImGuiTexture = 0;
 
     /**
      * @brief Settings for imgui_init(), chosen by the application.
@@ -108,5 +123,37 @@ namespace engine::gfx {
      * @param commands The command list from begin_frame().
      */
     void imgui_render(CommandList* commands);
+
+    /**
+     * @brief Binds a texture so an ImGui window can draw it.
+     *
+     * The editor renders the scene into an image of its own and shows that
+     * image in a panel, which is the one thing ImGui cannot do with a handle
+     * from `gfx::`. This turns the handle into something ImGui::Image() takes.
+     *
+     * @param device The device that owns the texture.
+     * @param texture The image to bind, from create_color_target().
+     * @return The id, or kInvalidImGuiTexture when the handle was stale or the
+     * overlay is not running.
+     *
+     * @warning The texture must be in ResourceState::ShaderRead by the time
+     * imgui_render() records, and it must stay alive until then. The caller
+     * issues that barrier.
+     *
+     * @warning Release it with imgui_release_texture() before the texture goes.
+     * The overlay holds a small pool of these, so an image rebuilt on every
+     * resize runs the pool out in a few seconds of dragging a panel edge.
+     */
+    [[nodiscard]] ImGuiTextureId imgui_texture_id(Device* device, TextureHandle texture);
+
+    /**
+     * @brief Releases what imgui_texture_id() bound.
+     *
+     * @param id The id to release. kInvalidImGuiTexture does nothing.
+     *
+     * @warning No frame may still be reading it. The caller waits for the
+     * device first, the same way it does before it frees the image itself.
+     */
+    void imgui_release_texture(ImGuiTextureId id);
 
 } // namespace engine::gfx

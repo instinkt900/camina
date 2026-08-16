@@ -105,9 +105,25 @@ namespace engine::render {
      */
     inline constexpr ResourceId kClusterGrid{ 4 };
 
+    /**
+     * @brief The picture an editor draws into a panel. Resource 5.
+     *
+     * The tonemap pass writes the swapchain image when a program fills the
+     * window with the scene, and it writes this one when the scene lives inside
+     * a panel. Then the overlay reads it and writes the swapchain, which is one
+     * more producer and consumer pair.
+     *
+     * A frame uses one or the other and never both. A runtime frame never names
+     * this, so its state stays where it started and no barrier is derived for
+     * it.
+     *
+     * Its state carries across frames for the reason kSceneColor gives.
+     */
+    inline constexpr ResourceId kViewportColor{ 5 };
+
     /// @brief How many resources a frame declares, which is the length of the
     /// state list derive_barriers() takes.
-    inline constexpr std::uint32_t kFrameResourceCount = 5;
+    inline constexpr std::uint32_t kFrameResourceCount = 6;
 
     /**
      * @brief One resource a pass reads.

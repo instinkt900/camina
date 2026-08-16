@@ -232,6 +232,43 @@ namespace engine::editor {
         ImGui::End();
     }
 
+    void draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
+                             gfx::Extent2D& wanted, bool* open) {
+        ENGINE_PROFILE_ZONE_N("draw_viewport_panel");
+
+        // No padding, so the picture reaches the edges of the panel. Without
+        // this the content area is smaller than the panel by the style padding,
+        // and the target follows the content area, so the scene would render at
+        // a size that never quite matches what a person dragged.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0.0F, 0.0F });
+        const bool visible = ImGui::Begin("Viewport", open);
+        ImGui::PopStyleVar();
+
+        if (visible) {
+            const ImVec2 area = ImGui::GetContentRegionAvail();
+            // A collapsed or fully shrunk panel asks for nothing. Reporting a
+            // zero here would have the caller build a target of no size, which
+            // the device refuses, and then try again every frame.
+            if (area.x >= 1.0F && area.y >= 1.0F) {
+                wanted = gfx::Extent2D{ static_cast<std::uint32_t>(area.x),
+                                        static_cast<std::uint32_t>(area.y) };
+            }
+
+            if (picture == gfx::kInvalidImGuiTexture) {
+                ImGui::TextDisabled("There is no picture yet.");
+            } else {
+                // At the size of the image rather than the size of the panel.
+                // They differ for the one frame after a drag, and drawing at
+                // the panel size would stretch it by the same amount either
+                // way. This way the mismatch shows as a gap at the edge, which
+                // is honest about what is happening.
+                ImGui::Image(picture, ImVec2{ static_cast<float>(size.width),
+                                              static_cast<float>(size.height) });
+            }
+        }
+        ImGui::End();
+    }
+
     bool save_scene_source(const std::filesystem::path& path, const scene::World& world,
                            const assets::Content& content) {
         nlohmann::json document = scene::save_scene(world);

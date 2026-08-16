@@ -396,8 +396,13 @@ with no window reads too. It sits beside the panel that edits it rather than in 
 themselves nowhere all open at the same spot, and the last one drawn buries the rest.
 The runtime answers that with fixed positions. The editor docks, so its answer is a
 layout: the hierarchy and the view settings on the left, the inspector on the right,
-and the middle left empty for the M9.3 viewport. It runs once. As soon as `imgui.ini`
-holds a node for the dockspace, the layout a person arranged is the one they get.
+and the viewport in the middle. It runs once. As soon as `imgui.ini` holds a node for
+the dockspace, the layout a person arranged is the one they get.
+
+`editor::Viewport` lives here too, beside the panel that shows it. It owns the image the
+scene is tonemapped into and the binding ImGui draws it through, and it names no ImGui
+type and no Vulkan type, the same way the panels do. §9 holds why the scene renders at
+the size of the panel and why the rebuild waits for the top of a frame.
 
 ---
 
@@ -1588,6 +1593,36 @@ is written into, and draws whatever goes over it.
 The tonemap is a call of its own for that reason. The physics wireframe, the game UI, and the
 ImGui overlay all draw in the same rendering scope, after the curve, and only the application
 knows which of them it has.
+
+**Where the tonemap writes is what separates a runtime frame from an editor frame.** A runtime
+maps the scene down straight into the swapchain image and the overlay floats over it. An editor
+maps it into an image of its own, and then the overlay samples that image and draws it inside a
+panel. So `SceneView::output` is the whole difference, and a null handle means the swapchain.
+
+That adds one producer and consumer pair, and the graph derives it like any other.
+`kViewportColor` is the image, the tonemap pass declares it as the write when a caller named
+one, and a trailing pass declares the read. A runtime frame never declares that pass, so its
+barriers do not move.
+
+The scene renders at the size of the panel rather than the size of the window. Both images
+follow it, because the passes draw into the half float one and the tonemap writes the other, and
+sizing them apart would render the scene at one aspect and show it at another. The camera aspect
+comes from the same size, so a person dragging a panel edge gets more or less of the scene rather
+than a stretched picture.
+
+**A target cannot be rebuilt while a frame is recording.** So the panel reports the size it wants
+and the rebuild happens at the top of the next frame, where it can wait for the device. One frame
+of a dragged edge therefore shows the picture at the size before the drag.
+
+**An editor viewport is clamped to the swapchain image.** `gfx::cmd_begin_color_rendering`
+attaches the frame depth image, which is the size of the window, and a render area has to fit
+inside every attachment. A docked panel is always inside the window, so the clamp is a guard
+rather than a live condition until #306 makes a panel an OS window of its own.
+
+The tonemap scope attaches no depth at all, and that is not an optimization. The triangle
+declares no depth format, Vulkan compares the pipeline against the attachments at every draw, and
+attaching one anyway is an error. `cmd_begin_color_rendering` takes the same `attach_depth` that
+`cmd_begin_rendering` always took.
 
 **The environment is a cubemap an entity names, and it arrives before the lighting that reads
 it.** The cooker turns an equirectangular `.hdr` panorama into six faces with a mip chain, and

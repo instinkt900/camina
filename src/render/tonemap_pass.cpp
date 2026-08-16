@@ -49,15 +49,24 @@ namespace engine::render {
 
     } // namespace
 
-    PassDesc TonemapPass::declare() {
+    PassDesc TonemapPass::declare(ResourceId target) {
         static constexpr std::array<ResourceRead, 1> kReads{ {
             { kSceneColor, gfx::ResourceState::ShaderRead },
         } };
         // The swapchain image, which this pass is the only writer of.
-        static constexpr std::array<ResourceWrite, 1> kWrites{ {
+        static constexpr std::array<ResourceWrite, 1> kToFrame{ {
             { kFrameColor, gfx::ResourceState::ColorTarget },
         } };
-        return PassDesc{ .name = "tonemap", .reads = kReads, .writes = kWrites };
+        // The panel image an editor shows. A span has to point at storage that
+        // outlives the call, so the two answers are two arrays rather than one
+        // the caller fills.
+        static constexpr std::array<ResourceWrite, 1> kToViewport{ {
+            { kViewportColor, gfx::ResourceState::ColorTarget },
+        } };
+        const std::span<const ResourceWrite> writes =
+            target == kViewportColor ? std::span<const ResourceWrite>{ kToViewport }
+                                     : std::span<const ResourceWrite>{ kToFrame };
+        return PassDesc{ .name = "tonemap", .reads = kReads, .writes = writes };
     }
 
     bool TonemapPass::build_target(gfx::Extent2D extent) {
