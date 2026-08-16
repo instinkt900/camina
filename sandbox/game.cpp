@@ -109,6 +109,11 @@ namespace sandbox {
         return engine::platform::cooked_content_root() / kContentName;
     }
 
+    void bind_actions(engine::platform::Input& input) {
+        input.bind(kThrowAction, kThrowKey);
+        input.bind(kResetAction, kResetKey);
+    }
+
     void register_components(engine::scene::ComponentRegistry& registry) {
         registry.add<Spin>();
         registry.add<Goal>();

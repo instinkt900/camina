@@ -30,6 +30,74 @@ namespace engine::editor {
         /// How many spaces one level of the written scene is indented by.
         constexpr int kSceneIndent = 2;
 
+        /// The gap around the play bar, in pixels. The viewport window carries
+        /// no padding of its own, because the picture reaches its edges.
+        constexpr float kBarPad = 4.0F;
+
+        /// The wider gap between the buttons and the state they report.
+        constexpr float kBarGap = 12.0F;
+
+        /// What the play bar says the session is doing.
+        [[nodiscard]] const char* state_label(PlayState state) {
+            switch (state) {
+            case PlayState::Playing:
+                return "playing";
+            case PlayState::Paused:
+                return "paused";
+            case PlayState::Edit:
+                break;
+            }
+            return "editing";
+        }
+
+        /**
+         * Draws the three buttons above the picture.
+         *
+         * Every button is drawn in every state, disabled where it does not
+         * apply, so the bar does not change width as a session starts and
+         * stops. A button that moves under the pointer is a button somebody
+         * clicks by mistake.
+         *
+         * @param state What the session is doing.
+         * @return What the user clicked.
+         */
+        [[nodiscard]] PlayRequest draw_play_bar(PlayState state) {
+            PlayRequest request = PlayRequest::None;
+            const bool editing = state == PlayState::Edit;
+
+            ImGui::Dummy(ImVec2{ kBarPad, kBarPad });
+            ImGui::SameLine(0.0F, 0.0F);
+
+            ImGui::BeginDisabled(!editing);
+            if (ImGui::Button("Play")) {
+                request = PlayRequest::Play;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SameLine(0.0F, kBarPad);
+            ImGui::BeginDisabled(editing);
+            if (state == PlayState::Paused) {
+                if (ImGui::Button("Resume")) {
+                    request = PlayRequest::Resume;
+                }
+            } else if (ImGui::Button("Pause")) {
+                request = PlayRequest::Pause;
+            }
+
+            ImGui::SameLine(0.0F, kBarPad);
+            if (ImGui::Button("Stop")) {
+                request = PlayRequest::Stop;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SameLine(0.0F, kBarGap);
+            ImGui::TextUnformatted(state_label(state));
+
+            ImGui::Dummy(ImVec2{ kBarPad, kBarPad });
+            ImGui::Separator();
+            return request;
+        }
+
         /// What the label for one entity says in the tree.
         std::string entity_label(const entt::registry& entities, entt::entity entity) {
             const auto* named = entities.try_get<scene::Name>(entity);
@@ -153,7 +221,7 @@ namespace engine::editor {
 
     void draw_world_panel(const scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path, const assets::Content& content,
-                          bool* open) {
+                          bool* open, const char* save_blocked) {
         ENGINE_PROFILE_ZONE_N("draw_world_panel");
 
         if (ImGui::Begin("World", open)) {
@@ -163,7 +231,7 @@ namespace engine::editor {
             // Without a source tree there is nowhere to save that a person
             // would find again. Writing into the cooked tree looks like it
             // worked and the next cook throws it away.
-            const bool can_save = !scene_path.empty();
+            const bool can_save = !scene_path.empty() && save_blocked == nullptr;
             ImGui::BeginDisabled(!can_save);
             if (ImGui::Button("Save scene") && can_save) {
                 if (!save_scene_source(scene_path, world, content)) {
@@ -174,8 +242,10 @@ namespace engine::editor {
             ImGui::SameLine();
             // The whole path, because which of the two trees this writes to is
             // the thing worth knowing.
-            ImGui::TextDisabled("%s", can_save ? scene_path.string().c_str()
-                                               : "no source tree, so there is nowhere to save");
+            const char* why = save_blocked != nullptr
+                                  ? save_blocked
+                                  : "no source tree, so there is nowhere to save";
+            ImGui::TextDisabled("%s", can_save ? scene_path.string().c_str() : why);
             if (can_save && ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("The source scene. The cooker turns it into what runs.");
             }
@@ -232,9 +302,11 @@ namespace engine::editor {
         ImGui::End();
     }
 
-    void draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
-                             gfx::Extent2D& wanted, bool* open) {
+    ViewportReport draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
+                                       gfx::Extent2D& wanted, PlayState state, bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_viewport_panel");
+
+        ViewportReport report;
 
         // No padding, so the picture reaches the edges of the panel. Without
         // this the content area is smaller than the panel by the style padding,
@@ -245,6 +317,15 @@ namespace engine::editor {
         ImGui::PopStyleVar();
 
         if (visible) {
+            // The whole panel, so a click on the picture counts as well as one
+            // on the bar. A child window inside it would otherwise hold the
+            // focus and the game would never see a key.
+            report.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+            report.request = draw_play_bar(state);
+
+            // After the bar, so the target follows the picture area rather
+            // than the whole panel. Sizing it to the panel would render a
+            // scene taller than the space left to show it.
             const ImVec2 area = ImGui::GetContentRegionAvail();
             // A collapsed or fully shrunk panel asks for nothing. Reporting a
             // zero here would have the caller build a target of no size, which
@@ -267,6 +348,7 @@ namespace engine::editor {
             }
         }
         ImGui::End();
+        return report;
     }
 
     bool save_scene_source(const std::filesystem::path& path, const scene::World& world,

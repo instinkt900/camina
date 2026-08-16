@@ -23,6 +23,7 @@
  */
 
 #include "core/entt.h"
+#include "editor/play_mode.h"
 #include "editor/view_settings.h"
 #include "gfx/imgui.h"
 #include "gfx/types.h"
@@ -40,6 +41,22 @@ namespace engine::scene {
 }
 
 namespace engine::editor {
+
+    /**
+     * @brief What the viewport panel reported about the frame it drew.
+     *
+     * The focus is here because a running session reads the keyboard, and a
+     * person typing a value into the inspector must not drive the game with it.
+     * The panel knows which window the user is working in and nothing else
+     * does.
+     */
+    struct ViewportReport {
+        /// @brief What the user clicked on the play bar.
+        PlayRequest request = PlayRequest::None;
+
+        /// @brief True while this panel is the focused one.
+        bool focused = false;
+    };
 
     /**
      * @brief Places the next panel, for an application that does not dock.
@@ -89,10 +106,15 @@ namespace engine::editor {
      * the reference a person wrote.
      * @param open Cleared when the user closes the panel. Pass null for a panel
      * the user cannot close.
+     * @param save_blocked Why the save is not allowed right now, or null when
+     * it is. The text is shown beside the disabled button. The editor passes a
+     * reason while a play session runs, because the world is then a game part
+     * way through a step rather than the scene somebody authored.
      */
     void draw_world_panel(const scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path,
-                          const assets::Content& content, bool* open = nullptr);
+                          const assets::Content& content, bool* open = nullptr,
+                          const char* save_blocked = nullptr);
 
     /**
      * @brief Draws every component the selected entity carries.
@@ -111,10 +133,15 @@ namespace engine::editor {
     void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open = nullptr);
 
     /**
-     * @brief Draws the rendered scene inside a panel.
+     * @brief Draws the rendered scene inside a panel, under a play bar.
      *
      * The picture fills the panel, so the camera aspect follows what the user
      * dragged the edges to and nothing is stretched or letterboxed.
+     *
+     * The three buttons sit above the picture, because that is the thing a
+     * person watches while a session runs. The panel changes no state: it
+     * reports what was clicked and the caller acts on it, which is what keeps
+     * the session out of a panel.
      *
      * The size it reports is what the panel wants, not what the picture is. A
      * target cannot be rebuilt while a frame is recording, so the caller
@@ -129,11 +156,15 @@ namespace engine::editor {
      * @param wanted Receives the size of the panel content area. Left untouched
      * when the panel is closed or collapsed, so a hidden panel never asks for a
      * target of zero.
+     * @param state What the play bar draws. Edit offers a play button, and a
+     * running session offers pause or resume and stop.
      * @param open Cleared when the user closes the panel. Pass null for a panel
      * the user cannot close.
+     * @return What the user clicked, and whether this panel holds the focus.
      */
-    void draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
-                             gfx::Extent2D& wanted, bool* open = nullptr);
+    ViewportReport draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
+                                       gfx::Extent2D& wanted, PlayState state,
+                                       bool* open = nullptr);
 
     /**
      * @brief Writes the world out as a source scene.

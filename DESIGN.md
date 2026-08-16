@@ -346,8 +346,8 @@ engine/
     math/              glm wrapper, transform, AABB, frustum, conventions.h
     reflect/           field descriptors, attributes, type registry, and the
                        two consumers: the ImGui inspector and JSON
-    editor/            the panels both applications draw, and the view state
-                       they edit. Not behind WITH_EDITOR, see below
+    editor/            the panels both applications draw, the view state they
+                       edit, and play mode. Not behind WITH_EDITOR, see below
     platform/          SDL3 window, input, filesystem, dynamic library loading
     gfx/               PUBLIC render interface: handles, descs, command list
       vulkan/          the ONLY place vulkan.h is legal (rule 4.1)
@@ -405,6 +405,27 @@ the dockspace, the layout a person arranged is the one they get.
 scene is tonemapped into and the binding ImGui draws it through, and it names no ImGui
 type and no Vulkan type, the same way the panels do. §9 holds why the scene renders at
 the size of the panel and why the rebuild waits for the top of a frame.
+
+`editor::PlayMode` is here for the same reason. It is play-in-editor: a snapshot of the
+world, a `play::Session` over it, and the restore that puts the authored scene back. M9.4
+built it, and it needed no new mechanism, because `scene::save_scene` and
+`scene::load_scene` already round-trip a world through a document. That is what §10 means
+when it says M2 and M3 already provide it.
+
+**Play and stop both replace every entity**, so anything holding one has to let go across
+either line. EnTT hands the same numbers out again, which is why the applications drop the
+selection at both ends and why the session is built by `play()` rather than held. A fresh
+session is a script host with no instances, a clock at zero, and bodies read from the world
+as it stands, so the second play is the same as the first.
+
+**Stop drops the session before it reads the world back.** Writing a transform onto a
+dynamic body does nothing, which is issue #284, so a restore that ran while the bodies were
+alive would put every static thing back and quietly leave the dynamic ones where the game
+left them. The session and every body it built are gone before the first entity is read.
+
+**A running session takes the save button away.** The world under a session is a game part
+way through a step, and writing that over the source scene would save the wreckage of a
+play as the authored scene.
 
 ---
 

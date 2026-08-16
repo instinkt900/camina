@@ -192,6 +192,15 @@ endif()
 
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
+# M9.4. Play-in-editor. This links the game, because the restore has to survive
+# what a real scene does: bodies that fall and scripts that create entities.
+add_executable(test_editor test_editor.cpp)
+target_link_libraries(test_editor PRIVATE camina::sandbox)
+engine_set_warnings(test_editor)
+engine_enable_clang_tidy(test_editor)
+
+add_test(NAME editor COMMAND test_editor)
+
 add_executable(test_sandbox test_sandbox.cpp)
 target_link_libraries(test_sandbox PRIVATE camina::sandbox)
 engine_set_warnings(test_sandbox)

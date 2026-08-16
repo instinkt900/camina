@@ -75,7 +75,9 @@ namespace engine::play {
         }
     }
 
-    void Session::stop_scripts(scene::World& world) { scripts_.stop(world); }
+    void Session::stop_scripts(scene::World& world, const View& view) {
+        scripts_.stop(world, step_services(view));
+    }
 
 #else
 
@@ -87,7 +89,10 @@ namespace engine::play {
         (void)changed;
     }
 
-    void Session::stop_scripts(scene::World& world) { (void)world; }
+    void Session::stop_scripts(scene::World& world, const View& view) {
+        (void)world;
+        (void)view;
+    }
 
 #endif
 

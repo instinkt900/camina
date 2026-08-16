@@ -15,16 +15,19 @@
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/panels.h"
+#include "editor/play_mode.h"
 #include "editor/view_settings.h"
 #include "editor/viewport.h"
 #include "gfx/device.h"
 #include "gfx/imgui.h"
 #include "physics/components.h"
+#include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
 #include "render/scene_renderer.h"
 #include "../screenshot.h"
 #include "sandbox/game.h"
+#include "core/jobs.h"
 #include "reflect/json.h"
 #include "scene/component_registry.h"
 #include "scene/world.h"
@@ -37,6 +40,7 @@
 // layout, and every ImGui docking example uses it. See build_default_layout().
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -67,6 +71,10 @@ namespace {
     /// How long to wait before polling again while the window is minimized.
     constexpr int kMinimizedSleepMs = 16;
 
+    /// The largest step one frame may hand the session, in seconds. A stall or
+    /// a debugger break must not run a burst of steps when it ends.
+    constexpr float kMaxFrameDelta = 0.25F;
+
     /// What the frame clears to behind the panels. The scene has its own image
     /// and its own clear color, so this shows through the gaps alone.
     constexpr engine::gfx::ColorRGBA kFrameClear{ 0.05F, 0.05F, 0.06F, 1.0F };
@@ -82,12 +90,17 @@ namespace {
         bool validation = true;       ///< The Khronos validation layer.
         bool sync_validation = false; ///< The barrier checks on top of it.
         bool vsync = true;
+        /// Start a play session on the first frame, as if somebody had clicked
+        /// Play. A run with --frames can then check the session rather than
+        /// only the empty editor.
+        bool play = false;
     };
 
     void print_usage() {
         ENGINE_LOG_INFO("Usage: editor [options]");
         ENGINE_LOG_INFO("  --content <dir>     Open this cooked content instead of the game's.");
         ENGINE_LOG_INFO("  --frames <n>        Stop after n frames. 0 runs until you quit.");
+        ENGINE_LOG_INFO("  --play              Start a play session on the first frame.");
         ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
@@ -130,7 +143,9 @@ namespace {
                 print_usage();
                 return false;
             }
-            if (arg == "--no-validation") {
+            if (arg == "--play") {
+                out.play = true;
+            } else if (arg == "--no-validation") {
                 out.validation = false;
             } else if (arg == "--sync-validation") {
                 out.sync_validation = true;
@@ -194,6 +209,11 @@ namespace {
         engine::editor::ViewSettings view;
         /// What the inspector shows, or entt::null for nothing.
         entt::entity selected = entt::null;
+        /// M9.4. The play session, and the authored world it goes back to.
+        engine::editor::PlayMode play;
+        /// Whether the Viewport panel held the focus on the last frame. A
+        /// running session reads the keyboard only while it did.
+        bool viewport_focused = false;
         /// The source scene the World panel saves to, or empty for no source tree.
         std::filesystem::path source_scene;
     };
@@ -414,6 +434,42 @@ namespace {
         ENGINE_LOG_INFO("No saved layout, so the editor built the default one.");
     }
 
+    /**
+     * Acts on what the play bar asked for.
+     *
+     * The selection is dropped at both ends of a session, because a play and a
+     * stop both replace every entity and EnTT hands the same numbers out again.
+     * An entity kept across one of those lines names whoever took its number.
+     *
+     * @param editor Everything the program owns.
+     * @param request What the user clicked.
+     */
+    void apply_play_request(Editor& editor, engine::editor::PlayRequest request) {
+        using engine::editor::PlayRequest;
+        switch (request) {
+        case PlayRequest::Play: {
+            const engine::editor::PlayDesc desc{ .content = &editor.content,
+                                                 .bind_actions = &sandbox::bind_actions };
+            if (editor.play.play(editor.world, desc)) {
+                editor.selected = entt::null;
+            }
+            break;
+        }
+        case PlayRequest::Pause:
+            editor.play.pause();
+            break;
+        case PlayRequest::Resume:
+            editor.play.resume();
+            break;
+        case PlayRequest::Stop:
+            editor.selected = entt::null;
+            editor.play.stop(editor.world);
+            break;
+        case PlayRequest::None:
+            break;
+        }
+    }
+
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(panels, running);
@@ -435,14 +491,23 @@ namespace {
         //
         // The viewport first, because what it reports is what the next frame
         // renders at, and the sooner that is known the shorter the mismatch.
+        engine::editor::ViewportReport viewport{};
         if (panels.viewport) {
-            engine::editor::draw_viewport_panel(editor.viewport.picture(),
-                                                editor.viewport.extent(),
-                                                editor.wanted_viewport, &panels.viewport);
+            viewport = engine::editor::draw_viewport_panel(
+                editor.viewport.picture(), editor.viewport.extent(), editor.wanted_viewport,
+                editor.play.state(), &panels.viewport);
         }
+        editor.viewport_focused = viewport.focused;
+
         if (panels.world) {
+            // The save button writes the world as it stands, and while a
+            // session runs that world is a game part way through a step rather
+            // than the scene a person authored. Saving it would write the
+            // wreckage of a play over the source file.
+            const char* blocked =
+                editor.play.running() ? "a session is running, so this is not your scene" : nullptr;
             engine::editor::draw_world_panel(editor.world, editor.selected, editor.source_scene,
-                                             editor.content, &panels.world);
+                                             editor.content, &panels.world, blocked);
         }
         if (panels.inspector) {
             engine::editor::draw_inspector_panel(editor.world, editor.selected,
@@ -459,6 +524,11 @@ namespace {
         if (panels.demo) {
             ImGui::ShowDemoWindow(&panels.demo);
         }
+
+        // After the panels are drawn and before the scene is composed. A stop
+        // replaces every entity, so acting on it here means this frame draws
+        // the world that comes back rather than the one that just went.
+        apply_play_request(editor, viewport.request);
 
         // After the panels, because an edit in the inspector goes around
         // World::set_local() and leaves the matrices stale. The runtime does
@@ -631,12 +701,56 @@ namespace {
         return true;
     }
 
+    /**
+     * Samples the devices for the session, and folds the frame into its step.
+     *
+     * A session reads the keyboard only while the Viewport panel holds the
+     * focus, so a value typed into the inspector cannot drive the game. Every
+     * other frame feeds a default frame, which reads every action as false.
+     *
+     * The focus is what the panel reported on the frame before, because the
+     * panels are drawn after this. One frame of lag on a click is invisible,
+     * and the alternative is drawing the UI twice.
+     *
+     * ImGui is asked first, because it owns the keyboard while a person types.
+     * platform/ sits below gfx/, so the module cannot ask on its own.
+     *
+     * @param editor Everything the program owns.
+     */
+    void update_input(Editor& editor) {
+        engine::platform::InputFrame state;
+        if (editor.play.running() && editor.viewport_focused) {
+            engine::platform::InputConsumed consumed;
+            engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
+            state = engine::platform::sample(editor.window, consumed);
+        }
+        editor.play.feed_input(state);
+    }
+
+    /**
+     * Works out how much wall time this frame covers.
+     *
+     * A long stall, a debugger break, or a driver hitch would otherwise hand
+     * the step accumulator the whole gap. The clock has a ceiling of its own,
+     * and this is the same clamp the runtime applies for the same reason.
+     *
+     * @param last_frame When the last frame ran.
+     * @param now The time this frame began.
+     * @return Seconds since the last frame, clamped.
+     */
+    [[nodiscard]] float frame_delta(std::chrono::steady_clock::time_point last_frame,
+                                    std::chrono::steady_clock::time_point now) {
+        const float seconds = std::chrono::duration<float>(now - last_frame).count();
+        return std::min(seconds, kMaxFrameDelta);
+    }
+
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
     [[nodiscard]] bool run_frames(Editor& editor, const Options& options) {
         Panels panels;
         bool running = true;
         std::uint64_t frame = 0;
         engine::gfx::Extent2D last_extent = window_extent(editor.window);
+        auto last_frame = std::chrono::steady_clock::now();
 
         while (running && editor.window.poll()) {
             if (editor.window.minimized()) {
@@ -664,6 +778,28 @@ namespace {
             if (!resize_scene_images(editor)) {
                 return false;
             }
+
+            const auto now = std::chrono::steady_clock::now();
+            const float delta = frame_delta(last_frame, now);
+            last_frame = now;
+
+            update_input(editor);
+
+            // The rate and the ceiling are read each frame, because the View
+            // panel can move either one while a session runs.
+            //
+            // A session that is paused advances nothing here, and one that is
+            // not running does not exist. So an editor sitting in Edit state
+            // costs a comparison.
+            if (engine::play::Session* session = editor.play.session(); session != nullptr) {
+                session->set_rate_hz(editor.view.physics_hz);
+                session->set_max_steps(editor.view.max_physics_steps);
+            }
+            editor.play.advance(editor.world,
+                                engine::play::View{ .position = editor.view.camera_position,
+                                                    .forward = engine::editor::camera_forward(
+                                                        editor.view) },
+                                delta);
 
             // The frame after this one is the last, so this is where the
             // capture has to be asked for.
@@ -754,6 +890,10 @@ int main(int argc, char** argv) {
 
     ENGINE_LOG_INFO("Camina Editor {} starting.", engine::Version);
 
+    // The solver runs on the job system, and a play session builds one. This is
+    // before anything that could step, which is what the runtime does too.
+    engine::jobs::init();
+
     // The engine registers what it defines, then the game registers what it
     // defines. This is rule 4.3 made visible: the same game module the runtime
     // links tells the editor what its types are, so the editor can show them
@@ -772,6 +912,7 @@ int main(int argc, char** argv) {
     Editor editor;
     if (!start(editor, options)) {
         stop(editor);
+        engine::jobs::shutdown();
         engine::log::shutdown();
         return 1;
     }
@@ -788,9 +929,22 @@ int main(int argc, char** argv) {
         ENGINE_LOG_INFO("Read {}.", engine::editor::kViewSettingsFile);
     }
 
+    // As if somebody had clicked Play on the first frame. A run with --frames
+    // then exercises the session, which is what an editor with no offscreen
+    // mode otherwise has no way to check.
+    if (options.play) {
+        apply_play_request(editor, engine::editor::PlayRequest::Play);
+    }
+
     const bool ok = run_frames(editor, options);
 
+    // Before the world goes, so a script that runs on_destroy still finds the
+    // simulation it may reach. A session left running at exit is the normal
+    // way to close the editor.
+    editor.play.stop(editor.world);
+
     stop(editor);
+    engine::jobs::shutdown();
     engine::log::shutdown();
     return ok ? 0 : 1;
 }
