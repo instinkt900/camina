@@ -15,7 +15,6 @@
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/fly_camera.h"
-#include "editor/fly_camera.h"
 #include "editor/panels.h"
 #include "editor/play_mode.h"
 #include "editor/view_settings.h"
@@ -32,9 +31,7 @@
 #include "core/jobs.h"
 #include "reflect/json.h"
 #include "scene/camera.h"
-#include "scene/camera.h"
 #include "scene/component_registry.h"
-#include "scene/components.h"
 #include "scene/components.h"
 #include "scene/world.h"
 #if defined(ENGINE_WITH_LUA)
