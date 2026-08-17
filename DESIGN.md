@@ -2254,6 +2254,16 @@ The exposure the editor tonemaps with is the scene camera's, not the editor's. E
 property of the level that a person judges by eye, so the viewport has to show what the game
 will show.
 
+**The editor draws the scene camera as a wireframe**, because the editor view is not that
+camera and nothing else says where it is. `editor::camera_lines` builds a pyramid from the
+camera out to a fixed length, with a bar over the top so a person can tell which way up it
+is. A symmetrical pyramid reads the same rolled by any angle.
+
+The width of that pyramid is the aspect the editor is drawing at rather than one the camera
+holds. A `scene::Camera` records a vertical field of view and nothing about the window a
+game will run in, so the height is exact and the width is a guess. Issue #327 holds the
+option that would let a scene say.
+
 **M9.5c puts ImGuizmo on the selected entity.** Move, turn, and size, in world space or
 in the entity's own. The handles write through `World::set_local`, so every child follows
 a dragged parent, and a child dragged under a moved parent lands where the pointer is

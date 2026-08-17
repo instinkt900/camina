@@ -14,6 +14,7 @@
 #include "assets/content.h"
 #include "core/log.h"
 #include "core/version.h"
+#include "editor/camera_lines.h"
 #include "editor/fly_camera.h"
 #include "gizmo.h"
 #include "editor/panels.h"
@@ -27,6 +28,7 @@
 #include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
+#include "render/debug_line_pass.h"
 #include "render/scene_renderer.h"
 #include "../screenshot.h"
 #include "sandbox/game.h"
@@ -257,6 +259,10 @@ namespace {
         bool viewport = true;
         bool demo = false;
         bool about = false;
+        /// The wireframe of the camera the game plays through. On by default,
+        /// because the editor draws through its own view and nothing else says
+        /// where that camera is.
+        bool camera_lines = true;
     };
 
     /// Everything the editor owns for the whole run, in the order it is built.
@@ -273,6 +279,13 @@ namespace {
         /// The shadow, cull, mesh, and tonemap passes. The same ones the
         /// runtime draws, which is what keeps the two pictures the same.
         engine::render::SceneRenderer scene;
+        /// Draws the wireframe of the scene camera over the picture. It costs
+        /// nothing on a frame with no lines to draw.
+        engine::render::DebugLinePass debug_lines;
+        /// The lines of that wireframe. Held between frames so a frame with the
+        /// wireframe on allocates nothing after the first one.
+        std::vector<engine::physics::DebugLine> camera_line_buffer;
+
         /// The image the scene is tonemapped into, and what the panel shows.
         engine::editor::Viewport viewport;
         /// The size the Viewport panel reported on the last frame. The target
@@ -461,6 +474,11 @@ namespace {
             return false;
         }
 
+        if (!editor.debug_lines.create(editor.device, editor.engine_content)) {
+            ENGINE_LOG_CRITICAL("The debug line pass did not build.");
+            return false;
+        }
+
         // After the overlay, because the binding the panel draws through comes
         // out of the pool the overlay owns.
         if (!editor.viewport.create(editor.device, extent, extent)) {
@@ -489,6 +507,7 @@ namespace {
         // Before the overlay goes, because the binding it holds is the
         // overlay's to return.
         editor.viewport.destroy();
+        editor.debug_lines.destroy();
         editor.scene.destroy();
         if (editor.overlay) {
             engine::gfx::imgui_shutdown(editor.device);
@@ -520,6 +539,8 @@ namespace {
             ImGui::MenuItem("World", nullptr, &panels.world);
             ImGui::MenuItem("Inspector", nullptr, &panels.inspector);
             ImGui::MenuItem("View settings", nullptr, &panels.view);
+            ImGui::Separator();
+            ImGui::MenuItem("Scene camera wireframe", nullptr, &panels.camera_lines);
             ImGui::Separator();
             ImGui::MenuItem("ImGui Demo", nullptr, &panels.demo);
             ImGui::EndMenu();
@@ -866,6 +887,18 @@ namespace {
         if (engine::gfx::cmd_begin_color_rendering(info.commands, editor.viewport.target(),
                                                    kSceneClear, false)) {
             editor.scene.draw_tonemap(info.commands, exposure);
+
+            // Inside the tonemap scope, because the line pipeline is built for
+            // a target with no depth attachment. The colors are display colors
+            // for the same reason the physics wireframe draws here: after the
+            // curve, so the color chosen is the color on screen.
+            if (panels.camera_lines && editor.camera != entt::null) {
+                engine::editor::camera_lines(editor.world, editor.camera, aspect,
+                                             editor.camera_line_buffer);
+                editor.debug_lines.draw(info.commands, clip_from_world,
+                                        editor.camera_line_buffer);
+            }
+
             engine::gfx::cmd_end_rendering(info.commands);
         }
 

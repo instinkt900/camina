@@ -597,6 +597,10 @@ ImGuizmo calls so a test can drive it with no window. Two mutations prove that t
 to divide out the parent, and two checks fail; write the Transform component instead of
 calling `World::set_local`, and three fail, because nothing recomposes the subtree.
 
+**The editor draws the scene camera as a wireframe**, from `editor::camera_lines`, with a bar
+over the top so up is readable. Its width is the editor's aspect rather than one the camera
+holds, because a scene says nothing about the shape it frames. Issue #327 holds that.
+
 **`editor --select <name>` and `--gizmo <move|turn|size>`** exist so a capture can show the
 handles. A gizmo otherwise needs a hand on the mouse, and there is no way to inject one.
 
