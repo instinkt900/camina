@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M8 complete, M9 in progress
-Last updated: 2026-08-14
+Status: M9 complete but for M9.8, which is held. M12 next, then M13, then M9.8
+Last updated: 2026-08-17
 
 ---
 
@@ -2503,6 +2503,17 @@ decides whether anyone can make a game with this engine, including you in a year
 
 **Start `sandbox/` at M3.** Choose something small and specific. A physics puzzle game fits
 well. It exercises Box3D, scripting, and PBR, and it needs no animation and little UI.
+
+**M9.8 waits for M13.** It is the milestone test of M9: build a level in the editor, press
+play, and ship it as a runtime build. M13 changes how the editor gets its assets, so running
+that test now would prove a loop that is about to change underneath. Its shipping half is
+already done and does not depend on M13: the runtime built with the editor on and off gives
+byte-identical captures, and a Release build with `with_editor=False` runs the level and
+carries no editor code. What is left is the authoring pass.
+
+That leaves M9 open across two milestones, which is unusual and is written here so nobody
+reads it as an oversight. M13.6 asks for much the same proof from the other side, so the two
+may well merge.
 
 **M13 runs after M12.** Both are editor comfort and both are worth having, and undo comes
 first because every hour of authoring without it is an hour spent being careful. M13 also
