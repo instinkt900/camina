@@ -28,6 +28,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -40,6 +41,40 @@ namespace engine::reflect {
      * These sit between the templates in this header and ImGui itself, so the
      * header stays free of ImGui types. Call inspect() rather than these.
      */
+    /**
+     * @brief Turns what an `AssetRef` field stores into what a person reads.
+     *
+     * A field marked `AssetRef` holds an identity, and an identity is the one
+     * thing `DESIGN.md` §7 says a person cannot know: the cooker derives it. So
+     * the inspector shows a name instead, and the application says what the name
+     * is, because `reflect/` sits below `assets/` and cannot ask a manifest
+     * anything.
+     *
+     * @param value The stored text, which is the identity.
+     * @return What to show. An empty answer leaves the inspector showing the
+     * stored text, which is what a program that installed no namer gets.
+     */
+    using AssetNamer = std::function<std::string(std::string_view value)>;
+
+    /**
+     * @brief Installs the namer every `AssetRef` field reads.
+     *
+     * Process wide, the same way the type registry is. An application sets it
+     * once, after its content opens.
+     *
+     * @param namer The namer, or an empty function to go back to raw text.
+     */
+    void set_asset_namer(AssetNamer namer);
+
+    /**
+     * @brief What an asset drag carries between panels.
+     *
+     * The asset browser is the drag source and an `AssetRef` field is the drop
+     * target. The payload is the identity as text, which is what the field
+     * stores, so nothing has to be looked up on the way.
+     */
+    inline constexpr const char* kAssetPayload = "engine.asset";
+
     namespace widget {
 
         /// @brief Which number a field holds, so one entry point covers them all.
@@ -144,6 +179,20 @@ namespace engine::reflect {
          * @return True when the user finished an edit.
          */
         [[nodiscard]] bool edit_text_value(const char* label, std::string& text);
+
+        /**
+         * @brief Draws an asset field: a name, a place to drop one, and a clear.
+         *
+         * The name comes from the installed AssetNamer. The field takes no typed
+         * text at all, which is the point: an identity is derived and nobody can
+         * type one. A person drags a row out of the asset browser instead.
+         *
+         * @param label The field name.
+         * @param text The identity as text. Written when the user drops an asset
+         * or clears the field, and left alone otherwise.
+         * @return True when the user changed it.
+         */
+        [[nodiscard]] bool edit_asset(const char* label, std::string& text);
 
         /**
          * @brief Draws a field the inspector cannot edit.
@@ -333,6 +382,34 @@ namespace engine::reflect {
             }
         }
 
+        /**
+         * Draws a field that names an asset.
+         *
+         * An empty answer clears the field to its default, which for an identity
+         * is the null one. Without that a person could drop an asset in and
+         * never take it out again.
+         */
+        template <typename V>
+        [[nodiscard]] bool inspect_asset(const char* label, V& value) {
+            using Value = std::remove_cvref_t<V>;
+            if constexpr (TextValue<Value>) {
+                std::string text = to_text(value);
+                if (!widget::edit_asset(label, text)) {
+                    return false;
+                }
+                if (text.empty()) {
+                    value = Value{};
+                    return true;
+                }
+                return from_text(text, value);
+            } else {
+                // A field marked AssetRef that holds something other than text is
+                // an authoring mistake, and drawing it normally says so more
+                // usefully than refusing to draw it.
+                return inspect_value(label, value, nullptr);
+            }
+        }
+
         /// Draws one field, honoring Hidden, ReadOnly, Range, and Tooltip.
         template <typename FieldType, typename V>
         [[nodiscard]] bool inspect_field(const FieldType& field, V& value) {
@@ -353,7 +430,9 @@ namespace engine::reflect {
                     widget::begin_disabled();
                 }
 
-                const bool changed = inspect_value(field.name(), value, range);
+                const bool changed = has_attribute_v<AssetRef, FieldType>
+                                         ? inspect_asset(field.name(), value)
+                                         : inspect_value(field.name(), value, range);
 
                 if constexpr (has_attribute_v<Tooltip, FieldType>) {
                     widget::tooltip(field.template attribute<Tooltip>().text);

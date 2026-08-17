@@ -206,13 +206,13 @@ namespace {
     void test_prefab_names_come_from_the_cooked_path() {
         const std::string source = "models/room/room.gltf";
 
-        check(sandbox::prefab_name(source, source + ".0.prefab") == source,
+        check(engine::assets::prefab_name(source, source + ".0.prefab") == source,
               "the first scene keeps the source path");
-        check(sandbox::prefab_name(source, source + ".1.prefab") == source + "#1",
+        check(engine::assets::prefab_name(source, source + ".1.prefab") == source + "#1",
               "a later scene carries its index");
-        check(sandbox::prefab_name(source, source + ".2.prefab") == source + "#2",
+        check(engine::assets::prefab_name(source, source + ".2.prefab") == source + "#2",
               "and the index is the one in the path");
-        check(sandbox::prefab_name("crate.prefab", "crate.prefab") == "crate.prefab",
+        check(engine::assets::prefab_name("crate.prefab", "crate.prefab") == "crate.prefab",
               "a copied prefab keeps the source path");
 
         // The reordering the finding asked for. Reading the outputs of one
@@ -227,13 +227,13 @@ namespace {
             const std::string expected =
                 cooked == forwards[0] ? source
                                       : source + "#" + cooked.substr(source.size() + 1, 1);
-            check(sandbox::prefab_name(source, cooked) == expected,
+            check(engine::assets::prefab_name(source, cooked) == expected,
                   "the name does not move when the outputs do");
         }
 
         // A shape the cooker does not write today. It must not collide with the
         // source path, because two prefabs under one name lose one of them.
-        check(sandbox::prefab_name(source, source + ".later.prefab") != source,
+        check(engine::assets::prefab_name(source, source + ".later.prefab") != source,
               "an unplanned shape does not take the source path");
     }
 

@@ -1,6 +1,7 @@
 #include "editor/picking.h"
 
 #include "scene/components.h"
+#include "scene/prefab.h"
 #include "scene/world.h"
 
 #include <limits>
@@ -50,6 +51,24 @@ namespace engine::editor {
         }
 
         return nearest;
+    }
+
+    entt::entity drop_prefab(scene::World& world, const scene::Prefab& prefab, const Vec3& at) {
+        // The record a scene file would hold for this instance. Entity 0 is the
+        // root, and a position is the only thing a drop decides.
+        nlohmann::json record;
+        record["overrides"]["0"]["Transform"]["position"] = { at.x, at.y, at.z };
+
+        const entt::entity root = scene::instantiate(world, prefab, record);
+        if (root == entt::null) {
+            return entt::null;
+        }
+
+        // The instance was built from local transforms, and nothing has composed
+        // the matrices yet. A caller that drew before this would see it at the
+        // origin for one frame.
+        world.update();
+        return root;
     }
 
 } // namespace engine::editor

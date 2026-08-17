@@ -1,4 +1,5 @@
 #include "assets/hot_reload.h"
+#include "assets/reference.h"
 #include "assets/manifest.h"
 #include "core/arena.h"
 #include "core/frame_stats.h"
@@ -17,6 +18,7 @@
 #include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
+#include "reflect/inspector.h"
 #include "reflect/json.h"
 #include "reflect/registry.h"
 #include "render/scene_renderer.h"
@@ -1832,6 +1834,17 @@ int main(int argc, char** argv) {
         engine::log::shutdown();
         return 1;
     }
+
+    // The debug overlay draws the same inspector the editor does, so an asset
+    // field there reads a name rather than an identity. reflect/ sits below
+    // assets/, which is why the manifest arrives through a function.
+    engine::reflect::set_asset_namer([&runtime](std::string_view value) -> std::string {
+        engine::Guid identity;
+        if (!engine::from_text(value, identity)) {
+            return {};
+        }
+        return engine::assets::reference_for(runtime.game_content.manifest(), identity);
+    });
 
     // After the first load, so the watcher takes its snapshot of a tree that
     // is already cooked and nothing arrives as a change on the first frame.

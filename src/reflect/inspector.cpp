@@ -7,9 +7,18 @@
 #include <cstddef>
 #include <cstring>
 #include <string_view>
+#include <utility>
 #include <unordered_map>
 
 namespace engine::reflect {
+
+    namespace {
+        /// What every AssetRef field reads to turn an identity into a name.
+        AssetNamer g_asset_namer;
+    } // namespace
+
+    void set_asset_namer(AssetNamer namer) { g_asset_namer = std::move(namer); }
+
 
     namespace {
 
@@ -162,6 +171,64 @@ namespace engine::reflect {
 
         bool edit_string(const char* label, std::string& value) {
             return ImGui::InputText(label, &value);
+        }
+
+        bool edit_asset(const char* label, std::string& text) {
+            bool changed = false;
+
+            // What a person reads. The namer answers empty for an identity
+            // nothing in the manifest produced, and the raw text is then the
+            // honest thing to show: it says the field names something the cook
+            // did not make.
+            std::string name;
+            if (g_asset_namer && !text.empty()) {
+                name = g_asset_namer(text);
+            }
+            const char* shown = "none";
+            if (!name.empty()) {
+                shown = name.c_str();
+            } else if (!text.empty()) {
+                shown = text.c_str();
+            }
+
+            ImGui::PushID(label);
+
+            // A button rather than a text box, because an identity is derived
+            // and typing one is not a thing anybody can do. It is a place to
+            // drop an asset and nothing else.
+            const float clear_width = ImGui::GetFrameHeight();
+            const float width = ImGui::GetContentRegionAvail().x - clear_width -
+                                ImGui::GetStyle().ItemSpacing.x;
+            ImGui::Button(shown, ImVec2{ width > 0.0F ? width : 0.0F, 0.0F });
+
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* dropped = ImGui::AcceptDragDropPayload(kAssetPayload)) {
+                    text.assign(static_cast<const char*>(dropped->Data),
+                                static_cast<std::size_t>(dropped->DataSize));
+                    changed = true;
+                }
+                ImGui::EndDragDropTarget();
+            }
+
+            if (ImGui::IsItemHovered() && !text.empty()) {
+                // The identity itself, for the moment somebody needs to compare
+                // one against a file or a log line.
+                ImGui::SetTooltip("%s", text.c_str());
+            }
+
+            ImGui::SameLine();
+            ImGui::BeginDisabled(text.empty());
+            if (ImGui::Button("x", ImVec2{ clear_width, 0.0F })) {
+                text.clear();
+                changed = true;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label);
+
+            ImGui::PopID();
+            return changed;
         }
 
         bool edit_text_value(const char* label, std::string& text) {

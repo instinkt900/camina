@@ -107,6 +107,41 @@ namespace engine {
     }
 
     /**
+     * @brief Where a ray meets a plane, if it does.
+     *
+     * The editor drops a prefab where the pointer meets the ground. A ray that
+     * runs along the plane, or away from it, meets nothing: the caller then puts
+     * the thing a fixed distance ahead instead, because a drop that goes nowhere
+     * is worse than a drop in a reasonable place.
+     *
+     * @param ray The ray to test.
+     * @param point Any point on the plane.
+     * @param normal The plane normal. It need not be normalized.
+     * @param out_distance Receives how far along the ray the meeting is.
+     * Untouched when they do not meet ahead of the origin.
+     * @return True when the ray meets the plane ahead of its origin.
+     */
+    [[nodiscard]] inline bool ray_hits_plane(const Ray& ray, const Vec3& point, const Vec3& normal,
+                                             float& out_distance) {
+        const float slope = glm::dot(normal, ray.direction);
+        if (std::abs(slope) < std::numeric_limits<float>::epsilon()) {
+            // Along the plane. Two parallel things meet nowhere, and dividing
+            // by this would give an infinity that reads as a very long ray.
+            return false;
+        }
+
+        const float distance = glm::dot(normal, point - ray.origin) / slope;
+        if (distance < 0.0F) {
+            // Behind the pointer. A person dragging over the sky is not asking
+            // for something behind their head.
+            return false;
+        }
+
+        out_distance = distance;
+        return true;
+    }
+
+    /**
      * @brief Turns a pixel inside a rectangle into normalized device coordinates.
      *
      * The rectangle is where the picture was drawn, in the same coordinates the

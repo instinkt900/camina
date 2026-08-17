@@ -108,6 +108,42 @@ namespace engine::assets {
     [[nodiscard]] std::string format_reference(const AssetReference& reference);
 
     /**
+     * @brief The name a scene file uses for one cooked prefab.
+     *
+     * The name is the source path, so a scene names the file a person edits. A
+     * cooked prefab has a derived identity that nobody chose, and a stem alone
+     * collides as soon as two directories hold a model of the same name.
+     * Neither is a name somebody can write down.
+     *
+     * A glTF that lists several scenes cooks one prefab for each, and the cooked
+     * path carries the scene index. Scene 0 keeps the source path, because that
+     * is the common case and it reads well. Every later scene is
+     * `<source>#<index>`.
+     *
+     * This lived in `sandbox/game.h` until M9.6b. It is a cooker convention
+     * rather than a game rule, and the editor needs it to turn a dropped
+     * identity back into the prefab the library holds.
+     *
+     * @warning The index comes out of the cooked path and is never counted from
+     * the position in the manifest. A prefab's identity is derived from the
+     * scene index, so counting would be a second source of truth that disagrees
+     * as soon as the outputs of one source are held in another order.
+     *
+     * @code
+     * prefab_name("models/room/room.gltf", "models/room/room.gltf.0.prefab");
+     * // "models/room/room.gltf"
+     * prefab_name("models/room/room.gltf", "models/room/room.gltf.2.prefab");
+     * // "models/room/room.gltf#2"
+     * prefab_name("crate.prefab", "crate.prefab"); // "crate.prefab"
+     * @endcode
+     *
+     * @param source The source path the cooker read, as the manifest holds it.
+     * @param cooked The cooked output path, which carries the scene index.
+     * @return The name a scene file uses to instance that prefab.
+     */
+    [[nodiscard]] std::string prefab_name(std::string_view source, std::string_view cooked);
+
+    /**
      * @brief Finds the reference that names an identity, if one does.
      *
      * This is the way back from a GUID. The manifest says which source produced
