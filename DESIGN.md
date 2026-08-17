@@ -435,6 +435,16 @@ field marked `reflect::AssetRef` holds an identity, and an identity is the one t
 a person cannot know: the cooker derives it. So the inspector shows a name and takes no
 typed text at all. A person drags a row out of the browser instead.
 
+**A prefab dropped on the viewport becomes an instance where the pointer is.** That is the
+other half of a browser: filling a field says what an entity uses, and a drop says an entity
+exists at all. It lands where the ray through the pointer meets the ground, and a few metres
+ahead of the camera when the pointer is on the sky, because a drop that goes nowhere is worse
+than one in a reasonable place. The new instance is selected, so the gizmo is already on it.
+
+`assets::prefab_name` moved out of `sandbox/game.h` for this. It is a cooker convention
+rather than a game rule: it turns a cooked path into the name a scene file writes, and the
+editor needs it to join a dropped identity to the prefab the library holds.
+
 That makes one of the M9.6 rules structural rather than checked. An asset the cook has not
 produced is not in the manifest, so it is not a row in the browser, so there is nothing to
 drag. Nothing has to refuse it.

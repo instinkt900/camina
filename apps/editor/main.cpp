@@ -13,6 +13,7 @@
 
 #include "assets/content.h"
 #include "assets/reference.h"
+#include "assets/manifest.h"
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/camera_lines.h"
@@ -40,6 +41,7 @@
 #include "scene/camera.h"
 #include "scene/component_registry.h"
 #include "scene/components.h"
+#include "scene/prefab.h"
 #include "scene/world.h"
 #if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
@@ -426,6 +428,9 @@ namespace {
         }
     }
 
+    /// How far ahead a dropped prefab lands when the pointer is on nothing.
+    constexpr float kDropAhead = 6.0F;
+
     /// The aspect ratio of an image, for the camera matrix.
     /// A zero height reads as square rather than dividing by zero.
     [[nodiscard]] float aspect_ratio(engine::gfx::Extent2D extent) {
@@ -784,9 +789,95 @@ namespace {
      * @param width Width of the picture, in pixels.
      * @param height Height of the picture.
      */
+    /**
+     * Creates an instance of a dropped prefab where the pointer is.
+     *
+     * The payload is an identity, and the prefab library is keyed by the name
+     * `assets::prefab_name` builds from the cooked path. So the manifest is what
+     * joins the two, and an identity that names no prefab is ignored: dropping a
+     * texture on the viewport should do nothing rather than something strange.
+     *
+     * @param editor Everything the program owns.
+     * @param identity The dropped identity, as text.
+     * @param x Left edge of the picture, in screen coordinates.
+     * @param y Top edge of the picture.
+     * @param width Width of the picture, in pixels.
+     * @param height Height of the picture.
+     */
+    void drop_asset(Editor& editor, std::string_view identity, float x, float y, float width,
+                    float height) {
+        engine::Guid dropped;
+        if (!engine::from_text(identity, dropped)) {
+            return;
+        }
+
+        // Which cooked file that identity is, and what the library calls it.
+        std::string name;
+        for (const engine::assets::ManifestEntry& entry : editor.content.manifest().entries) {
+            for (const engine::assets::ManifestOutput& output : entry.outputs) {
+                if (output.guid == dropped &&
+                    std::string_view{ output.cooked }.ends_with(
+                        engine::assets::kPrefabExtension)) {
+                    name = engine::assets::prefab_name(entry.source, output.cooked);
+                }
+            }
+        }
+        if (name.empty()) {
+            ENGINE_LOG_INFO("That asset is not a prefab, so there is nothing to place.");
+            return;
+        }
+
+        const engine::scene::Prefab* prefab = engine::scene::prefabs().find(name);
+        if (prefab == nullptr) {
+            ENGINE_LOG_ERROR("{} is cooked and the library does not hold it.", name);
+            return;
+        }
+
+        // Where the pointer is pointing. The ground is where a person means, and
+        // a drag over the sky puts it a few metres ahead instead, because a drop
+        // that goes nowhere is worse than one in a reasonable place.
+        const engine::Vec2 ndc =
+            engine::ndc_from_pixel(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y, x, y,
+                                   width, height);
+        const engine::Mat4 clip_from_world = engine::editor::fly_clip_from_world(
+            editor.view_camera, width / height, engine::editor::kFallbackFov,
+            engine::kDefaultNearPlane);
+        const engine::Ray ray = engine::ray_through_ndc(glm::inverse(clip_from_world),
+                                                        editor.view_camera.position, ndc.x, ndc.y);
+
+        float distance = kDropAhead;
+        (void)engine::ray_hits_plane(ray, engine::Vec3{ 0.0F, 0.0F, 0.0F },
+                                     engine::Vec3{ 0.0F, 1.0F, 0.0F }, distance);
+        const engine::Vec3 at = ray.origin + (ray.direction * distance);
+
+        const entt::entity root = engine::editor::drop_prefab(editor.world, *prefab, at);
+        if (root == entt::null) {
+            ENGINE_LOG_ERROR("{} would not instance.", name);
+            return;
+        }
+
+        // Selected, so the gizmo is on the new thing and a person can move it
+        // straight away. That is what every editor does after a drop.
+        editor.selected = root;
+        ENGINE_LOG_INFO("Placed {} at {} {} {}.", name, at.x, at.y, at.z);
+    }
+
     void draw_viewport_overlay(void* user, float x, float y, float width, float height) {
         Editor& editor = *static_cast<Editor*>(user);
         draw_gizmo_overlay(user, x, y, width, height);
+
+        // The picture is a drop target. The item drawn last is the image, so
+        // this attaches to it.
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* dropped =
+                    ImGui::AcceptDragDropPayload(engine::reflect::kAssetPayload)) {
+                drop_asset(editor,
+                           std::string_view{ static_cast<const char*>(dropped->Data),
+                                             static_cast<std::size_t>(dropped->DataSize) },
+                           x, y, width, height);
+            }
+            ImGui::EndDragDropTarget();
+        }
 
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered() &&
             !apps::gizmo_has_mouse()) {

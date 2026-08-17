@@ -457,6 +457,39 @@ namespace {
         check(right.direction.x > 0.0F, "the right of the picture points right");
     }
 
+    /**
+     * A ray meets the ground where a dropped thing should land.
+     *
+     * The editor drops a prefab here. A ray along the plane or pointing away
+     * from it meets nothing, and the caller then places the thing ahead of the
+     * camera rather than at an infinity.
+     */
+    void test_a_ray_against_the_ground() {
+        section("a ray against the ground plane");
+
+        const engine::Vec3 origin{ 0.0F, 0.0F, 0.0F };
+        const engine::Vec3 up{ 0.0F, 1.0F, 0.0F };
+        float distance = 0.0F;
+
+        // From two metres up, looking down and forwards at 45 degrees.
+        const engine::Ray down{ .origin = { 0.0F, 2.0F, 0.0F },
+                                .direction = glm::normalize(engine::Vec3{ 0.0F, -1.0F, -1.0F }) };
+        check(engine::ray_hits_plane(down, origin, up, distance), "a ray at the ground meets it");
+        const engine::Vec3 where = down.origin + (down.direction * distance);
+        check(near_enough(where.y, 0.0F), "on the plane");
+        check(near_enough(where.z, -2.0F), "two metres ahead, because the angle is 45 degrees");
+
+        const engine::Ray sky{ .origin = { 0.0F, 2.0F, 0.0F },
+                               .direction = glm::normalize(engine::Vec3{ 0.0F, 1.0F, -1.0F }) };
+        check(!engine::ray_hits_plane(sky, origin, up, distance),
+              "a ray at the sky meets nothing ahead of it");
+
+        const engine::Ray along{ .origin = { 0.0F, 2.0F, 0.0F },
+                                 .direction = { 0.0F, 0.0F, -1.0F } };
+        check(!engine::ray_hits_plane(along, origin, up, distance),
+              "and a ray along the plane meets nothing at all");
+    }
+
     /// A pixel in a panel becomes a point on the picture.
     void test_a_pixel_becomes_a_point() {
         section("a pixel inside a panel");
@@ -549,6 +582,7 @@ int main() {
     test_a_ray_through_the_screen();
     test_the_box_test();
     test_a_pixel_becomes_a_point();
+    test_a_ray_against_the_ground();
 
     test_who_gets_the_mouse();
     test_movement_needs_the_look_button();

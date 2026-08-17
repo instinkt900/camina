@@ -234,6 +234,11 @@ namespace {
     /// How close two matrices have to be, in meters and in the units of a basis.
     constexpr float kPlaceTolerance = 1.0e-4F;
 
+    [[nodiscard]] bool near_enough(const engine::Vec3& a, const engine::Vec3& b) {
+        return std::fabs(a.x - b.x) < kPlaceTolerance && std::fabs(a.y - b.y) < kPlaceTolerance &&
+               std::fabs(a.z - b.z) < kPlaceTolerance;
+    }
+
     [[nodiscard]] bool near_enough(const engine::Mat4& a, const engine::Mat4& b) {
         for (glm::length_t column = 0; column < 4; ++column) {
             for (glm::length_t row = 0; row < 4; ++row) {
@@ -541,6 +546,49 @@ namespace {
               "and neither is a mesh whose bounds are not known yet");
     }
 
+    /**
+     * Dropping a prefab makes an instance where it was dropped.
+     *
+     * The drag is ImGui and cannot be tested. Everything under it can: the
+     * prefab the library holds, the instance it builds, where that instance
+     * lands, and whether the scene file keeps it. A drop that did not survive a
+     * save would look right until somebody reopened the scene.
+     */
+    void test_dropping_a_prefab() {
+        section("dropping a prefab into the world");
+
+        engine::assets::Content content;
+        engine::scene::World world;
+        check(load_shipped(world, content), "the shipped content loads");
+
+        const std::size_t before = world.size();
+        const engine::scene::Prefab* crate = engine::scene::prefabs().find("crate.prefab");
+        check(crate != nullptr, "the library holds the crate prefab");
+
+        const engine::Vec3 at{ 1.5F, 0.5F, -2.5F };
+        const entt::entity root = engine::editor::drop_prefab(world, *crate, at);
+        check(root != entt::null, "the drop made an instance");
+        check(world.size() == before + crate->size(),
+              "and the world grew by everything the prefab holds");
+
+        const engine::Vec3 landed{ world.world_matrix(root)[3] };
+        check(near_enough(landed, at), "the root landed where it was dropped");
+
+        // It is an instance rather than loose entities, which is what keeps the
+        // scene file short and what lets the prefab change under it later.
+        check(world.registry().all_of<engine::scene::PrefabInstance>(root),
+              "the root carries the prefab link");
+
+        // Through the scene file and back.
+        const nlohmann::json saved = engine::scene::save_scene(world);
+        engine::scene::World reopened;
+        check(engine::scene::load_scene(saved, reopened), "the scene with the new instance loads");
+        reopened.update();
+        check(reopened.size() == world.size(), "with every entity");
+        check(engine::scene::save_scene(reopened) == saved,
+              "and saving what was loaded gives the same document");
+    }
+
 } // namespace
 
 int main() {
@@ -550,6 +598,7 @@ int main() {
     // the pool up before it builds one.
     engine::jobs::init();
 
+    test_dropping_a_prefab();
     test_picking_the_nearest_entity();
     test_a_room_does_not_swallow_every_click();
     test_picking_respects_the_transform();

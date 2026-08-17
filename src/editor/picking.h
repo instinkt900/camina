@@ -19,6 +19,10 @@
 #include "core/guid.h"
 #include "math/ray.h"
 
+namespace engine::scene {
+    class Prefab;
+}
+
 #include <entt/entity/entity.hpp>
 #include <entt/entity/fwd.hpp>
 
@@ -63,5 +67,22 @@ namespace engine::editor {
      */
     [[nodiscard]] entt::entity pick_entity(const scene::World& world, const Ray& ray,
                                            const BoundsLookup& bounds);
+
+    /**
+     * @brief Creates an instance of a prefab at a place in the world.
+     *
+     * What a drop from the asset browser does. The record a scene file would
+     * hold is built here: a position override on the root and nothing else, so
+     * the instance follows its prefab in every other way and the scene file
+     * says only what a person moved.
+     *
+     * @param world The world to create in.
+     * @param prefab The prefab to instance.
+     * @param at Where to put the root, in world space.
+     * @return The root of the new instance, or `entt::null` when the prefab
+     * would not build.
+     */
+    [[nodiscard]] entt::entity drop_prefab(scene::World& world, const scene::Prefab& prefab,
+                                           const Vec3& at);
 
 } // namespace engine::editor

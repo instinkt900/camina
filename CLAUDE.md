@@ -602,6 +602,11 @@ what it cooked into, and a row is a drag source. An `AssetRef` field in the insp
 drop target with a clear button and no text box, because nobody can type a derived identity.
 `reflect::set_asset_namer` is how the name reaches `reflect/`, which sits below `assets/`.
 
+**A prefab dropped on the viewport becomes an instance**, at the point where the pointer
+meets the ground. `assets::prefab_name` moved out of `sandbox/game.h` to make that possible:
+it is a cooker convention rather than a game rule, and the editor needs it to turn a dropped
+identity into the name the prefab library is keyed by.
+
 **Clicking an entity selects it**, which closed #34. `math/ray.h` holds the ray, the slab
 test, and the pixel to NDC step, all of it testable with no GPU. The ray goes into the local
 space of each candidate, so the test is against the oriented box of the entity. A click on a
