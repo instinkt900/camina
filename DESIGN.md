@@ -2423,6 +2423,47 @@ follows. This is the prerequisite for that, and M10 and the game will both want 
 names its entity after that entity has been deleted and brought back, and the cost of a step
 is measured on the largest scene the project has rather than on the sandbox.
 
+### M13 — Source assets in the editor
+The editor opens a project that has never been cooked. It reads `.gltf`, `.png`, `.hdr` and
+`.glsl` straight out of the source tree, imports them in memory, and draws them. **The
+runtime stays cooked-only.**
+
+The runtime keeps its side for two reasons. A shipped game should not carry cgltf, stb,
+meshoptimizer, bc7enc and shaderc, and shaderc is the largest of them. And cooked content is
+what makes a run reproducible, which is what every offscreen capture in this project rests
+on.
+
+**The rule that stops this becoming two engines: the editor runs the same import code the
+cooker runs, and produces the same bytes.** An entity drawn in the editor is drawn from the
+data the runtime will draw it from, so the two pictures match and a capture is still worth
+comparing. Anything that departs from that is a deliberate exception, named here, with its
+reason.
+
+There is exactly one place to put the seam. Every cache and pass reads an asset through
+`assets::Content`: `MeshCache`, `TextureCache`, `MaterialCache`, `MeshPass`,
+`SceneRenderer`, `sandbox::load`, and `play::Session::load_scripts`. So an interface there,
+with a cooked implementation and an importing one, reaches everything and changes nothing
+above it.
+
+The importers move out of `tools/cooker/` into a library the editor can link, and their
+dependencies stay private to it so a runtime build links none of them. `cooker_lib` already
+knows no game, so the code is separable today and the work is where it sits rather than what
+it does.
+
+**Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
+tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an
+incremental one is about a tenth of a second. So the editor imports one asset at a time and
+keeps what it imported for the session. If that is not enough, the next step is a cache of
+imported bytes on disk, and that cache is a cooked tree with another name. It should be
+called one rather than becoming a third format.
+
+Cooking then becomes something a person asks for, because it is how a level reaches the
+runtime rather than how the editor sees its own work.
+
+**Done when:** the editor opens the sandbox with no cooked tree at all and draws it, a level
+built that way runs in the runtime after one cook, and the two pictures match or every
+difference is named here.
+
 ### After that, as the game demands
 ozz-animation, which you pull forward as soon as you need a character. The `gfx::` plugin
 ABI. Controller navigation for moth_ui. Networking.
@@ -2437,6 +2478,11 @@ decides whether anyone can make a game with this engine, including you in a year
 
 **Start `sandbox/` at M3.** Choose something small and specific. A physics puzzle game fits
 well. It exercises Box3D, scripting, and PBR, and it needs no animation and little UI.
+
+**M13 runs after M12.** Both are editor comfort and both are worth having, and undo comes
+first because every hour of authoring without it is an hour spent being careful. M13 also
+wants an editor that is already pleasant to use, because it is a change to how assets reach
+it rather than to what a person can do.
 
 **M12 runs before M10.** Undo is authoring, and authoring pain compounds: every level built
 without it is built carefully rather than freely, and every mistake costs whatever was not
