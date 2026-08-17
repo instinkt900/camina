@@ -18,6 +18,7 @@
 #include "editor/fly_camera.h"
 #include "gizmo.h"
 #include "editor/panels.h"
+#include "editor/picking.h"
 #include "editor/placement.h"
 #include "editor/play_mode.h"
 #include "editor/view_settings.h"
@@ -28,6 +29,7 @@
 #include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/window.h"
+#include "math/ray.h"
 #include "render/debug_line_pass.h"
 #include "render/scene_renderer.h"
 #include "../screenshot.h"
@@ -675,6 +677,55 @@ namespace {
      * @param width Width of the picture, in pixels.
      * @param height Height of the picture.
      */
+    /**
+     * Selects whatever the pointer is over, or nothing.
+     *
+     * The bounds come from the mesh cache, which already holds every mesh the
+     * scene drew. A mesh that has not loaded answers false and is not pickable,
+     * which is the right answer: it is not on screen either.
+     *
+     * @param editor Everything the program owns.
+     * @param x Left edge of the picture, in screen coordinates.
+     * @param y Top edge of the picture.
+     * @param width Width of the picture, in pixels.
+     * @param height Height of the picture.
+     */
+    void pick_at_pointer(Editor& editor, float x, float y, float width, float height) {
+        if (width <= 0.0F || height <= 0.0F) {
+            return;
+        }
+
+        // Normalized device coordinates, where -1 is the top. Vulkan's Y runs
+        // down and the projection already accounts for it, so a pixel measured
+        // from the top of the picture needs no flip. See math/ray.h.
+        const ImVec2 pointer = ImGui::GetIO().MousePos;
+        const engine::Vec2 ndc =
+            engine::ndc_from_pixel(pointer.x, pointer.y, x, y, width, height);
+
+        const engine::Mat4 clip_from_world = engine::editor::fly_clip_from_world(
+            editor.view_camera, width / height, engine::editor::kFallbackFov,
+            engine::kDefaultNearPlane);
+        const engine::Ray ray = engine::ray_through_ndc(
+            glm::inverse(clip_from_world), editor.view_camera.position, ndc.x, ndc.y);
+
+        const engine::editor::BoundsLookup bounds = [&editor](engine::Guid mesh,
+                                                              engine::Vec3& min,
+                                                              engine::Vec3& max) {
+            const engine::render::GpuMesh* found =
+                editor.scene.mesh().meshes().get(editor.device, editor.content, mesh);
+            if (found == nullptr) {
+                return false;
+            }
+            min = found->min;
+            max = found->max;
+            return true;
+        };
+
+        // Empty space clears the selection, which is what every editor does and
+        // what makes the gizmo go away when somebody is done with it.
+        editor.selected = engine::editor::pick_entity(editor.world, ray, bounds);
+    }
+
     void draw_gizmo_overlay(void* user, float x, float y, float width, float height) {
         Editor& editor = *static_cast<Editor*>(user);
         if (editor.selected == entt::null || !editor.world.registry().valid(editor.selected)) {
@@ -698,6 +749,30 @@ namespace {
         engine::Mat4 world_matrix = editor.world.world_matrix(editor.selected);
         if (apps::draw_gizmo(desc, world_matrix)) {
             engine::editor::place_entity(editor.world, editor.selected, world_matrix);
+        }
+    }
+
+    /**
+     * Draws the gizmo, then picks, over the picture and inside its window.
+     *
+     * The order is what keeps the two apart. The gizmo reports whether the
+     * pointer is on a handle, and a click on a handle belongs to the drag rather
+     * than to a selection. Picking first would select whatever sits behind the
+     * arrow somebody just grabbed.
+     *
+     * @param user The Editor, because a function pointer carries no state.
+     * @param x Left edge of the picture, in screen coordinates.
+     * @param y Top edge of the picture.
+     * @param width Width of the picture, in pixels.
+     * @param height Height of the picture.
+     */
+    void draw_viewport_overlay(void* user, float x, float y, float width, float height) {
+        Editor& editor = *static_cast<Editor*>(user);
+        draw_gizmo_overlay(user, x, y, width, height);
+
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered() &&
+            !apps::gizmo_has_mouse()) {
+            pick_at_pointer(editor, x, y, width, height);
         }
     }
 
@@ -742,7 +817,7 @@ namespace {
         // renders at, and the sooner that is known the shorter the mismatch.
         engine::editor::ViewportReport viewport{};
         if (panels.viewport) {
-            const engine::editor::ViewportOverlay overlay{ .draw = &draw_gizmo_overlay,
+            const engine::editor::ViewportOverlay overlay{ .draw = &draw_viewport_overlay,
                                                            .user = &editor };
             viewport = engine::editor::draw_viewport_panel(
                 editor.viewport.picture(), editor.viewport.extent(), editor.wanted_viewport,
@@ -836,6 +911,15 @@ namespace {
         // After the ImGui frame opens and before any panel draws, because the
         // gizmo reads the mouse state this call latches.
         apps::begin_gizmo_frame();
+
+        // Before the panels, because two of them read world matrices: the gizmo
+        // draws at the pose of the selected entity, and a click tests the bounds
+        // of every entity. A session moved things this frame through
+        // Simulation::interpolate, which writes local transforms, so without
+        // this both would work from the pose of the frame before. The update
+        // after the panels stays, for what an inspector edit or a drag changed.
+        editor.world.update();
+
         draw_ui(editor, panels, running);
 
         // The scene, into the image the panel shows. The same four passes the

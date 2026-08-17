@@ -65,6 +65,16 @@ namespace apps {
     };
 
     /**
+     * @brief Whether the pointer is over a handle or dragging one.
+     *
+     * A click that lands on a handle belongs to the gizmo, and picking on it
+     * would select whatever is behind the arrow somebody just grabbed.
+     *
+     * @return True while the gizmo owns the mouse.
+     */
+    [[nodiscard]] bool gizmo_has_mouse();
+
+    /**
      * @brief Draws the handles and reports what the user dragged them to.
      *
      * Call this inside the window the picture is in, so the handles draw into

@@ -2264,6 +2264,30 @@ holds. A `scene::Camera` records a vertical field of view and nothing about the 
 game will run in, so the height is exact and the width is a guess. Issue #327 holds the
 option that would let a scene say.
 
+**Clicking an entity selects it**, which closed issue #34 after it had been open since M3.3.
+`math/ray.h` turns a point on the picture into a world ray, and `editor::pick_entity` finds
+the nearest entity that ray meets. Empty space clears the selection.
+
+The ray goes into the local space of each candidate rather than the bounds coming out into
+the world. That makes the test an oriented box for the price of one inverse, and a sphere
+would have been wrong for the shapes an editor holds: a sphere around a long thin wall is
+mostly empty space, and clicking that space would select the wall.
+
+**A ray that starts inside a box reports where it leaves, not zero.** Every scene the editor
+opens is a room: a box that contains the camera and everything in it. A hit at zero beats
+every object inside, so clicking anything selected the room. Reporting the far side puts the
+room behind its own contents, which is where a person sees it, and the room is still
+selectable wherever nothing else is in the way.
+
+**A click the gizmo owns does not change the selection.** The overlay draws the handles
+first and picks only when ImGuizmo reports neither a hover nor a drag, so grabbing an arrow
+cannot select whatever sits behind it, and a drag that wanders off the handle keeps the
+entity it started on.
+
+The bounds arrive through a callback, so `src/editor/` needs nothing from `src/render/` and
+a test drives the search with bounds it makes up. The editor answers that callback from
+`render::MeshCache`, which already holds every mesh the scene drew.
+
 **M9.5c puts ImGuizmo on the selected entity.** Move, turn, and size, in world space or
 in the entity's own. The handles write through `World::set_local`, so every child follows
 a dragged parent, and a child dragged under a moved parent lands where the pointer is
