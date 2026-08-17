@@ -2377,12 +2377,28 @@ as a document, and `scene::diff` writes the merge patch between two documents.
 
 Two things do not fall out of the shape.
 
-**An edit has to name an entity that may not exist yet.** Undoing a delete builds the entity
-again and EnTT hands out a new number, so every edit already on the stack that named the old
-one now names nothing, or names whoever took it. Move a crate, delete it, undo, undo: the
-move names an entity that no longer exists. A session identity in a side table is enough for
-this. A stable identity in the scene file is the exact answer and is what an entity
-reference needs eventually, and it changes the format.
+**Deleting in the editor does not destroy the entity.** Undoing a delete used to be the one
+edit that renumbered anything: EnTT hands out a new number, and every edit still on the stack
+that named the old one then names nothing, or names whoever took it. Move a crate, delete
+it, undo, undo, and the move names an entity that is gone.
+
+So a delete in the editor marks the entity, hides it, and keeps its number. Undo puts it back
+as it was. A marked entity is left out of a save and purged for good when the scene changes
+or the editor closes. No identity had to be invented for this, and none reaches the scene
+file.
+
+**A marked entity is stripped rather than filtered.** The delete takes every component off it
+and keeps them as documents, which is the data the undo entry needs anyway. An entity with no
+`MeshRenderer` is not in the mesh view and one with no `RigidBody` is not in the solver, so
+nothing sees it because there is nothing of it to see. A tag alone would mean excluding it at
+each of the fifteen or so places that iterate scene components, and every one of those is
+silent when it is missed. With the components gone, only the walks over the hierarchy have to
+know: the save, the prefab instance record, and the World panel tree.
+
+**A full rebuild of the world still renumbers everything**, so play and stop clears the
+history, and so does a scene reload. That is a limit of the shape rather than a bug in it,
+and it is what a stable identity in the scene file would buy if one is ever added for other
+reasons.
 
 **An action is recorded when it ends.** A gizmo drag writes on every frame it moves and a
 slider writes on every frame it is held, and neither is an edit. The edit is the whole drag,
