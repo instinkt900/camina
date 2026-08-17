@@ -98,6 +98,14 @@ namespace engine::gfx {
         if (desc.docking) {
             io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         }
+        if (desc.viewports) {
+            io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+            // Merging is what makes a floating panel inside the main window stay
+            // inside it. Turning it off puts every floating panel in an OS
+            // window of its own, which is how the path is checked without a hand
+            // on the mouse.
+            io.ConfigViewportsNoAutoMerge = !desc.merge_viewports;
+        }
 
         if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window*>(desc.sdl_window))) {
             ENGINE_LOG_ERROR("The ImGui SDL3 backend did not start.");
@@ -128,6 +136,15 @@ namespace engine::gfx {
         info.UseDynamicRendering = true;
         info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         info.PipelineInfoMain.PipelineRenderingCreateInfo = rendering;
+
+        // The same for a panel that lives in its own OS window. The backend
+        // builds those swapchains itself, and it asks the surface for the
+        // formats named here first, so this is what keeps a detached panel on
+        // the same format as the main window rather than on whatever the
+        // surface offered.
+        info.PipelineInfoForViewports.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        info.PipelineInfoForViewports.PipelineRenderingCreateInfo = rendering;
+
         info.CheckVkResultFn = report_vulkan_error;
 
         if (!ImGui_ImplVulkan_Init(&info)) {
@@ -139,8 +156,9 @@ namespace engine::gfx {
 
         g_started = true;
         ENGINE_LOG_INFO("The ImGui overlay started with {} swapchain images. Docking is {}, "
-                        "and the layout file is {}.",
+                        "windows of their own are {}, and the layout file is {}.",
                         device->images.size(), desc.docking ? "on" : "off",
+                        desc.viewports ? "on" : "off",
                         desc.ini_path != nullptr ? desc.ini_path : "none");
         return Result::Success;
     }
@@ -196,6 +214,29 @@ namespace engine::gfx {
             convert_draw_colors_to_linear(data);
             ImGui_ImplVulkan_RenderDrawData(data, commands->buffer);
         }
+    }
+
+    void imgui_render_platform_windows() {
+        if (!g_started ||
+            (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) == 0) {
+            return;
+        }
+
+        // Every extra window has its own draw data, and each one needs the same
+        // sRGB to linear conversion the main window gets. Their swapchains are
+        // _SRGB too, so a panel dragged out would otherwise come out lighter
+        // than the one it was dragged from. The main viewport is index 0 and
+        // imgui_render has already converted it.
+        const ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+        for (int i = 1; i < platform.Viewports.Size; ++i) {
+            ImDrawData* data = platform.Viewports[i]->DrawData;
+            if (data != nullptr) {
+                convert_draw_colors_to_linear(data);
+            }
+        }
+
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
     }
 
     ImGuiTextureId imgui_texture_id(Device* device, TextureHandle texture) {

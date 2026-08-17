@@ -60,6 +60,38 @@ namespace engine::gfx {
         bool docking = false;
 
         /**
+         * @brief Whether a panel dragged off the window becomes an OS window.
+         *
+         * ImGui calls this multi-viewport. The backends do most of it: the SDL3
+         * one creates the extra windows and the Vulkan one creates their
+         * surfaces, their swapchains, and the pipeline they draw with. Nothing
+         * above `gfx::` learns that a second swapchain exists.
+         *
+         * The editor asks for it. The runtime debug overlay does not, because
+         * its windows open at fixed places and a run has to look the same every
+         * time.
+         *
+         * @warning An offscreen run has no window at all, so this does nothing
+         * there and an offscreen capture stays what it was.
+         */
+        bool viewports = false;
+
+        /**
+         * @brief Whether a floating panel inside the main window stays in it.
+         *
+         * True is what a person expects: a panel floats over the window until
+         * they drag it off, and only then does it become an OS window.
+         *
+         * False puts every floating panel in a window of its own straight away.
+         * That is how the multi-viewport path is checked without a hand on the
+         * mouse, because nothing else can drag a panel out. `editor
+         * --own-windows` asks for it.
+         *
+         * It does nothing unless `viewports` is on.
+         */
+        bool merge_viewports = true;
+
+        /**
          * @brief Where ImGui saves the window layout, or null to save none.
          *
          * @warning ImGui keeps the pointer rather than a copy of the text, so
@@ -123,6 +155,18 @@ namespace engine::gfx {
      * @param commands The command list from begin_frame().
      */
     void imgui_render(CommandList* commands);
+
+    /**
+     * @brief Draws and presents the panels that live in their own OS windows.
+     *
+     * Call it once for each frame, **after the frame that holds the main window
+     * has been presented**. The extra windows have swapchains of their own, and
+     * this submits and presents each of them.
+     *
+     * It does nothing unless `ImGuiDesc::viewports` asked for it, and nothing on
+     * a frame where every panel is docked.
+     */
+    void imgui_render_platform_windows();
 
     /**
      * @brief Binds a texture so an ImGui window can draw it.

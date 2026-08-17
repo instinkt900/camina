@@ -602,6 +602,13 @@ what it cooked into, and a row is a drag source. An `AssetRef` field in the insp
 drop target with a clear button and no text box, because nobody can type a derived identity.
 `reflect::set_asset_namer` is how the name reaches `reflect/`, which sits below `assets/`.
 
+**M9.7 gave the editor multi-viewport**, so a panel dragged off the window becomes an OS
+window of its own. Two engine-specific traps: `PipelineInfoForViewports` is what the backend
+asks the new surface for, so it has to name the main swapchain format, and the sRGB to linear
+conversion has to be applied to every extra viewport's draw data or a detached panel comes out
+lighter than a docked one. `editor --own-windows` forces every floating panel into its own
+window, which is the only way to exercise the path without a mouse.
+
 **The inspector adds and removes components, and the World panel deletes an entity.**
 `ComponentOps::create` and `remove` came from the M9.8 run: without them a dropped prefab
 could never be given a RigidBody. A Transform is refused, and `owns_transform` is how the
