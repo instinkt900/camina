@@ -609,6 +609,13 @@ conversion has to be applied to every extra viewport's draw data or a detached p
 lighter than a docked one. `editor --own-windows` forces every floating panel into its own
 window, which is the only way to exercise the path without a mouse.
 
+**M12.1 is the undo stack**, in `src/editor/history.h`. Transactional: an edit records what it
+changed and how to put it back, so a step costs what the edit cost. **The caller changes the
+world and then records**, because a gizmo drag has already moved the entity by the time the
+mouse comes up, so `Edit::apply` is the redo path rather than the first run. Recording drops
+whatever was ahead. `tests/test_history.cpp` drives the whole thing with an edit that counts
+its own calls, so the ordering rules are settled without a world or a window.
+
 **The editor cooks after it saves**, which closed #341. It writes `sandbox/content` and reads
 the cooked tree beside the executable, so without a cook every edit looked lost on the next
 start while the file on disk was right. Nothing reported an error, because nothing had
