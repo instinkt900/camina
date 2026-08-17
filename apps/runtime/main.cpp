@@ -791,8 +791,11 @@ namespace {
             }
             engine::editor::place_next_panel(kPanelMargin, (2 * kPanelMargin) + kViewHeight,
                                              kPanelWidth, kWorldHeight);
-            engine::editor::draw_world_panel(world, *context.selected, context.source_scene,
-                                             *context.game_content);
+            // The runtime watches the source tree and cooks what changes, so a
+            // save here needs no cook of its own. The editor has no watcher and
+            // does, which is why the panel reports one. See issue #341.
+            (void)engine::editor::draw_world_panel(world, *context.selected, context.source_scene,
+                                                   *context.game_content);
             engine::editor::place_next_panel((2 * kPanelMargin) + kPanelWidth, kPanelMargin,
                                              kPanelWidth, kInspectorHeight);
             engine::editor::draw_inspector_panel(world, *context.selected);

@@ -2324,6 +2324,17 @@ The bounds arrive through a callback, so `src/editor/` needs nothing from `src/r
 a test drives the search with bounds it makes up. The editor answers that callback from
 `render::MeshCache`, which already holds every mesh the scene drew.
 
+**The editor cooks after it saves.** It writes the source scene, in `sandbox/content`, and it
+reads the cooked one, beside the executable. Between those sits the cooker, and until M9.8
+found it the editor never ran one, so every edit looked lost on the next start: the file on
+disk was right and the program read a different file. Nothing reported an error, because
+nothing had failed.
+
+The runtime does not have this problem, because `assets::HotReload` watches the source tree
+and cooks what changes. Giving the editor a watcher is the larger answer and it wants the
+entity identity of M12 first, because a reload rebuilds every entity and throws away the
+selection and the undo history with it.
+
 **M9.5c puts ImGuizmo on the selected entity.** Move, turn, and size, in world space or
 in the entity's own. The handles write through `World::set_local`, so every child follows
 a dragged parent, and a child dragged under a moved parent lands where the pointer is

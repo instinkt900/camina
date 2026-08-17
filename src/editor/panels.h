@@ -168,11 +168,14 @@ namespace engine::editor {
      * it is. The text is shown beside the disabled button. The editor passes a
      * reason while a play session runs, because the world is then a game part
      * way through a step rather than the scene somebody authored.
+     * @return True on the frame the scene was written. **A caller that reads
+     * cooked content has to cook after this**, or the file it reads next time
+     * is the one from before the save. See issue #341.
      */
-    void draw_world_panel(scene::World& world, entt::entity& selected,
-                          const std::filesystem::path& scene_path,
-                          const assets::Content& content, bool* open = nullptr,
-                          const char* save_blocked = nullptr);
+    [[nodiscard]] bool draw_world_panel(scene::World& world, entt::entity& selected,
+                                        const std::filesystem::path& scene_path,
+                                        const assets::Content& content, bool* open = nullptr,
+                                        const char* save_blocked = nullptr);
 
     /**
      * @brief Draws every component the selected entity carries.

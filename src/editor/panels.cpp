@@ -343,10 +343,12 @@ namespace engine::editor {
 
     } // namespace
 
-    void draw_world_panel(scene::World& world, entt::entity& selected,
+    bool draw_world_panel(scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path, const assets::Content& content,
                           bool* open, const char* save_blocked) {
         ENGINE_PROFILE_ZONE_N("draw_world_panel");
+
+        bool saved = false;
 
         if (ImGui::Begin("World", open)) {
             ImGui::Text("Entities: %zu", world.size());
@@ -358,7 +360,9 @@ namespace engine::editor {
             const bool can_save = !scene_path.empty() && save_blocked == nullptr;
             ImGui::BeginDisabled(!can_save);
             if (ImGui::Button("Save scene") && can_save) {
-                if (!save_scene_source(scene_path, world, content)) {
+                if (save_scene_source(scene_path, world, content)) {
+                    saved = true;
+                } else {
                     ENGINE_LOG_ERROR("The scene did not write to {}.", scene_path.string());
                 }
             }
@@ -390,6 +394,7 @@ namespace engine::editor {
             }
         }
         ImGui::End();
+        return saved;
     }
 
     namespace {
