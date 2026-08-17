@@ -32,6 +32,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 namespace engine::assets {
     class Content;
@@ -226,6 +227,27 @@ namespace engine::editor {
                                        GizmoControls& gizmo,
                                        const ViewportOverlay& overlay = {},
                                        bool* open = nullptr);
+
+    /**
+     * @brief Lists what the cooker made, and lets a person drag one out.
+     *
+     * A source file with several outputs opens as a tree: a glTF holds meshes, a
+     * material for each of them, and a prefab, and each of those is a separate
+     * thing a field can name.
+     *
+     * **A row is a drag source and nothing else picks an asset.** So a field can
+     * only ever be given something the manifest holds, which is the whole of the
+     * "refuse an asset the cook has not produced" rule in issue #303: an asset
+     * that was not cooked is not in this panel to drag.
+     *
+     * @param content The open cooked content. Its manifest is the list.
+     * @param filter What the user typed in the filter box, changed in place. A
+     * source path that does not hold it is left out.
+     * @param open Cleared when the user closes the panel. Pass null for a panel
+     * the user cannot close.
+     */
+    void draw_assets_panel(const assets::Content& content, std::string& filter,
+                           bool* open = nullptr);
 
     /**
      * @brief Writes the world out as a source scene.

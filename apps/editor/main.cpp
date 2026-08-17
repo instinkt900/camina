@@ -12,6 +12,7 @@
 // panel shows that image. The camera in the view panel is the camera it uses.
 
 #include "assets/content.h"
+#include "assets/reference.h"
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/camera_lines.h"
@@ -265,6 +266,8 @@ namespace {
         /// because the editor draws through its own view and nothing else says
         /// where that camera is.
         bool camera_lines = true;
+        /// M9.6. What the cooker made, and where an asset field is filled from.
+        bool assets = true;
     };
 
     /// Everything the editor owns for the whole run, in the order it is built.
@@ -335,6 +338,10 @@ namespace {
 
         /// Where the view is saved. Held because it is built once at start.
         std::string camera_path;
+
+        /// What the user typed in the asset browser filter. Held here because a
+        /// panel keeps no state of its own.
+        std::string asset_filter;
         /// M9.4. The play session, and the authored world it goes back to.
         engine::editor::PlayMode play;
         /// Whether the Viewport panel held the focus on the last frame. A
@@ -541,6 +548,7 @@ namespace {
             ImGui::MenuItem("World", nullptr, &panels.world);
             ImGui::MenuItem("Inspector", nullptr, &panels.inspector);
             ImGui::MenuItem("View settings", nullptr, &panels.view);
+            ImGui::MenuItem("Assets", nullptr, &panels.assets);
             ImGui::Separator();
             ImGui::MenuItem("Scene camera wireframe", nullptr, &panels.camera_lines);
             ImGui::Separator();
@@ -587,6 +595,7 @@ namespace {
 
         constexpr float kSideColumn = 0.22F; ///< How much width each side takes.
         constexpr float kViewShare = 0.45F;  ///< How much of the left column the view takes.
+        constexpr float kAssetShare = 0.28F; ///< How much of the middle the assets take.
 
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -609,10 +618,19 @@ namespace {
         ImGuiID left_bottom = 0;
         ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, kViewShare, &left_bottom, &left_top);
 
+        // The asset browser takes a strip under the picture. Read both outputs:
+        // the node that was split is a parent now, and docking into a parent
+        // leaves the window floating.
+        ImGuiID bottom = 0;
+        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, kAssetShare, &bottom, &centre);
+
         ImGui::DockBuilderDockWindow("World", left_top);
         ImGui::DockBuilderDockWindow("View", left_bottom);
         ImGui::DockBuilderDockWindow("Inspector", right);
         ImGui::DockBuilderDockWindow("Viewport", centre);
+        // Under the picture, where every editor puts it, and where a drag onto
+        // the inspector is a short trip across the window.
+        ImGui::DockBuilderDockWindow("Assets", bottom);
         ImGui::DockBuilderFinish(dockspace);
         ENGINE_LOG_INFO("No saved layout, so the editor built the default one.");
     }
@@ -839,6 +857,10 @@ namespace {
         if (panels.inspector) {
             engine::editor::draw_inspector_panel(editor.world, editor.selected,
                                                  &panels.inspector);
+        }
+        if (panels.assets) {
+            engine::editor::draw_assets_panel(editor.content, editor.asset_filter,
+                                              &panels.assets);
         }
         if (panels.view) {
             (void)engine::editor::draw_view_panel(editor.view, engine::editor::kViewSettingsFile,
@@ -1294,6 +1316,19 @@ namespace {
             editor.source_scene = source / sandbox::kSceneFile;
         }
         bind_camera(editor);
+
+        // What an AssetRef field shows instead of an identity nobody can read.
+        // reflect/ sits below assets/, so the manifest arrives this way rather
+        // than by an include. See reflect::set_asset_namer.
+        engine::reflect::set_asset_namer(
+            [&editor](std::string_view value) -> std::string {
+                engine::Guid identity;
+                if (!engine::from_text(value, identity)) {
+                    return {};
+                }
+                return engine::assets::reference_for(editor.content.manifest(), identity);
+            });
+
         ENGINE_LOG_INFO("Opened {} with {} entities.", content.string(), editor.world.size());
     }
 

@@ -4,6 +4,9 @@
 #include "editor/panels.h"
 
 #include "assets/content.h"
+#include "assets/manifest.h"
+#include "assets/reference.h"
+#include "core/guid.h"
 #include "core/log.h"
 #include "core/profile.h"
 #include "reflect/inspector.h"
@@ -17,6 +20,7 @@
 #include "scene/world.h"
 
 #include <imgui.h>
+#include <misc/cpp/imgui_stdlib.h>
 #include <nlohmann/json.hpp>
 
 #include <fstream>
@@ -413,6 +417,76 @@ namespace engine::editor {
         }
         ImGui::End();
         return report;
+    }
+
+    namespace {
+
+        /**
+         * Draws one cooked output as a row somebody can drag.
+         *
+         * The label is the reference a person would write, which
+         * `assets::reference_for` works out from the manifest. An output nothing
+         * names falls back to its cooked path, so a row is never blank.
+         *
+         * @param manifest The manifest the output came from.
+         * @param output The cooked file to draw.
+         */
+        void draw_asset_row(const assets::Manifest& manifest,
+                            const assets::ManifestOutput& output) {
+            const std::string name = assets::reference_for(manifest, output.guid);
+            const std::string label = name.empty() ? output.cooked : name;
+
+            ImGui::PushID(output.cooked.c_str());
+            ImGui::Selectable(label.c_str());
+            if (ImGui::BeginDragDropSource()) {
+                // The identity as text, which is what an AssetRef field stores,
+                // so nothing is looked up on the way over.
+                const std::string identity = to_text(output.guid);
+                ImGui::SetDragDropPayload(reflect::kAssetPayload, identity.c_str(),
+                                          identity.size());
+                ImGui::TextUnformatted(label.c_str());
+                ImGui::EndDragDropSource();
+            }
+            ImGui::PopID();
+        }
+
+    } // namespace
+
+    void draw_assets_panel(const assets::Content& content, std::string& filter, bool* open) {
+        ENGINE_PROFILE_ZONE_N("draw_assets_panel");
+
+        if (ImGui::Begin("Assets", open)) {
+            ImGui::TextUnformatted("Drag a row onto an asset field.");
+            ImGui::InputText("filter", &filter);
+
+            const assets::Manifest& manifest = content.manifest();
+            std::size_t shown = 0;
+
+            for (const assets::ManifestEntry& entry : manifest.entries) {
+                if (!filter.empty() && entry.source.find(filter) == std::string::npos) {
+                    continue;
+                }
+                ++shown;
+
+                // The source file is the node, and what it cooked into are the
+                // leaves. One glTF is a mesh, a material, and a prefab, and a
+                // field names one of those rather than the file.
+                if (!ImGui::TreeNode(entry.source.c_str())) {
+                    continue;
+                }
+                for (const assets::ManifestOutput& output : entry.outputs) {
+                    draw_asset_row(manifest, output);
+                }
+                ImGui::TreePop();
+            }
+
+            if (shown == 0) {
+                ImGui::TextDisabled("%s", manifest.entries.empty()
+                                              ? "No cooked content. Build the cooker target."
+                                              : "Nothing matches the filter.");
+            }
+        }
+        ImGui::End();
     }
 
     bool save_scene_source(const std::filesystem::path& path, const scene::World& world,

@@ -597,6 +597,11 @@ ImGuizmo calls so a test can drive it with no window. Two mutations prove that t
 to divide out the parent, and two checks fail; write the Transform component instead of
 calling `World::set_local`, and three fail, because nothing recomposes the subtree.
 
+**M9.6 is the asset browser.** It lists the manifest by source path, a source opens to show
+what it cooked into, and a row is a drag source. An `AssetRef` field in the inspector is a
+drop target with a clear button and no text box, because nobody can type a derived identity.
+`reflect::set_asset_namer` is how the name reaches `reflect/`, which sits below `assets/`.
+
 **Clicking an entity selects it**, which closed #34. `math/ray.h` holds the ray, the slab
 test, and the pixel to NDC step, all of it testable with no GPU. The ray goes into the local
 space of each candidate, so the test is against the oriented box of the entity. A click on a
