@@ -716,8 +716,14 @@ namespace {
         // turning those back into identities is the cooker's job. Loading one
         // directly reports every reference it could not read, which says
         // nothing about whether the drop reached the file.
-        std::ifstream reading(file);
-        const nlohmann::json written = nlohmann::json::parse(reading, nullptr, false);
+        // The stream closes before the file is removed at the end. Windows
+        // refuses to delete a file another handle holds open, which check.h
+        // says at remove_tree() and which this test found the hard way.
+        nlohmann::json written;
+        {
+            std::ifstream reading(file);
+            written = nlohmann::json::parse(reading, nullptr, false);
+        }
         check(!written.is_discarded(), "the written file parses");
 
         std::size_t crates_at_the_drop = 0;
