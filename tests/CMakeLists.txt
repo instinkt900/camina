@@ -201,6 +201,15 @@ engine_enable_clang_tidy(test_history)
 
 add_test(NAME history COMMAND test_history)
 
+# M12.3. The component edits. Each one is a document and an identity, so this
+# drives a bare World with no window and no device.
+add_executable(test_edits test_edits.cpp)
+target_link_libraries(test_edits PRIVATE engine::core)
+engine_set_warnings(test_edits)
+engine_enable_clang_tidy(test_edits)
+
+add_test(NAME edits COMMAND test_edits)
+
 # M9.5a. The camera the scene plays through, and the fly camera that steers one.
 # Neither opens a device, so this runs anywhere.
 add_executable(test_camera test_camera.cpp)
