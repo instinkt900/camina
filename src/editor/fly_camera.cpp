@@ -68,13 +68,15 @@ namespace engine::editor {
         return Transform{ .position = camera.position, .rotation = yaw * pitch };
     }
 
+    Mat4 fly_view(const FlyCamera& camera) {
+        return glm::lookAt(camera.position, camera.position + fly_forward(camera), world_up);
+    }
+
     Mat4 fly_clip_from_world(const FlyCamera& camera, float aspect, float fov_degrees,
                              float near_plane) {
         const Mat4 projection = perspective_reverse_z(glm::radians(fov_degrees),
                                                       aspect > 0.0F ? aspect : 1.0F, near_plane);
-        const Mat4 view =
-            glm::lookAt(camera.position, camera.position + fly_forward(camera), world_up);
-        return projection * view;
+        return projection * fly_view(camera);
     }
 
     bool update_fly_camera(FlyCamera& camera, const platform::Window& window,

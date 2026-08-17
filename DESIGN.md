@@ -430,6 +430,12 @@ the mouse turns them are preferences of the application, so they stay in
 `editor::ViewSettings` beside the panel that edits them. A reflected type lists what it
 wants rather than every member it has.
 
+`editor::place_entity` in `editor/placement.h` is here too. It turns a world pose into
+the local transform an entity stores, which is the arithmetic behind a gizmo drag, and it
+names no gizmo library. That is what lets a test drive it with no window. The ImGuizmo
+calls live in `apps/editor/gizmo.cpp`, because the editor application is the only program
+that draws handles and the only target that links the library.
+
 `editor::PlayMode` is here for the same reason. It is play-in-editor: a snapshot of the
 world, a `play::Session` over it, and the restore that puts the authored scene back. M9.4
 built it, and it needed no new mechanism, because `scene::save_scene` and
@@ -2247,6 +2253,18 @@ camera, and a scene saved after an afternoon of flying is the scene somebody aut
 The exposure the editor tonemaps with is the scene camera's, not the editor's. Exposure is a
 property of the level that a person judges by eye, so the viewport has to show what the game
 will show.
+
+**M9.5c puts ImGuizmo on the selected entity.** Move, turn, and size, in world space or
+in the entity's own. The handles write through `World::set_local`, so every child follows
+a dragged parent, and a child dragged under a moved parent lands where the pointer is
+because the parent is divided out first.
+
+**ImGuizmo needs a projection this engine never builds.** The engine renders with an
+infinite reverse-Z projection whose Y row is negated for Vulkan clip space. ImGuizmo does
+its own clip to screen step and expects the neutral form: Y up, and a finite far plane. So
+`apps::gizmo_projection` builds one for the handles alone, and the picture keeps the engine
+matrix. The two agree about where a point lands, because the X row is the same either way
+and the two Y flips cancel.
 
 The editor runs the ImGui docking branch, which `conanfile.py` already pins for this
 reason. Panels dock and tab inside the main window, and a panel dragged out of it becomes

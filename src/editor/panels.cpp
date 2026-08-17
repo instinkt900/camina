@@ -61,7 +61,53 @@ namespace engine::editor {
          * @param state What the session is doing.
          * @return What the user clicked.
          */
-        [[nodiscard]] PlayRequest draw_play_bar(PlayState state) {
+        /**
+         * Draws the gizmo mode buttons, and changes @p gizmo when one is
+         * clicked.
+         *
+         * They sit on the play bar because that is the row a person's eye is
+         * already on. There are no keyboard shortcuts for them: W, E and R are
+         * the fly camera's, and a key that means two things depending on what
+         * has the focus is a key nobody trusts. See issue #325.
+         *
+         * @param gizmo What the gizmo is set to.
+         */
+        void draw_gizmo_buttons(GizmoControls& gizmo) {
+            const auto mode_button = [&gizmo](const char* label, GizmoOperation operation) {
+                const bool active = gizmo.operation == operation;
+                // A pressed-looking button for the one in use. ImGui has no
+                // toggle, so the colour is the state.
+                if (active) {
+                    ImGui::PushStyleColor(ImGuiCol_Button,
+                                          ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                }
+                if (ImGui::Button(label)) {
+                    gizmo.operation = operation;
+                }
+                if (active) {
+                    ImGui::PopStyleColor();
+                }
+                ImGui::SameLine(0.0F, kBarPad);
+            };
+
+            mode_button("Move", GizmoOperation::Translate);
+            mode_button("Turn", GizmoOperation::Rotate);
+            mode_button("Size", GizmoOperation::Scale);
+
+            // One button that says which space it is in and swaps on a click,
+            // because the two are exclusive and a person reads the state faster
+            // than they read two buttons.
+            const bool world = gizmo.space == GizmoSpace::World;
+            if (ImGui::Button(world ? "World" : "Local")) {
+                gizmo.space = world ? GizmoSpace::Local : GizmoSpace::World;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", world ? "Handles line up with the world"
+                                              : "Handles line up with the entity");
+            }
+        }
+
+        [[nodiscard]] PlayRequest draw_play_bar(PlayState state, GizmoControls& gizmo) {
             PlayRequest request = PlayRequest::None;
             const bool editing = state == PlayState::Edit;
 
@@ -92,6 +138,9 @@ namespace engine::editor {
 
             ImGui::SameLine(0.0F, kBarGap);
             ImGui::TextUnformatted(state_label(state));
+
+            ImGui::SameLine(0.0F, kBarGap);
+            draw_gizmo_buttons(gizmo);
 
             ImGui::Dummy(ImVec2{ kBarPad, kBarPad });
             ImGui::Separator();
@@ -303,7 +352,9 @@ namespace engine::editor {
     }
 
     ViewportReport draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
-                                       gfx::Extent2D& wanted, PlayState state, bool* open) {
+                                       gfx::Extent2D& wanted, PlayState state,
+                                       GizmoControls& gizmo, const ViewportOverlay& overlay,
+                                       bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_viewport_panel");
 
         ViewportReport report;
@@ -321,7 +372,7 @@ namespace engine::editor {
             // on the bar. A child window inside it would otherwise hold the
             // focus and the game would never see a key.
             report.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
-            report.request = draw_play_bar(state);
+            report.request = draw_play_bar(state, gizmo);
 
             // After the bar, so the target follows the picture area rather
             // than the whole panel. Sizing it to the panel would render a
@@ -343,8 +394,16 @@ namespace engine::editor {
                 // the panel size would stretch it by the same amount either
                 // way. This way the mismatch shows as a gap at the edge, which
                 // is honest about what is happening.
+                // Where the picture landed, before anything else moves the
+                // cursor. The overlay is drawn over these pixels.
+                const ImVec2 corner = ImGui::GetCursorScreenPos();
                 ImGui::Image(picture, ImVec2{ static_cast<float>(size.width),
                                               static_cast<float>(size.height) });
+
+                if (overlay.draw != nullptr) {
+                    overlay.draw(overlay.user, corner.x, corner.y, static_cast<float>(size.width),
+                                 static_cast<float>(size.height));
+                }
             }
         }
         ImGui::End();

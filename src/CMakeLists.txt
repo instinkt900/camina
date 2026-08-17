@@ -25,6 +25,7 @@ add_library(engine_core STATIC
     reflect/inspector.cpp
     editor/fly_camera.cpp
     editor/panels.cpp
+    editor/placement.cpp
     editor/play_mode.cpp
     editor/viewport.cpp
     gfx/vulkan/vk_device.cpp

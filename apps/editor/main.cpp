@@ -15,7 +15,9 @@
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/fly_camera.h"
+#include "gizmo.h"
 #include "editor/panels.h"
+#include "editor/placement.h"
 #include "editor/play_mode.h"
 #include "editor/view_settings.h"
 #include "editor/viewport.h"
@@ -100,6 +102,12 @@ namespace {
         /// Play. A run with --frames can then check the session rather than
         /// only the empty editor.
         bool play = false;
+        /// Select the entity with this name at startup, as if somebody had
+        /// clicked it in the World panel. A run with --frames can then capture
+        /// the gizmo, which otherwise needs a hand on the mouse.
+        std::string select;
+        /// Which handles to start on, for the same reason.
+        engine::editor::GizmoControls gizmo;
     };
 
     void print_usage() {
@@ -107,6 +115,9 @@ namespace {
         ENGINE_LOG_INFO("  --content <dir>     Open this cooked content instead of the game's.");
         ENGINE_LOG_INFO("  --frames <n>        Stop after n frames. 0 runs until you quit.");
         ENGINE_LOG_INFO("  --play              Start a play session on the first frame.");
+        ENGINE_LOG_INFO("  --select <name>     Select the entity with this name at startup.");
+        ENGINE_LOG_INFO("  --gizmo <mode>      Start on move, turn, or size handles.");
+        ENGINE_LOG_INFO("  --gizmo-local       Line the handles up with the entity.");
         ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
@@ -140,8 +151,76 @@ namespace {
         return true;
     }
 
+    /// Reads which handles --gizmo asked for.
+    /// @param text The value given on the command line.
+    /// @param out Receives the operation. Untouched when the name is unknown.
+    /// @return True when the name is one of the three.
+    [[nodiscard]] bool parse_gizmo(std::string_view text,
+                                   engine::editor::GizmoOperation& out) {
+        if (text == "move") {
+            out = engine::editor::GizmoOperation::Translate;
+        } else if (text == "turn") {
+            out = engine::editor::GizmoOperation::Rotate;
+        } else if (text == "size") {
+            out = engine::editor::GizmoOperation::Scale;
+        } else {
+            ENGINE_LOG_CRITICAL("--gizmo wants move, turn, or size, and {} is none of them.",
+                                text);
+            return false;
+        }
+        return true;
+    }
+
     /// Reads the command line. An unknown option stops the program, because a
     /// misspelled one that is ignored looks like an option that did nothing.
+    /// Reads an option that carries no value.
+    /// @param arg The option, as given.
+    /// @param out Where the answer goes.
+    /// @return True when this was one of them.
+    [[nodiscard]] bool parse_flag(std::string_view arg, Options& out) {
+        if (arg == "--gizmo-local") {
+            out.gizmo.space = engine::editor::GizmoSpace::Local;
+        } else if (arg == "--play") {
+            out.play = true;
+        } else if (arg == "--no-validation") {
+            out.validation = false;
+        } else if (arg == "--sync-validation") {
+            out.sync_validation = true;
+        } else if (arg == "--no-vsync") {
+            out.vsync = false;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Reads an option that carries a value.
+     *
+     * @param arg The option, as given.
+     * @param value What followed it.
+     * @param out Where the answer goes.
+     * @param ok Cleared when the value would not parse, which stops the program.
+     * @return True when this was one of them, whatever the value was.
+     */
+    [[nodiscard]] bool parse_value(std::string_view arg, const char* value, Options& out,
+                                   bool& ok) {
+        if (arg == "--frames") {
+            ok = parse_count(value, out.frames);
+        } else if (arg == "--gizmo") {
+            ok = parse_gizmo(value, out.gizmo.operation);
+        } else if (arg == "--select") {
+            out.select = value;
+        } else if (arg == "--content") {
+            out.content = value;
+        } else if (arg == "--screenshot") {
+            out.screenshot = value;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] bool parse_options(int argc, char** argv, Options& out) {
         for (int i = 1; i < argc; ++i) {
             const std::string_view arg{ argv[i] };
@@ -149,27 +228,22 @@ namespace {
                 print_usage();
                 return false;
             }
-            if (arg == "--play") {
-                out.play = true;
-            } else if (arg == "--no-validation") {
-                out.validation = false;
-            } else if (arg == "--sync-validation") {
-                out.sync_validation = true;
-            } else if (arg == "--no-vsync") {
-                out.vsync = false;
-            } else if (arg == "--frames" && i + 1 < argc) {
-                if (!parse_count(argv[++i], out.frames)) {
+            if (parse_flag(arg, out)) {
+                continue;
+            }
+
+            bool ok = true;
+            if (i + 1 < argc && parse_value(arg, argv[i + 1], out, ok)) {
+                ++i;
+                if (!ok) {
                     return false;
                 }
-            } else if (arg == "--content" && i + 1 < argc) {
-                out.content = argv[++i];
-            } else if (arg == "--screenshot" && i + 1 < argc) {
-                out.screenshot = argv[++i];
-            } else {
-                ENGINE_LOG_CRITICAL("Unknown option: {}", arg);
-                print_usage();
-                return false;
+                continue;
             }
+
+            ENGINE_LOG_CRITICAL("Unknown option: {}", arg);
+            print_usage();
+            return false;
         }
         return true;
     }
@@ -235,6 +309,10 @@ namespace {
          * somebody fly around a game while it plays.
          */
         engine::editor::FlyCamera view_camera = engine::editor::fallback_fly_camera();
+
+        /// Which handles the gizmo shows, and which axes they line up with.
+        /// The viewport bar edits this and apps/editor/gizmo.cpp reads it.
+        engine::editor::GizmoControls gizmo;
 
         /// Keyboard and mouse on the frame clock, which is what flies the view.
         /// The game reads a second one on the fixed step, inside PlayMode.
@@ -557,6 +635,65 @@ namespace {
         }
     }
 
+    /**
+     * Draws the gizmo over the picture, from inside the viewport window.
+     *
+     * The panel calls this between its `Begin` and its `End`, which is the only
+     * place the window draw list and the picture rectangle are both known. See
+     * `editor::ViewportOverlay`.
+     *
+     * Nothing is drawn without a selection, which is the usual case.
+     *
+     * @param user The Editor, because a function pointer carries no state.
+     * @param x Left edge of the picture, in screen coordinates.
+     * @param y Top edge of the picture.
+     * @param width Width of the picture, in pixels.
+     * @param height Height of the picture.
+     */
+    void draw_gizmo_overlay(void* user, float x, float y, float width, float height) {
+        Editor& editor = *static_cast<Editor*>(user);
+        if (editor.selected == entt::null || !editor.world.registry().valid(editor.selected)) {
+            return;
+        }
+
+        const float aspect = height <= 0.0F ? 1.0F : width / height;
+        const apps::GizmoDesc desc{
+            .view = engine::editor::fly_view(editor.view_camera),
+            .projection = apps::gizmo_projection(engine::editor::kFallbackFov, aspect,
+                                                 engine::kDefaultNearPlane),
+            .controls = editor.gizmo,
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+        };
+
+        // The world matrix, because a gizmo works in world space. World::update
+        // has already composed it this frame.
+        engine::Mat4 world_matrix = editor.world.world_matrix(editor.selected);
+        if (apps::draw_gizmo(desc, world_matrix)) {
+            engine::editor::place_entity(editor.world, editor.selected, world_matrix);
+        }
+    }
+
+    /**
+     * Selects the first entity with this name, for --select.
+     *
+     * @param editor Everything the program owns.
+     * @param name The Name component to look for.
+     */
+    void select_by_name(Editor& editor, const std::string& name) {
+        for (const auto [entity, named] :
+             editor.world.registry().view<const engine::scene::Name>().each()) {
+            if (named.value == name) {
+                editor.selected = entity;
+                ENGINE_LOG_INFO("Selected {}.", name);
+                return;
+            }
+        }
+        ENGINE_LOG_WARN("No entity is named {}, so nothing is selected.", name);
+    }
+
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(panels, running);
@@ -580,9 +717,11 @@ namespace {
         // renders at, and the sooner that is known the shorter the mismatch.
         engine::editor::ViewportReport viewport{};
         if (panels.viewport) {
+            const engine::editor::ViewportOverlay overlay{ .draw = &draw_gizmo_overlay,
+                                                           .user = &editor };
             viewport = engine::editor::draw_viewport_panel(
                 editor.viewport.picture(), editor.viewport.extent(), editor.wanted_viewport,
-                editor.play.state(), &panels.viewport);
+                editor.play.state(), editor.gizmo, overlay, &panels.viewport);
         }
         editor.viewport_focused = viewport.focused;
 
@@ -667,6 +806,10 @@ namespace {
         // The overlay opens after the frame does, so a skipped frame never
         // leaves an ImGui frame half open.
         engine::gfx::imgui_new_frame();
+
+        // After the ImGui frame opens and before any panel draws, because the
+        // gizmo reads the mouse state this call latches.
+        apps::begin_gizmo_frame();
         draw_ui(editor, panels, running);
 
         // The scene, into the image the panel shows. The same four passes the
@@ -1080,6 +1223,14 @@ int main(int argc, char** argv) {
         engine::reflect::load_json(engine::editor::kViewSettingsFile, editor.view)) {
         ENGINE_LOG_INFO("Read {}.", engine::editor::kViewSettingsFile);
     }
+
+    // As if somebody had clicked the entity in the World panel. The gizmo
+    // draws on the selection, and a run with no hands on the mouse selects
+    // nothing without this.
+    if (!options.select.empty()) {
+        select_by_name(editor, options.select);
+    }
+    editor.gizmo = options.gizmo;
 
     // As if somebody had clicked Play on the first frame. A run with --frames
     // then exercises the session, which is what an editor with no offscreen

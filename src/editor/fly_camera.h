@@ -125,6 +125,18 @@ namespace engine::editor {
     [[nodiscard]] Transform fly_transform(const FlyCamera& camera);
 
     /**
+     * @brief Where a fly camera looks from, as world space to view space.
+     *
+     * The projection half is separate because two callers want the pair split:
+     * ImGuizmo takes a view and a projection rather than their product, and it
+     * wants a projection this engine does not build. See `apps/editor/gizmo.h`.
+     *
+     * @param camera The camera to look through.
+     * @return The view matrix.
+     */
+    [[nodiscard]] Mat4 fly_view(const FlyCamera& camera);
+
+    /**
      * @brief The camera of a fly camera, as clip space from world space.
      *
      * For a view that has no entity behind it: the fallback an application
