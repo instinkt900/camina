@@ -2377,46 +2377,34 @@ as a document, and `scene::diff` writes the merge patch between two documents.
 
 Two things do not fall out of the shape.
 
-**Deleting in the editor does not destroy the entity.** Undoing a delete used to be the one
-edit that renumbered anything: EnTT hands out a new number, and every edit still on the stack
-that named the old one then names nothing, or names whoever took it. Move a crate, delete
-it, undo, undo, and the move names an entity that is gone.
+**Every entity carries a stable identity, and an edit names one through that.** An
+`entt::entity` is a slot number that EnTT hands out again, so nothing outliving one edit can
+use one: not an undo entry, not the selection, and not an entity naming another entity.
+Undoing a delete builds the entity again, and a stop rebuilds the whole world, and both used
+to leave every entry on the stack naming whoever took its number.
 
-So a delete in the editor marks the entity, hides it, and keeps its number. Undo puts it back
-as it was. A marked entity is left out of a save and purged for good when the scene changes
-or the editor closes. No identity had to be invented for this, and none reaches the scene
-file.
+`engine::Guid` is the tool, unchanged: `generate` for a new one, `derive(parent, kind,
+index)` for a part of something, and a text form for the file. **A prefab member derives its
+identity from the instance root**, the same way the cooker derives a mesh identity from the
+glTF that holds it, because an instance is one record in the file and storing an identity for
+each member would bloat every one. The scene file goes to version 4, and a version 3 document
+still reads with an identity made for each entity as it loads.
 
-**A marked entity is stripped rather than filtered.** The delete takes every component off it
-and keeps them as documents, which is the data the undo entry needs anyway. An entity with no
-`MeshRenderer` is not in the mesh view and one with no `RigidBody` is not in the solver, so
-nothing sees it because there is nothing of it to see. A tag alone would mean excluding it at
-each of the fifteen or so places that iterate scene components, and every one of those is
-silent when it is missed. With the components gone, only the walks over the hierarchy have to
-know: the save, the prefab instance record, and the World panel tree.
+Two things fall out of it. A **delete is a real delete**, because undo builds the entity again
+with its identity and every other entry still resolves; an earlier plan to keep deleted
+entities alive and hidden is not needed. And **the history lives through a play and a stop**,
+which is the loop this milestone is for, because the rebuilt world carries the same identities
+out of the same document.
 
-**The history lives through a play and a stop.** Pressing play to see whether a change
-works, then stopping and undoing it, is the loop this milestone is for, and a history that
-emptied itself on every play would be worth very little.
+The order-based mapping considered before the identity is worth recording as rejected.
+`walk_in_order` in `scene/scene_file.cpp` pins its order by entity number, and after a clear
+EnTT hands numbers out from a free list rather than in load order, so pairing a walk before a
+play with a walk after a stop can quietly pair the wrong entities. An undo that moves
+something else is a worse failure than one that is refused.
 
-That is not free. `PlayMode::stop` restores by clearing the world and reading the snapshot
-back, so every entity is built again with a new number. Either the loader reports the entity
-it built for each record, so the old numbers can be mapped onto the new ones, or a stop
-stops rebuilding and restores each authored entity in place. **Whichever is chosen has to be
-checked rather than trusted**: `walk_in_order` in `scene/scene_file.cpp` pins its order by
-entity number, and after a clear EnTT hands numbers out from a free list, so walking the
-rebuilt world and zipping the two lists can quietly pair the wrong entities. A mismatch has
-to clear the history and say so, which is a far better failure than an undo that moves
-something else.
-
-A scene reload does clear the history, and that is a limit of the shape rather than a bug in
-it. A stable identity in the scene file is what would buy that back, if one is ever added
-for other reasons.
-
-**An action is recorded when it ends.** A gizmo drag writes on every frame it moves and a
-slider writes on every frame it is held, and neither is an edit. The edit is the whole drag,
-finished when the mouse comes up, so the value the interaction started from is kept and one
-entry is pushed at the end. Nothing has to be merged afterwards.
+**It buys more than undo.** A component can name an asset by GUID today and nothing can name
+an entity, so a trigger cannot say which door it opens and a camera cannot say what it
+follows. This is the prerequisite for that, and M10 and the game will both want it.
 
 **Done when:** every edit can be undone and redone, an action is one entry, an edit still
 names its entity after that entity has been deleted and brought back, and the cost of a step
