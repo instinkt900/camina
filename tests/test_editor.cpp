@@ -589,6 +589,97 @@ namespace {
               "and saving what was loaded gives the same document");
     }
 
+    /**
+     * Deleting a prefab member saves as a removal, not as a rebuilt instance.
+     *
+     * The scene format has carried `removed` since M4.5, and the editor's delete
+     * button is the first thing that produces one by hand. If the writer lost it,
+     * the deleted member would come back the next time the scene loaded, which
+     * looks like the delete silently failing.
+     */
+    void test_deleting_a_prefab_member() {
+        section("deleting part of a prefab instance");
+
+        engine::assets::Content content;
+        engine::scene::World world;
+        check(load_shipped(world, content), "the shipped content loads");
+
+        // The lid is a member of a crate instance, so removing it is a change to
+        // the instance rather than to the prefab.
+        entt::entity lid = entt::null;
+        for (const auto [entity, named] :
+             world.registry().view<const engine::scene::Name>().each()) {
+            if (named.value == "lid" && lid == entt::null) {
+                lid = entity;
+            }
+        }
+        check(lid != entt::null, "a crate instance has a lid to remove");
+
+        const std::size_t before = world.size();
+        world.destroy(lid);
+        world.update();
+        check(world.size() == before - 1, "the lid went");
+
+        const nlohmann::json saved = engine::scene::save_scene(world);
+
+        // Somewhere in the document an instance now says what it removed. The
+        // whole instance must not have been written out entity by entity.
+        bool records_a_removal = false;
+        for (const auto& record : saved.at("entities")) {
+            if (record.contains("removed") && !record.at("removed").empty()) {
+                records_a_removal = true;
+            }
+        }
+        check(records_a_removal, "the instance records the member it lost");
+
+        engine::scene::World reopened;
+        check(engine::scene::load_scene(saved, reopened), "the scene loads again");
+        reopened.update();
+        check(reopened.size() == world.size(), "and the lid stays gone");
+        check(engine::scene::save_scene(reopened) == saved,
+              "saving what was loaded gives the same document");
+    }
+
+    /**
+     * A component added by hand survives the scene file.
+     *
+     * What a person does after dropping a prefab: give it a body so it falls.
+     * The add is `ComponentOps::create`, and this is the rest of that path.
+     */
+    void test_a_component_added_by_hand_is_saved() {
+        section("adding a component to a placed entity");
+
+        engine::assets::Content content;
+        engine::scene::World world;
+        check(load_shipped(world, content), "the shipped content loads");
+
+        const engine::scene::Prefab* crate = engine::scene::prefabs().find("crate.prefab");
+        check(crate != nullptr, "the library holds the crate prefab");
+        const entt::entity placed =
+            engine::editor::drop_prefab(world, *crate, engine::Vec3{ 0.0F, 3.0F, 0.0F });
+        check(placed != entt::null, "the drop made an instance");
+
+        const engine::scene::ComponentOps* light = engine::scene::components().find("PointLight");
+        check(light != nullptr, "the registry holds PointLight");
+        check(!light->has(world.registry(), placed), "the crate carries none");
+
+        light->create(world.registry(), placed);
+        check(light->has(world.registry(), placed), "and now it does");
+
+        const nlohmann::json saved = engine::scene::save_scene(world);
+        engine::scene::World reopened;
+        check(engine::scene::load_scene(saved, reopened), "the scene loads again");
+        reopened.update();
+
+        std::size_t lights = 0;
+        for (const auto [entity, unused] :
+             reopened.registry().view<const engine::scene::PointLight>().each()) {
+            (void)unused;
+            ++lights;
+        }
+        check(lights == 3, "the light came back, beside the two the scene already had");
+    }
+
 } // namespace
 
 int main() {
@@ -599,6 +690,8 @@ int main() {
     engine::jobs::init();
 
     test_dropping_a_prefab();
+    test_deleting_a_prefab_member();
+    test_a_component_added_by_hand_is_saved();
     test_picking_the_nearest_entity();
     test_a_room_does_not_swallow_every_click();
     test_picking_respects_the_transform();

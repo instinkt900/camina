@@ -272,7 +272,78 @@ namespace engine::editor {
         return changed;
     }
 
-    void draw_world_panel(const scene::World& world, entt::entity& selected,
+    namespace {
+
+        /// How many entities go when this one does, itself included.
+        [[nodiscard]] std::size_t count_subtree(const scene::World& world, entt::entity entity) {
+            const entt::registry& entities = world.registry();
+            std::size_t total = 1;
+            const auto* node = entities.try_get<scene::Hierarchy>(entity);
+            for (entt::entity child = node != nullptr ? node->first_child : entt::null;
+                 child != entt::null;) {
+                total += count_subtree(world, child);
+                child = entities.get<scene::Hierarchy>(child).next_sibling;
+            }
+            return total;
+        }
+
+        /**
+         * Draws the delete button and the question it asks first.
+         *
+         * **Deleting takes the descendants.** A crate holds its lid, and a
+         * person who deletes the crate means the lid too, but nobody expects to
+         * find out afterwards. There is no undo yet, which is issue #331, so the
+         * count goes in the question rather than in a log line after the fact.
+         *
+         * @param world The world to delete from.
+         * @param selected The selection, cleared when the entity goes.
+         */
+        void draw_delete_button(scene::World& world, entt::entity& selected) {
+            const bool have = selected != entt::null && world.registry().valid(selected);
+
+            ImGui::BeginDisabled(!have);
+            if (ImGui::Button("Delete") && have) {
+                ImGui::OpenPopup("delete_entity");
+            }
+            ImGui::EndDisabled();
+
+            if (!ImGui::BeginPopup("delete_entity")) {
+                return;
+            }
+            if (!have) {
+                // The selection went between the click and the popup opening.
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                return;
+            }
+
+            const std::size_t going = count_subtree(world, selected);
+            const std::string label = entity_label(world.registry(), selected);
+            if (going > 1) {
+                ImGui::Text("Delete %s and the %zu entities under it?", label.c_str(), going - 1);
+            } else {
+                ImGui::Text("Delete %s?", label.c_str());
+            }
+            ImGui::TextDisabled("This cannot be undone.");
+            ImGui::Separator();
+
+            if (ImGui::Button("Delete")) {
+                world.destroy(selected);
+                // Nothing may hold an entity that no longer exists, and EnTT
+                // hands the same number out again.
+                selected = entt::null;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Keep")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+    } // namespace
+
+    void draw_world_panel(scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path, const assets::Content& content,
                           bool* open, const char* save_blocked) {
         ENGINE_PROFILE_ZONE_N("draw_world_panel");
@@ -292,6 +363,12 @@ namespace engine::editor {
                 }
             }
             ImGui::EndDisabled();
+
+            // Beside the save and before the path, because the path is as long
+            // as a path is and anything after it lands off the panel.
+            ImGui::SameLine();
+            draw_delete_button(world, selected);
+
             ImGui::SameLine();
             // The whole path, because which of the two trees this writes to is
             // the thing worth knowing.
@@ -315,6 +392,72 @@ namespace engine::editor {
         ImGui::End();
     }
 
+    namespace {
+
+        /**
+         * Draws the button that takes a component off, on the header row.
+         *
+         * A Transform has no button. Every entity carries one and the hierarchy
+         * reads it, so removing one is not an editing mistake to be undone but a
+         * world that no longer works. `owns_transform` is how a caller tells,
+         * without comparing a name against a spelling.
+         *
+         * @param ops The component the header belongs to.
+         * @return True when the user asked for it to go.
+         */
+        [[nodiscard]] bool draw_remove_button(const scene::ComponentOps& ops) {
+            if (ops.owns_transform || ops.remove == nullptr) {
+                return false;
+            }
+
+            // On the same line as the header it belongs to, at the right edge.
+            const float button = ImGui::GetFrameHeight();
+            ImGui::SameLine(ImGui::GetWindowWidth() - button - ImGui::GetStyle().WindowPadding.x);
+            const bool clicked = ImGui::SmallButton("x");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Take %s off this entity", ops.name);
+            }
+            return clicked;
+        }
+
+        /**
+         * Draws the add button, listing what the entity does not carry.
+         *
+         * The list is the registry, so a component added to the engine or to the
+         * game appears here with no editor change at all. That is rule 4.5 doing
+         * its job: one description, and every consumer reads it.
+         *
+         * @param world The world holding the entity.
+         * @param selected The entity to add to.
+         */
+        void draw_add_component(scene::World& world, entt::entity selected) {
+            ImGui::Separator();
+            if (ImGui::Button("Add component")) {
+                ImGui::OpenPopup("add_component");
+            }
+
+            if (!ImGui::BeginPopup("add_component")) {
+                return;
+            }
+
+            std::size_t offered = 0;
+            for (const scene::ComponentOps& ops : scene::components().all()) {
+                if (ops.create == nullptr || ops.has(world.registry(), selected)) {
+                    continue;
+                }
+                ++offered;
+                if (ImGui::MenuItem(ops.name)) {
+                    ops.create(world.registry(), selected);
+                }
+            }
+            if (offered == 0) {
+                ImGui::TextDisabled("This entity carries every component there is.");
+            }
+            ImGui::EndPopup();
+        }
+
+    } // namespace
+
     void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_inspector_panel");
 
@@ -329,16 +472,33 @@ namespace engine::editor {
             ImGui::Separator();
 
             bool moved = false;
+            const scene::ComponentOps* remove_this = nullptr;
+
             for (const scene::ComponentOps& ops : scene::components().all()) {
                 if (!ops.has(world.registry(), selected)) {
                     continue;
                 }
                 ImGui::PushID(ops.name);
-                if (ImGui::CollapsingHeader(ops.name, ImGuiTreeNodeFlags_DefaultOpen)) {
+                const bool open_header =
+                    ImGui::CollapsingHeader(ops.name, ImGuiTreeNodeFlags_DefaultOpen);
+                if (draw_remove_button(ops)) {
+                    // Held rather than removed here. Taking a component off
+                    // while this loop walks the registry storage is what
+                    // invalidates the iteration.
+                    remove_this = &ops;
+                }
+                if (open_header) {
                     moved = ops.inspect(world.registry(), selected) || moved;
                 }
                 ImGui::PopID();
             }
+
+            if (remove_this != nullptr) {
+                remove_this->remove(world.registry(), selected);
+                moved = true;
+            }
+
+            draw_add_component(world, selected);
 
             const auto* renderer = world.registry().try_get<scene::MeshRenderer>(selected);
             if (renderer != nullptr && renderer->mesh.valid()) {
