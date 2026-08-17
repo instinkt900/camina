@@ -372,6 +372,11 @@ namespace engine::editor {
             // on the bar. A child window inside it would otherwise hold the
             // focus and the game would never see a key.
             report.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+            // Hovered rather than focused for the mouse, because turning the
+            // view is what a person does first, before they have clicked
+            // anything. ImGui reports false here when another window covers
+            // this one, so a popup over the viewport still keeps the pointer.
+            report.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
             report.request = draw_play_bar(state, gizmo);
 
             // After the bar, so the target follows the picture area rather

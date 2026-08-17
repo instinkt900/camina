@@ -325,6 +325,10 @@ namespace {
         /// Whether the Viewport panel held the focus on the last frame. A
         /// running session reads the keyboard only while it did.
         bool viewport_focused = false;
+
+        /// Whether the pointer was over the Viewport panel on the last frame.
+        /// The camera takes the mouse from the interface while it is.
+        bool viewport_hovered = false;
         /// The source scene the World panel saves to, or empty for no source tree.
         std::filesystem::path source_scene;
     };
@@ -724,6 +728,7 @@ namespace {
                 editor.play.state(), editor.gizmo, overlay, &panels.viewport);
         }
         editor.viewport_focused = viewport.focused;
+        editor.viewport_hovered = viewport.hovered;
 
         if (panels.world) {
             // The save button writes the world as it stands, and while a
@@ -966,10 +971,18 @@ namespace {
      * @param editor Everything the program owns.
      */
     void update_input(Editor& editor) {
+        engine::platform::InputConsumed consumed;
+        engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
+
+        // The viewport is an ImGui window, so ImGui claims the mouse whenever
+        // the pointer is over the picture. A camera drawn in that picture has
+        // to ignore that claim or it can never be turned.
+        const bool looking = editor.input.held(engine::editor::fly_action::kLook);
+        consumed.mouse = engine::editor::mouse_consumed_by_ui(consumed.mouse,
+                                                              editor.viewport_hovered, looking);
+
         engine::platform::InputFrame state;
-        if (editor.viewport_focused) {
-            engine::platform::InputConsumed consumed;
-            engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
+        if (editor.viewport_hovered || editor.viewport_focused || looking) {
             state = engine::platform::sample(editor.window, consumed);
         }
 
@@ -996,6 +1009,10 @@ namespace {
     void fly_view(Editor& editor, float delta_seconds) {
         editor.view_camera.move_speed = editor.view.move_speed;
         editor.view_camera.look_sensitivity = editor.view.look_sensitivity;
+        // Hold the right mouse button to look, and the keys move while it is
+        // held. That is what every editor does, and it is what leaves the
+        // letter keys free for anything else.
+        editor.view_camera.move_needs_look = true;
         (void)engine::editor::update_fly_camera(editor.view_camera, editor.window, editor.input,
                                                 delta_seconds);
     }

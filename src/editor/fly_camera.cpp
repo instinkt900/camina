@@ -42,6 +42,10 @@ namespace engine::editor {
         input.bind(fly_action::kLook, MouseButton::Right);
     }
 
+    bool mouse_consumed_by_ui(bool imgui_wants_mouse, bool viewport_hovered, bool looking) {
+        return imgui_wants_mouse && !viewport_hovered && !looking;
+    }
+
     Vec3 fly_forward(const FlyCamera& camera) {
         const float yaw = glm::radians(camera.yaw);
         const float pitch = glm::radians(camera.pitch);
@@ -96,6 +100,12 @@ namespace engine::editor {
                 camera.yaw = std::remainder(camera.yaw, kFullTurnDegrees);
                 moved = true;
             }
+        }
+
+        // Every editor moves only while the look is held, and it is what frees
+        // the letter keys for anything else. See issue #325.
+        if (camera.move_needs_look && !looking) {
+            return moved;
         }
 
         const Vec3 forward = fly_forward(camera);

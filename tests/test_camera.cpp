@@ -10,9 +10,12 @@
 #include "math/transform.h"
 #include "scene/camera.h"
 #include "scene/components.h"
+#include "platform/input.h"
+#include "platform/window.h"
 #include "scene/world.h"
 
 #include <cmath>
+#include <cstddef>
 
 namespace {
 
@@ -232,9 +235,90 @@ namespace {
               "the entity looks where the fly camera says it does");
     }
 
+    /**
+     * The interface does not take the mouse from a camera in a viewport.
+     *
+     * ImGui claims the mouse for every window it owns, and an editor viewport
+     * is one of its windows. Taking that claim at face value means the camera
+     * can never be turned, which is what M9.5b shipped: the look button was
+     * discarded on every frame the pointer was over the picture.
+     */
+    void test_who_gets_the_mouse() {
+        section("who gets the mouse over a viewport");
+
+        using engine::editor::mouse_consumed_by_ui;
+
+        check(!mouse_consumed_by_ui(false, false, false),
+              "with no claim the camera has it anyway");
+        check(mouse_consumed_by_ui(true, false, false),
+              "a claim away from the viewport holds, so a panel keeps its drag");
+        check(!mouse_consumed_by_ui(true, true, false),
+              "a claim over the viewport does not, or the camera cannot turn");
+        check(!mouse_consumed_by_ui(true, false, true),
+              "a look already in progress keeps the mouse off the panel");
+        check(!mouse_consumed_by_ui(true, true, true), "and both together as well");
+    }
+
+    /// Presses a set of keys and a button, and hands them to an Input.
+    [[nodiscard]] engine::platform::Input pressed_input(bool look, engine::platform::Key key) {
+        engine::platform::Input input;
+        engine::editor::bind_fly_actions(input);
+
+        engine::platform::InputFrame frame;
+        frame.focused = true;
+        frame.keys.at(static_cast<std::size_t>(key)) = true;
+        frame.mouse_buttons.at(static_cast<std::size_t>(engine::platform::MouseButton::Right)) =
+            look;
+        input.update(frame);
+        return input;
+    }
+
+    /**
+     * The editor moves only while the look button is held, and the runtime
+     * moves whenever the keys are down.
+     *
+     * Two rules in one function, chosen by one field. The editor needs the
+     * letter keys free while the button is up, and a debug camera in a game has
+     * nothing else those keys could mean.
+     */
+    void test_movement_needs_the_look_button() {
+        section("what the movement keys need");
+
+        const engine::platform::Window no_window;
+        constexpr float kStep = 1.0F / 60.0F;
+
+        {
+            // The runtime rule. Forward moves with no button held.
+            engine::editor::FlyCamera camera;
+            const engine::platform::Input input = pressed_input(false, engine::platform::Key::W);
+            check(engine::editor::update_fly_camera(camera, no_window, input, kStep),
+                  "the runtime camera moves on the key alone");
+            check(camera.position.z < 0.0F, "and it moved forward, which is -Z");
+        }
+        {
+            // The editor rule. The same key does nothing on its own.
+            engine::editor::FlyCamera camera{ .move_needs_look = true };
+            const engine::platform::Input input = pressed_input(false, engine::platform::Key::W);
+            check(!engine::editor::update_fly_camera(camera, no_window, input, kStep),
+                  "the editor camera stands still without the look button");
+            check(camera.position == engine::Vec3{ 0.0F, 0.0F, 0.0F }, "nothing moved at all");
+        }
+        {
+            // And moves once the button is held.
+            engine::editor::FlyCamera camera{ .move_needs_look = true };
+            const engine::platform::Input input = pressed_input(true, engine::platform::Key::W);
+            check(engine::editor::update_fly_camera(camera, no_window, input, kStep),
+                  "the editor camera moves while the look is held");
+            check(camera.position.z < 0.0F, "and it moved forward");
+        }
+    }
+
 } // namespace
 
 int main() {
+    test_who_gets_the_mouse();
+    test_movement_needs_the_look_button();
+
     test_a_world_with_no_camera();
     test_the_primary_flag_chooses();
     test_the_pose_comes_from_the_entity();

@@ -103,6 +103,14 @@ namespace engine::editor {
 
         /// @brief True while this panel is the focused one.
         bool focused = false;
+
+        /**
+         * @brief True while the pointer is over this panel.
+         *
+         * A camera drawn into the panel takes the mouse from the interface when
+         * this is set. See `editor::mouse_consumed_by_ui`.
+         */
+        bool hovered = false;
     };
 
     /**

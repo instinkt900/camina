@@ -75,7 +75,38 @@ namespace engine::editor {
         float move_speed = 6.0F;
         /// @brief Degrees for each mouse count.
         float look_sensitivity = 0.12F;
+
+        /**
+         * @brief Whether the movement keys need the look button held.
+         *
+         * The editor sets this, because that is what every editor does and
+         * because it leaves the letter keys free while the button is up. The
+         * runtime leaves it off: it has flown with WASD alone since M2, there
+         * is nothing else those keys could mean in a game, and a debug camera
+         * that needs two hands is a worse debug camera.
+         */
+        bool move_needs_look = false;
     };
+
+    /**
+     * @brief Whether ImGui's claim on the mouse holds for a camera in a panel.
+     *
+     * ImGui claims the mouse whenever the pointer is over one of its windows,
+     * and an editor viewport is one of its windows. So the claim cannot be the
+     * whole answer: taken at face value it means a camera drawn inside a panel
+     * can never be turned, which is exactly what happened when M9.5b shipped.
+     *
+     * The camera keeps the mouse while a look is in progress as well, so a drag
+     * that wanders off the panel does not stop half way.
+     *
+     * @param imgui_wants_mouse What `gfx::imgui_wants_input` reported.
+     * @param viewport_hovered Whether the pointer is over the panel the camera
+     * draws into.
+     * @param looking Whether a look is in progress.
+     * @return True when the interface should keep the mouse from the camera.
+     */
+    [[nodiscard]] bool mouse_consumed_by_ui(bool imgui_wants_mouse, bool viewport_hovered,
+                                            bool looking);
 
     /**
      * @brief Where a fly camera stands when a scene carries no camera.
