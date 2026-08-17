@@ -419,9 +419,16 @@ input state and never a camera in its own right. The runtime steers the scene ca
 it, and both applications fall back to it for a scene that carries no camera at all. So it
 belongs to neither application and to no scene.
 
-**Today both applications draw through `scene::primary_camera`.** M9.5b gives the editor a
-free view of its own, flown with this and separate from the camera the game plays through.
-Issue #322 holds it.
+**The runtime draws through `scene::primary_camera` and the editor draws through its own
+view.** M9.5b split them. The editor viewport always shows the editor camera, a running
+session included, so a person can fly around a game while it plays through its own eye. The
+saved pose goes beside `imgui.ini` under `platform::preferences_directory`, because where
+somebody stands while they work belongs to them and not to the project.
+
+`Describe<FlyCamera>` lists the pose and nothing else. How fast a person flies and how far
+the mouse turns them are preferences of the application, so they stay in
+`editor::ViewSettings` beside the panel that edits them. A reflected type lists what it
+wants rather than every member it has.
 
 `editor::PlayMode` is here for the same reason. It is play-in-editor: a snapshot of the
 world, a `play::Session` over it, and the restore that puts the authored scene back. M9.4
@@ -2228,10 +2235,18 @@ M9.5a is the first half and it has landed. `scene::Camera` is a reflected compon
 level carries its viewpoint the way it carries its lights, and a script that acts along the
 line of sight reads the camera the game plays through. Both applications draw through it.
 
-M9.5b is the second half. The editor gets a free-fly view that belongs to the person rather
-than to the scene, saved beside `imgui.ini` rather than in the project. The viewport then
-keeps showing that view while a session plays, so a person can fly around a running game
-while the game keeps playing through its own camera.
+M9.5b is the second half and it has landed. The editor has a free-fly view that belongs to
+the person rather than to the scene, saved beside `imgui.ini` rather than in the project.
+The viewport keeps showing that view while a session plays, so a person can fly around a
+running game while the game keeps playing through its own camera.
+
+**The editor never writes to the camera entity.** It reads that entity for one thing only:
+the pose a script sees, through `play::View`. So flying in the editor cannot move a level's
+camera, and a scene saved after an afternoon of flying is the scene somebody authored.
+
+The exposure the editor tonemaps with is the scene camera's, not the editor's. Exposure is a
+property of the level that a person judges by eye, so the viewport has to show what the game
+will show.
 
 The editor runs the ImGui docking branch, which `conanfile.py` already pins for this
 reason. Panels dock and tab inside the main window, and a panel dragged out of it becomes

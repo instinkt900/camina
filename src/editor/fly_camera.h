@@ -21,6 +21,10 @@
 
 #include "math/conventions.h"
 #include "math/transform.h"
+#include "reflect/attributes.h"
+#include "reflect/reflect.h"
+
+#include <tuple>
 
 namespace engine::platform {
     class Input;
@@ -160,3 +164,34 @@ namespace engine::editor {
                            const platform::Input& input, float delta_seconds);
 
 } // namespace engine::editor
+
+// The numbers in a Range are the description, the same as every other reflected
+// type in this directory.
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+/**
+ * @brief Describes the pose of engine::editor::FlyCamera, for a saved view.
+ *
+ * The pose alone. How fast a person flies and how far the mouse turns them are
+ * preferences of the application rather than of one viewpoint, so they stay in
+ * `editor::ViewSettings` beside the panel that edits them. A reflected type
+ * lists what it wants, not every member it has.
+ */
+template <>
+struct engine::reflect::Describe<engine::editor::FlyCamera> {
+    /// @brief The type name the file stores.
+    static constexpr const char* name = "FlyCamera";
+
+    /// @brief The pose fields, in the order a panel would show them.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        using engine::editor::FlyCamera;
+        return std::make_tuple(
+            ENGINE_FIELD(FlyCamera, position, Range{ -1000.0, 1000.0, 0.05 },
+                         Tooltip{ "Meters. Hold the right mouse button and use WASD" }),
+            ENGINE_FIELD(FlyCamera, yaw, Range{ -180.0, 180.0, 0.5 },
+                         Tooltip{ "Degrees around up. Zero looks down -Z" }),
+            ENGINE_FIELD(FlyCamera, pitch, Range{ -89.0, 89.0, 0.5 },
+                         Tooltip{ "Degrees above the horizon" }));
+    }
+};
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
