@@ -37,6 +37,8 @@ namespace engine::scene {
             nlohmann::json overrides = nlohmann::json::object();
             /// The entities the instance added, in the order the file lists them.
             std::vector<PrefabEntity> added;
+            /// The identity each addition was saved under, null where it named none.
+            std::vector<Guid> added_ids;
             /// Every index that is not built, a removed member's children included.
             std::set<std::size_t> gone;
             /// A member that moved, from its index to its new parent index.
@@ -102,9 +104,9 @@ namespace engine::scene {
             return true;
         }
 
-        /// Reads the entities an instance added under itself.
+        /// Reads the entities an instance added under itself, and their identities.
         [[nodiscard]] bool read_added(const nlohmann::json& record, const Prefab& prefab,
-                                      std::vector<PrefabEntity>& out) {
+                                      std::vector<PrefabEntity>& out, std::vector<Guid>& ids) {
             const auto found = record.find(kAddedKey);
             if (found == record.end()) {
                 return true;
@@ -144,7 +146,22 @@ namespace engine::scene {
                     }
                     built.components = *parts;
                 }
+
+                // An addition belongs to the scene rather than to the prefab,
+                // so its record carries its identity the way a top-level entity
+                // does. A record that names none, which is a hand-written one,
+                // falls back to a derived identity.
+                Guid id;
+                if (const auto named = entry.find(kIdKey);
+                    named != entry.end() && named->is_string() &&
+                    !Guid::parse(named->get<std::string>(), id)) {
+                    ENGINE_LOG_ERROR("{} names the identity {}, which is not one. It takes a "
+                                     "derived one instead.",
+                                     where, named->get<std::string>());
+                }
+
                 out.push_back(std::move(built));
+                ids.push_back(id);
             }
             return true;
         }
@@ -212,7 +229,7 @@ namespace engine::scene {
                     out.overrides = *found;
                 }
                 if (!read_removed(record, prefab, out.gone) ||
-                    !read_added(record, prefab, out.added)) {
+                    !read_added(record, prefab, out.added, out.added_ids)) {
                     return false;
                 }
                 if (!read_reparented(record, prefab, prefab.size() + out.added.size(),
@@ -399,6 +416,14 @@ namespace engine::scene {
             for (const entt::entity entity : extra) {
                 nlohmann::json entry = nlohmann::json::object();
                 entry[kParentKey] = index.at(entities.get<Hierarchy>(entity).parent);
+
+                // An addition keeps the identity it was made with, rather than
+                // deriving one. It is scene data, so a save writes it out whole,
+                // and an identity that changed on the first save would leave
+                // every undo entry naming it pointing at nothing.
+                if (const auto* held = entities.try_get<const Id>(entity); held != nullptr) {
+                    entry[kIdKey] = to_text(held->value);
+                }
                 entry[kComponentsKey] = save_components(entities, entity, registry);
                 out.push_back(std::move(entry));
             }
@@ -541,6 +566,78 @@ namespace engine::scene {
         return library;
     }
 
+    namespace {
+
+        /**
+         * Gives an instance the identities it will answer to.
+         *
+         * The root takes the one the record names, so an instance built again
+         * from a scene file is the same instance an undo entry named. A record
+         * with no identity, which is a drop or a script instancing a prefab,
+         * keeps the one `World::create` generated.
+         *
+         * **A member derives its identity from the root**, under the kind word
+         * `member` and its index in the prefab. So an instance stays one record
+         * in the file, two instances of one prefab never collide, and a member
+         * answers to the same identity every time the scene is read. It is the
+         * same trick the cooker uses for a mesh inside a glTF.
+         *
+         * **An entity the instance added keeps the one its record names.** It
+         * is scene data rather than prefab data, so the file writes it out
+         * whole, identity included. A record with none, which is a hand-written
+         * one, falls back to a derived identity so that it is at least stable
+         * from one read to the next.
+         *
+         * **Index 0 is the root, and it derives nothing.** Deriving over it
+         * would throw away the identity the record just gave it, and then
+         * everything under it would derive from a different root on the next
+         * read.
+         *
+         * @param world The world holding the instance.
+         * @param created Every entity of the instance by index, null where the
+         * instance removed one.
+         * @param parts The record, read into the form instantiate() walks.
+         * @param prefab The prefab the instance came from.
+         * @param record The record it was built from.
+         */
+        void assign_identities(World& world, const std::vector<entt::entity>& created,
+                               const InstanceRecord& parts, const Prefab& prefab,
+                               const nlohmann::json& record) {
+            const entt::entity root = created.front();
+            const auto named = record.find(kIdKey);
+            if (named != record.end() && named->is_string()) {
+                Guid wanted;
+                if (Guid::parse(named->get<std::string>(), wanted)) {
+                    (void)world.set_identity(root, wanted);
+                } else {
+                    ENGINE_LOG_ERROR("An instance names the identity {}, which is not one.",
+                                     named->get<std::string>());
+                }
+            }
+
+            const Guid id = world.identity(root);
+            if (!id.valid()) {
+                return;
+            }
+
+            for (std::size_t i = 1; i < created.size(); ++i) {
+                if (created[i] == entt::null) {
+                    continue;
+                }
+
+                Guid wanted;
+                if (i >= prefab.size()) {
+                    wanted = parts.added_ids[i - prefab.size()];
+                }
+                if (!wanted.valid()) {
+                    wanted = Guid::derive(id, kMemberKind, static_cast<std::uint32_t>(i));
+                }
+                (void)world.set_identity(created[i], wanted);
+            }
+        }
+
+    } // namespace
+
     entt::entity instantiate(World& world, const Prefab& prefab, const nlohmann::json& record,
                              const ComponentRegistry& registry) {
         if (prefab.size() == 0) {
@@ -599,6 +696,8 @@ namespace engine::scene {
             }
             return entt::null;
         }
+
+        assign_identities(world, created, parts, prefab, record);
         return root;
     }
 

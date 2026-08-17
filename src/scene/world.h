@@ -10,12 +10,14 @@
  */
 
 #include "core/entt.h"
+#include "core/guid.h"
 #include "math/transform.h"
 #include "scene/components.h"
 
 #include <entt/entity/registry.hpp>
 
 #include <cstddef>
+#include <unordered_map>
 #include <vector>
 
 namespace engine::scene {
@@ -54,9 +56,47 @@ namespace engine::scene {
 
         /**
          * @brief Creates an entity at the origin, with no parent.
+         *
+         * It carries an identity of its own, which is what an undo entry and a
+         * selection hold rather than the entity number. See `scene::Id`.
+         *
          * @return The new entity. Its world matrix is stale until update() runs.
          */
         [[nodiscard]] entt::entity create();
+
+        /**
+         * @brief Finds an entity by its identity.
+         *
+         * The way back from a `scene::Id`. An `entt::entity` is handed out
+         * again after the entity that held it is destroyed, and an identity is
+         * not, so anything outliving one edit holds an identity and asks here.
+         *
+         * @param id The identity to look for.
+         * @return The entity, or `entt::null` when no entity carries it.
+         */
+        [[nodiscard]] entt::entity find(Guid id) const;
+
+        /**
+         * @brief The identity of an entity.
+         * @param entity The entity to read.
+         * @return Its identity, or a null one for an entity this class did not
+         * build.
+         */
+        [[nodiscard]] Guid identity(entt::entity entity) const;
+
+        /**
+         * @brief Gives an entity the identity a file chose for it.
+         *
+         * `create` generates one. Loading a scene replaces it, because the file
+         * holds the identity the entity was saved with and an entity built again
+         * has to answer to the same one.
+         *
+         * @param entity The entity to name.
+         * @param id The identity it should carry. A null identity is refused.
+         * @return False when the identity is null or another entity already
+         * carries it, which is reported rather than left to be found later.
+         */
+        bool set_identity(entt::entity entity, Guid id);
 
         /**
          * @brief Destroys an entity and every descendant it holds.
@@ -161,6 +201,13 @@ namespace engine::scene {
         void attach(entt::entity child, entt::entity parent);
 
         entt::registry registry_;
+
+        /// @brief Identity to entity, kept in step by create, destroy and clear.
+        ///
+        /// A map rather than a search, because an undo step asks for an entity
+        /// by identity and a scene holds thousands of them.
+        std::unordered_map<Guid, entt::entity> by_id_;
+
         /// @brief Reused by every walk, so a deep hierarchy allocates once.
         std::vector<entt::entity> stack_;
         std::size_t rebuilt_ = 0;

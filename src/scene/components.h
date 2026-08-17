@@ -133,6 +133,29 @@ namespace engine::scene {
         float range = kDefaultLightRange;
     };
 
+    /**
+     * @brief The identity of an entity, which outlives the entity itself.
+     *
+     * An `entt::entity` is a slot number that EnTT hands out again, so nothing
+     * that outlives one edit can name an entity with one. An undo entry, a
+     * selection, and one day an entity naming another entity all need something
+     * that survives the entity being destroyed and built again. This is it.
+     *
+     * The scene file stores it beside the parent link rather than among the
+     * components, because it is what an entity **is** rather than something it
+     * carries. So it stays out of the component registry, the same way
+     * `Hierarchy` and `WorldTransform` do, and out of the inspector: nobody
+     * chooses an identity.
+     *
+     * `World::create` gives every entity one. A prefab instance gives its
+     * members derived ones, so an instance stays one record in the file. See
+     * `DESIGN.md` §10 M12.
+     */
+    struct Id {
+        /// @brief The identity. Generated, or read out of a scene file.
+        Guid value;
+    };
+
     /// @brief The vertical field of view a new Camera opens with, in degrees.
     inline constexpr float kDefaultFovDegrees = 60.0F;
 

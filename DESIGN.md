@@ -2428,6 +2428,16 @@ glTF that holds it, because an instance is one record in the file and storing an
 each member would bloat every one. The scene file goes to version 4, and a version 3 document
 still reads with an identity made for each entity as it loads.
 
+**An entity somebody added under an instance keeps a stored identity, not a derived one.** It
+is scene data rather than prefab data, so its record already carries its parent and its
+components, and one more field costs nothing. A derived identity would be stable from one read
+to the next but would change on the **first** save, because the index it derives from is only
+worked out when the file is written. That would break every undo entry naming an entity the
+author had just dropped into an instance, which is the case the identity exists for. The root
+is the same shape: it is a member of its own instance at index 0 and it derives nothing,
+because deriving over it would throw away the identity the record just gave it and move every
+member with it.
+
 Two things fall out of it. A **delete is a real delete**, because undo builds the entity again
 with its identity and every other entry still resolves; an earlier plan to keep deleted
 entities alive and hidden is not needed. And **the history lives through a play and a stop**,
