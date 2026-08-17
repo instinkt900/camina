@@ -586,6 +586,27 @@ pose moves the whole frame, so this is the shape of a rounding change rather tha
 Measure a later camera change against `--offscreen --frames 120` and expect byte equality
 from here on.
 
+**M9.5c draws the gizmo, and it needed its own projection.** ImGuizmo expects Y up in
+normalized device coordinates and a finite far plane. The engine renders with an infinite
+reverse-Z projection whose Y row is negated for Vulkan, so `apps::gizmo_projection` builds a
+neutral one for the handles alone. Handles and picture agree because the X row is the same
+either way and the two Y flips cancel.
+
+`editor::place_entity` is the write path, and it is in `engine_core` rather than beside the
+ImGuizmo calls so a test can drive it with no window. Two mutations prove that test: forget
+to divide out the parent, and two checks fail; write the Transform component instead of
+calling `World::set_local`, and three fail, because nothing recomposes the subtree.
+
+**The editor draws the scene camera as a wireframe**, from `editor::camera_lines`, with a bar
+over the top so up is readable. Its width is the editor's aspect rather than one the camera
+holds, because a scene says nothing about the shape it frames. Issue #327 holds that.
+
+**`editor --select <name>` and `--gizmo <move|turn|size>`** exist so a capture can show the
+handles. A gizmo otherwise needs a hand on the mouse, and there is no way to inject one.
+
+**The gizmo has no keyboard shortcuts**, because W, E and R fly the camera. Issue #325 holds
+the decision that would free them.
+
 **The game's key bindings are in `sandbox::bind_actions` now**, not in the runtime's
 `main.cpp`. Two applications run this game, and two copies of the table would let one key do
 two different things. The camera bindings stay with whichever application flies a camera.

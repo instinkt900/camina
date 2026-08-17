@@ -12,9 +12,12 @@
 #include "check.h"
 #include "core/jobs.h"
 #include "editor/play_mode.h"
+#include "editor/placement.h"
 #include "physics/components.h"
 #include "sandbox/game.h"
+#include "math/transform.h"
 #include "scene/component_registry.h"
+#include "scene/components.h"
 #include "scene/prefab.h"
 #include "scene/scene_file.h"
 #include "scene/world.h"
@@ -25,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -226,6 +230,172 @@ namespace {
         play.stop(world);
     }
 
+    /// How close two matrices have to be, in meters and in the units of a basis.
+    constexpr float kPlaceTolerance = 1.0e-4F;
+
+    [[nodiscard]] bool near_enough(const engine::Mat4& a, const engine::Mat4& b) {
+        for (glm::length_t column = 0; column < 4; ++column) {
+            for (glm::length_t row = 0; row < 4; ++row) {
+                if (std::fabs(a[column][row] - b[column][row]) > kPlaceTolerance) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * A transform survives being composed into a matrix and read back.
+     *
+     * `place_entity` goes through a matrix, so an entity dragged by a gizmo
+     * comes back through this. A rotation that came back conjugated, or a scale
+     * that came back on the wrong axis, would move an entity every time
+     * somebody touched it.
+     */
+    void test_a_transform_round_trips_through_a_matrix() {
+        section("a transform through a matrix and back");
+
+        const engine::Quat turn =
+            glm::angleAxis(glm::radians(35.0F), glm::normalize(engine::Vec3{ 0.3F, 1.0F, 0.2F }));
+        const engine::Transform original{ .position = { 1.5F, -2.0F, 3.25F },
+                                          .rotation = turn,
+                                          .scale = { 2.0F, 0.5F, 1.25F } };
+
+        const engine::Transform back = engine::from_matrix(engine::to_matrix(original));
+        check(near_enough(engine::to_matrix(back), engine::to_matrix(original)),
+              "the matrix it composes to is the one it came from");
+        check(std::fabs(back.scale.x - 2.0F) < kPlaceTolerance &&
+                  std::fabs(back.scale.y - 0.5F) < kPlaceTolerance &&
+                  std::fabs(back.scale.z - 1.25F) < kPlaceTolerance,
+              "a non-uniform scale comes back on the right axes");
+    }
+
+    /**
+     * A gizmo drag puts an entity exactly where it was dragged.
+     *
+     * The parent is the whole of this test. A child stores a transform relative
+     * to its parent, and a gizmo works in world space, so placing a child under
+     * a moved and turned parent is where the arithmetic can go wrong. Issue
+     * #302 named it: the handles have to land where the pointer is.
+     */
+    void test_placing_an_entity_under_a_parent() {
+        section("placing an entity through the hierarchy");
+
+        engine::scene::World world;
+
+        const entt::entity parent = world.create();
+        world.set_local(parent, { .position = { 10.0F, 1.0F, -4.0F },
+                                  .rotation = glm::angleAxis(glm::radians(70.0F),
+                                                             engine::Vec3{ 0.0F, 1.0F, 0.0F }) });
+
+        const entt::entity middle = world.create();
+        check(world.set_parent(middle, parent), "the middle entity attaches");
+        world.set_local(middle, { .position = { 0.0F, 2.0F, 0.0F } });
+
+        const entt::entity leaf = world.create();
+        check(world.set_parent(leaf, middle), "the leaf attaches");
+        world.set_local(leaf, { .position = { 1.0F, 0.0F, 0.0F } });
+        world.update();
+
+        const engine::Mat4 parent_before = world.world_matrix(parent);
+
+        // Where a drag left it: somewhere the child's own transform would never
+        // have put it.
+        const engine::Transform dragged{ .position = { -3.0F, 5.0F, 8.0F },
+                                         .rotation = glm::angleAxis(glm::radians(-25.0F),
+                                                                    engine::Vec3{ 1.0F, 0.0F,
+                                                                                  0.0F }),
+                                         .scale = { 1.5F, 1.5F, 1.5F } };
+        engine::editor::place_entity(world, middle, engine::to_matrix(dragged));
+        world.update();
+
+        check(near_enough(world.world_matrix(middle), engine::to_matrix(dragged)),
+              "the dragged entity ends up exactly where it was dragged");
+        check(near_enough(world.world_matrix(parent), parent_before),
+              "the parent did not move");
+
+        // The write went through set_local, so the subtree was marked and the
+        // leaf was composed again. Writing the component directly is the
+        // bug this catches: everything under the entity stays behind.
+        const engine::Vec3 leaf_position{ world.world_matrix(leaf)[3] };
+        const engine::Vec3 expected{ engine::to_matrix(dragged) *
+                                     engine::Vec4{ 1.0F, 0.0F, 0.0F, 1.0F } };
+        check(std::fabs(leaf_position.x - expected.x) < kPlaceTolerance &&
+                  std::fabs(leaf_position.y - expected.y) < kPlaceTolerance &&
+                  std::fabs(leaf_position.z - expected.z) < kPlaceTolerance,
+              "the leaf followed");
+    }
+
+    /// A root entity has no parent to divide out, and lands just the same.
+    void test_placing_a_root_entity() {
+        section("placing an entity with no parent");
+
+        engine::scene::World world;
+        const entt::entity entity = world.create();
+        world.update();
+
+        const engine::Transform dragged{ .position = { 4.0F, 0.5F, -2.0F } };
+        engine::editor::place_entity(world, entity, engine::to_matrix(dragged));
+        world.update();
+
+        check(near_enough(world.world_matrix(entity), engine::to_matrix(dragged)),
+              "a root entity lands where it was dragged");
+    }
+
+    /**
+     * A dragged entity reaches the scene file and comes back the same.
+     *
+     * The gizmo writes a local transform, the writer collapses a prefab
+     * instance to its overrides, and the reader builds it again. A drag that
+     * did not survive that round trip would look right until somebody reopened
+     * the scene, which is the worst moment to find out.
+     */
+    void test_a_dragged_entity_survives_the_scene_file() {
+        section("a dragged entity through the scene file");
+
+        engine::assets::Content content;
+        engine::scene::World world;
+        check(load_shipped(world, content), "the shipped content loads");
+
+        entt::entity dragged = entt::null;
+        for (const auto [entity, named] :
+             world.registry().view<const engine::scene::Name>().each()) {
+            if (named.value == "big crate") {
+                dragged = entity;
+            }
+        }
+        check(dragged != entt::null, "the crate to drag is there");
+
+        // Where a gizmo would have left it. The crate is a prefab instance, so
+        // this has to come back as an override rather than as a new entity.
+        const engine::Transform moved{ .position = { -2.5F, 3.75F, 1.25F },
+                                       .rotation = glm::angleAxis(glm::radians(30.0F),
+                                                                  engine::Vec3{ 0.0F, 1.0F,
+                                                                                0.0F }),
+                                       .scale = { 1.6F, 1.6F, 1.6F } };
+        engine::editor::place_entity(world, dragged, engine::to_matrix(moved));
+        world.update();
+
+        const nlohmann::json saved = engine::scene::save_scene(world);
+
+        engine::scene::World reopened;
+        check(engine::scene::load_scene(saved, reopened), "the saved scene loads again");
+        reopened.update();
+        check(engine::scene::save_scene(reopened) == saved,
+              "saving what was loaded gives the same document");
+
+        entt::entity found = entt::null;
+        for (const auto [entity, named] :
+             reopened.registry().view<const engine::scene::Name>().each()) {
+            if (named.value == "big crate") {
+                found = entity;
+            }
+        }
+        check(found != entt::null, "the crate came back");
+        check(near_enough(reopened.world_matrix(found), engine::to_matrix(moved)),
+              "and it is where it was dragged to");
+    }
+
 } // namespace
 
 int main() {
@@ -235,6 +405,11 @@ int main() {
     // the pool up before it builds one.
     engine::jobs::init();
 
+    test_a_transform_round_trips_through_a_matrix();
+    test_placing_an_entity_under_a_parent();
+    test_placing_a_root_entity();
+
+    test_a_dragged_entity_survives_the_scene_file();
     test_stop_restores_the_authored_world();
     test_a_second_session_starts_from_the_same_place();
     test_pause_holds_the_step();

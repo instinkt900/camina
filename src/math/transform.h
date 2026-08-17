@@ -51,6 +51,40 @@ namespace engine {
         return glm::scale(result, transform.scale);
     }
 
+    /**
+     * @brief Takes a transform back out of a matrix.
+     *
+     * The inverse of to_matrix(). The scale is the length of each basis column,
+     * the rotation is what is left once those lengths are divided out, and the
+     * position is the translation column.
+     *
+     * @warning **A mirrored matrix comes back unmirrored.** A length has no
+     * sign, so a scale of -1 on one axis reads as 1 and the rotation absorbs
+     * the flip. Nothing in the engine authors a negative scale, and a gizmo
+     * cannot produce one, so this is a limit rather than a loss.
+     *
+     * A matrix with skew in it has no exact transform, and this gives the
+     * nearest one rather than reporting it. Only a non-uniform scale under a
+     * rotation makes one, which no editor path produces.
+     *
+     * @param matrix The matrix to read.
+     * @return The position, rotation, and scale it was composed from.
+     */
+    [[nodiscard]] inline Transform from_matrix(const Mat4& matrix) {
+        Transform result;
+        result.position = Vec3{ matrix[3] };
+
+        Mat3 basis{ matrix };
+        result.scale = Vec3{ glm::length(basis[0]), glm::length(basis[1]), glm::length(basis[2]) };
+        for (glm::length_t axis = 0; axis < 3; ++axis) {
+            if (result.scale[axis] > 0.0F) {
+                basis[axis] /= result.scale[axis];
+            }
+        }
+        result.rotation = glm::quat_cast(basis);
+        return result;
+    }
+
 } // namespace engine
 
 /**

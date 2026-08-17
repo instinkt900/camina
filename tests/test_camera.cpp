@@ -6,13 +6,19 @@
 // have to agree with what the camera reads back out.
 
 #include "check.h"
+#include "editor/camera_lines.h"
 #include "editor/fly_camera.h"
 #include "math/transform.h"
 #include "scene/camera.h"
 #include "scene/components.h"
+#include "platform/input.h"
+#include "platform/window.h"
 #include "scene/world.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <vector>
 
 namespace {
 
@@ -232,9 +238,198 @@ namespace {
               "the entity looks where the fly camera says it does");
     }
 
+    /**
+     * The interface does not take the mouse from a camera in a viewport.
+     *
+     * ImGui claims the mouse for every window it owns, and an editor viewport
+     * is one of its windows. Taking that claim at face value means the camera
+     * can never be turned, which is what M9.5b shipped: the look button was
+     * discarded on every frame the pointer was over the picture.
+     */
+    void test_who_gets_the_mouse() {
+        section("who gets the mouse over a viewport");
+
+        using engine::editor::mouse_consumed_by_ui;
+
+        check(!mouse_consumed_by_ui(false, false, false),
+              "with no claim the camera has it anyway");
+        check(mouse_consumed_by_ui(true, false, false),
+              "a claim away from the viewport holds, so a panel keeps its drag");
+        check(!mouse_consumed_by_ui(true, true, false),
+              "a claim over the viewport does not, or the camera cannot turn");
+        check(!mouse_consumed_by_ui(true, false, true),
+              "a look already in progress keeps the mouse off the panel");
+        check(!mouse_consumed_by_ui(true, true, true), "and both together as well");
+    }
+
+    /// Presses a set of keys and a button, and hands them to an Input.
+    [[nodiscard]] engine::platform::Input pressed_input(bool look, engine::platform::Key key) {
+        engine::platform::Input input;
+        engine::editor::bind_fly_actions(input);
+
+        engine::platform::InputFrame frame;
+        frame.focused = true;
+        frame.keys.at(static_cast<std::size_t>(key)) = true;
+        frame.mouse_buttons.at(static_cast<std::size_t>(engine::platform::MouseButton::Right)) =
+            look;
+        input.update(frame);
+        return input;
+    }
+
+    /**
+     * The editor moves only while the look button is held, and the runtime
+     * moves whenever the keys are down.
+     *
+     * Two rules in one function, chosen by one field. The editor needs the
+     * letter keys free while the button is up, and a debug camera in a game has
+     * nothing else those keys could mean.
+     */
+    void test_movement_needs_the_look_button() {
+        section("what the movement keys need");
+
+        const engine::platform::Window no_window;
+        constexpr float kStep = 1.0F / 60.0F;
+
+        {
+            // The runtime rule. Forward moves with no button held.
+            engine::editor::FlyCamera camera;
+            const engine::platform::Input input = pressed_input(false, engine::platform::Key::W);
+            check(engine::editor::update_fly_camera(camera, no_window, input, kStep),
+                  "the runtime camera moves on the key alone");
+            check(camera.position.z < 0.0F, "and it moved forward, which is -Z");
+        }
+        {
+            // The editor rule. The same key does nothing on its own.
+            engine::editor::FlyCamera camera{ .move_needs_look = true };
+            const engine::platform::Input input = pressed_input(false, engine::platform::Key::W);
+            check(!engine::editor::update_fly_camera(camera, no_window, input, kStep),
+                  "the editor camera stands still without the look button");
+            check(camera.position == engine::Vec3{ 0.0F, 0.0F, 0.0F }, "nothing moved at all");
+        }
+        {
+            // And moves once the button is held.
+            engine::editor::FlyCamera camera{ .move_needs_look = true };
+            const engine::platform::Input input = pressed_input(true, engine::platform::Key::W);
+            check(engine::editor::update_fly_camera(camera, no_window, input, kStep),
+                  "the editor camera moves while the look is held");
+            check(camera.position.z < 0.0F, "and it moved forward");
+        }
+    }
+
+    /**
+     * The middle of the far end of a wireframe.
+     *
+     * The four lines that start at the camera end on the four corners, so the
+     * mean of those ends is the middle. Measuring the furthest point instead
+     * would measure the spread, which is the aspect rather than the direction.
+     *
+     * @param lines The wireframe to read.
+     * @param apex Where the camera stands.
+     * @return The middle of the far end.
+     */
+    [[nodiscard]] engine::Vec3 far_centre(const std::vector<engine::physics::DebugLine>& lines,
+                                          const engine::Vec3& apex) {
+        engine::Vec3 total{ 0.0F, 0.0F, 0.0F };
+        float count = 0.0F;
+        for (const engine::physics::DebugLine& line : lines) {
+            if (near_enough(line.from, apex)) {
+                total += line.to;
+                count += 1.0F;
+            }
+        }
+        return count > 0.0F ? total / count : total;
+    }
+
+    /**
+     * The wireframe stands where the camera stands and opens the way it looks.
+     *
+     * A picture cannot say this. A frustum drawn at the wrong scale, pointing
+     * backwards, or centred on the origin all look like a yellow shape in a
+     * room, and the mistake only shows when somebody tries to line a camera up
+     * with it.
+     */
+    void test_the_camera_wireframe() {
+        section("the wireframe of a camera");
+
+        sc::World world;
+        const engine::Vec3 where{ 2.0F, 1.5F, -3.0F };
+        const entt::entity camera = add_camera(world, { .position = where }, true);
+        world.registry().get<sc::Camera>(camera).fov_degrees = 60.0F;
+
+        std::vector<engine::physics::DebugLine> lines;
+        engine::editor::camera_lines(world, camera, 1.0F, lines);
+        check(lines.size() == 10, "four edges, four sides of the far end, and the up bar");
+
+        // The four lines that start at the camera are the edges of the pyramid.
+        std::size_t from_apex = 0;
+        for (const engine::physics::DebugLine& line : lines) {
+            if (near_enough(line.from, where)) {
+                ++from_apex;
+            }
+        }
+        check(from_apex == 4, "four lines start where the camera stands");
+
+        // The far end sits one length down -Z, which is forward for an unturned
+        // camera, and its half height is the tangent of half the field of view.
+        const float expected_half =
+            engine::editor::kCameraLinesLength * std::tan(glm::radians(30.0F));
+        float highest = 0.0F;
+        for (const engine::physics::DebugLine& line : lines) {
+            highest = std::max(highest, line.to.y - where.y);
+        }
+        check(near_enough(far_centre(lines, where),
+                          where - engine::Vec3{ 0.0F, 0.0F, engine::editor::kCameraLinesLength }),
+              "the far end is one length ahead, down -Z");
+        check(highest > expected_half,
+              "the up bar rises above the top of the far end, so up is readable");
+        check(near_enough(highest, expected_half * 1.25F), "and it rises by a quarter of it");
+
+        // A wider lens makes a wider shape. This is what catches a frustum built
+        // from a fixed angle rather than from the camera.
+        world.registry().get<sc::Camera>(camera).fov_degrees = 90.0F;
+        std::vector<engine::physics::DebugLine> wider;
+        engine::editor::camera_lines(world, camera, 1.0F, wider);
+
+        const auto spread = [](const std::vector<engine::physics::DebugLine>& of) {
+            float widest = 0.0F;
+            for (const engine::physics::DebugLine& line : of) {
+                widest = std::max(widest, std::fabs(line.to.x));
+            }
+            return widest;
+        };
+        check(spread(wider) > spread(lines), "a wider field of view draws a wider shape");
+    }
+
+    /// A turned camera takes its wireframe with it.
+    void test_the_wireframe_turns_with_the_camera() {
+        section("the wireframe of a turned camera");
+
+        sc::World world;
+        const engine::Quat quarter =
+            glm::angleAxis(glm::radians(90.0F), engine::Vec3{ 0.0F, 1.0F, 0.0F });
+        const entt::entity camera = add_camera(world, { .rotation = quarter }, true);
+
+        std::vector<engine::physics::DebugLine> lines;
+        engine::editor::camera_lines(world, camera, 1.0F, lines);
+
+        // A quarter turn to the left looks down -X, so the middle of the far
+        // end is there. The corners spread sideways from it, which after this
+        // turn is along Z, so the middle is the thing to measure and the
+        // furthest point is not.
+        check(near_enough(far_centre(lines, engine::Vec3{ 0.0F, 0.0F, 0.0F }),
+                          engine::Vec3{ -engine::editor::kCameraLinesLength, 0.0F, 0.0F }),
+              "the far end followed the camera round to -X");
+    }
+
 } // namespace
 
 int main() {
+    test_who_gets_the_mouse();
+    test_movement_needs_the_look_button();
+
+    test_the_camera_wireframe();
+    test_the_wireframe_turns_with_the_camera();
+
     test_a_world_with_no_camera();
     test_the_primary_flag_chooses();
     test_the_pose_comes_from_the_entity();

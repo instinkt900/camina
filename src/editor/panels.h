@@ -30,6 +30,7 @@
 
 #include <entt/entity/fwd.hpp>
 
+#include <cstdint>
 #include <filesystem>
 
 namespace engine::assets {
@@ -41,6 +42,52 @@ namespace engine::scene {
 }
 
 namespace engine::editor {
+
+    /// @brief Which handles the gizmo shows.
+    enum class GizmoOperation : std::uint8_t {
+        Translate, ///< Arrows that move the entity.
+        Rotate,    ///< Rings that turn it.
+        Scale,     ///< Boxes that resize it.
+    };
+
+    /// @brief Which axes those handles line up with.
+    enum class GizmoSpace : std::uint8_t {
+        World, ///< The axes of the world, whatever the entity is turned to.
+        Local, ///< The axes of the entity itself.
+    };
+
+    /**
+     * @brief What the gizmo is set to, which the viewport bar edits.
+     *
+     * Plain data with no ImGui type and no ImGuizmo type in it. The panel
+     * changes it, and whoever draws a gizmo reads it. `apps/editor/gizmo.h`
+     * turns these two into what ImGuizmo asks for.
+     */
+    struct GizmoControls {
+        /// @brief Which handles the gizmo shows.
+        GizmoOperation operation = GizmoOperation::Translate;
+        /// @brief Which axes those handles line up with.
+        GizmoSpace space = GizmoSpace::World;
+    };
+
+    /**
+     * @brief Something to draw inside the viewport window, over the picture.
+     *
+     * A gizmo has to draw into that window's draw list and needs the rectangle
+     * the picture occupies, and both are only knowable between the `Begin` and
+     * the `End` of the panel. So the caller hands over a function to run there
+     * rather than the panel handing out an ImGui type.
+     *
+     * @warning The rectangle is in screen coordinates, which is what ImGui
+     * reports and what ImGuizmo::SetRect expects. It is not relative to the
+     * panel.
+     */
+    struct ViewportOverlay {
+        /// @brief Called with the picture rectangle, or null for nothing to draw.
+        void (*draw)(void* user, float x, float y, float width, float height) = nullptr;
+        /// @brief Handed back to draw(), because a function pointer carries no state.
+        void* user = nullptr;
+    };
 
     /**
      * @brief What the viewport panel reported about the frame it drew.
@@ -56,6 +103,14 @@ namespace engine::editor {
 
         /// @brief True while this panel is the focused one.
         bool focused = false;
+
+        /**
+         * @brief True while the pointer is over this panel.
+         *
+         * A camera drawn into the panel takes the mouse from the interface when
+         * this is set. See `editor::mouse_consumed_by_ui`.
+         */
+        bool hovered = false;
     };
 
     /**
@@ -158,12 +213,18 @@ namespace engine::editor {
      * target of zero.
      * @param state What the play bar draws. Edit offers a play button, and a
      * running session offers pause or resume and stop.
+     * @param gizmo Which handles the bar offers, changed in place when the user
+     * picks another. The panel draws no gizmo itself.
+     * @param overlay Drawn over the picture, inside this window. A gizmo goes
+     * here. The default draws nothing.
      * @param open Cleared when the user closes the panel. Pass null for a panel
      * the user cannot close.
      * @return What the user clicked, and whether this panel holds the focus.
      */
     ViewportReport draw_viewport_panel(gfx::ImGuiTextureId picture, gfx::Extent2D size,
                                        gfx::Extent2D& wanted, PlayState state,
+                                       GizmoControls& gizmo,
+                                       const ViewportOverlay& overlay = {},
                                        bool* open = nullptr);
 
     /**
