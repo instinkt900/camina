@@ -2354,6 +2354,30 @@ and the Lua bindings. Add widgets when `sandbox/` needs them.
 miniaudio behind `IAudioDevice`. Positional 3D and buses.
 **Done when:** the sandbox game plays sound.
 
+### M12 — Editor undo
+Every edit the editor makes can be undone and redone. The editor changes a world in place
+and keeps no history today, so a gizmo drag, a component added or taken off, a deleted
+entity, and a dropped prefab are all final. Reloading the scene is the only way back, and it
+throws away everything since the last save rather than the last thing.
+
+**The cheap shape first, and it was chosen on numbers.** A stack of whole-world documents:
+`scene::save_scene` already writes one, and `editor::PlayMode` already proves a world can be
+restored from one. Measured on the sandbox scene of 43 entities, a document is 7.2 KiB, a
+save is 0.304 ms, a load is 0.317 ms, and a hundred steps hold 0.7 MiB. A command list,
+where each edit undoes itself, is exact and fine grained and needs every edit path to go
+through it. It has to earn that cost against a measurement rather than against an argument,
+which is what M12.5 is for.
+
+Two things do not fall out of the shape. **A drag has to be one entry**: a gizmo writes on
+every frame it moves, and a stack that took each one would fill with sixty entries a second.
+And **the selection has to survive a step**: a restore builds every entity again and EnTT
+hands the same numbers to different things, so undoing a nudge would lose what was being
+nudged. Restoring by record index is nearly free, because `save_scene` writes in hierarchy
+order. A stable identity in the file is the exact answer and changes the format.
+
+**Done when:** every edit can be undone and redone, a drag is one entry, the selection
+survives, and the cost of a step is measured on the largest scene the project has.
+
 ### After that, as the game demands
 ozz-animation, which you pull forward as soon as you need a character. The `gfx::` plugin
 ABI. Controller navigation for moth_ui. Networking.
@@ -2368,6 +2392,11 @@ decides whether anyone can make a game with this engine, including you in a year
 
 **Start `sandbox/` at M3.** Choose something small and specific. A physics puzzle game fits
 well. It exercises Box3D, scripting, and PBR, and it needs no animation and little UI.
+
+**M12 runs before M10.** Undo is authoring, and authoring pain compounds: every level built
+without it is built carefully rather than freely, and every mistake costs whatever was not
+saved. M9 gives a person the tools to build a level, and M12 is what makes using them
+comfortable. The game UI can wait a milestone for that.
 
 **Keep M6 timeboxed.** If it starts to become M10, stop. Its value is the interface
 feedback, not the pixels.
