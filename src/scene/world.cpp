@@ -10,7 +10,56 @@ namespace engine::scene {
         registry_.emplace<Transform>(entity);
         registry_.emplace<WorldTransform>(entity);
         registry_.emplace<Hierarchy>(entity);
+
+        // Every entity gets an identity here, so nothing in the engine has to
+        // remember to give it one. A scene file replaces it with the one the
+        // entity was saved under.
+        const Guid id = Guid::generate();
+        registry_.emplace<Id>(entity, Id{ .value = id });
+        by_id_.emplace(id, entity);
         return entity;
+    }
+
+    entt::entity World::find(Guid id) const {
+        const auto found = by_id_.find(id);
+        return found != by_id_.end() ? found->second : entt::null;
+    }
+
+    Guid World::identity(entt::entity entity) const {
+        const auto* held = registry_.try_get<const Id>(entity);
+        return held != nullptr ? held->value : Guid{};
+    }
+
+    bool World::set_identity(entt::entity entity, Guid id) {
+        if (!id.valid()) {
+            ENGINE_LOG_ERROR("An entity cannot be given a null identity.");
+            return false;
+        }
+
+        const auto taken = by_id_.find(id);
+        if (taken != by_id_.end() && taken->second != entity) {
+            // Two entities answering to one identity is worse than one losing
+            // it: every undo entry naming that identity would then reach
+            // whichever of them the map happened to hold.
+            ENGINE_LOG_ERROR("Two entities cannot share the identity {}.", to_text(id));
+            return false;
+        }
+
+        auto* held = registry_.try_get<Id>(entity);
+        if (held == nullptr) {
+            // World::create() gives every entity an Id, so this means the
+            // entity came from the registry directly. Say so rather than
+            // failing quietly, because the caller then reads back an identity
+            // it never set and nothing points at the cause.
+            ENGINE_LOG_ERROR("An entity with no identity cannot be given one. It was not "
+                             "created through World::create.");
+            return false;
+        }
+
+        by_id_.erase(held->value);
+        held->value = id;
+        by_id_[id] = entity;
+        return true;
     }
 
     std::size_t World::size() const {
@@ -19,6 +68,7 @@ namespace engine::scene {
 
     void World::clear() {
         registry_.clear();
+        by_id_.clear();
         // The walk buffer holds entities that no longer exist, and the count
         // describes an update that no longer means anything.
         stack_.clear();
@@ -193,6 +243,10 @@ namespace engine::scene {
         }
 
         for (const entt::entity dead : doomed) {
+            // The identity goes with the entity. An identity left behind would
+            // answer with an entity number that EnTT is about to hand to
+            // somebody else.
+            by_id_.erase(identity(dead));
             registry_.destroy(dead);
         }
     }

@@ -300,6 +300,72 @@ namespace {
               "an array goes into the patch whole");
     }
 
+    /**
+     * A member's identity is derived from its instance root.
+     *
+     * An instance is one record in a scene file, so the members cannot each
+     * carry a stored identity without bloating every record. They derive one,
+     * the way the cooker derives a mesh identity from the glTF that holds it.
+     * Two things have to hold: two instances of one prefab must not collide,
+     * and the same instance must come back with the same identities every time.
+     */
+    void test_member_identities_are_derived() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+        const sc::Prefab& crate = crate_of(library);
+
+        sc::World world;
+        const entt::entity first = sc::instantiate(world, crate, nlohmann::json::object(),
+                                                   registry);
+        const entt::entity second = sc::instantiate(world, crate, nlohmann::json::object(),
+                                                    registry);
+        check(first != entt::null && second != entt::null, "two instances build");
+
+        const engine::Guid first_id = world.identity(first);
+        const engine::Guid second_id = world.identity(second);
+        check(first_id.valid() && second_id.valid(), "each root has an identity");
+        check(first_id != second_id, "and the two roots differ");
+
+        // The lid of each instance derives from its own root, so the two lids
+        // are different things even though they come from one prefab entity.
+        const auto lid_of = [&world](entt::entity root) -> entt::entity {
+            for (const auto [entity, member] :
+                 world.registry().view<const sc::PrefabMember>().each()) {
+                if (member.root == root && entity != root) {
+                    return entity;
+                }
+            }
+            return entt::null;
+        };
+
+        const entt::entity first_lid = lid_of(first);
+        const entt::entity second_lid = lid_of(second);
+        check(first_lid != entt::null && second_lid != entt::null, "each instance has a lid");
+        check(world.identity(first_lid) != world.identity(second_lid),
+              "and the two lids do not collide");
+        check(world.find(world.identity(first_lid)) == first_lid,
+              "a member is found by its identity");
+
+        // Through a scene file: the same instance comes back with the same
+        // identities, root and member both.
+        const nlohmann::json document = sc::save_scene(world, registry, library);
+        sc::World loaded;
+        check(sc::load_scene(document, loaded, registry, library), "the scene loads again");
+
+        const entt::entity first_again = loaded.find(first_id);
+        check(first_again != entt::null, "the first root came back under its identity");
+        check(loaded.find(second_id) != entt::null, "and so did the second");
+        check(loaded.find(world.identity(first_lid)) != entt::null,
+              "the derived identity of a member came back too");
+
+        // The root is a member of its own instance, at index 0. Deriving over
+        // it would leave the identity on some other entity, or on none, so the
+        // check is that this identity still names the instance root.
+        check(first_again != entt::null &&
+                  loaded.registry().all_of<sc::PrefabInstance>(first_again),
+              "and that identity still names the instance root");
+    }
+
     void test_instantiate() {
         const sc::ComponentRegistry registry = make_registry();
         const sc::PrefabLibrary library = crate_library();
@@ -493,6 +559,35 @@ namespace {
         }
         check(loaded.local(back).position.y == 2.0F, "and it kept where it was put");
         check(child_count(loaded, roots.front()) == 2, "the crate holds its lid and the lamp");
+        // The lamp is scene data, so its record carries its identity and the
+        // identity does not move on the first save. A derived one would, and
+        // then an undo entry naming the lamp would reach nothing.
+        check(loaded.identity(back) == world.identity(lamp),
+              "and it kept the identity it was made with");
+    }
+
+    void test_an_addition_keeps_its_identity_through_two_trips() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+
+        sc::World world;
+        const entt::entity root =
+            sc::instantiate(world, crate_of(library), nlohmann::json::object(), registry);
+        check(root != entt::null, "the crate builds");
+
+        const entt::entity lamp = world.create();
+        world.registry().emplace<sc::Name>(lamp, sc::Name{ "lamp" });
+        check(world.set_parent(lamp, root), "the lamp attaches to the crate");
+        const engine::Guid wanted = world.identity(lamp);
+
+        nlohmann::json first;
+        const sc::World once = round_trip(world, registry, library, first);
+        nlohmann::json second;
+        const sc::World twice = round_trip(once, registry, library, second);
+
+        check(once.find(wanted) != entt::null, "the lamp came back under its identity");
+        check(twice.find(wanted) != entt::null, "and it still does after a second trip");
+        check(first == second, "and the two documents match");
     }
 
     void test_a_destroyed_member_stays_destroyed() {
@@ -743,11 +838,13 @@ int main() {
     test_override_patch();
     std::printf("instances\n");
     test_instantiate();
+    test_member_identities_are_derived();
     test_overrides_are_per_field();
     test_instantiate_refuses_bad_input();
     test_unknown_component_is_a_warning();
     std::printf("scene files\n");
     test_an_added_child_survives();
+    test_an_addition_keeps_its_identity_through_two_trips();
     test_a_destroyed_member_stays_destroyed();
     test_a_moved_member_stays_where_it_was_put();
     test_removing_a_parent_removes_what_hangs_under_it();

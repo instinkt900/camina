@@ -132,6 +132,39 @@ namespace engine::scene {
         };
 
         /**
+         * Gives an entity the identity its record names.
+         *
+         * A record from before version 4 names none, and the entity keeps the
+         * one `World::create` generated. That is what lets an older scene open,
+         * and it is the only case where an identity is not the one the file
+         * holds.
+         *
+         * @param world The world holding the entity.
+         * @param entity The entity to name.
+         * @param record Its record.
+         * @param self Its index, for the message when the text is not a GUID.
+         */
+        void take_identity(World& world, entt::entity entity, const nlohmann::json& record,
+                           std::size_t self) {
+            if (!record.is_object()) {
+                return;
+            }
+            const auto named = record.find(kIdKey);
+            if (named == record.end() || !named->is_string()) {
+                return;
+            }
+
+            Guid wanted;
+            if (!Guid::parse(named->get<std::string>(), wanted)) {
+                ENGINE_LOG_ERROR("Entity {} names the identity {}, which is not one. It keeps "
+                                 "the one it was made with.",
+                                 self, named->get<std::string>());
+                return;
+            }
+            (void)world.set_identity(entity, wanted);
+        }
+
+        /**
          * Creates the entity one record asks for.
          *
          * A record that names a prefab builds a whole instance, and the root
@@ -147,7 +180,9 @@ namespace engine::scene {
 
             const auto name = record.find(kPrefabKey);
             if (name == record.end()) {
-                return { .entity = world.create(), .ok = true };
+                const entt::entity plain = world.create();
+                take_identity(world, plain, record, self);
+                return { .entity = plain, .ok = true };
             }
             if (!name->is_string()) {
                 ENGINE_LOG_ERROR("Entity {} names a prefab that is not a string.", self);
@@ -263,6 +298,10 @@ namespace engine::scene {
             const Hierarchy& node = entities.get<Hierarchy>(entity);
             record[kParentKey] =
                 node.parent == entt::null ? kNoParent : index.at(node.parent);
+
+            // The identity, so an entity built again from this file answers to
+            // the same one and an undo entry naming it still reaches it.
+            record[kIdKey] = to_text(world.identity(entity));
 
             if (collapsed.contains(entity)) {
                 const PrefabInstance& link = entities.get<PrefabInstance>(entity);

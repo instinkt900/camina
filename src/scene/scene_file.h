@@ -41,8 +41,13 @@ namespace engine::scene {
      * is for the other direction: a reader from before this refuses a version 3
      * document rather than loading it with every structural change dropped and
      * nothing said.
+     *
+     * Version 4 added the identity of an entity, beside its parent. A version 3
+     * document carries none, and the loader makes one for each entity as it
+     * reads, so an older scene still opens. What it cannot do is carry an undo
+     * entry from a session before it was saved, which nothing does anyway.
      */
-    inline constexpr std::uint32_t kSceneVersion = 3;
+    inline constexpr std::uint32_t kSceneVersion = 4;
 
     /**
      * @brief Writes a world to a JSON document.

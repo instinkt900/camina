@@ -30,6 +30,22 @@ namespace engine::scene {
     /// @brief The key on one entity that holds its parent index.
     inline constexpr const char* kParentKey = "parent";
 
+    /**
+     * @brief The key that holds the identity of an entity.
+     *
+     * Beside the parent rather than among the components, because an identity
+     * is what an entity is rather than something it carries. A document from
+     * before version 4 has none, and the loader makes one as it reads.
+     *
+     * A prefab instance writes the identity of its root, and one for each
+     * entity it added. A member derives its own, so an instance stays one
+     * record.
+     */
+    inline constexpr const char* kIdKey = "id";
+
+    /// @brief The kind word a prefab member's identity is derived under.
+    inline constexpr const char* kMemberKind = "member";
+
     /// @brief The key on one entity that names the prefab it is an instance of.
     inline constexpr const char* kPrefabKey = "prefab";
 

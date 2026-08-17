@@ -8,6 +8,7 @@
 #include "check.h"
 #include "math/transform.h"
 #include "scene/component_registry.h"
+#include "scene/document.h"
 #include "scene/components.h"
 #include "scene/scene_file.h"
 #include "scene/world.h"
@@ -157,6 +158,67 @@ namespace {
         const sc::ComponentOps* transform = registry.find("Transform");
         check(transform != nullptr && transform->owns_transform,
               "Transform is marked as the one that moves an entity");
+    }
+
+    /**
+     * An entity answers to the same identity after a save and a load.
+     *
+     * This is what an undo entry holds. An `entt::entity` is handed out again,
+     * so an entry that held one would name whoever took it after a delete or a
+     * scene reload. The identity is the thing that does not move.
+     */
+    void test_identity_survives_the_file() {
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::World original;
+        const entt::entity root = build_world(original);
+        const engine::Guid root_id = original.identity(root);
+        check(root_id.valid(), "a created entity carries an identity");
+        check(original.find(root_id) == root, "and the world finds it by that identity");
+
+        sc::World loaded;
+        check(sc::load_scene(sc::save_scene(original, registry), loaded, registry),
+              "the document loads");
+
+        const entt::entity same = loaded.find(root_id);
+        check(same != entt::null, "the identity is in the world that was read back");
+        check(loaded.registry().get<sc::Name>(same).value == "root",
+              "and it names the same entity it did before");
+
+        // Two worlds built by hand hold different identities, because each is
+        // generated. Only a file carries one from a world to another.
+        sc::World other;
+        (void)build_world(other);
+        check(other.find(root_id) == entt::null,
+              "a different world does not answer to that identity");
+    }
+
+    /// A document from before version 4 has no identities, and still opens.
+    void test_an_older_document_still_loads() {
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::World original;
+        (void)build_world(original);
+        nlohmann::json older = sc::save_scene(original, registry);
+        older[engine::reflect::kVersionKey] = 3;
+        for (auto& record : older.at(sc::kEntitiesKey)) {
+            record.erase(sc::kIdKey);
+        }
+
+        sc::World loaded;
+        check(sc::load_scene(older, loaded, registry), "a version 3 document still reads");
+        check(loaded.size() == original.size(), "with every entity");
+
+        // Every entity still has an identity. It is a new one, because the file
+        // held none to give it.
+        std::size_t named = 0;
+        for (const auto [entity, unused] : loaded.registry().view<const sc::Hierarchy>().each()) {
+            (void)unused;
+            if (loaded.identity(entity).valid()) {
+                ++named;
+            }
+        }
+        check(named == loaded.size(), "and each one was given an identity as it was read");
     }
 
     void test_round_trip() {
@@ -385,6 +447,8 @@ int main() {
     test_registry();
     test_add_and_remove_by_name();
     std::printf("round trip\n");
+    test_identity_survives_the_file();
+    test_an_older_document_still_loads();
     test_round_trip();
     test_hierarchy_survives();
     test_transforms_match();
