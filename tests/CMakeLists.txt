@@ -192,6 +192,15 @@ endif()
 
 # The game module. This test reads the content the sandbox actually ships, so a
 # broken prefab or scene fails here rather than in the running application.
+# M12.1. The undo stack. It is driven with an edit that counts its own calls, so
+# it needs no world, no window, and no real edit to exist yet.
+add_executable(test_history test_history.cpp)
+target_link_libraries(test_history PRIVATE engine::core)
+engine_set_warnings(test_history)
+engine_enable_clang_tidy(test_history)
+
+add_test(NAME history COMMAND test_history)
+
 # M9.5a. The camera the scene plays through, and the fly camera that steers one.
 # Neither opens a device, so this runs anywhere.
 add_executable(test_camera test_camera.cpp)
