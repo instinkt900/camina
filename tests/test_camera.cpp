@@ -510,10 +510,20 @@ namespace {
                                   .direction = { 0.0F, 0.0F, -1.0F } };
         check(!engine::ray_hits_box(beside, min, max, distance), "a ray beside the box misses");
 
+        // Inside the box, the surface ahead is the one it leaves by. A hit at
+        // zero here is what made every click in a room select the room: nothing
+        // can be nearer than zero, so the room won every time.
         const engine::Ray inside{ .origin = { 0.0F, 0.0F, 0.0F },
                                   .direction = { 0.0F, 0.0F, -1.0F } };
         check(engine::ray_hits_box(inside, min, max, distance), "a ray inside the box hits");
-        check(near_enough(distance, 0.0F), "at no distance at all");
+        check(near_enough(distance, 1.0F), "at the far side, not at zero");
+
+        // Behind the origin altogether, which the far side rule must not turn
+        // into a hit.
+        const engine::Ray past_it{ .origin = { 0.0F, 0.0F, -9.0F },
+                                   .direction = { 0.0F, 0.0F, -1.0F } };
+        check(!engine::ray_hits_box(past_it, min, max, distance),
+              "a box entirely behind the origin is still a miss");
 
         // Parallel to two faces and outside them. Dividing by that direction
         // would give an infinity, and an infinity compares as a hit.

@@ -28,7 +28,14 @@ namespace engine {
      * @brief Where a ray enters an axis-aligned box, if it does.
      *
      * The slab test: clip the ray against each pair of parallel faces and keep
-     * the overlap. A ray that starts inside the box hits at zero.
+     * the overlap.
+     *
+     * **The distance is to the first surface ahead of the origin, which is the
+     * far side when the origin is inside the box.** A picker in a room is
+     * inside the bounding box of that room, and a hit at zero would beat every
+     * object in it: clicking anything would select the room. Reporting where the
+     * ray leaves instead puts the room behind its own contents, which is where a
+     * person sees it.
      *
      * **This is an oriented box test as well.** Put the ray into the local space
      * of an entity first and the local bounds become an oriented box in world
@@ -45,7 +52,9 @@ namespace engine {
      */
     [[nodiscard]] inline bool ray_hits_box(const Ray& ray, const Vec3& min, const Vec3& max,
                                            float& out_distance) {
-        float nearest = 0.0F;
+        // Not clamped at zero. A negative entry means the origin is past that
+        // pair of faces already, and the exit below is then the surface ahead.
+        float nearest = std::numeric_limits<float>::lowest();
         float furthest = std::numeric_limits<float>::max();
 
         for (glm::length_t axis = 0; axis < 3; ++axis) {
@@ -76,7 +85,14 @@ namespace engine {
             }
         }
 
-        out_distance = nearest;
+        if (furthest < 0.0F) {
+            // The whole box is behind the origin.
+            return false;
+        }
+
+        // Inside the box gives a negative entry, and then the surface ahead is
+        // the one the ray leaves by.
+        out_distance = nearest >= 0.0F ? nearest : furthest;
         return true;
     }
 

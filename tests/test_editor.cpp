@@ -448,6 +448,35 @@ namespace {
     }
 
     /**
+     * A room does not swallow every click inside it.
+     *
+     * This is the shape of every scene the editor opens: a box that contains the
+     * camera and everything in it. A ray starting inside a box used to hit at
+     * zero, and nothing can be nearer than zero, so clicking anything selected
+     * the room. Reported from a real session.
+     */
+    void test_a_room_does_not_swallow_every_click() {
+        section("picking inside a room");
+
+        engine::scene::World world;
+        // The room: a box around everything, with the camera inside it.
+        const entt::entity room =
+            add_box(world, { 0.0F, 0.0F, 0.0F }, { 40.0F, 40.0F, 40.0F });
+        const entt::entity crate = add_box(world, { 0.0F, 0.0F, -5.0F });
+
+        const engine::Ray at_the_crate{ .origin = { 0.0F, 0.0F, 0.0F },
+                                        .direction = { 0.0F, 0.0F, -1.0F } };
+        check(engine::editor::pick_entity(world, at_the_crate, unit_cubes()) == crate,
+              "a click on the crate selects the crate, not the room around it");
+
+        // And the room is still selectable where nothing else is in the way.
+        const engine::Ray at_the_wall{ .origin = { 0.0F, 0.0F, 0.0F },
+                                       .direction = { 0.0F, 1.0F, 0.0F } };
+        check(engine::editor::pick_entity(world, at_the_wall, unit_cubes()) == room,
+              "a click at the bare wall still selects the room");
+    }
+
+    /**
      * The test is against the box the entity actually occupies.
      *
      * The ray goes into the local space of each candidate, so a scaled entity is
@@ -522,6 +551,7 @@ int main() {
     engine::jobs::init();
 
     test_picking_the_nearest_entity();
+    test_a_room_does_not_swallow_every_click();
     test_picking_respects_the_transform();
     test_picking_skips_what_has_no_mesh();
 

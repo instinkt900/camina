@@ -603,6 +603,10 @@ space of each candidate, so the test is against the oriented box of the entity. 
 gizmo handle belongs to the drag, so the overlay draws the gizmo first and picks only when
 `ImGuizmo::IsOver` is false.
 
+**A ray that starts inside a box reports where it leaves.** A hit at zero beats everything,
+and every scene is a room whose box holds the camera, so clicking anything selected the room.
+Reported from a real session, and `tests/test_editor.cpp` now builds that exact shape.
+
 **-1 is the top of the picture**, because Vulkan's Y runs down and the projection already
 accounts for it. There is no flip in `ndc_from_pixel` and adding one is the mistake that
 header exists to stop repeating.
