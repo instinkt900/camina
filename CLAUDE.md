@@ -558,10 +558,15 @@ session before it reads the world back, because writing a transform onto a live 
 body does nothing (#284). And both ends of a session replace every entity, so the selection
 is dropped at each one: EnTT hands the same numbers out again.
 
-**M9.5a moved the camera into the scene, and both applications draw through it.** The
-editor has no camera of its own yet, which is M9.5b and issue #322. `editor::FlyCamera` is
-input state: the runtime steers the scene camera with it, and both applications fall back
-to it when a scene carries no camera.
+**M9.5a moved the camera into the scene, and M9.5b gave the editor one of its own.** The
+runtime draws through `scene::primary_camera` and steers that entity with
+`editor::FlyCamera`. The editor draws through its own `FlyCamera` always, a running session
+included, and reads the scene camera for one thing only: the pose a script sees. So flying
+in the editor cannot move a level's camera.
+
+The editor's view is saved to `camera.json` beside `imgui.ini`, under
+`platform::preferences_directory`. `Describe<FlyCamera>` lists the pose alone, because the
+speed and the sensitivity are application preferences and live in `ViewSettings`.
 
 **M9.5a in detail.** `scene::Camera` is a reflected component, the
 pose is the entity's transform, and `scene::primary_camera` picks the one a game plays

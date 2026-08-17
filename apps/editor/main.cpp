@@ -68,6 +68,9 @@ namespace {
     /// The name under the user preferences directory. See platform paths.
     constexpr const char* kApplicationName = "editor";
 
+    /// What the saved editor view is called, beside the layout file.
+    constexpr const char* kCameraFile = "camera.json";
+
     /// What ImGui calls its layout file. The path is built at start.
     constexpr const char* kLayoutFile = "imgui.ini";
 
@@ -212,12 +215,33 @@ namespace {
         engine::editor::ViewSettings view;
         /// What the inspector shows, or entt::null for nothing.
         entt::entity selected = entt::null;
-        /// The camera the scene is drawn through, or entt::null for none.
-        /// M9.5a moved it into the scene, so it is an entity rather than a
-        /// struct. M9.5b gives the editor a free view of its own.
+        /**
+         * The camera the game plays through, or entt::null when the scene
+         * carries none.
+         *
+         * The viewport does not draw through this. M9.5a made it a component so
+         * a level could ship its own viewpoint, and M9.5b gave the editor the
+         * free view below. A script that acts along the line of sight reads
+         * this one, because that is the eye the player will have.
+         */
         entt::entity camera = entt::null;
-        /// What the viewport draws through when the scene carries no camera.
-        engine::editor::FlyCamera fallback_camera;
+
+        /**
+         * Where the person is standing while they work.
+         *
+         * It belongs to the person rather than to the scene, so it is saved
+         * beside `imgui.ini` and never in the project. The viewport always
+         * draws through it, a running session included, which is what lets
+         * somebody fly around a game while it plays.
+         */
+        engine::editor::FlyCamera view_camera = engine::editor::fallback_fly_camera();
+
+        /// Keyboard and mouse on the frame clock, which is what flies the view.
+        /// The game reads a second one on the fixed step, inside PlayMode.
+        engine::platform::Input input;
+
+        /// Where the view is saved. Held because it is built once at start.
+        std::string camera_path;
         /// M9.4. The play session, and the authored world it goes back to.
         engine::editor::PlayMode play;
         /// Whether the Viewport panel held the focus on the last frame. A
@@ -235,13 +259,28 @@ namespace {
      * will not say, the file goes next to the executable instead, which is
      * wrong for an installation and right for a build tree.
      */
-    [[nodiscard]] std::string layout_path() {
+
+    /**
+     * Works out where the saved view goes.
+     *
+     * Beside the layout, and for the same reason: where a person stands while
+     * they work is theirs, not the project's. A scene carries the camera the
+     * game plays through, and that one lives in the scene file.
+     *
+     * @param file The file name under the preferences directory.
+     * @return The path, or the file beside the executable when the platform
+     * will not say where preferences go.
+     */
+    [[nodiscard]] std::string preferences_path(const char* file) {
         std::filesystem::path directory = engine::platform::preferences_directory(kApplicationName);
         if (directory.empty()) {
             directory = engine::platform::executable_directory();
         }
-        return (directory / kLayoutFile).string();
+        return (directory / file).string();
     }
+
+    /// @return Where ImGui saves the layout.
+    [[nodiscard]] std::string layout_path() { return preferences_path(kLayoutFile); }
 
     [[nodiscard]] engine::gfx::Extent2D window_extent(const engine::platform::Window& window) {
         return engine::gfx::Extent2D{ static_cast<std::uint32_t>(window.size().x),
@@ -265,14 +304,7 @@ namespace {
      *
      * @param editor Everything the program owns.
      */
-    void bind_camera(Editor& editor) {
-        editor.camera = engine::scene::primary_camera(editor.world);
-        if (editor.camera == entt::null) {
-            // The same pose the runtime falls back to, from one place, so a
-            // scene with no camera looks the same in both programs.
-            editor.fallback_camera = engine::editor::fallback_fly_camera();
-        }
-    }
+    void bind_camera(Editor& editor) { editor.camera = engine::scene::primary_camera(editor.world); }
 
     /**
      * Drops a camera entity that no longer exists, and finds another.
@@ -354,6 +386,10 @@ namespace {
             return false;
         }
         editor.wanted_viewport = editor.viewport.extent();
+
+        // The camera keys. The game's own actions are bound on the session
+        // input when a session starts, which is sandbox::bind_actions.
+        engine::editor::bind_fly_actions(editor.input);
 
         // ImGui reads every event, and the window still acts on the ones it owns.
         editor.window.set_event_hook(
@@ -643,23 +679,26 @@ namespace {
         const engine::gfx::Extent2D scene_extent = editor.viewport.extent();
         const float aspect = aspect_ratio(scene_extent);
 
-        engine::Mat4 clip_from_world =
-            engine::editor::fly_clip_from_world(editor.fallback_camera, aspect,
+        // Always the editor's own camera, never the scene's. A person has to be
+        // able to look at what they are editing, and at what a session is
+        // doing, from somewhere other than where the game is looking.
+        const engine::Mat4 clip_from_world =
+            engine::editor::fly_clip_from_world(editor.view_camera, aspect,
                                                 engine::editor::kFallbackFov,
                                                 engine::kDefaultNearPlane);
-        engine::Vec3 camera_position = editor.fallback_camera.position;
+
+        // The exposure is the scene's, because it is a property of the level
+        // that somebody is judging by eye. A scene with no camera tonemaps at
+        // one, which is neutral.
         float exposure = 1.0F;
         if (editor.camera != entt::null) {
-            clip_from_world = engine::scene::clip_from_world(editor.world, editor.camera, aspect);
-            engine::Vec3 forward{ 0.0F, 0.0F, -1.0F };
-            engine::scene::camera_pose(editor.world, editor.camera, camera_position, forward);
             exposure =
                 editor.world.registry().get<const engine::scene::Camera>(editor.camera).exposure;
         }
 
         const engine::render::SceneView view{
             .clip_from_world = clip_from_world,
-            .camera_position = camera_position,
+            .camera_position = editor.view_camera.position,
             .clear_color = { editor.view.clear_color.r, editor.view.clear_color.g,
                              editor.view.clear_color.b, 1.0F },
             .extent = scene_extent,
@@ -785,12 +824,37 @@ namespace {
      */
     void update_input(Editor& editor) {
         engine::platform::InputFrame state;
-        if (editor.play.running() && editor.viewport_focused) {
+        if (editor.viewport_focused) {
             engine::platform::InputConsumed consumed;
             engine::gfx::imgui_wants_input(&consumed.mouse, &consumed.keyboard);
             state = engine::platform::sample(editor.window, consumed);
         }
+
+        // The camera, on the frame clock. A frame the viewport did not hold the
+        // focus for reads a default frame, so every action is false and the
+        // camera stands still.
+        editor.input.update(state);
+
+        // And the game, on the fixed step. The same gate, because a key meant
+        // for a panel is not a key meant for the game either. feed_input does
+        // nothing while no session runs.
         editor.play.feed_input(state);
+    }
+
+    /**
+     * Flies the editor view for one frame.
+     *
+     * The speed and the sensitivity come from the View panel, so a person tunes
+     * them where they tune everything else. The pose belongs to the camera.
+     *
+     * @param editor Everything the program owns.
+     * @param delta_seconds How much wall time this frame took.
+     */
+    void fly_view(Editor& editor, float delta_seconds) {
+        editor.view_camera.move_speed = editor.view.move_speed;
+        editor.view_camera.look_sensitivity = editor.view.look_sensitivity;
+        (void)engine::editor::update_fly_camera(editor.view_camera, editor.window, editor.input,
+                                                delta_seconds);
     }
 
     /**
@@ -850,6 +914,7 @@ namespace {
             last_frame = now;
 
             update_input(editor);
+            fly_view(editor, delta);
 
             // The rate and the ceiling are read each frame, because the View
             // panel can move either one while a session runs.
@@ -865,9 +930,9 @@ namespace {
             // editor is looking at. That is the point of the split M9.5a made:
             // a throw aimed along the editor view is a game the player cannot
             // reproduce.
-            engine::play::View view{ .position = editor.fallback_camera.position,
+            engine::play::View view{ .position = editor.view_camera.position,
                                      .forward =
-                                         engine::editor::fly_forward(editor.fallback_camera) };
+                                         engine::editor::fly_forward(editor.view_camera) };
             if (editor.camera != entt::null) {
                 engine::scene::camera_pose(editor.world, editor.camera, view.position,
                                            view.forward);
@@ -999,9 +1064,18 @@ int main(int argc, char** argv) {
     // nobody claimed. Nothing draws the world yet, so this needs no device.
     load_world(editor, options);
 
-    // A view file next to the executable wins over the defaults, so the editor
-    // opens where the last session left the camera. The runtime reads the same
-    // file, which is what makes a camera set here the camera the game starts on.
+    // Where the person was standing when they last closed the editor. This is
+    // the editor's own view and never the camera the game plays through, which
+    // the scene carries.
+    editor.camera_path = preferences_path(kCameraFile);
+    if (std::filesystem::exists(editor.camera_path) &&
+        engine::reflect::load_json(editor.camera_path, editor.view_camera)) {
+        ENGINE_LOG_INFO("Read the saved view from {}.", editor.camera_path);
+    }
+
+    // A view file next to the executable wins over the defaults. It carries how
+    // fast a person flies and how the simulation steps, and no camera: M9.5a
+    // moved that into the scene.
     if (std::filesystem::exists(engine::editor::kViewSettingsFile) &&
         engine::reflect::load_json(engine::editor::kViewSettingsFile, editor.view)) {
         ENGINE_LOG_INFO("Read {}.", engine::editor::kViewSettingsFile);
@@ -1020,6 +1094,12 @@ int main(int argc, char** argv) {
     // simulation it may reach. A session left running at exit is the normal
     // way to close the editor.
     editor.play.stop(editor.world);
+
+    // Where the person was standing, so the next start opens there. ImGui saves
+    // its layout beside this and for the same reason.
+    if (!engine::reflect::save_json(editor.camera_path, editor.view_camera)) {
+        ENGINE_LOG_ERROR("The editor view did not save to {}.", editor.camera_path);
+    }
 
     stop(editor);
     engine::jobs::shutdown();
