@@ -8,6 +8,7 @@
 #include "check.h"
 #include "editor/camera_lines.h"
 #include "editor/fly_camera.h"
+#include "math/ray.h"
 #include "math/transform.h"
 #include "scene/camera.h"
 #include "scene/components.h"
@@ -421,9 +422,114 @@ namespace {
               "the far end followed the camera round to -X");
     }
 
+    /**
+     * A ray through the middle of the screen goes where the camera looks.
+     *
+     * Every mistake available here is silent. A ray built from the wrong depth
+     * points backwards and picks nothing, and a Y that is flipped once too often
+     * picks whatever is above what somebody clicked.
+     */
+    void test_a_ray_through_the_screen() {
+        section("the ray through a point on the screen");
+
+        sc::World world;
+        const engine::Vec3 where{ 0.0F, 1.0F, 5.0F };
+        const entt::entity camera = add_camera(world, { .position = where }, true);
+
+        const engine::Mat4 clip = sc::clip_from_world(world, camera, 16.0F / 9.0F);
+        const engine::Mat4 world_from_clip = glm::inverse(clip);
+
+        const engine::Ray middle =
+            engine::ray_through_ndc(world_from_clip, where, 0.0F, 0.0F);
+        check(near_enough(middle.origin, where), "the ray starts at the camera");
+        check(near_enough(middle.direction, engine::Vec3{ 0.0F, 0.0F, -1.0F }),
+              "and the middle of the screen looks down -Z");
+
+        // Vulkan puts -1 at the top of the picture, so a click there is a ray
+        // that goes up in the world. This is the flip that is easy to get wrong.
+        const engine::Ray top = engine::ray_through_ndc(world_from_clip, where, 0.0F, -1.0F);
+        check(top.direction.y > 0.0F, "the top of the picture points up in the world");
+
+        const engine::Ray bottom = engine::ray_through_ndc(world_from_clip, where, 0.0F, 1.0F);
+        check(bottom.direction.y < 0.0F, "and the bottom points down");
+
+        const engine::Ray right = engine::ray_through_ndc(world_from_clip, where, 1.0F, 0.0F);
+        check(right.direction.x > 0.0F, "the right of the picture points right");
+    }
+
+    /// A pixel in a panel becomes a point on the picture.
+    void test_a_pixel_becomes_a_point() {
+        section("a pixel inside a panel");
+
+        // A picture 800 by 400, drawn at 100, 50 inside the window.
+        constexpr float kX = 100.0F;
+        constexpr float kY = 50.0F;
+        constexpr float kWidth = 800.0F;
+        constexpr float kHeight = 400.0F;
+
+        const engine::Vec2 middle =
+            engine::ndc_from_pixel(kX + (kWidth / 2.0F), kY + (kHeight / 2.0F), kX, kY, kWidth,
+                                   kHeight);
+        check(near_enough(middle.x, 0.0F) && near_enough(middle.y, 0.0F),
+              "the middle of the picture is the middle of the screen");
+
+        const engine::Vec2 top_left = engine::ndc_from_pixel(kX, kY, kX, kY, kWidth, kHeight);
+        check(near_enough(top_left.x, -1.0F), "the left edge is -1");
+        check(near_enough(top_left.y, -1.0F), "and the top edge is -1, because Vulkan Y runs down");
+
+        const engine::Vec2 bottom_right =
+            engine::ndc_from_pixel(kX + kWidth, kY + kHeight, kX, kY, kWidth, kHeight);
+        check(near_enough(bottom_right.x, 1.0F) && near_enough(bottom_right.y, 1.0F),
+              "and the far corner is 1, 1");
+
+        // A panel collapsed to nothing must not divide by it.
+        const engine::Vec2 nothing = engine::ndc_from_pixel(kX, kY, kX, kY, 0.0F, 0.0F);
+        check(near_enough(nothing.x, 0.0F) && near_enough(nothing.y, 0.0F),
+              "a picture of no size gives the middle rather than an infinity");
+    }
+
+    /// The slab test, which is what a pick asks about every candidate.
+    void test_the_box_test() {
+        section("a ray against a box");
+
+        const engine::Vec3 min{ -1.0F, -1.0F, -1.0F };
+        const engine::Vec3 max{ 1.0F, 1.0F, 1.0F };
+        float distance = 0.0F;
+
+        const engine::Ray at_it{ .origin = { 0.0F, 0.0F, 5.0F },
+                                 .direction = { 0.0F, 0.0F, -1.0F } };
+        check(engine::ray_hits_box(at_it, min, max, distance), "a ray at the box hits it");
+        check(near_enough(distance, 4.0F), "at the near face, four along");
+
+        const engine::Ray away{ .origin = { 0.0F, 0.0F, 5.0F },
+                                .direction = { 0.0F, 0.0F, 1.0F } };
+        check(!engine::ray_hits_box(away, min, max, distance),
+              "a ray pointing away misses, rather than hitting behind itself");
+
+        const engine::Ray beside{ .origin = { 5.0F, 0.0F, 5.0F },
+                                  .direction = { 0.0F, 0.0F, -1.0F } };
+        check(!engine::ray_hits_box(beside, min, max, distance), "a ray beside the box misses");
+
+        const engine::Ray inside{ .origin = { 0.0F, 0.0F, 0.0F },
+                                  .direction = { 0.0F, 0.0F, -1.0F } };
+        check(engine::ray_hits_box(inside, min, max, distance), "a ray inside the box hits");
+        check(near_enough(distance, 0.0F), "at no distance at all");
+
+        // Parallel to two faces and outside them. Dividing by that direction
+        // would give an infinity, and an infinity compares as a hit.
+        const engine::Ray parallel{ .origin = { 0.0F, 9.0F, 5.0F },
+                                    .direction = { 0.0F, 0.0F, -1.0F } };
+        check(!engine::ray_hits_box(parallel, min, max, distance),
+              "a ray parallel to a pair of faces and outside them misses");
+    }
+
 } // namespace
 
 int main() {
+    test_a_ray_through_the_screen();
+    test_the_box_test();
+    test_a_pixel_becomes_a_point();
+
     test_who_gets_the_mouse();
     test_movement_needs_the_look_button();
 

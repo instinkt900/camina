@@ -50,6 +50,8 @@ namespace apps {
 
     void begin_gizmo_frame() { ImGuizmo::BeginFrame(); }
 
+    bool gizmo_has_mouse() { return ImGuizmo::IsOver() || ImGuizmo::IsUsing(); }
+
     bool draw_gizmo(const GizmoDesc& desc, engine::Mat4& world_matrix) {
         // Into the window that is open, so the handles clip to the picture
         // rather than drawing over the panels beside it.

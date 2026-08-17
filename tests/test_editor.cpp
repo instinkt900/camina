@@ -12,6 +12,7 @@
 #include "check.h"
 #include "core/jobs.h"
 #include "editor/play_mode.h"
+#include "editor/picking.h"
 #include "editor/placement.h"
 #include "physics/components.h"
 #include "sandbox/game.h"
@@ -396,6 +397,121 @@ namespace {
               "and it is where it was dragged to");
     }
 
+    /// A unit cube for every mesh, which is all a picking test needs.
+    [[nodiscard]] engine::editor::BoundsLookup unit_cubes() {
+        return [](engine::Guid /*mesh*/, engine::Vec3& min, engine::Vec3& max) {
+            min = engine::Vec3{ -0.5F, -0.5F, -0.5F };
+            max = engine::Vec3{ 0.5F, 0.5F, 0.5F };
+            return true;
+        };
+    }
+
+    /// Adds an entity that occupies space, at a position.
+    entt::entity add_box(engine::scene::World& world, const engine::Vec3& at,
+                         const engine::Vec3& scale = { 1.0F, 1.0F, 1.0F }) {
+        const entt::entity entity = world.create();
+        world.set_local(entity, { .position = at, .scale = scale });
+        world.registry().emplace<engine::scene::MeshRenderer>(entity);
+        world.update();
+        return entity;
+    }
+
+    /**
+     * A click picks the thing under it, and the nearest of two.
+     *
+     * The nearest check is the one that matters. A picker that returns the first
+     * hit rather than the closest looks correct until two things line up, and
+     * then it selects the one behind, which reads as the click having missed.
+     */
+    void test_picking_the_nearest_entity() {
+        section("picking the entity under a ray");
+
+        engine::scene::World world;
+        const entt::entity near_box = add_box(world, { 0.0F, 0.0F, -2.0F });
+        const entt::entity far_box = add_box(world, { 0.0F, 0.0F, -8.0F });
+
+        const engine::Ray down_z{ .origin = { 0.0F, 0.0F, 0.0F },
+                                  .direction = { 0.0F, 0.0F, -1.0F } };
+        check(engine::editor::pick_entity(world, down_z, unit_cubes()) == near_box,
+              "the nearer of two boxes wins");
+
+        // From behind the far one, looking the other way, the order reverses.
+        const engine::Ray up_z{ .origin = { 0.0F, 0.0F, -12.0F },
+                                .direction = { 0.0F, 0.0F, 1.0F } };
+        check(engine::editor::pick_entity(world, up_z, unit_cubes()) == far_box,
+              "and from the other side the other one does");
+
+        const engine::Ray past{ .origin = { 9.0F, 0.0F, 0.0F },
+                                .direction = { 0.0F, 0.0F, -1.0F } };
+        check(engine::editor::pick_entity(world, past, unit_cubes()) == entt::null,
+              "a ray through empty space picks nothing");
+    }
+
+    /**
+     * The test is against the box the entity actually occupies.
+     *
+     * The ray goes into the local space of each candidate, so a scaled entity is
+     * bigger to click and a turned one is picked at the angle it sits at. A
+     * picker that tested a world-axis box around the entity would select the
+     * empty corners of anything turned.
+     */
+    void test_picking_respects_the_transform() {
+        section("picking a scaled and a turned entity");
+
+        {
+            engine::scene::World world;
+            const entt::entity big = add_box(world, { 0.0F, 0.0F, -5.0F }, { 4.0F, 4.0F, 4.0F });
+
+            // Well outside a unit cube, inside one scaled by four.
+            const engine::Ray edge{ .origin = { 1.5F, 0.0F, 0.0F },
+                                    .direction = { 0.0F, 0.0F, -1.0F } };
+            check(engine::editor::pick_entity(world, edge, unit_cubes()) == big,
+                  "a scaled entity is bigger to click");
+        }
+        {
+            engine::scene::World world;
+            const entt::entity flat =
+                add_box(world, { 0.0F, 0.0F, -5.0F }, { 8.0F, 8.0F, 0.1F });
+            // Turn the wall a quarter turn about up. It is then edge on, so a
+            // ray that hit its face now goes past it. A test against a world
+            // axis box would still report a hit.
+            world.set_local(flat, { .position = { 0.0F, 0.0F, -5.0F },
+                                    .rotation = glm::angleAxis(glm::radians(90.0F),
+                                                               engine::Vec3{ 0.0F, 1.0F, 0.0F }),
+                                    .scale = { 8.0F, 8.0F, 0.1F } });
+            world.update();
+
+            const engine::Ray beside{ .origin = { 3.0F, 0.0F, 0.0F },
+                                      .direction = { 0.0F, 0.0F, -1.0F } };
+            check(engine::editor::pick_entity(world, beside, unit_cubes()) == entt::null,
+                  "a wall turned edge on is no longer under a ray beside it");
+        }
+    }
+
+    /// Only an entity that occupies space can be picked.
+    void test_picking_skips_what_has_no_mesh() {
+        section("picking something with no mesh");
+
+        engine::scene::World world;
+        const entt::entity empty = world.create();
+        world.set_local(empty, { .position = { 0.0F, 0.0F, -2.0F } });
+        world.update();
+
+        const engine::Ray down_z{ .origin = { 0.0F, 0.0F, 0.0F },
+                                  .direction = { 0.0F, 0.0F, -1.0F } };
+        check(engine::editor::pick_entity(world, down_z, unit_cubes()) == entt::null,
+              "an entity with no mesh occupies nothing and is not picked");
+
+        // A mesh the lookup does not know is not pickable either, which is what
+        // a mesh that has not finished loading looks like.
+        const entt::entity unknown = add_box(world, { 0.0F, 0.0F, -2.0F });
+        (void)unknown;
+        const engine::editor::BoundsLookup nothing_known =
+            [](engine::Guid, engine::Vec3&, engine::Vec3&) { return false; };
+        check(engine::editor::pick_entity(world, down_z, nothing_known) == entt::null,
+              "and neither is a mesh whose bounds are not known yet");
+    }
+
 } // namespace
 
 int main() {
@@ -404,6 +520,10 @@ int main() {
     // The physics world runs its solver on the scheduler, so a session needs
     // the pool up before it builds one.
     engine::jobs::init();
+
+    test_picking_the_nearest_entity();
+    test_picking_respects_the_transform();
+    test_picking_skips_what_has_no_mesh();
 
     test_a_transform_round_trips_through_a_matrix();
     test_placing_an_entity_under_a_parent();

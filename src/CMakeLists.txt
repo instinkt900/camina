@@ -26,6 +26,7 @@ add_library(engine_core STATIC
     editor/camera_lines.cpp
     editor/fly_camera.cpp
     editor/panels.cpp
+    editor/picking.cpp
     editor/placement.cpp
     editor/play_mode.cpp
     editor/viewport.cpp
