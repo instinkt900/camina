@@ -2338,9 +2338,23 @@ and the two Y flips cancel.
 
 The editor runs the ImGui docking branch, which `conanfile.py` already pins for this
 reason. Panels dock and tab inside the main window, and a panel dragged out of it becomes
-an OS window of its own. Multi-viewport is in scope rather than deferred, because the
-backends do most of it: ImGui creates the extra SDL windows and their swapchains, so
-`platform::Window` keeps its one window and `gfx::Device` keeps its one surface.
+an OS window of its own. M9.7 turned that on, and the backends did most of it as expected:
+ImGui creates the extra SDL windows and their swapchains, so `platform::Window` keeps its one
+window and `gfx::Device` keeps its one surface.
+
+Two things did not come free. **A detached panel needs its own pipeline format**, and
+`ImGui_ImplVulkan_InitInfo::PipelineInfoForViewports` is both where that is stated and what
+the backend asks the new surface for, so naming the main swapchain format there is what keeps
+a detached panel on the same format rather than on whatever the surface offered first. And
+**the colour conversion has to reach them**. The overlay converts every vertex colour from
+sRGB to linear because the swapchain is `_SRGB`, and the extra swapchains are too, so a panel
+dragged out would come out lighter than the one it was dragged from. `imgui_render_platform_windows`
+converts each extra viewport's draw data before it presents them.
+
+**`editor --own-windows` is how the path is checked.** Nothing else can drag a panel out, so
+that flag turns ImGui's viewport merging off and every floating panel becomes an OS window at
+once. With it, the editor runs three platform viewports, two of them real windows with
+swapchains of their own, and `--sync-validation` reports nothing over 300 frames.
 
 Docking and the saved layout are chosen per application, not in `gfx::`. The editor wants
 both. The runtime debug overlay wants neither, and its windows open at fixed places so a

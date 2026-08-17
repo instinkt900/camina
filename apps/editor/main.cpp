@@ -109,6 +109,10 @@ namespace {
         /// Play. A run with --frames can then check the session rather than
         /// only the empty editor.
         bool play = false;
+        /// Put every floating panel in an OS window of its own, rather than
+        /// waiting for somebody to drag one out. Nothing else can exercise the
+        /// multi-viewport path without a mouse.
+        bool own_windows = false;
         /// Select the entity with this name at startup, as if somebody had
         /// clicked it in the World panel. A run with --frames can then capture
         /// the gizmo, which otherwise needs a hand on the mouse.
@@ -122,6 +126,7 @@ namespace {
         ENGINE_LOG_INFO("  --content <dir>     Open this cooked content instead of the game's.");
         ENGINE_LOG_INFO("  --frames <n>        Stop after n frames. 0 runs until you quit.");
         ENGINE_LOG_INFO("  --play              Start a play session on the first frame.");
+        ENGINE_LOG_INFO("  --own-windows       Give every floating panel an OS window of its own.");
         ENGINE_LOG_INFO("  --select <name>     Select the entity with this name at startup.");
         ENGINE_LOG_INFO("  --gizmo <mode>      Start on move, turn, or size handles.");
         ENGINE_LOG_INFO("  --gizmo-local       Line the handles up with the entity.");
@@ -185,7 +190,9 @@ namespace {
     /// @param out Where the answer goes.
     /// @return True when this was one of them.
     [[nodiscard]] bool parse_flag(std::string_view arg, Options& out) {
-        if (arg == "--gizmo-local") {
+        if (arg == "--own-windows") {
+            out.own_windows = true;
+        } else if (arg == "--gizmo-local") {
             out.gizmo.space = engine::editor::GizmoSpace::Local;
         } else if (arg == "--play") {
             out.play = true;
@@ -472,6 +479,11 @@ namespace {
         const engine::gfx::ImGuiDesc imgui_desc{
             .sdl_window = editor.window.native(),
             .docking = true,
+            // A panel dragged off the window becomes an OS window of its own.
+            // The runtime overlay asks for neither this nor docking, so a run
+            // looks the same every time. See DESIGN.md section 10, M9.
+            .viewports = true,
+            .merge_viewports = !options.own_windows,
             .ini_path = editor.layout_path.c_str(),
         };
         if (!engine::gfx::succeeded(engine::gfx::imgui_init(editor.device, imgui_desc))) {
@@ -1112,6 +1124,11 @@ namespace {
         if (capture) {
             engine::gfx::request_capture(editor.device);
         }
+
+        // After the frame that holds the main window has been presented. Each
+        // panel that lives in its own OS window has a swapchain of its own, and
+        // this is what draws and presents those.
+        engine::gfx::imgui_render_platform_windows();
 
         result = engine::gfx::end_frame(editor.device);
         if (result == engine::gfx::Result::OutOfDate) {
