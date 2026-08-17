@@ -435,6 +435,19 @@ field marked `reflect::AssetRef` holds an identity, and an identity is the one t
 a person cannot know: the cooker derives it. So the inspector shows a name and takes no
 typed text at all. A person drags a row out of the browser instead.
 
+**The inspector adds and removes components, and the World panel deletes an entity.** The
+M9.8 run found both missing on the first attempt: a prefab dropped into a level could never
+be given a `RigidBody`, so it never fell, and nothing took an entity away again. Placing
+things is not authoring without those two.
+
+`ComponentOps` grew `create` and `remove`, filled from the one description like every other
+operation, so a component the game defines appears in the add list with no editor change at
+all. **A Transform cannot be removed**: every entity has one and the hierarchy reads it, and
+`owns_transform` already marked it, so the rule needed no new flag.
+
+Deleting takes the descendants, so the panel asks first and says how many go. There is no
+undo, which is issue #331, and that is the reason the question is worth a click.
+
 **A prefab dropped on the viewport becomes an instance where the pointer is.** That is the
 other half of a browser: filling a field says what an entity uses, and a drop says an entity
 exists at all. It lands where the ray through the pointer meets the ground, and a few metres

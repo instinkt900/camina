@@ -61,6 +61,30 @@ namespace engine::scene {
         bool (*inspect)(entt::registry& registry, entt::entity entity) = nullptr;
 
         /**
+         * @brief Puts a default component on an entity.
+         *
+         * What the inspector's add button calls. The component arrives with the
+         * defaults its type declares, which is what a person expects: a
+         * RigidBody added by hand is the RigidBody a fresh one would be.
+         *
+         * An entity that already carries one keeps what it has, so an add is
+         * never a way to lose the values somebody set.
+         */
+        void (*create)(entt::registry& registry, entt::entity entity) = nullptr;
+
+        /**
+         * @brief Takes this component off an entity.
+         *
+         * Removing one the entity does not carry does nothing.
+         *
+         * @warning **A Transform must never be removed.** Every entity has one
+         * and the hierarchy reads it. `owns_transform` is how a caller tells,
+         * and the inspector refuses it there rather than here, so a caller that
+         * knows what it is doing is not stopped.
+         */
+        void (*remove)(entt::registry& registry, entt::entity entity) = nullptr;
+
+        /**
          * @brief Reaches the component on an entity as untyped storage.
          *
          * This is the half only an ECS registry can do: turn an entity and a
@@ -167,6 +191,16 @@ namespace engine::scene {
             };
             ops.inspect = [](entt::registry& registry, entt::entity entity) {
                 return reflect::inspect(registry.get<T>(entity));
+            };
+            ops.create = [](entt::registry& registry, entt::entity entity) {
+                // Not emplace_or_replace. An add that overwrote what somebody
+                // had set would be a way to lose work by misclicking.
+                if (!registry.all_of<T>(entity)) {
+                    registry.emplace<T>(entity);
+                }
+            };
+            ops.remove = [](entt::registry& registry, entt::entity entity) {
+                registry.remove<T>(entity);
             };
             ops.instance = [](entt::registry& registry, entt::entity entity) -> void* {
                 return registry.try_get<T>(entity);

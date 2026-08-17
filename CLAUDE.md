@@ -602,6 +602,12 @@ what it cooked into, and a row is a drag source. An `AssetRef` field in the insp
 drop target with a clear button and no text box, because nobody can type a derived identity.
 `reflect::set_asset_namer` is how the name reaches `reflect/`, which sits below `assets/`.
 
+**The inspector adds and removes components, and the World panel deletes an entity.**
+`ComponentOps::create` and `remove` came from the M9.8 run: without them a dropped prefab
+could never be given a RigidBody. A Transform is refused, and `owns_transform` is how the
+panel knows without comparing a name against a spelling. There is no undo yet (#331), so a
+delete asks first and says how many entities go with it.
+
 **A prefab dropped on the viewport becomes an instance**, at the point where the pointer
 meets the ground. `assets::prefab_name` moved out of `sandbox/game.h` to make that possible:
 it is a cooker convention rather than a game rule, and the editor needs it to turn a dropped

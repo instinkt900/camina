@@ -109,9 +109,54 @@ namespace {
         // entry, and a null there would take the editor down on the first click.
         for (const sc::ComponentOps& ops : registry.all()) {
             check(ops.has != nullptr && ops.save != nullptr && ops.load != nullptr &&
-                      ops.inspect != nullptr,
+                      ops.inspect != nullptr && ops.create != nullptr && ops.remove != nullptr,
                   "every registered type carries every operation");
         }
+    }
+
+    /**
+     * A component can be put on an entity and taken off again by name.
+     *
+     * This is what the inspector's add and remove call. By name rather than by
+     * type, because the editor holds a registry entry and never a C++ type: a
+     * game component it has never heard of has to work the same way.
+     */
+    void test_add_and_remove_by_name() {
+        const sc::ComponentRegistry registry = make_registry();
+        sc::World world;
+        const entt::entity entity = world.create();
+
+        const sc::ComponentOps* health = registry.find("Health");
+        check(health != nullptr, "the registry holds the game component");
+        if (health == nullptr) {
+            // Everything below reads through it, and a test that carries on
+            // here reports a crash rather than the missing registration.
+            return;
+        }
+        check(!health->has(world.registry(), entity), "a new entity carries none of it");
+
+        health->create(world.registry(), entity);
+        check(health->has(world.registry(), entity), "adding one puts it there");
+        check(world.registry().get<Health>(entity).maximum == 100.0F,
+              "and it arrives with the defaults its type declares");
+
+        // An add over one that is already there keeps what somebody set. A
+        // misclick must not be a way to lose values.
+        world.registry().get<Health>(entity).current = 25.0F;
+        health->create(world.registry(), entity);
+        check(world.registry().get<Health>(entity).current == 25.0F,
+              "adding it twice does not reset it");
+
+        health->remove(world.registry(), entity);
+        check(!health->has(world.registry(), entity), "removing it takes it off");
+        health->remove(world.registry(), entity);
+        check(!health->has(world.registry(), entity), "and removing it again does nothing");
+
+        // Transform says so itself, which is how the inspector knows to refuse
+        // it without comparing a name against a spelling.
+        const sc::ComponentOps* transform = registry.find("Transform");
+        check(transform != nullptr && transform->owns_transform,
+              "Transform is marked as the one that moves an entity");
     }
 
     void test_round_trip() {
@@ -338,6 +383,7 @@ namespace {
 int main() {
     std::printf("component registry\n");
     test_registry();
+    test_add_and_remove_by_name();
     std::printf("round trip\n");
     test_round_trip();
     test_hierarchy_survives();

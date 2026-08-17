@@ -154,7 +154,9 @@ namespace engine::editor {
      * different game shows the same tree. The save button writes the source
      * scene, and it is disabled when there is no source tree to write to.
      *
-     * @param world The world to show.
+     * @param world The world to show, and to delete from. The delete button
+     * takes the descendants of an entity with it, and there is no undo, so it
+     * asks first and says how many go.
      * @param selected The selected entity, changed when the user clicks one.
      * Pass entt::null for nothing selected.
      * @param scene_path The source scene to save to, or empty for no save.
@@ -167,7 +169,7 @@ namespace engine::editor {
      * reason while a play session runs, because the world is then a game part
      * way through a step rather than the scene somebody authored.
      */
-    void draw_world_panel(const scene::World& world, entt::entity& selected,
+    void draw_world_panel(scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path,
                           const assets::Content& content, bool* open = nullptr,
                           const char* save_blocked = nullptr);
