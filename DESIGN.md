@@ -2360,23 +2360,38 @@ and keeps no history today, so a gizmo drag, a component added or taken off, a d
 entity, and a dropped prefab are all final. Reloading the scene is the only way back, and it
 throws away everything since the last save rather than the last thing.
 
-**The cheap shape first, and it was chosen on numbers.** A stack of whole-world documents:
-`scene::save_scene` already writes one, and `editor::PlayMode` already proves a world can be
-restored from one. Measured on the sandbox scene of 43 entities, a document is 7.2 KiB, a
-save is 0.304 ms, a load is 0.317 ms, and a hundred steps hold 0.7 MiB. A command list,
-where each edit undoes itself, is exact and fine grained and needs every edit path to go
-through it. It has to earn that cost against a measurement rather than against an argument,
-which is what M12.5 is for.
+**Transactional. Each edit records what it changed and how to put it back**, so a step costs
+what the edit cost rather than what the level costs.
 
-Two things do not fall out of the shape. **A drag has to be one entry**: a gizmo writes on
-every frame it moves, and a stack that took each one would fill with sixty entries a second.
-And **the selection has to survive a step**: a restore builds every entity again and EnTT
-hands the same numbers to different things, so undoing a nudge would lose what was being
-nudged. Restoring by record index is nearly free, because `save_scene` writes in hierarchy
-order. A stable identity in the file is the exact answer and changes the format.
+A stack of whole-world documents was considered and rejected. It is far less code, and
+`scene::save_scene` already writes one while `editor::PlayMode` already restores a world from
+one. The measurement that made it look cheap was taken on the sandbox scene, which is 43
+entities on purpose: 7.2 KiB and 0.62 ms for a step. That number says nothing about a level
+worth building. At a few thousand entities every click writes hundreds of kilobytes, and
+undo gets slower as the level gets better, which is the wrong way round.
 
-**Done when:** every edit can be undone and redone, a drag is one entry, the selection
-survives, and the cost of a step is measured on the largest scene the project has.
+**Transactional does not mean nothing is serialized.** Deleting an entity has to keep the
+subtree it removed, because there is no other way to bring one back. It means the unit is
+what changed. The pieces are already here: `ComponentOps::save` and `load` give a component
+as a document, and `scene::diff` writes the merge patch between two documents.
+
+Two things do not fall out of the shape.
+
+**An edit has to name an entity that may not exist yet.** Undoing a delete builds the entity
+again and EnTT hands out a new number, so every edit already on the stack that named the old
+one now names nothing, or names whoever took it. Move a crate, delete it, undo, undo: the
+move names an entity that no longer exists. A session identity in a side table is enough for
+this. A stable identity in the scene file is the exact answer and is what an entity
+reference needs eventually, and it changes the format.
+
+**An action is recorded when it ends.** A gizmo drag writes on every frame it moves and a
+slider writes on every frame it is held, and neither is an edit. The edit is the whole drag,
+finished when the mouse comes up, so the value the interaction started from is kept and one
+entry is pushed at the end. Nothing has to be merged afterwards.
+
+**Done when:** every edit can be undone and redone, an action is one entry, an edit still
+names its entity after that entity has been deleted and brought back, and the cost of a step
+is measured on the largest scene the project has rather than on the sandbox.
 
 ### After that, as the game demands
 ozz-animation, which you pull forward as soon as you need a character. The `gfx::` plugin
