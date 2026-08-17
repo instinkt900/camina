@@ -609,6 +609,12 @@ conversion has to be applied to every extra viewport's draw data or a detached p
 lighter than a docked one. `editor --own-windows` forces every floating panel into its own
 window, which is the only way to exercise the path without a mouse.
 
+**The editor cooks after it saves**, which closed #341. It writes `sandbox/content` and reads
+the cooked tree beside the executable, so without a cook every edit looked lost on the next
+start while the file on disk was right. Nothing reported an error, because nothing had
+failed. The runtime never had this, because `HotReload` watches and cooks for it. M13.4 is
+what settles it properly, by having the editor read what it writes.
+
 **The inspector adds and removes components, and the World panel deletes an entity.**
 `ComponentOps::create` and `remove` came from the M9.8 run: without them a dropped prefab
 could never be given a RigidBody. A Transform is refused, and `owns_transform` is how the

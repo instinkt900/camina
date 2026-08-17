@@ -12,6 +12,7 @@
 #include "check.h"
 #include "core/jobs.h"
 #include "editor/play_mode.h"
+#include "editor/panels.h"
 #include "editor/picking.h"
 #include "editor/placement.h"
 #include "physics/components.h"
@@ -30,6 +31,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <fstream>
 #include <cstddef>
 #include <cstdint>
 
@@ -680,6 +682,74 @@ namespace {
         check(lights == 3, "the light came back, beside the two the scene already had");
     }
 
+    /**
+     * A dropped prefab survives the path the panel actually writes.
+     *
+     * The other tests here go through `scene::save_scene`. The World panel goes
+     * through `editor::save_scene_source`, which also puts the asset references
+     * back and writes through a temporary and a rename. A drop that reached the
+     * document but not the file would look exactly like the save doing nothing,
+     * which is what was reported in the M9.8 run.
+     */
+    void test_a_dropped_prefab_reaches_the_file() {
+        section("a dropped prefab through the panel's own save");
+
+        engine::assets::Content content;
+        engine::scene::World world;
+        check(load_shipped(world, content), "the shipped content loads");
+
+        const engine::scene::Prefab* crate = engine::scene::prefabs().find("crate.prefab");
+        check(crate != nullptr, "the library holds the crate prefab");
+        const engine::Vec3 at{ -2.0F, 4.5F, 1.0F };
+        check(engine::editor::drop_prefab(world, *crate, at) != entt::null, "the drop worked");
+
+        const std::filesystem::path file =
+            std::filesystem::temp_directory_path() / "camina_dropped.scene";
+        std::error_code ignored;
+        std::filesystem::remove(file, ignored);
+
+        check(engine::editor::save_scene_source(file, world, content), "the panel's save writes");
+        check(std::filesystem::exists(file), "and the file is there");
+
+        // Read the file rather than load it. A source scene names its assets by
+        // reference, `asset:models/crate/crate.gltf#mesh:0` and the like, and
+        // turning those back into identities is the cooker's job. Loading one
+        // directly reports every reference it could not read, which says
+        // nothing about whether the drop reached the file.
+        // The stream closes before the file is removed at the end. Windows
+        // refuses to delete a file another handle holds open, which check.h
+        // says at remove_tree() and which this test found the hard way.
+        nlohmann::json written;
+        {
+            std::ifstream reading(file);
+            written = nlohmann::json::parse(reading, nullptr, false);
+        }
+        check(!written.is_discarded(), "the written file parses");
+
+        std::size_t crates_at_the_drop = 0;
+        for (const auto& record : written.at("entities")) {
+            if (!record.contains("prefab") || record.at("prefab") != "crate.prefab") {
+                continue;
+            }
+            const auto& overrides = record.value("overrides", nlohmann::json::object());
+            const auto& root = overrides.value("0", nlohmann::json::object());
+            const auto& transform = root.value("Transform", nlohmann::json::object());
+            if (!transform.contains("position")) {
+                continue;
+            }
+            const auto& p = transform.at("position");
+            if (near_enough(engine::Vec3{ p[0].get<float>(), p[1].get<float>(),
+                                          p[2].get<float>() },
+                            at)) {
+                ++crates_at_the_drop;
+            }
+        }
+        check(crates_at_the_drop == 1,
+              "the file holds one crate instance at the place it was dropped");
+
+        test::remove_tree(file);
+    }
+
 } // namespace
 
 int main() {
@@ -690,6 +760,7 @@ int main() {
     engine::jobs::init();
 
     test_dropping_a_prefab();
+    test_a_dropped_prefab_reaches_the_file();
     test_deleting_a_prefab_member();
     test_a_component_added_by_hand_is_saved();
     test_picking_the_nearest_entity();

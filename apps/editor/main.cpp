@@ -30,6 +30,7 @@
 #include "physics/components.h"
 #include "platform/input.h"
 #include "platform/paths.h"
+#include "platform/process.h"
 #include "platform/window.h"
 #include "math/ray.h"
 #include "render/debug_line_pass.h"
@@ -915,6 +916,50 @@ namespace {
         ENGINE_LOG_WARN("No entity is named {}, so nothing is selected.", name);
     }
 
+    /// The cooker that ships beside this executable.
+    [[nodiscard]] std::filesystem::path cooker_path() {
+#if defined(_WIN32)
+        constexpr const char* kCookerName = "cooker.exe";
+#else
+        constexpr const char* kCookerName = "cooker";
+#endif
+        return engine::platform::executable_directory() / kCookerName;
+    }
+
+    /**
+     * Cooks the source tree, so what was saved is what the next start reads.
+     *
+     * **The editor writes the source scene and reads the cooked one.** Between
+     * those two sits the cooker, and without this the file on disk is right
+     * while the program keeps reading the one from before the save. Every edit
+     * then looks lost, and nothing reports an error. That was issue #341.
+     *
+     * The cooker walks the tree and skips what the manifest already holds, so a
+     * save costs one scene file rather than a whole tree.
+     *
+     * @param editor Everything the program owns.
+     * @param source The source content tree the scene was written into.
+     */
+    void cook_after_save(Editor& editor, const std::filesystem::path& source) {
+        const std::vector<std::string> arguments{ "--content", source.string(), "--out",
+                                                  editor.content.root().string() };
+        const engine::platform::ProcessResult result =
+            engine::platform::run_process(cooker_path(), arguments);
+
+        if (!result.ran) {
+            ENGINE_LOG_ERROR("The scene was saved and the cooker would not run, so the cooked "
+                             "content still holds the scene from before it.");
+            return;
+        }
+        if (result.exit_code != 0) {
+            ENGINE_LOG_ERROR("The scene was saved and the cook returned {}, so the cooked "
+                             "content and the source no longer agree.",
+                             result.exit_code);
+            return;
+        }
+        ENGINE_LOG_INFO("The scene was saved and cooked.");
+    }
+
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(panels, running);
@@ -954,8 +999,13 @@ namespace {
             // wreckage of a play over the source file.
             const char* blocked =
                 editor.play.running() ? "a session is running, so this is not your scene" : nullptr;
-            engine::editor::draw_world_panel(editor.world, editor.selected, editor.source_scene,
-                                             editor.content, &panels.world, blocked);
+            if (engine::editor::draw_world_panel(editor.world, editor.selected,
+                                                 editor.source_scene, editor.content,
+                                                 &panels.world, blocked)) {
+                // The panel wrote the source scene. The cooked tree is what this
+                // program reads, so it has to be brought up to date now.
+                cook_after_save(editor, editor.source_scene.parent_path());
+            }
         }
         if (panels.inspector) {
             engine::editor::draw_inspector_panel(editor.world, editor.selected,
