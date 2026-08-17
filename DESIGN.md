@@ -2395,10 +2395,23 @@ each of the fifteen or so places that iterate scene components, and every one of
 silent when it is missed. With the components gone, only the walks over the hierarchy have to
 know: the save, the prefab instance record, and the World panel tree.
 
-**A full rebuild of the world still renumbers everything**, so play and stop clears the
-history, and so does a scene reload. That is a limit of the shape rather than a bug in it,
-and it is what a stable identity in the scene file would buy if one is ever added for other
-reasons.
+**The history lives through a play and a stop.** Pressing play to see whether a change
+works, then stopping and undoing it, is the loop this milestone is for, and a history that
+emptied itself on every play would be worth very little.
+
+That is not free. `PlayMode::stop` restores by clearing the world and reading the snapshot
+back, so every entity is built again with a new number. Either the loader reports the entity
+it built for each record, so the old numbers can be mapped onto the new ones, or a stop
+stops rebuilding and restores each authored entity in place. **Whichever is chosen has to be
+checked rather than trusted**: `walk_in_order` in `scene/scene_file.cpp` pins its order by
+entity number, and after a clear EnTT hands numbers out from a free list, so walking the
+rebuilt world and zipping the two lists can quietly pair the wrong entities. A mismatch has
+to clear the history and say so, which is a far better failure than an undo that moves
+something else.
+
+A scene reload does clear the history, and that is a limit of the shape rather than a bug in
+it. A stable identity in the scene file is what would buy that back, if one is ever added
+for other reasons.
 
 **An action is recorded when it ends.** A gizmo drag writes on every frame it moves and a
 slider writes on every frame it is held, and neither is an edit. The edit is the whole drag,
