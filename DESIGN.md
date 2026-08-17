@@ -2367,6 +2367,62 @@ and the Lua bindings. Add widgets when `sandbox/` needs them.
 miniaudio behind `IAudioDevice`. Positional 3D and buses.
 **Done when:** the sandbox game plays sound.
 
+### M12 — Editor undo
+Every edit the editor makes can be undone and redone. The editor changes a world in place
+and keeps no history today, so a gizmo drag, a component added or taken off, a deleted
+entity, and a dropped prefab are all final. Reloading the scene is the only way back, and it
+throws away everything since the last save rather than the last thing.
+
+**Transactional. Each edit records what it changed and how to put it back**, so a step costs
+what the edit cost rather than what the level costs.
+
+A stack of whole-world documents was considered and rejected. It is far less code, and
+`scene::save_scene` already writes one while `editor::PlayMode` already restores a world from
+one. The measurement that made it look cheap was taken on the sandbox scene, which is 43
+entities on purpose: 7.2 KiB and 0.62 ms for a step. That number says nothing about a level
+worth building. At a few thousand entities every click writes hundreds of kilobytes, and
+undo gets slower as the level gets better, which is the wrong way round.
+
+**Transactional does not mean nothing is serialized.** Deleting an entity has to keep the
+subtree it removed, because there is no other way to bring one back. It means the unit is
+what changed. The pieces are already here: `ComponentOps::save` and `load` give a component
+as a document, and `scene::diff` writes the merge patch between two documents.
+
+Two things do not fall out of the shape.
+
+**Every entity carries a stable identity, and an edit names one through that.** An
+`entt::entity` is a slot number that EnTT hands out again, so nothing outliving one edit can
+use one: not an undo entry, not the selection, and not an entity naming another entity.
+Undoing a delete builds the entity again, and a stop rebuilds the whole world, and both used
+to leave every entry on the stack naming whoever took its number.
+
+`engine::Guid` is the tool, unchanged: `generate` for a new one, `derive(parent, kind,
+index)` for a part of something, and a text form for the file. **A prefab member derives its
+identity from the instance root**, the same way the cooker derives a mesh identity from the
+glTF that holds it, because an instance is one record in the file and storing an identity for
+each member would bloat every one. The scene file goes to version 4, and a version 3 document
+still reads with an identity made for each entity as it loads.
+
+Two things fall out of it. A **delete is a real delete**, because undo builds the entity again
+with its identity and every other entry still resolves; an earlier plan to keep deleted
+entities alive and hidden is not needed. And **the history lives through a play and a stop**,
+which is the loop this milestone is for, because the rebuilt world carries the same identities
+out of the same document.
+
+The order-based mapping considered before the identity is worth recording as rejected.
+`walk_in_order` in `scene/scene_file.cpp` pins its order by entity number, and after a clear
+EnTT hands numbers out from a free list rather than in load order, so pairing a walk before a
+play with a walk after a stop can quietly pair the wrong entities. An undo that moves
+something else is a worse failure than one that is refused.
+
+**It buys more than undo.** A component can name an asset by GUID today and nothing can name
+an entity, so a trigger cannot say which door it opens and a camera cannot say what it
+follows. This is the prerequisite for that, and M10 and the game will both want it.
+
+**Done when:** every edit can be undone and redone, an action is one entry, an edit still
+names its entity after that entity has been deleted and brought back, and the cost of a step
+is measured on the largest scene the project has rather than on the sandbox.
+
 ### After that, as the game demands
 ozz-animation, which you pull forward as soon as you need a character. The `gfx::` plugin
 ABI. Controller navigation for moth_ui. Networking.
@@ -2381,6 +2437,11 @@ decides whether anyone can make a game with this engine, including you in a year
 
 **Start `sandbox/` at M3.** Choose something small and specific. A physics puzzle game fits
 well. It exercises Box3D, scripting, and PBR, and it needs no animation and little UI.
+
+**M12 runs before M10.** Undo is authoring, and authoring pain compounds: every level built
+without it is built carefully rather than freely, and every mistake costs whatever was not
+saved. M9 gives a person the tools to build a level, and M12 is what makes using them
+comfortable. The game UI can wait a milestone for that.
 
 **Keep M6 timeboxed.** If it starts to become M10, stop. Its value is the interface
 feedback, not the pixels.
