@@ -911,6 +911,15 @@ namespace {
         // After the ImGui frame opens and before any panel draws, because the
         // gizmo reads the mouse state this call latches.
         apps::begin_gizmo_frame();
+
+        // Before the panels, because two of them read world matrices: the gizmo
+        // draws at the pose of the selected entity, and a click tests the bounds
+        // of every entity. A session moved things this frame through
+        // Simulation::interpolate, which writes local transforms, so without
+        // this both would work from the pose of the frame before. The update
+        // after the panels stays, for what an inspector edit or a drag changed.
+        editor.world.update();
+
         draw_ui(editor, panels, running);
 
         // The scene, into the image the panel shows. The same four passes the

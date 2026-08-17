@@ -2279,6 +2279,11 @@ every object inside, so clicking anything selected the room. Reporting the far s
 room behind its own contents, which is where a person sees it, and the room is still
 selectable wherever nothing else is in the way.
 
+**A click the gizmo owns does not change the selection.** The overlay draws the handles
+first and picks only when ImGuizmo reports neither a hover nor a drag, so grabbing an arrow
+cannot select whatever sits behind it, and a drag that wanders off the handle keeps the
+entity it started on.
+
 The bounds arrive through a callback, so `src/editor/` needs nothing from `src/render/` and
 a test drives the search with bounds it makes up. The editor answers that callback from
 `render::MeshCache`, which already holds every mesh the scene drew.

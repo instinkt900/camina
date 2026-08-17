@@ -43,7 +43,10 @@ namespace engine {
      * wall is mostly empty space, and clicking that space would select the wall.
      *
      * @param ray The ray to test. The direction need not be normalized, but the
-     * distance comes back in units of that direction when it is not.
+     * distance comes back in units of that direction when it is not. A very
+     * small component gives a very large distance rather than a miss, which is
+     * the honest answer: a caller that cares about how far away a hit is
+     * compares it, and a picker's nearest-wins search discards it for free.
      * @param min The smallest corner of the box.
      * @param max The largest corner of the box.
      * @param out_distance Receives how far along the ray the hit is. Untouched
@@ -61,10 +64,17 @@ namespace engine {
             const float direction = ray.direction[axis];
             const float origin = ray.origin[axis];
 
-            if (std::abs(direction) < std::numeric_limits<float>::epsilon()) {
-                // Parallel to this pair of faces. It misses unless it started
-                // between them, and dividing would give an infinity that the
-                // compares below read as a hit.
+            if (direction == 0.0F) {
+                // Exactly parallel to this pair of faces. It misses unless it
+                // started between them, and zero divided by zero would give a
+                // NaN, which compares false against everything and would read
+                // as a hit.
+                //
+                // **Only exactly zero.** A threshold here reports a miss for a
+                // direction that is merely small, and a ray transformed into the
+                // local space of a scaled entity can carry small components.
+                // Every other value divides to a finite number or to an
+                // infinity, and the compares below are correct for both.
                 if (origin < min[axis] || origin > max[axis]) {
                     return false;
                 }

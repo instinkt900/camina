@@ -601,7 +601,9 @@ calling `World::set_local`, and three fail, because nothing recomposes the subtr
 test, and the pixel to NDC step, all of it testable with no GPU. The ray goes into the local
 space of each candidate, so the test is against the oriented box of the entity. A click on a
 gizmo handle belongs to the drag, so the overlay draws the gizmo first and picks only when
-`ImGuizmo::IsOver` is false.
+the gizmo owns neither the pointer nor a drag: `ImGuizmo::IsOver()` and `IsUsing()` must
+both be false. Hovering alone is not enough, because a drag that wanders off a handle is
+still a drag.
 
 **A ray that starts inside a box reports where it leaves.** A hit at zero beats everything,
 and every scene is a room whose box holds the camera, so clicking anything selected the room.

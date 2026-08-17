@@ -525,6 +525,16 @@ namespace {
         check(!engine::ray_hits_box(past_it, min, max, distance),
               "a box entirely behind the origin is still a miss");
 
+        // Small is not parallel. A threshold here would report a miss, and a ray
+        // put into the local space of a scaled entity carries small components.
+        // The honest answer is a hit a very long way off, which a nearest-wins
+        // search discards for free.
+        const engine::Ray barely{ .origin = { 0.0F, 0.0F, 5.0F },
+                                  .direction = { 0.0F, 0.0F, -1.0e-8F } };
+        check(engine::ray_hits_box(barely, min, max, distance),
+              "a direction below the float epsilon still hits");
+        check(distance > 1.0e8F, "at the distance that direction takes to get there");
+
         // Parallel to two faces and outside them. Dividing by that direction
         // would give an infinity, and an infinity compares as a hit.
         const engine::Ray parallel{ .origin = { 0.0F, 9.0F, 5.0F },
