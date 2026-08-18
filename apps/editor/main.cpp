@@ -681,9 +681,15 @@ namespace {
      * numbers out again, so a handle kept across that line names whoever took
      * its number. That is why the camera is bound again on a stop alone.
      *
-     * The selection is dropped at both ends even so. A session moves and
-     * destroys things, and an inspector still pointed at a crate that has been
-     * thrown across the room is not what anybody meant by selected.
+     * **The selection is kept across both ends, by identity.** Pressing play to
+     * see whether a change works, then stopping and carrying on with the thing
+     * you were looking at, is the loop M12 is for. A play clears nothing, so
+     * the entity is still the same one. A stop rebuilds every entity, so the
+     * identity is read before it and looked up after it. Holding the number
+     * across that line would point the inspector at whoever took it.
+     *
+     * A session that destroys the selected entity leaves nothing to go back
+     * to, and the lookup then answers with nothing selected.
      *
      * @param editor Everything the program owns.
      * @param request What the user clicked.
@@ -694,9 +700,9 @@ namespace {
         case PlayRequest::Play: {
             const engine::editor::PlayDesc desc{ .content = &editor.content,
                                                  .bind_actions = &sandbox::bind_actions };
-            if (editor.play.play(editor.world, desc)) {
-                editor.selected = entt::null;
-            }
+            // The selection stays. A play snapshots the world and runs it in
+            // place, so the entity somebody was looking at is still that entity.
+            (void)editor.play.play(editor.world, desc);
             break;
         }
         case PlayRequest::Pause:
@@ -705,13 +711,19 @@ namespace {
         case PlayRequest::Resume:
             editor.play.resume();
             break;
-        case PlayRequest::Stop:
-            editor.selected = entt::null;
+        case PlayRequest::Stop: {
+            // Read before the stop and looked up after it. The snapshot carries
+            // the identity of every entity, so the one somebody was looking at
+            // answers to the same name once it is built again.
+            const engine::Guid was_selected = editor.world.identity(editor.selected);
             editor.play.stop(editor.world);
+            editor.selected =
+                was_selected.valid() ? editor.world.find(was_selected) : entt::null;
             // The snapshot built new entities, so the camera of the world
             // before the session is not the camera of the world after it.
             bind_camera(editor);
             break;
+        }
         case PlayRequest::None:
             break;
         }

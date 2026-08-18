@@ -26,6 +26,12 @@ namespace engine::scene {
     }
 
     Guid World::identity(entt::entity entity) const {
+        // A stale or null entity answers with a null identity rather than
+        // asserting. Asking what a selection is called, when the selection is
+        // nothing, is a normal thing for a caller to do.
+        if (entity == entt::null || !registry_.valid(entity)) {
+            return {};
+        }
         const auto* held = registry_.try_get<const Id>(entity);
         return held != nullptr ? held->value : Guid{};
     }

@@ -11,6 +11,9 @@
 #include "assets/content.h"
 #include "check.h"
 #include "core/jobs.h"
+#include "editor/edits.h"
+#include "editor/history.h"
+#include "editor/interaction.h"
 #include "editor/play_mode.h"
 #include "editor/panels.h"
 #include "editor/picking.h"
@@ -30,6 +33,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <cstddef>
@@ -752,6 +756,267 @@ namespace {
 
 } // namespace
 
+/// The first entity carrying a Name, so a test can name one of the shipped ones.
+[[nodiscard]] entt::entity find_named(const engine::scene::World& world, const char* wanted) {
+    for (const auto [entity, name] :
+         world.registry().view<const engine::scene::Name>().each()) {
+        if (name.value == wanted) {
+            return entity;
+        }
+    }
+    return entt::null;
+}
+
+/**
+ * A named entity of the shipped scene, for a test to edit.
+ *
+ * **A scene restores its entities down two different paths**, and an
+ * identity is put back by each one separately. An entity the file lists
+ * itself goes through `take_identity` in `scene/scene_file.cpp`, and a
+ * prefab instance goes through `assign_identities` in `scene/prefab.cpp`.
+ * A test that only reaches one of them passes while the other is broken,
+ * so the caller asks for each kind by name.
+ *
+ * @param world The world to search.
+ * @param inside_prefab True for an entity a prefab supplied, false for one
+ * the scene file lists on its own.
+ * @return The entity with the smallest number that matches, or entt::null.
+ */
+[[nodiscard]] entt::entity any_named(const engine::scene::World& world,
+                                     bool inside_prefab) {
+    entt::entity best = entt::null;
+    for (const auto [entity, name] :
+         world.registry().view<const engine::scene::Name>().each()) {
+        const bool member = world.registry().all_of<engine::scene::PrefabMember>(entity);
+        if (member != inside_prefab) {
+            continue;
+        }
+        if (best == entt::null || entt::to_integral(entity) < entt::to_integral(best)) {
+            best = entity;
+        }
+    }
+    return best;
+}
+
+/**
+ * An edit made before a play can be undone after a stop.
+ *
+ * This is M12.5. Pressing play to see whether a change works, then stopping
+ * and undoing it, is the loop the milestone is for, and a history that
+ * emptied itself at either end would be worth very little.
+ *
+ * It works because a stop reads back a document that carries the identity
+ * of every entity, so an entry finds its entity by asking for it by name.
+ * The entity numbers are all different afterwards and none of them matter.
+ */
+void test_an_edit_before_play_undoes_after_stop() {
+    section("an edit survives a play and a stop");
+
+    engine::assets::Content content;
+    engine::scene::World world;
+    check(load_shipped(world, content), "the shipped scene loads");
+
+    // One of each kind, because the two are restored down different paths
+    // and an identity is put back by each one separately.
+    const std::array<entt::entity, 2> moved{ any_named(world, true),
+                                             any_named(world, false) };
+    check(moved[0] != entt::null, "the scene holds an entity a prefab supplied");
+    check(moved[1] != entt::null, "and one the file lists itself");
+    if (moved[0] == entt::null || moved[1] == entt::null) {
+        return;
+    }
+
+    std::array<engine::Guid, 2> moved_id{};
+    std::array<std::uint32_t, 2> before_number{};
+    std::array<float, 2> was_x{};
+
+    // Move each one the way a gizmo drag does: keep the value, change the
+    // world, then record one entry.
+    engine::editor::History history;
+    for (std::size_t i = 0; i < moved.size(); ++i) {
+        moved_id[i] = world.identity(moved[i]);
+        before_number[i] = entt::to_integral(moved[i]);
+
+        engine::editor::Interaction drag;
+        check(drag.begin(world, moved[i], "Transform"), "the drag opens");
+
+        engine::Transform local = world.local(moved[i]);
+        was_x[i] = local.position.x;
+        local.position.x = was_x[i] + 5.0F;
+        world.set_local(moved[i], local);
+        check(drag.end(world, history), "and one entry comes out");
+    }
+    check(history.size() == 2, "the stack holds both");
+
+    // A whole session over it: the crates fall and a script may create and
+    // destroy things.
+    engine::editor::PlayMode play;
+    const engine::editor::PlayDesc desc{ .content = &content,
+                                         .bind_actions = &sandbox::bind_actions };
+    check(play.play(world, desc), "the session starts");
+    run(play, world, 60);
+    play.stop(world);
+
+    check(history.size() == 2, "the stack is still there after the stop");
+
+    for (std::size_t i = 0; i < moved.size(); ++i) {
+        const entt::entity again = world.find(moved_id[i]);
+        check(again != entt::null, "the entity answers to the same identity");
+        check(entt::to_integral(again) != before_number[i],
+              "and it is a different entity number, so the lookup is doing the work");
+        check(world.local(again).position.x == was_x[i] + 5.0F,
+              "the move is still applied");
+    }
+
+    // Undone in the order they were made, last one first.
+    check(history.undo(world), "undo runs after the stop");
+    check(world.local(world.find(moved_id[1])).position.x == was_x[1],
+          "and it undoes the right thing");
+    check(history.undo(world), "the entry under it runs too");
+    check(world.local(world.find(moved_id[0])).position.x == was_x[0],
+          "and reaches the other restore path");
+
+    check(history.redo(world), "redo runs too");
+    check(world.local(world.find(moved_id[0])).position.x == was_x[0] + 5.0F,
+          "and puts the move back");
+}
+
+/**
+ * A delete made before a play is undone after a stop.
+ *
+ * The harder half. Undo has to build the entity again into a world whose
+ * every entity was built a moment ago, and every other entry has to keep
+ * resolving.
+ */
+void test_a_delete_before_play_undoes_after_stop() {
+    section("a delete survives a play and a stop");
+
+    engine::assets::Content content;
+    engine::scene::World world;
+    check(load_shipped(world, content), "the shipped scene loads");
+
+    const entt::entity going = any_named(world, false);
+    check(going != entt::null, "the scene holds an entity to delete");
+    if (going == entt::null) {
+        return;
+    }
+    const engine::Guid going_id = world.identity(going);
+    const std::size_t before = world.size();
+
+    engine::editor::History history;
+    check(engine::editor::delete_entity(world, going, &history), "the delete runs");
+    check(world.find(going_id) == entt::null, "the entity is gone");
+
+    engine::editor::PlayMode play;
+    const engine::editor::PlayDesc desc{ .content = &content,
+                                         .bind_actions = &sandbox::bind_actions };
+    check(play.play(world, desc), "the session starts");
+    run(play, world, 60);
+    play.stop(world);
+
+    check(world.find(going_id) == entt::null,
+          "the snapshot was taken without it, so it is still gone");
+
+    check(history.undo(world), "undo runs after the stop");
+    check(world.find(going_id) != entt::null, "and the entity is back");
+    check(world.size() == before, "with everything that went with it");
+}
+
+/**
+ * The selection survives a play and a stop.
+ *
+ * The editor holds an entity number, and every number changes at a stop.
+ * The identity is what carries across, and this is the lookup the editor
+ * does around `PlayMode::stop`.
+ */
+void test_the_selection_survives_a_play_and_a_stop() {
+    section("the selection survives a play and a stop");
+
+    engine::assets::Content content;
+    engine::scene::World world;
+    check(load_shipped(world, content), "the shipped scene loads");
+
+    const entt::entity selected = any_named(world, true);
+    check(selected != entt::null, "something is selected");
+    if (selected == entt::null) {
+        return;
+    }
+    const std::string name = world.registry().get<engine::scene::Name>(selected).value;
+
+    // What the editor does: read the identity before the stop.
+    const engine::Guid was_selected = world.identity(selected);
+    check(was_selected.valid(), "the selection has an identity");
+
+    engine::editor::PlayMode play;
+    const engine::editor::PlayDesc desc{ .content = &content,
+                                         .bind_actions = &sandbox::bind_actions };
+    check(play.play(world, desc), "the session starts");
+    run(play, world, 60);
+    play.stop(world);
+
+    // And the lookup after it.
+    const entt::entity again = world.find(was_selected);
+    check(again != entt::null, "the selection is found again after the stop");
+    check(world.registry().get<engine::scene::Name>(again).value == name,
+          "and it is the same entity somebody was looking at");
+
+    // A null selection asks for nothing and gets nothing, rather than
+    // asserting on a stale entity.
+    check(!world.identity(entt::null).valid(), "nothing selected has no identity");
+}
+
+/**
+ * An entry naming an entity that no stop can bring back is reported.
+ *
+ * The entity is destroyed without an entry, so no undo builds it again and
+ * the snapshot never held it. The edit that names it then reaches nothing.
+ * It reports on the error channel and changes no other entity, which is
+ * what "reported rather than passed over" has to mean for a stack that
+ * still has to work for every other entry on it.
+ */
+void test_an_entry_naming_a_lost_entity_is_reported() {
+    section("an entry that names a lost entity");
+
+    engine::assets::Content content;
+    engine::scene::World world;
+    check(load_shipped(world, content), "the shipped scene loads");
+
+    const entt::entity doomed = any_named(world, false);
+    check(doomed != entt::null, "the scene holds an entity");
+    if (doomed == entt::null) {
+        return;
+    }
+    const engine::Guid doomed_id = world.identity(doomed);
+
+    engine::editor::History history;
+    engine::editor::Interaction drag;
+    check(drag.begin(world, doomed, "Transform"), "an edit opens on it");
+    engine::Transform local = world.local(doomed);
+    local.position.x += 2.0F;
+    world.set_local(doomed, local);
+    check(drag.end(world, history), "and is recorded");
+
+    // Destroyed with no entry of its own, so nothing can bring it back.
+    world.destroy(doomed);
+    check(world.find(doomed_id) == entt::null, "the entity is gone for good");
+
+    engine::editor::PlayMode play;
+    const engine::editor::PlayDesc desc{ .content = &content,
+                                         .bind_actions = &sandbox::bind_actions };
+    check(play.play(world, desc), "the session starts");
+    run(play, world, 30);
+    play.stop(world);
+
+    const nlohmann::json before = engine::scene::save_scene(world);
+
+    // The error line above this check is the report. Undo still advances,
+    // so a second one goes further back rather than retrying this one.
+    check(history.undo(world), "undo runs");
+    check(engine::scene::save_scene(world) == before,
+          "and it changed nothing, rather than moving another entity");
+    check(!history.can_undo(), "the stack moved past it");
+}
+
 int main() {
     register_everything();
 
@@ -777,6 +1042,11 @@ int main() {
     test_a_second_session_starts_from_the_same_place();
     test_pause_holds_the_step();
     test_the_states_refuse_what_they_cannot_do();
+
+    test_an_edit_before_play_undoes_after_stop();
+    test_a_delete_before_play_undoes_after_stop();
+    test_the_selection_survives_a_play_and_a_stop();
+    test_an_entry_naming_a_lost_entity_is_reported();
 
     engine::jobs::shutdown();
     return test::report();
