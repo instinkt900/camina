@@ -64,7 +64,10 @@ namespace engine::editor {
          * is, so the menu can say "Undo move crate" and somebody can tell how
          * far back they are about to go.
          *
-         * @return A short name that outlives the edit, so a literal.
+         * @return A short name that lives as long as the edit does. A literal,
+         * or a string the edit holds. It cannot be a temporary: the menu reads
+         * it while the edit sits on the stack, and an edit that names the
+         * component it changed has to build that text rather than quote it.
          */
         [[nodiscard]] virtual const char* name() const = 0;
     };
