@@ -78,7 +78,8 @@ namespace engine::scene {
 
         /**
          * @brief The identity of an entity.
-         * @param entity The entity to read.
+         * @param entity The entity to read. A null or stale one is allowed, and
+         * answers with a null identity.
          * @return Its identity, or a null one for an entity this class did not
          * build.
          */

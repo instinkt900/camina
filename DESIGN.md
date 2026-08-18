@@ -2463,6 +2463,27 @@ entities alive and hidden is not needed. And **the history lives through a play 
 which is the loop this milestone is for, because the rebuilt world carries the same identities
 out of the same document.
 
+**The play and stop loop cost nothing to build.** `PlayMode::stop` clears the world and reads
+the snapshot back, and the snapshot is a scene document, so every entity comes back carrying
+the identity the document holds. An entry on the stack finds its entity by asking for it by
+name. Nothing had to be zipped, mapped or guessed, and the stack is never cleared at either
+end.
+
+The selection is kept the same way. It is an entity number, and every number changes at a
+stop, so the editor reads the identity before the stop and looks it up after it. A play clears
+nothing, so the selection simply stays.
+
+**A scene restores its entities down two paths and each one puts an identity back separately.**
+An entity the file lists goes through `take_identity` in `scene/scene_file.cpp`, and a prefab
+instance goes through `assign_identities` in `scene/prefab.cpp`. A test that reaches only one
+of them passes while the other is broken, which is why `tests/test_editor.cpp` edits one entity
+of each kind. Deleting either call fails that test and nothing else it drives.
+
+An entry that names an entity no stop can bring back reports on the error channel and changes
+nothing. That happens when something destroyed the entity outside the history, so the snapshot
+never held it. Undo still moves past the entry, because the entries under it are good and
+retrying a broken one forever is worse than skipping it.
+
 The order-based mapping considered before the identity is worth recording as rejected.
 `walk_in_order` in `scene/scene_file.cpp` pins its order by entity number, and after a clear
 EnTT hands numbers out from a free list rather than in load order, so pairing a walk before a
