@@ -465,14 +465,25 @@ namespace engine::editor {
 
     namespace {
 
+        /// Whether the open interaction is the one this component started.
+        [[nodiscard]] bool interaction_owns(const Interaction& pending, const scene::World& world,
+                                            entt::entity entity, const char* component) {
+            return pending.active() && pending.component() == component &&
+                   pending.entity() == world.identity(entity);
+        }
+
         /**
          * Draws the fields of one component, and records an edit when it ends.
          *
-         * **The value is kept before the fields are drawn**, because a slider
-         * jumps to where it was clicked on the frame it takes the focus. A
-         * value read after that draw is already the edited one, and the undo
-         * would then go back to part way through the edit rather than to the
-         * start of it.
+         * **The value is kept before the fields are drawn.** A slider jumps to
+         * where it was clicked on the frame it takes the focus, so a value read
+         * after that draw is already the edited one, and the undo would then go
+         * back to part way through the edit rather than to the start of it.
+         *
+         * Nothing has begun at that point, so the interaction is opened on
+         * every frame and dropped again when no widget took the focus. That
+         * costs one saved document for each component on each frame, and it is
+         * the only order that can hold the value from before the first write.
          *
          * A panel with no history draws exactly as it did before undo existed.
          *
@@ -486,17 +497,27 @@ namespace engine::editor {
         bool draw_component_fields(scene::World& world, entt::entity selected,
                                    const scene::ComponentOps& ops, History* history,
                                    Interaction* pending) {
+            const bool recording = history != nullptr && pending != nullptr;
+
             reflect::widget::begin_edit_tracking();
+
+            // Before the draw, because the draw is also the write.
+            const bool opened =
+                recording && !pending->active() && pending->begin(world, selected, ops.name);
 
             const bool moved = ops.inspect(world.registry(), selected);
 
-            if (history == nullptr || pending == nullptr) {
+            if (!recording) {
                 return moved;
             }
-            if (reflect::widget::edit_began() && !pending->active()) {
-                (void)pending->begin(world, selected, ops.name);
-            }
-            if (reflect::widget::edit_ended()) {
+            if (opened && !reflect::widget::edit_began()) {
+                // Nothing was touched, so there is no edit to keep.
+                pending->cancel();
+            } else if (reflect::widget::edit_ended() &&
+                       interaction_owns(*pending, world, selected, ops.name)) {
+                // Only the interaction this component opened. One Interaction
+                // can be held by another panel, and closing that one here would
+                // record its edit early and leave it with nothing to push.
                 (void)pending->end(world, *history);
             }
             return moved;

@@ -321,9 +321,17 @@ namespace {
         entt::entity selected = entt::null;
         /// Every edit made to the scene, and the way back through them.
         engine::editor::History history;
-        /// The edit in progress, which is a gizmo drag or a held widget. It has
-        /// to outlive the frame, because the two edges are frames apart.
-        engine::editor::Interaction pending;
+        /**
+         * The handle being dragged, which has to outlive the frame because the
+         * two edges of one drag are frames apart.
+         *
+         * The inspector keeps its own rather than sharing this one. Two panels
+         * over one interaction can close each other's edit, and then a drag
+         * records nothing while a field records a transform nobody moved.
+         */
+        engine::editor::Interaction gizmo_drag;
+        /// The inspector widget being held. See gizmo_drag for why it is separate.
+        engine::editor::Interaction field_edit;
         /// Whether a handle was being dragged on the last frame, so the two
         /// edges of one drag can be told apart.
         bool was_dragging = false;
@@ -775,6 +783,18 @@ namespace {
     void draw_gizmo_overlay(void* user, float x, float y, float width, float height) {
         Editor& editor = *static_cast<Editor*>(user);
         if (editor.selected == entt::null || !editor.world.registry().valid(editor.selected)) {
+            // The entity went away while a handle was held. Close the drag
+            // here, or was_dragging stays true and the next drag on another
+            // entity never opens one: it would record nothing, and its release
+            // would close this stale interaction instead.
+            //
+            // Ended rather than cancelled. The entity did move before it went,
+            // so an entry is the honest answer, and end() records nothing at
+            // all when the entity is no longer there to read.
+            if (editor.was_dragging) {
+                (void)editor.gizmo_drag.end(editor.world, editor.history);
+                editor.was_dragging = false;
+            }
             return;
         }
 
@@ -803,9 +823,9 @@ namespace {
         // it comes up. A drag that ends where it started pushes nothing.
         const bool dragging = apps::gizmo_is_dragging();
         if (dragging && !editor.was_dragging) {
-            (void)editor.pending.begin(editor.world, editor.selected, "Transform");
+            (void)editor.gizmo_drag.begin(editor.world, editor.selected, "Transform");
         } else if (!dragging && editor.was_dragging) {
-            (void)editor.pending.end(editor.world, editor.history);
+            (void)editor.gizmo_drag.end(editor.world, editor.history);
         }
         editor.was_dragging = dragging;
     }
@@ -1032,7 +1052,7 @@ namespace {
         if (panels.inspector) {
             engine::editor::draw_inspector_panel(editor.world, editor.selected,
                                                  &panels.inspector, &editor.history,
-                                                 &editor.pending);
+                                                 &editor.field_edit);
         }
         if (panels.assets) {
             engine::editor::draw_assets_panel(editor.content, editor.asset_filter,

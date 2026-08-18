@@ -80,6 +80,8 @@ namespace {
         check(drag.end(fixture.world, history), "the mouse comes up and one entry is pushed");
         check(!drag.active(), "the interaction is closed");
         check(history.size() == 1, "one drag is one entry, whatever it cost to make");
+        check(std::string(history.undo_name()) == "change Transform",
+              "and the entry names the component that changed");
 
         check(fixture.x() == 10.0F, "the entity sits where the drag left it");
         check(history.undo(fixture.world), "undo runs");
@@ -201,6 +203,64 @@ namespace {
         check(history.size() == 0, "the stack is empty");
     }
 
+    /**
+     * begin() keeps what the component holds at the moment it is called.
+     *
+     * This is the contract every caller rests on, and the one that is easy to
+     * get wrong. A caller that draws its widgets first and calls begin()
+     * afterwards has already written the new value, so the entry would go back
+     * to part way through the edit rather than to the start of it. A slider is
+     * where that bites: it jumps to the position that was clicked on the very
+     * frame it takes the focus.
+     */
+    void test_begin_keeps_the_value_it_was_called_on() {
+        section("what begin keeps");
+
+        Fixture fixture;
+        ed::History history;
+        ed::Interaction drag;
+
+        // The jump a slider makes on the frame it is clicked.
+        fixture.nudge(3.0F);
+
+        // Called after that write, which is the mistake. The value it keeps is
+        // the jumped one, so this pins what begin() reads rather than blessing
+        // the order: a caller has to call it first.
+        check(drag.begin(fixture.world, fixture.entity, "Transform", &fixture.types),
+              "the interaction opens");
+        fixture.nudge(8.0F);
+        check(drag.end(fixture.world, history), "and one entry comes out");
+
+        check(history.undo(fixture.world), "undo runs");
+        check(fixture.x() == 3.0F,
+              "it goes back to what the component held when begin was called");
+    }
+
+    /**
+     * A caller can tell whether the open interaction is its own.
+     *
+     * Two panels sharing one Interaction can close each other's edit. The
+     * editor keeps one for the gizmo and one for the inspector so that cannot
+     * happen, and these two answers are how a caller checks anyway.
+     */
+    void test_an_interaction_says_what_it_holds() {
+        section("what the open interaction names");
+
+        Fixture fixture;
+        ed::Interaction drag;
+        check(!drag.entity().valid(), "nothing open names no entity");
+        check(drag.component().empty(), "and no component");
+
+        check(drag.begin(fixture.world, fixture.entity, "Transform", &fixture.types),
+              "the interaction opens");
+        check(drag.entity() == fixture.world.identity(fixture.entity),
+              "it names the entity it was opened on");
+        check(drag.component() == "Transform", "and the component");
+
+        drag.cancel();
+        check(!drag.entity().valid(), "and it names nothing once it is closed");
+    }
+
     /// Cancel drops the interaction and leaves the stack alone.
     void test_cancel_records_nothing() {
         section("cancel");
@@ -228,6 +288,9 @@ int main() {
     test_a_drag_that_goes_nowhere_records_nothing();
     test_an_instant_change_is_one_entry();
     test_two_interactions_are_two_entries();
+    std::printf("the contract a caller rests on\n");
+    test_begin_keeps_the_value_it_was_called_on();
+    test_an_interaction_says_what_it_holds();
     std::printf("edges that do not pair\n");
     test_edges_that_do_not_pair();
     test_an_entity_that_goes_away_records_nothing();
