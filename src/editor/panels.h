@@ -23,6 +23,8 @@
  */
 
 #include "core/entt.h"
+#include "editor/history.h"
+#include "editor/interaction.h"
 #include "editor/play_mode.h"
 #include "editor/view_settings.h"
 #include "gfx/imgui.h"
@@ -185,13 +187,25 @@ namespace engine::editor {
      * described component to the registry and it appears here, game types
      * included.
      *
+     * **A slider held for a hundred frames is one entry, not a hundred.** The
+     * panel keeps what the field held when the widget took the focus, and
+     * records once when it is let go. A field put back where it started records
+     * nothing at all. See `editor::Interaction`.
+     *
      * @param world The world holding the entity. An edit marks it dirty, so
      * this takes it by reference.
      * @param selected The entity to show, or entt::null for none.
      * @param open Cleared when the user closes the panel. Pass null for a panel
      * the user cannot close.
+     * @param history Where an edit is recorded, or null for a panel with no
+     * undo behind it. The runtime debug overlay passes null, because it edits a
+     * running game rather than a scene somebody is authoring.
+     * @param pending Where the panel keeps the edit in progress between frames.
+     * It has to outlive the frame, so the caller owns it. Null goes with a null
+     * @p history.
      */
-    void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open = nullptr);
+    void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open = nullptr,
+                              History* history = nullptr, Interaction* pending = nullptr);
 
     /**
      * @brief Draws the rendered scene inside a panel, under a play bar.

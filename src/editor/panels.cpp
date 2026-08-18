@@ -463,7 +463,49 @@ namespace engine::editor {
 
     } // namespace
 
-    void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open) {
+    namespace {
+
+        /**
+         * Draws the fields of one component, and records an edit when it ends.
+         *
+         * **The value is kept before the fields are drawn**, because a slider
+         * jumps to where it was clicked on the frame it takes the focus. A
+         * value read after that draw is already the edited one, and the undo
+         * would then go back to part way through the edit rather than to the
+         * start of it.
+         *
+         * A panel with no history draws exactly as it did before undo existed.
+         *
+         * @param world The world holding the entity.
+         * @param selected The entity being shown.
+         * @param ops The component to draw.
+         * @param history Where an edit is recorded, or null for no undo.
+         * @param pending The edit in progress, or null for no undo.
+         * @return True when the user changed a field this frame.
+         */
+        bool draw_component_fields(scene::World& world, entt::entity selected,
+                                   const scene::ComponentOps& ops, History* history,
+                                   Interaction* pending) {
+            reflect::widget::begin_edit_tracking();
+
+            const bool moved = ops.inspect(world.registry(), selected);
+
+            if (history == nullptr || pending == nullptr) {
+                return moved;
+            }
+            if (reflect::widget::edit_began() && !pending->active()) {
+                (void)pending->begin(world, selected, ops.name);
+            }
+            if (reflect::widget::edit_ended()) {
+                (void)pending->end(world, *history);
+            }
+            return moved;
+        }
+
+    } // namespace
+
+    void draw_inspector_panel(scene::World& world, entt::entity selected, bool* open,
+                              History* history, Interaction* pending) {
         ENGINE_PROFILE_ZONE_N("draw_inspector_panel");
 
         if (ImGui::Begin("Inspector", open)) {
@@ -493,7 +535,8 @@ namespace engine::editor {
                     remove_this = &ops;
                 }
                 if (open_header) {
-                    moved = ops.inspect(world.registry(), selected) || moved;
+                    moved = draw_component_fields(world, selected, ops, history, pending) ||
+                            moved;
                 }
                 ImGui::PopID();
             }

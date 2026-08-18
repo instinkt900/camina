@@ -18,6 +18,8 @@
 #include "core/version.h"
 #include "editor/camera_lines.h"
 #include "editor/fly_camera.h"
+#include "editor/history.h"
+#include "editor/interaction.h"
 #include "gizmo.h"
 #include "editor/panels.h"
 #include "editor/picking.h"
@@ -317,6 +319,14 @@ namespace {
         engine::editor::ViewSettings view;
         /// What the inspector shows, or entt::null for nothing.
         entt::entity selected = entt::null;
+        /// Every edit made to the scene, and the way back through them.
+        engine::editor::History history;
+        /// The edit in progress, which is a gizmo drag or a held widget. It has
+        /// to outlive the frame, because the two edges are frames apart.
+        engine::editor::Interaction pending;
+        /// Whether a handle was being dragged on the last frame, so the two
+        /// edges of one drag can be told apart.
+        bool was_dragging = false;
         /**
          * The camera the game plays through, or entt::null when the scene
          * carries none.
@@ -786,6 +796,18 @@ namespace {
         if (apps::draw_gizmo(desc, world_matrix)) {
             engine::editor::place_entity(editor.world, editor.selected, world_matrix);
         }
+
+        // One drag is one entry. The transform is written on every frame the
+        // handle moves, and none of those frames is an edit on its own, so the
+        // value is kept when the mouse goes down and the entry is pushed when
+        // it comes up. A drag that ends where it started pushes nothing.
+        const bool dragging = apps::gizmo_is_dragging();
+        if (dragging && !editor.was_dragging) {
+            (void)editor.pending.begin(editor.world, editor.selected, "Transform");
+        } else if (!dragging && editor.was_dragging) {
+            (void)editor.pending.end(editor.world, editor.history);
+        }
+        editor.was_dragging = dragging;
     }
 
     /**
@@ -1009,7 +1031,8 @@ namespace {
         }
         if (panels.inspector) {
             engine::editor::draw_inspector_panel(editor.world, editor.selected,
-                                                 &panels.inspector);
+                                                 &panels.inspector, &editor.history,
+                                                 &editor.pending);
         }
         if (panels.assets) {
             engine::editor::draw_assets_panel(editor.content, editor.asset_filter,

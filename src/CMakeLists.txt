@@ -25,6 +25,7 @@ add_library(engine_core STATIC
     reflect/inspector.cpp
     editor/camera_lines.cpp
     editor/edits.cpp
+    editor/interaction.cpp
     editor/fly_camera.cpp
     editor/history.cpp
     editor/panels.cpp

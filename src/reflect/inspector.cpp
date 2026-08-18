@@ -103,7 +103,48 @@ namespace engine::reflect {
 
     } // namespace
 
+    namespace {
+
+        /// Whether an edit began and whether one finished, over one pass.
+        bool g_edit_began = false;
+        bool g_edit_ended = false;
+
+        /**
+         * Folds the edges of the item just drawn into the pass flags.
+         *
+         * ImGui reports both for the last item, and a multi-component widget
+         * closes a group, which carries the state of the component inside it.
+         */
+        void note_item() {
+            g_edit_began = g_edit_began || ImGui::IsItemActivated();
+            g_edit_ended = g_edit_ended || ImGui::IsItemDeactivatedAfterEdit();
+        }
+
+        /**
+         * Notes a widget that changes in one go rather than over a drag.
+         *
+         * A checkbox, a drop-down and an asset field have nothing to hold, and
+         * ImGui does not promise the deactivation edge for a value chosen
+         * inside a popup. So the change itself is both edges, and the caller
+         * opens and closes one entry on that frame.
+         */
+        void note_instant(bool changed) {
+            g_edit_began = g_edit_began || changed;
+            g_edit_ended = g_edit_ended || changed;
+        }
+
+    } // namespace
+
     namespace widget {
+
+        void begin_edit_tracking() {
+            g_edit_began = false;
+            g_edit_ended = false;
+        }
+
+        bool edit_began() { return g_edit_began; }
+
+        bool edit_ended() { return g_edit_ended; }
 
         bool begin_node(const char* label) { return ImGui::TreeNode(label); }
 
@@ -134,18 +175,26 @@ namespace engine::reflect {
                 alignas(kScalarBytes) std::array<std::byte, kScalarBytes> high{};
                 store_bound(type, low.data(), range->min);
                 store_bound(type, high.data(), range->max);
-                return ImGui::SliderScalarN(label, data_type, data, count, low.data(),
-                                            high.data());
+                const bool changed = ImGui::SliderScalarN(label, data_type, data, count,
+                                                          low.data(), high.data());
+                note_item();
+                return changed;
             }
 
             float speed = is_real(type) ? kFloatDragSpeed : kIntegerDragSpeed;
             if (range != nullptr && range->step > 0.0) {
                 speed = static_cast<float>(range->step);
             }
-            return ImGui::DragScalarN(label, data_type, data, count, speed);
+            const bool changed = ImGui::DragScalarN(label, data_type, data, count, speed);
+            note_item();
+            return changed;
         }
 
-        bool edit_bool(const char* label, bool& value) { return ImGui::Checkbox(label, &value); }
+        bool edit_bool(const char* label, bool& value) {
+            const bool changed = ImGui::Checkbox(label, &value);
+            note_instant(changed);
+            return changed;
+        }
 
         bool edit_enum(const char* label, const char* const* names, std::size_t count,
                        std::size_t& index) {
@@ -166,11 +215,14 @@ namespace engine::reflect {
             }
 
             index = static_cast<std::size_t>(chosen);
+            note_instant(true);
             return true;
         }
 
         bool edit_string(const char* label, std::string& value) {
-            return ImGui::InputText(label, &value);
+            const bool changed = ImGui::InputText(label, &value);
+            note_item();
+            return changed;
         }
 
         bool edit_asset(const char* label, std::string& text) {
@@ -228,6 +280,7 @@ namespace engine::reflect {
             ImGui::TextUnformatted(label);
 
             ImGui::PopID();
+            note_instant(changed);
             return changed;
         }
 
@@ -278,6 +331,9 @@ namespace engine::reflect {
             if (ImGui::IsItemDeactivated()) {
                 pending.erase(id);
             }
+            // This field already reports on the edge rather than on a keystroke,
+            // so the commit is the whole edit and both edges land on it.
+            note_instant(committed);
             return committed;
         }
 

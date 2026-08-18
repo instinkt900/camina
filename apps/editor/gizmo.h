@@ -75,6 +75,18 @@ namespace apps {
     [[nodiscard]] bool gizmo_has_mouse();
 
     /**
+     * @brief Whether the user is dragging a handle right now.
+     *
+     * This is the edge undo records on. A drag writes a transform on every
+     * frame it moves, and none of those frames is an edit on its own: the edit
+     * is the whole drag. So the caller opens an interaction when this goes
+     * true, and closes it when this goes false. See `editor::Interaction`.
+     *
+     * @return True between the mouse going down on a handle and coming up.
+     */
+    [[nodiscard]] bool gizmo_is_dragging();
+
+    /**
      * @brief Draws the handles and reports what the user dragged them to.
      *
      * Call this inside the window the picture is in, so the handles draw into
