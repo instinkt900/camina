@@ -57,4 +57,25 @@ namespace engine::editor {
         next_ = 0;
     }
 
+    UndoMenu undo_menu(const History& history, bool session_running) {
+        UndoMenu menu{ .undo_label = "Undo", .redo_label = "Redo" };
+        if (session_running) {
+            // Off, and with no name either. Naming an entry that cannot be
+            // clicked invites somebody to try.
+            return menu;
+        }
+
+        menu.can_undo = history.can_undo();
+        menu.can_redo = history.can_redo();
+        if (const char* name = history.undo_name(); name != nullptr) {
+            menu.undo_label += " ";
+            menu.undo_label += name;
+        }
+        if (const char* name = history.redo_name(); name != nullptr) {
+            menu.redo_label += " ";
+            menu.redo_label += name;
+        }
+        return menu;
+    }
+
 } // namespace engine::editor

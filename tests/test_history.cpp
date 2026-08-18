@@ -173,7 +173,55 @@ namespace {
 
 } // namespace
 
+/**
+ * The Edit menu names what it will do, and goes off while a session runs.
+ *
+ * "Undo" on its own is a stack a person cannot read. And undo is off during
+ * a play session because the world under one is a game part way through a
+ * step: the entries belong to the scene somebody authored, and a stop reads
+ * the snapshot back over anything an undo did anyway.
+ */
+void test_the_menu_says_what_it_will_do() {
+    section("the Edit menu");
+
+    Trace trace;
+    engine::editor::History history;
+    {
+        const engine::editor::UndoMenu empty = engine::editor::undo_menu(history, false);
+        check(empty.undo_label == "Undo", "an empty stack names nothing to undo");
+        check(empty.redo_label == "Redo", "and nothing to redo");
+        check(!empty.can_undo && !empty.can_redo, "and neither can be clicked");
+    }
+
+    engine::scene::World world;
+    history.record(edit(trace, "move crate"));
+
+    {
+        const engine::editor::UndoMenu one = engine::editor::undo_menu(history, false);
+        check(one.undo_label == "Undo move crate", "the entry is named");
+        check(one.can_undo, "and it can be clicked");
+        check(!one.can_redo, "with nothing ahead to redo");
+    }
+
+    check(history.undo(world), "undo runs");
+    {
+        const engine::editor::UndoMenu back = engine::editor::undo_menu(history, false);
+        check(back.redo_label == "Redo move crate", "the redo names it now");
+        check(back.can_redo && !back.can_undo, "and the two sides swapped");
+    }
+
+    // A session is running. Both halves go off, and neither is named,
+    // because naming an entry nobody can click invites somebody to try.
+    {
+        const engine::editor::UndoMenu playing = engine::editor::undo_menu(history, true);
+        check(!playing.can_undo && !playing.can_redo, "a session turns both off");
+        check(playing.undo_label == "Undo" && playing.redo_label == "Redo",
+              "and takes the names off with them");
+    }
+}
+
 int main() {
+    test_the_menu_says_what_it_will_do();
     test_an_empty_history_does_nothing();
     test_undo_and_redo_walk_the_stack();
     test_recording_drops_the_redo_side();

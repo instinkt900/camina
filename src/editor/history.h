@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace engine::scene {
@@ -159,5 +160,41 @@ namespace engine::editor {
         /// How many to keep.
         std::size_t depth_ = kDefaultHistoryDepth;
     };
+
+    /**
+     * @brief What the Edit menu shows, and whether either half can be clicked.
+     *
+     * The rule lives here rather than beside the ImGui calls, so a test settles
+     * it with no window. See `DESIGN.md` §10 M12.
+     */
+    struct UndoMenu {
+        /// @brief What the undo item says, for example "Undo move crate".
+        std::string undo_label;
+        /// @brief What the redo item says.
+        std::string redo_label;
+        /// @brief Whether the undo item can be clicked.
+        bool can_undo = false;
+        /// @brief Whether the redo item can be clicked.
+        bool can_redo = false;
+    };
+
+    /**
+     * @brief Works out what the Edit menu should show right now.
+     *
+     * **Both halves are off while a session runs.** The world under a session
+     * is a game part way through a step, and every entry on the stack belongs
+     * to the scene somebody authored. Undoing into a running game would move an
+     * entity the simulation owns, and a stop throws that world away and reads
+     * the snapshot back, so the change would not survive the session either.
+     * The save button is already off for the same reason.
+     *
+     * The labels name what the entry is, because "Undo" on its own is a stack
+     * a person cannot read.
+     *
+     * @param history The stack to read.
+     * @param session_running True while a play session is playing or paused.
+     * @return What to draw.
+     */
+    [[nodiscard]] UndoMenu undo_menu(const History& history, bool session_running);
 
 } // namespace engine::editor

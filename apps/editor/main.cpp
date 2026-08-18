@@ -565,18 +565,102 @@ namespace {
     }
 
     /**
+     * Undoes one entry, and keeps the selection pointing at something real.
+     *
+     * An undo can destroy the selected entity, which is what undoing a create
+     * does. Nothing may hold an entity that has gone, so the selection is read
+     * back through its identity afterwards.
+     *
+     * @param editor Everything the program owns.
+     */
+    void undo_one(Editor& editor) {
+        const engine::Guid was_selected = editor.world.identity(editor.selected);
+        (void)editor.history.undo(editor.world);
+        editor.world.update();
+        editor.selected = was_selected.valid() ? editor.world.find(was_selected) : entt::null;
+    }
+
+    /// Redoes one entry. See undo_one for why the selection is read back.
+    /// @param editor Everything the program owns.
+    void redo_one(Editor& editor) {
+        const engine::Guid was_selected = editor.world.identity(editor.selected);
+        (void)editor.history.redo(editor.world);
+        editor.world.update();
+        editor.selected = was_selected.valid() ? editor.world.find(was_selected) : entt::null;
+    }
+
+    /**
+     * Reads the undo and redo keys, wherever the pointer is in the editor.
+     *
+     * **Not through `editor.input`.** That one is gated on the Viewport panel
+     * holding the pointer or the focus, because it flies the camera. A menu
+     * shortcut has to work with the pointer over the Inspector as well, so it
+     * reads ImGui, which sees the keys for the whole window.
+     *
+     * A text box gets the keys first. ImGui gives an InputText its own undo on
+     * the same chord, and stealing it would make typing in a Name field worse
+     * than it was before undo existed.
+     *
+     * **`ImGui::Shortcut` is the wrong tool here.** It works out its owner from
+     * `CurrentFocusScopeId`, which is zero outside a window, and
+     * `SetShortcutRouting` asserts on a zero owner. This runs after the menu
+     * bar has closed, so there is no window. `IsKeyPressed` reads the key state
+     * and asks nothing about routing, which is what a chord with no owner
+     * wants. RelWithDebInfo compiles that assert out, so the wrong version
+     * would have looked like it worked here and stopped a Debug build.
+     *
+     * @param editor Everything the program owns.
+     */
+    void read_undo_keys(Editor& editor) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.WantTextInput || !io.KeyCtrl) {
+            return;
+        }
+        if (!ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+            return;
+        }
+
+        const engine::editor::UndoMenu menu =
+            engine::editor::undo_menu(editor.history, editor.play.running());
+        if (io.KeyShift) {
+            if (menu.can_redo) {
+                redo_one(editor);
+            }
+            return;
+        }
+        if (menu.can_undo) {
+            undo_one(editor);
+        }
+    }
+
+    /**
      * Draws the menu bar and reports whether the editor keeps running.
      *
      * It comes before the dockspace, because a main menu bar takes its height
      * out of the viewport work area and the dockspace fills what is left.
      */
-    void draw_menu_bar(Panels& panels, bool& running) {
+    void draw_menu_bar(Editor& editor, Panels& panels, bool& running) {
         if (!ImGui::BeginMainMenuBar()) {
             return;
         }
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
                 running = false;
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            const engine::editor::UndoMenu menu =
+                engine::editor::undo_menu(editor.history, editor.play.running());
+            if (ImGui::MenuItem(menu.undo_label.c_str(), "Ctrl+Z", false, menu.can_undo)) {
+                undo_one(editor);
+            }
+            if (ImGui::MenuItem(menu.redo_label.c_str(), "Ctrl+Shift+Z", false, menu.can_redo)) {
+                redo_one(editor);
+            }
+            if (editor.play.running()) {
+                ImGui::Separator();
+                ImGui::TextDisabled("Stop the session to edit the scene.");
             }
             ImGui::EndMenu();
         }
@@ -1022,7 +1106,11 @@ namespace {
 
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
-        draw_menu_bar(panels, running);
+        draw_menu_bar(editor, panels, running);
+
+        // After the menu bar, so a click on the item and the chord cannot both
+        // fire on one frame.
+        read_undo_keys(editor);
 
         // The whole work area is one dockspace, so a panel docks anywhere in
         // the window. The central node passes through to the clear color, which
