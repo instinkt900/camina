@@ -27,6 +27,16 @@ namespace engine::platform {
         int height = kDefaultWindowHeight;
         /// @brief Whether the user can resize the window.
         bool resizable = true;
+        /**
+         * @brief Whether Escape asks the window to close.
+         *
+         * A per-application choice, the way docking is for `gfx::ImGuiDesc`.
+         * A game runtime quits on it. **The editor does not**, because Escape
+         * there clears the selection, and a key that throws away unsaved work
+         * when somebody meant to deselect something is the worst kind of
+         * shortcut.
+         */
+        bool quit_on_escape = true;
     };
 
     /**
@@ -70,8 +80,8 @@ namespace engine::platform {
         /**
          * @brief Drains the event queue.
          *
-         * Call this once per frame. Escape and the window close button both request
-         * a quit.
+         * Call this once per frame. The window close button requests a quit, and
+         * so does Escape when `WindowDesc::quit_on_escape` is set.
          *
          * @return False when the user asks to quit, true to keep running.
          */
@@ -112,6 +122,8 @@ namespace engine::platform {
         IVec2 size_{ 0, 0 };
         bool minimized_ = false;
         bool running_ = true;
+        /// @brief What WindowDesc::quit_on_escape asked for, kept for poll().
+        bool quit_on_escape_ = true;
     };
 
 } // namespace engine::platform

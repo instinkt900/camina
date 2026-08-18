@@ -2494,6 +2494,48 @@ something else is a worse failure than one that is refused.
 an entity, so a trigger cannot say which door it opens and a camera cannot say what it
 follows. This is the prerequisite for that, and M10 and the game will both want it.
 
+**Escape clears the selection rather than closing the window.**
+`platform::WindowDesc::quit_on_escape` is a per-application choice, the way docking is for
+`gfx::ImGuiDesc`. A game runtime quits on Escape and still does. The editor does not, because a
+key that throws away unsaved work when somebody meant to deselect something is the worst kind
+of shortcut. File > Exit is the way out. Escape is also the one editing key that still works
+while a session runs, because letting go of a selection is not an edit.
+
+**Pressing Delete takes the selected entity and asks nothing.** The question the World panel
+asks was written when a delete was final, and a key that stops to ask is a key nobody uses.
+The button keeps its question, because it also says how many entities go with the one that
+was picked, and that is worth seeing before fifty of them do.
+
+**Undo is off while a play session runs**, and so is redo. The world under a session is a
+game part way through a step, and every entry on the stack belongs to the scene somebody
+authored. Undoing into a running game would move an entity the simulation owns, and a stop
+reads the snapshot back over it, so the change would not survive the session either. The save
+button is already off for the same reason. `editor::undo_menu` holds that rule, and it takes
+the names off the two items as well, because naming an entry nobody can click invites somebody
+to try.
+
+**What a step costs, measured.** The largest scene the project has is Intel Sponza at 180
+entities, and the sandbox is 43. The numbers below are the serialized size of what an entry
+keeps and the wall time of one undo, taken over 20000 entries and repeatable across runs.
+
+| | sandbox, 43 entities | Sponza, 180 entities |
+|---|---|---|
+| One field edit keeps | 2 x 151 B | 2 x 155 B |
+| One delete keeps | 531 B | 409 B |
+| One undo step | 0.49 us | 0.50 us |
+| A whole-world snapshot | 8344 B, 0.26 ms | 9408 B, 0.53 ms |
+
+**An entry costs the same on both scenes and a snapshot does not.** That is the whole of the
+transactional decision, and it is the shape rather than the extreme: 180 entities is not a
+level worth building either, and the snapshot column is what grows when it becomes one. Sponza
+is large in triangles rather than in entities, because its geometry sits in cooked assets and
+its scene file is mostly prefab instances that collapse to one record each.
+
+The in-memory cost of an entry is larger than the serialized figure, because a
+`nlohmann::json` document carries its own nodes. Measuring it through resident pages was tried
+and thrown away: the second scene measured reuses the pages the first one freed, so it reported
+14 bytes for an entry that plainly costs more.
+
 **Done when:** every edit can be undone and redone, an action is one entry, an edit still
 names its entity after that entity has been deleted and brought back, and the cost of a step
 is measured on the largest scene the project has rather than on the sandbox.

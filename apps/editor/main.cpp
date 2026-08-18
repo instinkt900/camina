@@ -474,7 +474,11 @@ namespace {
             return false;
         }
 
-        const engine::platform::WindowDesc window_desc{ .title = kWindowTitle };
+        // Escape clears the selection here rather than closing the window. A
+        // key that throws away unsaved work when somebody meant to deselect
+        // something is the worst kind of shortcut. File > Exit is the way out.
+        const engine::platform::WindowDesc window_desc{ .title = kWindowTitle,
+                                                        .quit_on_escape = false };
         if (!editor.window.create(window_desc)) {
             return false;
         }
@@ -565,18 +569,157 @@ namespace {
     }
 
     /**
+     * Undoes one entry, and keeps the selection pointing at something real.
+     *
+     * An undo can destroy the selected entity, which is what undoing a create
+     * does. Nothing may hold an entity that has gone, so the selection is read
+     * back through its identity afterwards.
+     *
+     * @param editor Everything the program owns.
+     */
+    void undo_one(Editor& editor) {
+        const engine::Guid was_selected = editor.world.identity(editor.selected);
+        (void)editor.history.undo(editor.world);
+        editor.world.update();
+        editor.selected = was_selected.valid() ? editor.world.find(was_selected) : entt::null;
+    }
+
+    /// Redoes one entry. See undo_one for why the selection is read back.
+    /// @param editor Everything the program owns.
+    void redo_one(Editor& editor) {
+        const engine::Guid was_selected = editor.world.identity(editor.selected);
+        (void)editor.history.redo(editor.world);
+        editor.world.update();
+        editor.selected = was_selected.valid() ? editor.world.find(was_selected) : entt::null;
+    }
+
+    /**
+     * Deletes the selected entity, with no question asked.
+     *
+     * The button in the World panel asks first and this does not. The question
+     * was written when a delete was final. It can be undone now, and a key that
+     * stops to ask is a key nobody uses. The button keeps its question, because
+     * it also says how many entities go, which is worth seeing before fifty of
+     * them do.
+     *
+     * @param editor Everything the program owns.
+     */
+    void delete_selected(Editor& editor) {
+        if (editor.selected == entt::null || !editor.world.registry().valid(editor.selected)) {
+            return;
+        }
+        (void)engine::editor::delete_entity(editor.world, editor.selected, &editor.history);
+        // Nothing may hold an entity that no longer exists, and EnTT hands the
+        // same number out again.
+        editor.selected = entt::null;
+    }
+
+    /**
+     * Reads the editing keys, wherever the pointer is in the editor.
+     *
+     * Delete and Escape go through here too, for the same reason.
+     *
+     * **Not through `editor.input`.** That one is gated on the Viewport panel
+     * holding the pointer or the focus, because it flies the camera. A menu
+     * shortcut has to work with the pointer over the Inspector as well, so it
+     * reads ImGui, which sees the keys for the whole window.
+     *
+     * A text box gets the keys first. ImGui gives an InputText its own undo on
+     * the same chord, and stealing it would make typing in a Name field worse
+     * than it was before undo existed.
+     *
+     * **`ImGui::Shortcut` is the wrong tool here.** It works out its owner from
+     * `CurrentFocusScopeId`, which is zero outside a window, and
+     * `SetShortcutRouting` asserts on a zero owner. This runs after the menu
+     * bar has closed, so there is no window. `IsKeyPressed` reads the key state
+     * and asks nothing about routing, which is what a chord with no owner
+     * wants. RelWithDebInfo compiles that assert out, so the wrong version
+     * would have looked like it worked here and stopped a Debug build.
+     *
+     * @param editor Everything the program owns.
+     */
+    void read_editor_keys(Editor& editor) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.WantTextInput) {
+            // A text box gets Escape as well, to put back what it held.
+            return;
+        }
+
+        // Escape lets go of the selection. The window is told not to close on
+        // it, so this is the only thing that key does in the editor.
+        //
+        // **Before the editing gate**, because letting go of a selection is not
+        // an edit. It is the one key here that still works while a session
+        // runs, and somebody watching a game should be able to clear the
+        // inspector without stopping it.
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            editor.selected = entt::null;
+            return;
+        }
+
+        // Every key below this edits the scene, and a session is not the
+        // scene. The same rule the Edit menu and the save button follow.
+        if (editor.play.running()) {
+            return;
+        }
+
+        // Delete takes the selection, with no question. See delete_selected.
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+            delete_selected(editor);
+            return;
+        }
+
+        if (!io.KeyCtrl || !ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+            return;
+        }
+
+        const engine::editor::UndoMenu menu =
+            engine::editor::undo_menu(editor.history, editor.play.running());
+        if (io.KeyShift) {
+            if (menu.can_redo) {
+                redo_one(editor);
+            }
+            return;
+        }
+        if (menu.can_undo) {
+            undo_one(editor);
+        }
+    }
+
+    /**
      * Draws the menu bar and reports whether the editor keeps running.
      *
      * It comes before the dockspace, because a main menu bar takes its height
      * out of the viewport work area and the dockspace fills what is left.
      */
-    void draw_menu_bar(Panels& panels, bool& running) {
+    void draw_menu_bar(Editor& editor, Panels& panels, bool& running) {
         if (!ImGui::BeginMainMenuBar()) {
             return;
         }
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
                 running = false;
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            const engine::editor::UndoMenu menu =
+                engine::editor::undo_menu(editor.history, editor.play.running());
+            if (ImGui::MenuItem(menu.undo_label.c_str(), "Ctrl+Z", false, menu.can_undo)) {
+                undo_one(editor);
+            }
+            if (ImGui::MenuItem(menu.redo_label.c_str(), "Ctrl+Shift+Z", false, menu.can_redo)) {
+                redo_one(editor);
+            }
+            ImGui::Separator();
+            const bool have =
+                editor.selected != entt::null && editor.world.registry().valid(editor.selected);
+            if (ImGui::MenuItem("Delete", "Del", false, have && !editor.play.running())) {
+                delete_selected(editor);
+            }
+            if (editor.play.running()) {
+                ImGui::Separator();
+                ImGui::TextDisabled("Stop the session to edit the scene.");
             }
             ImGui::EndMenu();
         }
@@ -1022,7 +1165,11 @@ namespace {
 
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
-        draw_menu_bar(panels, running);
+        draw_menu_bar(editor, panels, running);
+
+        // After the menu bar, so a click on the item and the chord cannot both
+        // fire on one frame.
+        read_editor_keys(editor);
 
         // The whole work area is one dockspace, so a panel docks anywhere in
         // the window. The central node passes through to the clear color, which
