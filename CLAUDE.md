@@ -694,8 +694,8 @@ what settles it properly, by having the editor read what it writes.
 `ComponentOps::create` and `remove` came from the M9.8 run: without them a dropped prefab
 could never be given a RigidBody. A Transform is refused, and `owns_transform` is how the
 panel knows without comparing a name against a spelling. Every one of these is recorded on the
-undo stack now, which closed #331. The delete still asks first, because the question also says
-how many entities go with the one that was picked.
+undo stack now, which is what #331 asked for. The delete still asks first, because the question
+also says how many entities go with the one that was picked.
 
 **A prefab dropped on the viewport becomes an instance**, at the point where the pointer
 meets the ground. `assets::prefab_name` moved out of `sandbox/game.h` to make that possible:

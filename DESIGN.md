@@ -445,8 +445,9 @@ operation, so a component the game defines appears in the add list with no edito
 all. **A Transform cannot be removed**: every entity has one and the hierarchy reads it, and
 `owns_transform` already marked it, so the rule needed no new flag.
 
-Deleting takes the descendants, so the panel asks first and says how many go. There is no
-undo, which is issue #331, and that is the reason the question is worth a click.
+Deleting takes the descendants, so the panel asks first and says how many go. M12 gave that
+delete an undo, and the question stayed: it is the count that is worth a click, not the
+finality. The Delete key asks nothing, because a key that stops to ask is a key nobody uses.
 
 **A prefab dropped on the viewport becomes an instance where the pointer is.** That is the
 other half of a browser: filling a field says what an entity uses, and a drop says an entity
