@@ -7,6 +7,7 @@
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/guid.h"
+#include "editor/edits.h"
 #include "core/log.h"
 #include "core/profile.h"
 #include "reflect/inspector.h"
@@ -298,7 +299,7 @@ namespace engine::editor {
          * @param world The world to delete from.
          * @param selected The selection, cleared when the entity goes.
          */
-        void draw_delete_button(scene::World& world, entt::entity& selected) {
+        void draw_delete_button(scene::World& world, entt::entity& selected, History* history) {
             const bool have = selected != entt::null && world.registry().valid(selected);
 
             ImGui::BeginDisabled(!have);
@@ -324,11 +325,16 @@ namespace engine::editor {
             } else {
                 ImGui::Text("Delete %s?", label.c_str());
             }
-            ImGui::TextDisabled("This cannot be undone.");
+            if (history != nullptr) {
+                ImGui::TextDisabled("Undo brings it back.");
+            } else {
+                ImGui::TextDisabled("This cannot be undone.");
+            }
             ImGui::Separator();
 
             if (ImGui::Button("Delete")) {
-                world.destroy(selected);
+                // The pair, because the subtree has to be read before it goes.
+                (void)delete_entity(world, selected, history);
                 // Nothing may hold an entity that no longer exists, and EnTT
                 // hands the same number out again.
                 selected = entt::null;
@@ -345,7 +351,7 @@ namespace engine::editor {
 
     bool draw_world_panel(scene::World& world, entt::entity& selected,
                           const std::filesystem::path& scene_path, const assets::Content& content,
-                          bool* open, const char* save_blocked) {
+                          bool* open, const char* save_blocked, History* history) {
         ENGINE_PROFILE_ZONE_N("draw_world_panel");
 
         bool saved = false;
@@ -371,7 +377,7 @@ namespace engine::editor {
             // Beside the save and before the path, because the path is as long
             // as a path is and anything after it lands off the panel.
             ImGui::SameLine();
-            draw_delete_button(world, selected);
+            draw_delete_button(world, selected, history);
 
             ImGui::SameLine();
             // The whole path, because which of the two trees this writes to is
@@ -435,7 +441,7 @@ namespace engine::editor {
          * @param world The world holding the entity.
          * @param selected The entity to add to.
          */
-        void draw_add_component(scene::World& world, entt::entity selected) {
+        void draw_add_component(scene::World& world, entt::entity selected, History* history) {
             ImGui::Separator();
             if (ImGui::Button("Add component")) {
                 ImGui::OpenPopup("add_component");
@@ -452,7 +458,7 @@ namespace engine::editor {
                 }
                 ++offered;
                 if (ImGui::MenuItem(ops.name)) {
-                    ops.create(world.registry(), selected);
+                    (void)add_component(world, selected, ops.name, history);
                 }
             }
             if (offered == 0) {
@@ -563,11 +569,12 @@ namespace engine::editor {
             }
 
             if (remove_this != nullptr) {
-                remove_this->remove(world.registry(), selected);
+                // The pair, because the values have to be read before they go.
+                (void)remove_component(world, selected, remove_this->name, history);
                 moved = true;
             }
 
-            draw_add_component(world, selected);
+            draw_add_component(world, selected, history);
 
             const auto* renderer = world.registry().try_get<scene::MeshRenderer>(selected);
             if (renderer != nullptr && renderer->mesh.valid()) {

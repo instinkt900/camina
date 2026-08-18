@@ -453,6 +453,102 @@ namespace {
         check(sc::save_scene(world, types, library) == moved, "and the move is back");
     }
 
+    /**
+     * Delete and undo, through the pair a panel calls.
+     *
+     * The panel cannot be driven without a window, so the two steps that have
+     * an order between them live in `editor::delete_entity` and are driven
+     * here. Reading the subtree after the destroy is the mistake this exists
+     * to stop, and there is nothing left to read by then.
+     */
+    void test_the_delete_pair_records_and_goes_back() {
+        sc::ComponentRegistry types = make_registry();
+        sc::PrefabLibrary library;
+
+        sc::World world;
+        const entt::entity root = world.create();
+        world.registry().emplace<sc::Name>(root, sc::Name{ "root" });
+        (void)named_child(world, root, "first");
+        const entt::entity middle = named_child(world, root, "middle");
+        (void)named_child(world, root, "last");
+        (void)named_child(world, middle, "kid");
+
+        const nlohmann::json before = sc::save_scene(world, types, library);
+
+        ed::History history;
+        check(ed::delete_entity(world, middle, &history, &types, &library), "the delete runs");
+        check(history.size() == 1, "and it is one entry");
+        check(sc::save_scene(world, types, library) != before, "the scene changed");
+
+        check(history.undo(world), "undo runs");
+        check(sc::save_scene(world, types, library) == before,
+              "and the subtree is back, in the place it had");
+
+        // A delete with no history still deletes. That is the runtime overlay,
+        // which edits a running game rather than a scene somebody is authoring.
+        const entt::entity again = world.find(world.identity(root));
+        check(ed::delete_entity(world, again, nullptr, &types, &library),
+              "a delete with no history runs");
+        check(world.size() == 0, "and it took the world with it");
+    }
+
+    /// Add and remove, through the pairs a panel calls.
+    void test_the_component_pairs_record_and_go_back() {
+        sc::ComponentRegistry types = make_registry();
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<sc::Name>(entity, sc::Name{ "lamp" });
+
+        ed::History history;
+        check(ed::add_component(world, entity, "PointLight", &history, &types),
+              "the component goes on");
+        check(world.registry().all_of<sc::PointLight>(entity), "the entity carries it");
+        check(std::string(history.undo_name()) == "add PointLight", "the menu says what it is");
+
+        // A value somebody set, so the remove has something to lose.
+        const float wanted = world.registry().get<sc::PointLight>(entity).range + 7.0F;
+        world.registry().get<sc::PointLight>(entity).range = wanted;
+
+        check(ed::remove_component(world, entity, "PointLight", &history, &types),
+              "the component comes off");
+        check(!world.registry().all_of<sc::PointLight>(entity), "and it is gone");
+
+        check(history.undo(world), "undo runs");
+        check(world.registry().all_of<sc::PointLight>(entity), "the component is back");
+        check(world.registry().get<sc::PointLight>(entity).range == wanted,
+              "with the value it had, not the default");
+
+        check(history.undo(world), "the undo under it runs");
+        check(!world.registry().all_of<sc::PointLight>(entity), "and the add goes away");
+        check(history.size() == 2, "two actions are two entries");
+    }
+
+    /// What the pairs do with input they cannot use.
+    void test_the_pairs_refuse_what_they_cannot_do() {
+        sc::ComponentRegistry types = make_registry();
+        sc::PrefabLibrary library;
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        ed::History history;
+
+        check(!ed::delete_entity(world, entt::null, &history, &types, &library),
+              "deleting nothing does nothing");
+        check(!ed::add_component(world, entity, "Nothing", &history, &types),
+              "adding an unregistered component does nothing");
+        check(!ed::add_component(world, entt::null, "PointLight", &history, &types),
+              "adding to nothing does nothing");
+        check(!ed::remove_component(world, entity, "PointLight", &history, &types),
+              "removing one the entity does not carry does nothing");
+
+        check(ed::add_component(world, entity, "PointLight", &history, &types), "one add runs");
+        check(!ed::add_component(world, entity, "PointLight", &history, &types),
+              "and adding it twice does nothing");
+
+        check(history.size() == 1, "so only the one that happened was recorded");
+    }
+
     /// What the factories do with an entity that is not in the world.
     void test_a_missing_entity_records_nothing() {
         sc::ComponentRegistry types = make_registry();
@@ -488,7 +584,11 @@ int main() {
     test_a_deleted_member_comes_back_a_member();
     std::printf("the parent link\n");
     test_a_reparented_entity_goes_back();
+    std::printf("the actions a panel calls\n");
+    test_the_delete_pair_records_and_goes_back();
+    test_the_component_pairs_record_and_go_back();
     std::printf("bad input\n");
     test_a_missing_entity_records_nothing();
+    test_the_pairs_refuse_what_they_cannot_do();
     return test::report();
 }
