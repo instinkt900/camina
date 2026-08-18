@@ -17,6 +17,7 @@
 #include "core/log.h"
 #include "core/version.h"
 #include "editor/camera_lines.h"
+#include "editor/edits.h"
 #include "editor/fly_camera.h"
 #include "editor/history.h"
 #include "editor/interaction.h"
@@ -911,6 +912,11 @@ namespace {
             return;
         }
 
+        // After the instance is built, because the entry keeps what the new
+        // entity holds rather than what it was asked for. A redo then builds
+        // the same thing rather than instancing the prefab again.
+        editor.history.record(engine::editor::entity_created(editor.world, root));
+
         // Selected, so the gizmo is on the new thing and a person can move it
         // straight away. That is what every editor does after a drop.
         editor.selected = root;
@@ -1043,7 +1049,7 @@ namespace {
                 editor.play.running() ? "a session is running, so this is not your scene" : nullptr;
             if (engine::editor::draw_world_panel(editor.world, editor.selected,
                                                  editor.source_scene, editor.content,
-                                                 &panels.world, blocked)) {
+                                                 &panels.world, blocked, &editor.history)) {
                 // The panel wrote the source scene. The cooked tree is what this
                 // program reads, so it has to be brought up to date now.
                 cook_after_save(editor, editor.source_scene.parent_path());

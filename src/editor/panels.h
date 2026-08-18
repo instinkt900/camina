@@ -157,8 +157,8 @@ namespace engine::editor {
      * scene, and it is disabled when there is no source tree to write to.
      *
      * @param world The world to show, and to delete from. The delete button
-     * takes the descendants of an entity with it, and there is no undo, so it
-     * asks first and says how many go.
+     * takes the descendants of an entity with it, so it asks first and says how
+     * many go.
      * @param selected The selected entity, changed when the user clicks one.
      * Pass entt::null for nothing selected.
      * @param scene_path The source scene to save to, or empty for no save.
@@ -170,6 +170,9 @@ namespace engine::editor {
      * it is. The text is shown beside the disabled button. The editor passes a
      * reason while a play session runs, because the world is then a game part
      * way through a step rather than the scene somebody authored.
+     * @param history Where a delete is recorded, or null for a panel with no
+     * undo behind it. The runtime debug overlay passes null. The question the
+     * delete asks says which of the two it is.
      * @return True on the frame the scene was written. **A caller that reads
      * cooked content has to cook after this**, or the file it reads next time
      * is the one from before the save. See issue #341.
@@ -177,7 +180,8 @@ namespace engine::editor {
     [[nodiscard]] bool draw_world_panel(scene::World& world, entt::entity& selected,
                                         const std::filesystem::path& scene_path,
                                         const assets::Content& content, bool* open = nullptr,
-                                        const char* save_blocked = nullptr);
+                                        const char* save_blocked = nullptr,
+                                        History* history = nullptr);
 
     /**
      * @brief Draws every component the selected entity carries.

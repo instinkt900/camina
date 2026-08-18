@@ -192,6 +192,98 @@ namespace engine::editor {
         return entity_edit(world, entity, true, "create", types, library);
     }
 
+    bool delete_entity(scene::World& world, entt::entity entity, History* history,
+                       const scene::ComponentRegistry* types,
+                       const scene::PrefabLibrary* library) {
+        if (entity == entt::null || !world.registry().valid(entity)) {
+            return false;
+        }
+
+        // Before the destroy. Afterwards there is nothing left to read, which
+        // is the whole reason this pair exists.
+        std::unique_ptr<Edit> edit;
+        if (history != nullptr) {
+            edit = entity_deleted(world, entity, types, library);
+        }
+
+        world.destroy(entity);
+
+        if (history != nullptr) {
+            // A null edit means save_subtree refused. The delete still happened,
+            // and recording nothing is better than recording an entry that
+            // cannot build the entity again.
+            history->record(std::move(edit));
+        }
+        return true;
+    }
+
+    namespace {
+
+        /// The registry a caller named, or the process-wide one.
+        [[nodiscard]] const scene::ComponentRegistry& registry_or_default(
+            const scene::ComponentRegistry* types) {
+            return types != nullptr ? *types : scene::components();
+        }
+
+    } // namespace
+
+    bool add_component(scene::World& world, entt::entity entity, std::string_view component,
+                       History* history, const scene::ComponentRegistry* types) {
+        if (entity == entt::null || !world.registry().valid(entity)) {
+            return false;
+        }
+
+        const scene::ComponentRegistry& registry = registry_or_default(types);
+        const scene::ComponentOps* ops = registry.find(std::string(component));
+        if (ops == nullptr || ops->create == nullptr) {
+            ENGINE_LOG_ERROR("Nothing registered a component called {}, so it cannot be added.",
+                             component);
+            return false;
+        }
+        if (ops->has(world.registry(), entity)) {
+            return false;
+        }
+
+        ops->create(world.registry(), entity);
+
+        if (history != nullptr) {
+            // After the create, so a redo brings back the values the component
+            // arrived with rather than nothing.
+            history->record(component_added(world.identity(entity), component,
+                                            ops->save(world.registry(), entity), types));
+        }
+        if (ops->owns_transform) {
+            world.mark_dirty(entity);
+        }
+        return true;
+    }
+
+    bool remove_component(scene::World& world, entt::entity entity, std::string_view component,
+                          History* history, const scene::ComponentRegistry* types) {
+        if (entity == entt::null || !world.registry().valid(entity)) {
+            return false;
+        }
+
+        const scene::ComponentRegistry& registry = registry_or_default(types);
+        const scene::ComponentOps* ops = registry.find(std::string(component));
+        if (ops == nullptr || !ops->has(world.registry(), entity)) {
+            return false;
+        }
+
+        // Before the remove, so an undo brings back the values it had rather
+        // than the defaults.
+        if (history != nullptr) {
+            history->record(component_removed(world.identity(entity), component,
+                                              ops->save(world.registry(), entity), types));
+        }
+
+        ops->remove(world.registry(), entity);
+        if (ops->owns_transform) {
+            world.mark_dirty(entity);
+        }
+        return true;
+    }
+
     Place place_of(const scene::World& world, entt::entity entity) {
         if (entity == entt::null || !world.registry().valid(entity)) {
             return {};

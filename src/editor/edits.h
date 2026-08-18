@@ -258,6 +258,62 @@ namespace engine::editor {
         const scene::PrefabLibrary* library = nullptr);
 
     /**
+     * @brief Deletes an entity and records how to bring it back.
+     *
+     * The two steps have an order and it is easy to get wrong, because the
+     * subtree has to be read before it goes. This is the pair, so no caller has
+     * to remember it and a test can drive it with no window.
+     *
+     * @param world The world to delete from.
+     * @param entity The entity to delete. Every descendant goes with it.
+     * @param history Where the entry goes, or null to delete with no way back.
+     * The runtime debug overlay passes null.
+     * @param types Where to look a component name up, or null for the
+     * process-wide registry.
+     * @param library The prefabs to collapse against, or null for the
+     * process-wide library.
+     * @return True when the entity was deleted.
+     */
+    bool delete_entity(scene::World& world, entt::entity entity, History* history,
+                       const scene::ComponentRegistry* types = nullptr,
+                       const scene::PrefabLibrary* library = nullptr);
+
+    /**
+     * @brief Puts a component on an entity and records it.
+     *
+     * The document is read after the component is there, so a redo brings back
+     * the same values. See `component_added`.
+     *
+     * @param world The world holding the entity.
+     * @param entity The entity to add to.
+     * @param component The component name, as a scene file stores it.
+     * @param history Where the entry goes, or null for no undo.
+     * @param types Where to look the component name up, or null for the
+     * process-wide registry.
+     * @return True when the component was added. False when the entity already
+     * carried it, or when nothing registered that name.
+     */
+    bool add_component(scene::World& world, entt::entity entity, std::string_view component,
+                       History* history, const scene::ComponentRegistry* types = nullptr);
+
+    /**
+     * @brief Takes a component off an entity and records it.
+     *
+     * The document is read before the component goes, so an undo brings back
+     * the values it had rather than the defaults.
+     *
+     * @param world The world holding the entity.
+     * @param entity The entity to take it off.
+     * @param component The component name.
+     * @param history Where the entry goes, or null for no undo.
+     * @param types Where to look the component name up, or null for the
+     * process-wide registry.
+     * @return True when the component was removed.
+     */
+    bool remove_component(scene::World& world, entt::entity entity, std::string_view component,
+                          History* history, const scene::ComponentRegistry* types = nullptr);
+
+    /**
      * @brief Where an entity hangs in the hierarchy.
      *
      * Both halves are identities, because an `entt::entity` is a slot number
