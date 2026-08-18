@@ -92,6 +92,39 @@ namespace engine::reflect {
         };
 
         /**
+         * @brief Starts watching for the beginning and the end of one edit.
+         *
+         * A drag writes a value on every frame it moves, and none of those
+         * frames is an edit on its own. The edit is the whole drag. So a caller
+         * that records undo entries needs the two edges rather than the writes
+         * between them, and this is where they come from.
+         *
+         * Call it before the fields of one object, and read the two answers
+         * after them. See `editor::Interaction`, which is the only caller.
+         */
+        void begin_edit_tracking();
+
+        /**
+         * @brief Whether an edit began since begin_edit_tracking().
+         *
+         * **A widget that changes in one go reports both edges on one frame.**
+         * A checkbox, a drop-down and an asset field have no drag to hold, so
+         * the edit starts and finishes where the value changes. The caller then
+         * opens and closes one entry on that frame, which is the right answer
+         * and needs no case of its own.
+         *
+         * @return True when a widget took the focus, or changed in one go.
+         */
+        [[nodiscard]] bool edit_began();
+
+        /**
+         * @brief Whether an edit finished since begin_edit_tracking().
+         * @return True when a widget was let go after a change, or changed in
+         * one go.
+         */
+        [[nodiscard]] bool edit_ended();
+
+        /**
          * @brief Opens a collapsing node for a nested object or a list.
          * @param label The node text. It also gives the node its ID.
          * @return True when the node is open and the caller must draw the contents.

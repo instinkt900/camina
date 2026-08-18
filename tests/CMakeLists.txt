@@ -210,6 +210,13 @@ engine_enable_clang_tidy(test_edits)
 
 add_test(NAME edits COMMAND test_edits)
 
+add_executable(test_interaction test_interaction.cpp)
+target_link_libraries(test_interaction PRIVATE engine::core)
+engine_set_warnings(test_interaction)
+engine_enable_clang_tidy(test_interaction)
+
+add_test(NAME interaction COMMAND test_interaction)
+
 # M9.5a. The camera the scene plays through, and the fly camera that steers one.
 # Neither opens a device, so this runs anywhere.
 add_executable(test_camera test_camera.cpp)

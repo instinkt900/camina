@@ -18,6 +18,8 @@
 #include "core/version.h"
 #include "editor/camera_lines.h"
 #include "editor/fly_camera.h"
+#include "editor/history.h"
+#include "editor/interaction.h"
 #include "gizmo.h"
 #include "editor/panels.h"
 #include "editor/picking.h"
@@ -317,6 +319,22 @@ namespace {
         engine::editor::ViewSettings view;
         /// What the inspector shows, or entt::null for nothing.
         entt::entity selected = entt::null;
+        /// Every edit made to the scene, and the way back through them.
+        engine::editor::History history;
+        /**
+         * The handle being dragged, which has to outlive the frame because the
+         * two edges of one drag are frames apart.
+         *
+         * The inspector keeps its own rather than sharing this one. Two panels
+         * over one interaction can close each other's edit, and then a drag
+         * records nothing while a field records a transform nobody moved.
+         */
+        engine::editor::Interaction gizmo_drag;
+        /// The inspector widget being held. See gizmo_drag for why it is separate.
+        engine::editor::Interaction field_edit;
+        /// Whether a handle was being dragged on the last frame, so the two
+        /// edges of one drag can be told apart.
+        bool was_dragging = false;
         /**
          * The camera the game plays through, or entt::null when the scene
          * carries none.
@@ -765,6 +783,18 @@ namespace {
     void draw_gizmo_overlay(void* user, float x, float y, float width, float height) {
         Editor& editor = *static_cast<Editor*>(user);
         if (editor.selected == entt::null || !editor.world.registry().valid(editor.selected)) {
+            // The entity went away while a handle was held. Close the drag
+            // here, or was_dragging stays true and the next drag on another
+            // entity never opens one: it would record nothing, and its release
+            // would close this stale interaction instead.
+            //
+            // Ended rather than cancelled. The entity did move before it went,
+            // so an entry is the honest answer, and end() records nothing at
+            // all when the entity is no longer there to read.
+            if (editor.was_dragging) {
+                (void)editor.gizmo_drag.end(editor.world, editor.history);
+                editor.was_dragging = false;
+            }
             return;
         }
 
@@ -786,6 +816,18 @@ namespace {
         if (apps::draw_gizmo(desc, world_matrix)) {
             engine::editor::place_entity(editor.world, editor.selected, world_matrix);
         }
+
+        // One drag is one entry. The transform is written on every frame the
+        // handle moves, and none of those frames is an edit on its own, so the
+        // value is kept when the mouse goes down and the entry is pushed when
+        // it comes up. A drag that ends where it started pushes nothing.
+        const bool dragging = apps::gizmo_is_dragging();
+        if (dragging && !editor.was_dragging) {
+            (void)editor.gizmo_drag.begin(editor.world, editor.selected, "Transform");
+        } else if (!dragging && editor.was_dragging) {
+            (void)editor.gizmo_drag.end(editor.world, editor.history);
+        }
+        editor.was_dragging = dragging;
     }
 
     /**
@@ -1009,7 +1051,8 @@ namespace {
         }
         if (panels.inspector) {
             engine::editor::draw_inspector_panel(editor.world, editor.selected,
-                                                 &panels.inspector);
+                                                 &panels.inspector, &editor.history,
+                                                 &editor.field_edit);
         }
         if (panels.assets) {
             engine::editor::draw_assets_panel(editor.content, editor.asset_filter,
