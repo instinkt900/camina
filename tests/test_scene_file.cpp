@@ -10,9 +10,11 @@
 #include "scene/component_registry.h"
 #include "scene/document.h"
 #include "scene/components.h"
+#include "scene/prefab.h"
 #include "scene/scene_file.h"
 #include "scene/world.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -83,6 +85,242 @@ namespace {
             found.push_back(record.at("components").at("Name").at("value").get<std::string>());
         }
         return found;
+    }
+
+
+    /// A crate with a lid on it, so a fragment has a prefab to collapse.
+    sc::PrefabLibrary crate_library() {
+        nlohmann::json root = nlohmann::json::object();
+        root["parent"] = sc::kNoParent;
+        root["components"]["Name"] = engine::reflect::to_json(sc::Name{ "crate" });
+
+        nlohmann::json lid = nlohmann::json::object();
+        lid["parent"] = 0;
+        lid["components"]["Name"] = engine::reflect::to_json(sc::Name{ "lid" });
+
+        nlohmann::json document = nlohmann::json::object();
+        document[sc::kVersionKey] = sc::kPrefabVersion;
+        document[sc::kEntitiesKey] = nlohmann::json::array({ root, lid });
+
+        sc::PrefabLibrary library;
+        check(library.add("crate", document), "the crate prefab parses");
+        return library;
+    }
+
+    /// The one child of an entity that carries the given name.
+    entt::entity child_named(const sc::World& world, entt::entity parent,
+                             const std::string& wanted) {
+        const auto& registry = world.registry();
+        for (entt::entity walk = registry.get<sc::Hierarchy>(parent).first_child;
+             walk != entt::null; walk = registry.get<sc::Hierarchy>(walk).next_sibling) {
+            const auto* name = registry.try_get<sc::Name>(walk);
+            if (name != nullptr && name->value == wanted) {
+                return walk;
+            }
+        }
+        check(false, "the world holds the child the test asked for");
+        return entt::null;
+    }
+
+    /**
+     * The prefab entity index one fragment record links to.
+     *
+     * `at()` throws on a key that is not there, which ends the process and
+     * takes every later result with it. A missing link is a result, so it comes
+     * back as a number the caller can compare.
+     *
+     * @return The index, or -1 when the record carries no link.
+     */
+    int member_index_of(const nlohmann::json& record) {
+        const auto link = record.find(sc::kMemberKey);
+        if (link == record.end() || !link->is_object()) {
+            return -1;
+        }
+        const auto at = link->find(sc::kIndexKey);
+        if (at == link->end() || !at->is_number_unsigned()) {
+            return -1;
+        }
+        return at->get<int>();
+    }
+
+    /**
+     * A subtree comes back where it was, and the scene reads as it did.
+     *
+     * The check is the whole scene document, byte for byte. A weaker check
+     * passes while the subtree comes back at the end of its sibling list, and
+     * that is exactly the failure this has to catch: the entities are all there
+     * and the file has changed.
+     */
+    void test_a_subtree_goes_back_where_it_was() {
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::World world;
+        const entt::entity root = build_world(world);
+        const entt::entity middle = child_named(world, root, "middle");
+        const entt::entity leaf = child_named(world, middle, "leaf1");
+
+        const nlohmann::json before = sc::save_scene(world, registry);
+
+        // The middle of a sibling list, which is the case that has a position
+        // to lose. The last one would pass whatever the writer did.
+        const nlohmann::json fragment = sc::save_subtree(world, leaf, registry);
+        check(fragment.contains(sc::kUnderKey), "the fragment says what it hung under");
+        check(fragment.contains(sc::kBeforeKey), "and which sibling it sat in front of");
+
+        world.destroy(leaf);
+        check(sc::save_scene(world, registry) != before, "deleting it changes the scene");
+
+        check(sc::load_subtree(fragment, world, registry) != entt::null, "the fragment loads");
+        check(sc::save_scene(world, registry) == before,
+              "and the scene reads as it did before the delete");
+    }
+
+    /// A subtree of several entities, each with its identity back.
+    void test_a_deleted_subtree_keeps_its_identities() {
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::World world;
+        const entt::entity root = build_world(world);
+        const entt::entity middle = child_named(world, root, "middle");
+
+        std::vector<engine::Guid> identities{ world.identity(middle) };
+        for (int i = 0; i < 3; ++i) {
+            identities.push_back(
+                world.identity(child_named(world, middle, "leaf" + std::to_string(i))));
+        }
+
+        const nlohmann::json before = sc::save_scene(world, registry);
+        const nlohmann::json fragment = sc::save_subtree(world, middle, registry);
+
+        world.destroy(middle);
+        for (const engine::Guid& id : identities) {
+            check(world.find(id) == entt::null, "the delete took the identity with it");
+        }
+
+        // A fresh entity in between, so EnTT hands a recycled number to
+        // something else and the restore cannot lean on the old numbers.
+        const entt::entity filler = world.create();
+        check(filler != entt::null, "an unrelated entity takes a number first");
+
+        check(sc::load_subtree(fragment, world, registry) != entt::null, "the fragment loads");
+        for (const engine::Guid& id : identities) {
+            check(world.find(id) != entt::null, "and every identity answers again");
+        }
+
+        world.destroy(filler);
+        check(sc::save_scene(world, registry) == before, "the scene reads as it did");
+    }
+
+    /// An instance comes back an instance, not four loose entities.
+    void test_a_deleted_instance_comes_back_an_instance() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+        const sc::Prefab* crate = library.find("crate");
+        check(crate != nullptr, "the library holds the crate");
+        if (crate == nullptr) {
+            return;
+        }
+
+        sc::World world;
+        const entt::entity root = world.create();
+        world.registry().emplace<sc::Name>(root, sc::Name{ "root" });
+
+        const entt::entity instance = sc::instantiate(world, *crate, {}, registry);
+        check(instance != entt::null, "the crate instances");
+        check(world.set_parent(instance, root), "and it attaches");
+
+        const nlohmann::json before = sc::save_scene(world, registry, library);
+        const nlohmann::json fragment = sc::save_subtree(world, instance, registry, library);
+        check(fragment.at(sc::kEntitiesKey).size() == 1,
+              "an instance collapses to one record, the lid included");
+
+        world.destroy(instance);
+        check(sc::load_subtree(fragment, world, registry, library) != entt::null,
+              "the fragment loads");
+        check(sc::save_scene(world, registry, library) == before,
+              "and the scene holds the instance it held before");
+    }
+
+    /**
+     * A deleted prefab member is not a deleted entity.
+     *
+     * The instance records what it lost, so the scene document gains a
+     * "removed" list. Bringing the member back has to take that list away
+     * again, which needs the link from the member to its instance.
+     */
+    void test_a_deleted_member_comes_back_a_member() {
+        const sc::ComponentRegistry registry = make_registry();
+        const sc::PrefabLibrary library = crate_library();
+        const sc::Prefab* crate = library.find("crate");
+        check(crate != nullptr, "the library holds the crate");
+        if (crate == nullptr) {
+            return;
+        }
+
+        sc::World world;
+        const entt::entity instance = sc::instantiate(world, *crate, {}, registry);
+        check(instance != entt::null, "the crate instances");
+        const entt::entity lid = child_named(world, instance, "lid");
+
+        const nlohmann::json before = sc::save_scene(world, registry, library);
+        const nlohmann::json fragment = sc::save_subtree(world, lid, registry, library);
+        check(member_index_of(fragment.at(sc::kEntitiesKey).at(0)) == 1,
+              "the fragment carries the link back to the instance");
+
+        world.destroy(lid);
+        const nlohmann::json without = sc::save_scene(world, registry, library);
+        check(without.at(sc::kEntitiesKey).at(0).contains(sc::kRemovedKey),
+              "the instance records the member it lost");
+
+        check(sc::load_subtree(fragment, world, registry, library) != entt::null,
+              "the fragment loads");
+        check(sc::save_scene(world, registry, library) == before,
+              "and the instance is whole again, with no removed list");
+    }
+
+    /// A fragment whose parent has gone is refused, and changes nothing.
+    void test_a_fragment_with_no_parent_is_refused() {
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::World world;
+        const entt::entity root = build_world(world);
+        const entt::entity middle = child_named(world, root, "middle");
+        const nlohmann::json fragment = sc::save_subtree(world, middle, registry);
+
+        world.destroy(root);
+        const nlohmann::json before = sc::save_scene(world, registry);
+        const std::size_t size = world.size();
+
+        // Putting it at the root of the world instead would move it somewhere
+        // nobody asked for, and nothing would say so.
+        check(sc::load_subtree(fragment, world, registry) == entt::null,
+              "a fragment whose parent has gone is refused");
+        check(world.size() == size, "and nothing is left behind in the world");
+        check(sc::save_scene(world, registry) == before, "so the scene did not change");
+    }
+
+    /// What save_subtree and load_subtree do with input they cannot use.
+    void test_bad_fragments() {
+        const sc::ComponentRegistry registry = make_registry();
+
+        sc::World world;
+        const entt::entity root = build_world(world);
+        check(sc::save_subtree(world, entt::null, registry).is_null(),
+              "a null entity writes no fragment");
+
+        check(sc::load_subtree(nlohmann::json::object(), world, registry) == entt::null,
+              "a document with no version is refused");
+
+        nlohmann::json empty = nlohmann::json::object();
+        empty[sc::kVersionKey] = sc::kSceneVersion;
+        empty[sc::kEntitiesKey] = nlohmann::json::array();
+        check(sc::load_subtree(empty, world, registry) == entt::null,
+              "a fragment with no entity is refused");
+
+        nlohmann::json orphan = sc::save_subtree(world, root, registry);
+        orphan[sc::kBeforeKey] = to_text(world.identity(root));
+        check(sc::load_subtree(orphan, world, registry) == entt::null,
+              "a root that asks for a place among its siblings is refused");
     }
 
     void test_registry() {
@@ -456,8 +694,15 @@ int main() {
     test_dirty_after_load();
     std::printf("tolerance\n");
     test_unknown_component_is_a_warning();
+    std::printf("fragments\n");
+    test_a_subtree_goes_back_where_it_was();
+    test_a_deleted_subtree_keeps_its_identities();
+    test_a_deleted_instance_comes_back_an_instance();
+    test_a_deleted_member_comes_back_a_member();
+    test_a_fragment_with_no_parent_is_refused();
     std::printf("bad input\n");
     test_bad_documents();
+    test_bad_fragments();
     std::printf("files\n");
     test_file_round_trip();
     return test::report();

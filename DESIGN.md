@@ -2413,6 +2413,25 @@ subtree it removed, because there is no other way to bring one back. It means th
 what changed. The pieces are already here: `ComponentOps::save` and `load` give a component
 as a document, and `scene::diff` writes the merge patch between two documents.
 
+**What a delete keeps is a fragment**, which `scene::save_subtree` writes and
+`scene::load_subtree` reads. It holds the entity records a scene holds, and two more keys
+saying where the subtree hung: the identity of its parent, and the identity of the sibling it
+sat in front of. The second one is what a weaker answer drops. A subtree brought back at the
+end of its sibling list holds every entity and writes a different file, and child order is
+what a scene file writes and what the hierarchy panel shows. `World::set_parent` takes a
+sibling to sit in front of for that reason.
+
+A fragment also carries one thing a scene file never writes: the link from an entity to the
+prefab instance it belongs to. A scene collapses an instance to one record, so no member ever
+gets a record of its own there. A fragment can be one member somebody deleted, and then
+nothing rebuilds the link. Putting the member back with that link is what takes the instance's
+`removed` list away again, so the instance is an instance rather than a hole and a loose
+entity.
+
+A root of the world keeps no place, because the roots come out sorted by entity value and
+EnTT hands a slot number out again. The entity, its identity and its data all come back. Only
+the order of the records moves. Issue #353 holds it.
+
 Two things do not fall out of the shape.
 
 **Every entity carries a stable identity, and an edit names one through that.** An

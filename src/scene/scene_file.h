@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Reads and writes a whole world as a `.scene` document.
+ * @brief Reads and writes a world, or one subtree of it, as a document.
  *
  * This is the third consumer of the reflection descriptors, after the inspector
  * and the field serializer. It adds no descriptor system of its own. It walks
@@ -12,6 +12,10 @@
  * The document is deterministic. Saving a world, loading it, and saving it
  * again produces the same bytes, which is the check that catches a field the
  * writer drops or a link the reader rebuilds in the wrong order.
+ *
+ * A subtree comes out as a fragment, which holds the same entity records and
+ * two more keys saying where it hung. That is what an undo of a delete keeps,
+ * because a delete is the one edit that cannot be described by what changed.
  */
 
 #include "scene/component_registry.h"
@@ -97,6 +101,65 @@ namespace engine::scene {
     [[nodiscard]] bool load_scene(const nlohmann::json& document, World& world,
                                   const ComponentRegistry& registry = components(),
                                   const PrefabLibrary& library = prefabs());
+
+    /**
+     * @brief Writes one subtree as a document, and where it hung.
+     *
+     * A fragment. It holds the same entity records a scene holds, and two more
+     * keys: the identity of the entity its root hung under, and the identity of
+     * the sibling its root sat in front of. So `load_subtree` can put it back
+     * exactly where it was rather than at the end of the list.
+     *
+     * **This is what an undo of a delete keeps.** Deleting an entity is the one
+     * edit that cannot be described by what changed, because everything it took
+     * is gone. See `DESIGN.md` §10 M12.
+     *
+     * A prefab instance inside the subtree collapses the same way a scene
+     * collapses one. A member of an instance that is not itself the root gets a
+     * record of its own, with the link to its instance on it, which is the one
+     * thing a scene document never writes.
+     *
+     * @param world The world to read.
+     * @param root The root of the subtree. Every descendant goes with it.
+     * @param registry The component types to consider.
+     * @param library The prefabs to collapse against.
+     * @return The document, or a null document when @p root is not a live
+     * entity.
+     *
+     * @warning **A subtree hanging at the root of the world keeps no place.**
+     * The roots of a scene come out sorted by entity value, which is a number
+     * EnTT hands out again, so a root taken and put back can land elsewhere in
+     * the entity list. Every entity, its identity and its data are the same.
+     * Only the order of the written records moves. See issue #353.
+     */
+    [[nodiscard]] nlohmann::json save_subtree(const World& world, entt::entity root,
+                                              const ComponentRegistry& registry = components(),
+                                              const PrefabLibrary& library = prefabs());
+
+    /**
+     * @brief Builds a subtree again from a document, where it came from.
+     *
+     * The world keeps everything it already holds. This adds to it, unlike
+     * `load_scene`, which needs an empty world.
+     *
+     * Every entity comes back with the identity it had, so an undo entry that
+     * names one still reaches it after the entity has been deleted and brought
+     * back. That is what `DESIGN.md` §10 M12 calls a real delete.
+     *
+     * @param document A document `save_subtree` wrote.
+     * @param world The world to build in.
+     * @param registry The component types to build.
+     * @param library The prefabs to build instances from.
+     * @return The root of the subtree, or `entt::null` when the document would
+     * not build. Nothing is left behind in the world on failure.
+     *
+     * @warning The entity it hung under has to be in the world. A fragment
+     * whose parent has gone as well is refused, because putting the subtree at
+     * the root of the world instead would move it somewhere nobody asked for.
+     */
+    [[nodiscard]] entt::entity load_subtree(const nlohmann::json& document, World& world,
+                                            const ComponentRegistry& registry = components(),
+                                            const PrefabLibrary& library = prefabs());
 
     /**
      * @brief Writes a world to a `.scene` file.
