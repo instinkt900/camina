@@ -111,24 +111,42 @@ namespace engine::scene {
         node.next_sibling = entt::null;
     }
 
-    void World::attach(entt::entity child, entt::entity parent) {
+    void World::attach(entt::entity child, entt::entity parent, entt::entity before) {
         Hierarchy& node = registry_.get<Hierarchy>(child);
         Hierarchy& head = registry_.get<Hierarchy>(parent);
 
-        // Join at the end, so the list keeps the order the caller attached in.
         node.parent = parent;
-        node.next_sibling = entt::null;
-        node.prev_sibling = head.last_child;
-        if (head.last_child != entt::null) {
-            registry_.get<Hierarchy>(head.last_child).next_sibling = child;
+        ++head.child_count;
+
+        if (before == entt::null) {
+            // Join at the end, so the list keeps the order the caller attached in.
+            node.next_sibling = entt::null;
+            node.prev_sibling = head.last_child;
+            if (head.last_child != entt::null) {
+                registry_.get<Hierarchy>(head.last_child).next_sibling = child;
+            } else {
+                head.first_child = child;
+            }
+            head.last_child = child;
+            return;
+        }
+
+        Hierarchy& next = registry_.get<Hierarchy>(before);
+        node.next_sibling = before;
+        node.prev_sibling = next.prev_sibling;
+        if (next.prev_sibling != entt::null) {
+            registry_.get<Hierarchy>(next.prev_sibling).next_sibling = child;
         } else {
             head.first_child = child;
         }
-        head.last_child = child;
-        ++head.child_count;
+        next.prev_sibling = child;
     }
 
     bool World::set_parent(entt::entity child, entt::entity parent) {
+        return set_parent(child, parent, entt::null);
+    }
+
+    bool World::set_parent(entt::entity child, entt::entity parent, entt::entity before) {
         ENGINE_CHECK(registry_.valid(child), "set_parent needs a live child.");
 
         if (parent != entt::null) {
@@ -141,9 +159,24 @@ namespace engine::scene {
             }
         }
 
+        if (before != entt::null) {
+            ENGINE_CHECK(registry_.valid(before), "set_parent needs a live sibling.");
+            // Refused rather than treated as "at the end". A caller that names
+            // the wrong sibling has the wrong list, and putting the child
+            // somewhere else quietly is how an undo moves what nobody watched.
+            // A root has no sibling list to sit in either: the roots come out
+            // sorted by entity value, so there is no position to ask for.
+            if (parent == entt::null || before == child ||
+                registry_.get<Hierarchy>(before).parent != parent) {
+                ENGINE_LOG_ERROR("set_parent was given a sibling that is not a child of the "
+                                 "wanted parent. The link was not made.");
+                return false;
+            }
+        }
+
         detach(child);
         if (parent != entt::null) {
-            attach(child, parent);
+            attach(child, parent, before);
         }
         mark_dirty(child);
         return true;

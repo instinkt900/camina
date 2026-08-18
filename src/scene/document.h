@@ -84,6 +84,42 @@ namespace engine::scene {
     inline constexpr int kNoParent = -1;
 
     /**
+     * @brief The key on one entity record that links it to a prefab instance.
+     *
+     * A fragment writes this and a scene file does not. A scene collapses an
+     * instance to one record, so no member ever gets a record of its own there.
+     * A fragment is one subtree, and that subtree can be a single member
+     * somebody deleted, so the link has to survive on the record itself.
+     *
+     * The value is an object holding @ref kRootKey and @ref kIndexKey.
+     */
+    inline constexpr const char* kMemberKey = "member";
+
+    /// @brief The key inside @ref kMemberKey naming the instance root, as text.
+    inline constexpr const char* kRootKey = "root";
+
+    /// @brief The key inside @ref kMemberKey holding the prefab entity index.
+    inline constexpr const char* kIndexKey = "index";
+
+    /**
+     * @brief The key on a fragment naming the entity its root hung under.
+     *
+     * An identity, as text. A fragment whose root was a root of the world
+     * carries no such key.
+     */
+    inline constexpr const char* kUnderKey = "under";
+
+    /**
+     * @brief The key on a fragment naming the sibling its root sat in front of.
+     *
+     * An identity, as text. Child order is what a scene file writes and what
+     * the hierarchy panel shows, so a subtree put back at the end of the list
+     * gives back a different document from the one it was taken from. A
+     * fragment whose root was the last child carries no such key.
+     */
+    inline constexpr const char* kBeforeKey = "before";
+
+    /**
      * @brief Reads the parent index off one entity record.
      *
      * A record with no parent key is a root.

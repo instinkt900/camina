@@ -205,6 +205,74 @@ namespace {
               "an empty list holds neither end");
     }
 
+    /**
+     * A sibling can go back where it was, not only at the end of the list.
+     *
+     * Child order is what a scene file writes and what the hierarchy panel
+     * shows. An undo that brings a subtree back at the end of the list gives a
+     * different document from the one it took, so it is not an undo.
+     */
+    void test_a_sibling_goes_back_in_its_place() {
+        sc::World world;
+        const entt::entity parent = world.create();
+        std::array<entt::entity, 3> kids{};
+        for (entt::entity& kid : kids) {
+            kid = world.create();
+            check(world.set_parent(kid, parent), "a sibling attaches");
+        }
+
+        // Out of the middle and back into the middle.
+        check(world.set_parent(kids[1], entt::null), "the middle sibling detaches");
+        check(world.set_parent(kids[1], parent, kids[2]), "and goes back in front of the last");
+        check(children_of(world, parent) ==
+                  std::vector<entt::entity>({ kids[0], kids[1], kids[2] }),
+              "the list reads as it did before");
+        check(world.registry().get<sc::Hierarchy>(parent).child_count == 3,
+              "and the count is right");
+
+        // The head is the case that moves first_child rather than a next link.
+        check(world.set_parent(kids[2], parent, kids[0]), "the last sibling moves to the head");
+        check(children_of(world, parent) ==
+                  std::vector<entt::entity>({ kids[2], kids[0], kids[1] }),
+              "the head follows");
+        check(world.registry().get<sc::Hierarchy>(parent).first_child == kids[2],
+              "first_child names it");
+        check(world.registry().get<sc::Hierarchy>(kids[2]).prev_sibling == entt::null,
+              "and the new head has nothing before it");
+
+        // A null sibling still means the end, which is what every earlier
+        // caller asks for.
+        check(world.set_parent(kids[2], parent, entt::null), "a null sibling joins at the end");
+        check(children_of(world, parent) ==
+                  std::vector<entt::entity>({ kids[0], kids[1], kids[2] }),
+              "so it lands last");
+    }
+
+    /// A sibling that is not a child of the wanted parent is refused.
+    void test_a_wrong_sibling_is_refused() {
+        sc::World world;
+        const entt::entity parent = world.create();
+        const entt::entity other = world.create();
+        const entt::entity settled = world.create();
+        const entt::entity stranger = world.create();
+        check(world.set_parent(settled, parent), "the child attaches");
+        check(world.set_parent(stranger, other), "the stranger attaches elsewhere");
+
+        // Refused rather than treated as "at the end". A caller that names the
+        // wrong sibling has the wrong list, and landing somewhere else quietly
+        // is how an undo moves what nobody was watching.
+        const entt::entity orphan = world.create();
+        check(!world.set_parent(orphan, parent, stranger),
+              "a sibling under another parent is refused");
+        check(children_of(world, parent) == std::vector<entt::entity>({ settled }),
+              "and the list did not change");
+
+        // The roots of a world come out sorted by entity value, so a root has
+        // no position among its siblings to ask for.
+        check(!world.set_parent(orphan, entt::null, settled),
+              "a root cannot ask for a place among its siblings");
+    }
+
     void test_cycles_are_refused() {
         sc::World world;
         const entt::entity root = world.create();
@@ -279,6 +347,8 @@ int main() {
     std::printf("links\n");
     test_reparent_and_detach();
     test_sibling_list_surgery();
+    test_a_sibling_goes_back_in_its_place();
+    test_a_wrong_sibling_is_refused();
     test_cycles_are_refused();
     test_destroy_takes_the_subtree();
     std::printf("conventions\n");

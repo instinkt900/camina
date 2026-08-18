@@ -114,12 +114,34 @@ namespace engine::scene {
          * The local transform does not change, so the entity moves in world
          * space to follow its new parent. The subtree becomes dirty.
          *
+         * The entity joins at the end of the child list. Use the three-argument
+         * form to put it back somewhere in the middle.
+         *
          * @param child The entity to move.
          * @param parent The new parent, or `entt::null` to make @p child a root.
          * @return True on success. False when the call would build a cycle,
          * which happens when @p parent is @p child or one of its descendants.
          */
         [[nodiscard]] bool set_parent(entt::entity child, entt::entity parent);
+
+        /**
+         * @brief Moves an entity under a new parent, in front of one sibling.
+         *
+         * Child order is what a scene file writes and what the hierarchy panel
+         * shows, so an undo that brings a subtree back at the end of the list
+         * gives back a different document from the one it took. This is how a
+         * caller puts it where it was.
+         *
+         * @param child The entity to move.
+         * @param parent The new parent, or `entt::null` to make @p child a root.
+         * @param before The sibling to sit in front of, or `entt::null` to join
+         * at the end. It must already be a child of @p parent.
+         * @return True on success. False when the call would build a cycle, and
+         * false when @p before is not a child of @p parent. The link is not
+         * made either way.
+         */
+        [[nodiscard]] bool set_parent(entt::entity child, entt::entity parent,
+                                      entt::entity before);
 
         /// @brief The local transform of an entity.
         /// @param entity The entity to read.
@@ -198,7 +220,7 @@ namespace engine::scene {
 
     private:
         void detach(entt::entity child);
-        void attach(entt::entity child, entt::entity parent);
+        void attach(entt::entity child, entt::entity parent, entt::entity before);
 
         entt::registry registry_;
 
