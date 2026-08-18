@@ -17,6 +17,8 @@ namespace engine::platform {
             return false;
         }
 
+        quit_on_escape_ = desc.quit_on_escape;
+
         SDL_WindowFlags flags = SDL_WINDOW_VULKAN;
         if (desc.resizable) {
             flags |= SDL_WINDOW_RESIZABLE;
@@ -85,7 +87,7 @@ namespace engine::platform {
                 break;
 
             case SDL_EVENT_KEY_DOWN:
-                if (event.key.key == SDLK_ESCAPE) {
+                if (quit_on_escape_ && event.key.key == SDLK_ESCAPE) {
                     running_ = false;
                 }
                 break;

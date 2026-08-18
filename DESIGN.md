@@ -2494,6 +2494,13 @@ something else is a worse failure than one that is refused.
 an entity, so a trigger cannot say which door it opens and a camera cannot say what it
 follows. This is the prerequisite for that, and M10 and the game will both want it.
 
+**Escape clears the selection rather than closing the window.**
+`platform::WindowDesc::quit_on_escape` is a per-application choice, the way docking is for
+`gfx::ImGuiDesc`. A game runtime quits on Escape and still does. The editor does not, because a
+key that throws away unsaved work when somebody meant to deselect something is the worst kind
+of shortcut. File > Exit is the way out. Escape is also the one editing key that still works
+while a session runs, because letting go of a selection is not an edit.
+
 **Pressing Delete takes the selected entity and asks nothing.** The question the World panel
 asks was written when a delete was final, and a key that stops to ask is a key nobody uses.
 The button keeps its question, because it also says how many entities go with the one that

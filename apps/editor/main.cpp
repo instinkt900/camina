@@ -474,7 +474,11 @@ namespace {
             return false;
         }
 
-        const engine::platform::WindowDesc window_desc{ .title = kWindowTitle };
+        // Escape clears the selection here rather than closing the window. A
+        // key that throws away unsaved work when somebody meant to deselect
+        // something is the worst kind of shortcut. File > Exit is the way out.
+        const engine::platform::WindowDesc window_desc{ .title = kWindowTitle,
+                                                        .quit_on_escape = false };
         if (!editor.window.create(window_desc)) {
             return false;
         }
@@ -610,17 +614,10 @@ namespace {
         editor.selected = entt::null;
     }
 
-    /// Whether the editor takes an edit key right now.
-    /// @param editor Everything the program owns.
-    /// @return False while a text box has the keys, or while a session runs.
-    [[nodiscard]] bool editing_keys_are_live(const Editor& editor) {
-        return !ImGui::GetIO().WantTextInput && !editor.play.running();
-    }
-
     /**
-     * Reads the undo and redo keys, wherever the pointer is in the editor.
+     * Reads the editing keys, wherever the pointer is in the editor.
      *
-     * Delete goes through here too, for the same reason.
+     * Delete and Escape go through here too, for the same reason.
      *
      * **Not through `editor.input`.** That one is gated on the Viewport panel
      * holding the pointer or the focus, because it flies the camera. A menu
@@ -641,8 +638,28 @@ namespace {
      *
      * @param editor Everything the program owns.
      */
-    void read_undo_keys(Editor& editor) {
-        if (!editing_keys_are_live(editor)) {
+    void read_editor_keys(Editor& editor) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.WantTextInput) {
+            // A text box gets Escape as well, to put back what it held.
+            return;
+        }
+
+        // Escape lets go of the selection. The window is told not to close on
+        // it, so this is the only thing that key does in the editor.
+        //
+        // **Before the editing gate**, because letting go of a selection is not
+        // an edit. It is the one key here that still works while a session
+        // runs, and somebody watching a game should be able to clear the
+        // inspector without stopping it.
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            editor.selected = entt::null;
+            return;
+        }
+
+        // Every key below this edits the scene, and a session is not the
+        // scene. The same rule the Edit menu and the save button follow.
+        if (editor.play.running()) {
             return;
         }
 
@@ -652,7 +669,6 @@ namespace {
             return;
         }
 
-        const ImGuiIO& io = ImGui::GetIO();
         if (!io.KeyCtrl || !ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
             return;
         }
@@ -1153,7 +1169,7 @@ namespace {
 
         // After the menu bar, so a click on the item and the chord cannot both
         // fire on one frame.
-        read_undo_keys(editor);
+        read_editor_keys(editor);
 
         // The whole work area is one dockspace, so a panel docks anywhere in
         // the window. The central node passes through to the clear color, which

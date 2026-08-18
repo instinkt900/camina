@@ -23,6 +23,8 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
+M12 is complete, and M13 is next. M9.8 waits for M13.
+
 M2 is complete. A type describes itself once in a `Describe<T>` specialization, and two
 consumers read that one description. The ImGui inspector generates its widgets from the
 descriptors, and the JSON serializer writes and reads the same fields. The runtime shows
@@ -609,12 +611,78 @@ conversion has to be applied to every extra viewport's draw data or a detached p
 lighter than a docked one. `editor --own-windows` forces every floating panel into its own
 window, which is the only way to exercise the path without a mouse.
 
-**M12.1 is the undo stack**, in `src/editor/history.h`. Transactional: an edit records what it
+**M12 is complete. Every edit the editor makes can be undone and redone.**
+
+M12.1 is the undo stack, in `src/editor/history.h`. Transactional: an edit records what it
 changed and how to put it back, so a step costs what the edit cost. **The caller changes the
 world and then records**, because a gizmo drag has already moved the entity by the time the
 mouse comes up, so `Edit::apply` is the redo path rather than the first run. Recording drops
 whatever was ahead. `tests/test_history.cpp` drives the whole thing with an edit that counts
 its own calls, so the ordering rules are settled without a world or a window.
+
+M12.2 gives every entity a stable identity. **An edit names its entity by `engine::Guid`, never
+by `entt::entity`**, because a slot number is handed out again the moment the entity holding it
+is destroyed. The scene file is version 4 and carries the identity beside the parent. A prefab
+member derives its own from the instance root, so an instance stays one record.
+
+M12.3 is the edits. One class covers a component changed, added and removed, because all three
+are a document before and a document after, and a null document means the entity carries none.
+One class covers a delete and a create the same way: both hold the subtree as a fragment and
+differ only in which side the entity exists on. `scene::save_subtree` and `load_subtree` write
+that fragment. It holds what a scene holds plus where the subtree hung, which is the parent
+**and the sibling it sat in front of**, because child order is what a scene file writes.
+`World::set_parent` takes that sibling for it.
+
+A fragment carries one thing a scene file never writes: the link from an entity to its prefab
+instance. A scene collapses an instance to one record, so no member gets a record of its own
+there, and a fragment can be one member somebody deleted. Putting it back with that link is
+what clears the instance's `removed` list.
+
+M12.4 settles **when** an edit is recorded. A gizmo drag writes a transform on every frame it
+moves and none of those frames is an edit: the edit is the whole drag. `editor::Interaction`
+keeps the value the interaction started from and pushes one entry when it ends, and an
+interaction that ends where it started pushes nothing. **The value is kept before the fields
+are drawn**, because a slider jumps to where it was clicked on the frame it takes the focus, so
+a value read after the draw is already the edited one. The edges come from `ImGuizmo::IsUsing`
+and from `begin_edit_tracking`, `edit_began` and `edit_ended` in the `reflect::widget` shim.
+A widget that changes in one go reports both edges on one frame, so a checkbox needs no case.
+
+M12.4b wires the edits that happen in one go. **Three of the four have an order between doing
+the thing and recording it**, and getting it wrong is quiet: the subtree is read before the
+destroy, the values before the remove, and the document after the create. So
+`editor::delete_entity`, `add_component` and `remove_component` are pairs rather than two steps
+a panel has to remember.
+
+M12.5 is the play and stop loop, and it cost nothing to build. `PlayMode::stop` reads back a
+scene document that carries every identity, so an entry finds its entity by asking for it by
+name. The selection is kept the same way: the identity is read before the stop and looked up
+after it. **A scene restores its entities down two paths and each puts an identity back
+separately**, `take_identity` in `scene/scene_file.cpp` and `assign_identities` in
+`scene/prefab.cpp`, so a test has to edit one entity of each kind or it passes while half of it
+is broken.
+
+M12.6 closed it. Undo and redo are on the Edit menu naming what they will do, and on `Ctrl+Z`
+and `Ctrl+Shift+Z` wherever the pointer is. **Undo is off while a session runs**, and the two
+items lose their names with them, because the world under a session is a game part way through
+a step and a stop reads the snapshot back over anything an undo did.
+
+**`ImGui::Shortcut` is the wrong tool for a chord with no window.** It takes its owner from
+`CurrentFocusScopeId`, which is zero once the menu bar has closed, and `SetShortcutRouting`
+asserts on a zero owner. RelWithDebInfo compiles that assert out, so it looks like it works and
+stops a Debug build. `IsKeyPressed` asks nothing about routing.
+
+**Delete takes the selected entity and asks nothing**, because it can be undone now. The World
+panel button keeps its question, which also says how many entities go. **Escape clears the
+selection rather than closing the window**: `platform::WindowDesc::quit_on_escape` is a
+per-application choice and the editor turns it off, so the runtime still quits on it. File >
+Exit is the way out of the editor.
+
+**What a step costs**, measured on Intel Sponza at 180 entities and on the sandbox at 43. One
+field edit keeps two documents of about 150 bytes on both, one undo takes 0.5 us on both, and a
+whole-world snapshot is 8.3 KiB and 0.26 ms against 9.4 KiB and 0.53 ms. **An entry costs the
+same on both scenes and a snapshot does not**, which is the whole of the transactional
+decision. Sponza is large in triangles rather than entities, so this is the shape rather than
+the extreme. `DESIGN.md` §10 M12 holds the table and the rejected measurement.
 
 **The editor cooks after it saves**, which closed #341. It writes `sandbox/content` and reads
 the cooked tree beside the executable, so without a cook every edit looked lost on the next
@@ -625,8 +693,9 @@ what settles it properly, by having the editor read what it writes.
 **The inspector adds and removes components, and the World panel deletes an entity.**
 `ComponentOps::create` and `remove` came from the M9.8 run: without them a dropped prefab
 could never be given a RigidBody. A Transform is refused, and `owns_transform` is how the
-panel knows without comparing a name against a spelling. There is no undo yet (#331), so a
-delete asks first and says how many entities go with it.
+panel knows without comparing a name against a spelling. Every one of these is recorded on the
+undo stack now, which closed #331. The delete still asks first, because the question also says
+how many entities go with the one that was picked.
 
 **A prefab dropped on the viewport becomes an instance**, at the point where the pointer
 meets the ground. `assets::prefab_name` moved out of `sandbox/game.h` to make that possible:
