@@ -2494,6 +2494,11 @@ something else is a worse failure than one that is refused.
 an entity, so a trigger cannot say which door it opens and a camera cannot say what it
 follows. This is the prerequisite for that, and M10 and the game will both want it.
 
+**Pressing Delete takes the selected entity and asks nothing.** The question the World panel
+asks was written when a delete was final, and a key that stops to ask is a key nobody uses.
+The button keeps its question, because it also says how many entities go with the one that
+was picked, and that is worth seeing before fifty of them do.
+
 **Undo is off while a play session runs**, and so is redo. The world under a session is a
 game part way through a step, and every entry on the stack belongs to the scene somebody
 authored. Undoing into a running game would move an entity the simulation owns, and a stop

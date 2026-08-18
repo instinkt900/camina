@@ -590,7 +590,37 @@ namespace {
     }
 
     /**
+     * Deletes the selected entity, with no question asked.
+     *
+     * The button in the World panel asks first and this does not. The question
+     * was written when a delete was final. It can be undone now, and a key that
+     * stops to ask is a key nobody uses. The button keeps its question, because
+     * it also says how many entities go, which is worth seeing before fifty of
+     * them do.
+     *
+     * @param editor Everything the program owns.
+     */
+    void delete_selected(Editor& editor) {
+        if (editor.selected == entt::null || !editor.world.registry().valid(editor.selected)) {
+            return;
+        }
+        (void)engine::editor::delete_entity(editor.world, editor.selected, &editor.history);
+        // Nothing may hold an entity that no longer exists, and EnTT hands the
+        // same number out again.
+        editor.selected = entt::null;
+    }
+
+    /// Whether the editor takes an edit key right now.
+    /// @param editor Everything the program owns.
+    /// @return False while a text box has the keys, or while a session runs.
+    [[nodiscard]] bool editing_keys_are_live(const Editor& editor) {
+        return !ImGui::GetIO().WantTextInput && !editor.play.running();
+    }
+
+    /**
      * Reads the undo and redo keys, wherever the pointer is in the editor.
+     *
+     * Delete goes through here too, for the same reason.
      *
      * **Not through `editor.input`.** That one is gated on the Viewport panel
      * holding the pointer or the focus, because it flies the camera. A menu
@@ -612,11 +642,18 @@ namespace {
      * @param editor Everything the program owns.
      */
     void read_undo_keys(Editor& editor) {
-        const ImGuiIO& io = ImGui::GetIO();
-        if (io.WantTextInput || !io.KeyCtrl) {
+        if (!editing_keys_are_live(editor)) {
             return;
         }
-        if (!ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+
+        // Delete takes the selection, with no question. See delete_selected.
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+            delete_selected(editor);
+            return;
+        }
+
+        const ImGuiIO& io = ImGui::GetIO();
+        if (!io.KeyCtrl || !ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
             return;
         }
 
@@ -657,6 +694,12 @@ namespace {
             }
             if (ImGui::MenuItem(menu.redo_label.c_str(), "Ctrl+Shift+Z", false, menu.can_redo)) {
                 redo_one(editor);
+            }
+            ImGui::Separator();
+            const bool have =
+                editor.selected != entt::null && editor.world.registry().valid(editor.selected);
+            if (ImGui::MenuItem("Delete", "Del", false, have && !editor.play.running())) {
+                delete_selected(editor);
             }
             if (editor.play.running()) {
                 ImGui::Separator();

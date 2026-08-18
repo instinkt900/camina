@@ -172,7 +172,9 @@ namespace engine::editor {
      * way through a step rather than the scene somebody authored.
      * @param history Where a delete is recorded, or null for a panel with no
      * undo behind it. The runtime debug overlay passes null. The question the
-     * delete asks says which of the two it is.
+     * delete asks says which of the two it is. **The button asks and the Delete
+     * key does not**, because the button also says how many entities go and
+     * that is worth seeing before fifty of them do.
      * @return True on the frame the scene was written. **A caller that reads
      * cooked content has to cook after this**, or the file it reads next time
      * is the one from before the save. See issue #341.
