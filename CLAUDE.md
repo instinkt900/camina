@@ -927,11 +927,15 @@ the retry could not help: the thing holding the lock was the thing the retry had
 apt.llvm.org source file directly rather than calling `add-apt-repository`, so there is no
 nested apt to leak a lock in the first place.
 
-**Keep the retry budget under the job's `timeout-minutes`.** Attempts times the per-attempt
-timeout is what a stalling runner costs, and a job cut off part way through its retries pays
-the delay and gets none of the benefit. That happened too: a 15 minute timeout against a
-30 minute worst case cancelled the job before the retries could finish. The format job's worst
-case is now 1170 seconds against a 25 minute timeout.
+**Judge a stall by silence, never by how long the command has taken.** A hung apt sat for 25 to
+43 minutes and never finished. A working one took 912 seconds on the same day. No total timeout
+separates those: one short enough to catch the hang also kills the install that would have
+succeeded. A first attempt at this used total timeouts and turned two slow-but-working jobs
+into failures, which is worse than the problem it was meant to fix.
+
+`.github/scripts/run-until-stalled.sh` watches the output instead. A working command prints as
+it goes, whatever the pace, and a hung one prints nothing at all. `timeout-minutes` is then the
+last line of defence rather than the mechanism.
 
 That reduces the problem, it does not remove it. A runner that stalls three times in a row
 still fails the job, and the remedy below is still the answer.
