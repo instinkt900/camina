@@ -909,11 +909,21 @@ factor is installing packages on a fresh runner, not any one job**, so do not go
 at the build jobs. The first ran 43 minutes while its sibling finished in 19. Every re-run on a
 fresh runner has been clean and no branch has ever needed a change.
 
-**`.github/scripts/apt-install.sh` is what counters it.** Every apt step goes through it. It
-gives each apt call a timeout, so a stall becomes a failed attempt rather than a job that never
-finishes, and it retries. A hang then costs a minute of its own rather than a cancel and a
-re-run. Every job also carries `timeout-minutes`, so a hang anywhere else fails rather than
-sits.
+**`.github/scripts/retry.sh` and `apt-install.sh` are what counter it.** Every network command
+in CI goes through one of them: they give the command a timeout, so a stall becomes a failed
+attempt rather than a job that never finishes, and they retry. A stall then costs a minute
+rather than a cancel and a re-run.
+
+**Wrap every network command, not only apt.** The first version of this hardening wrapped
+`apt-get` and left the `wget` and `add-apt-repository` that set up apt.llvm.org bare. The next
+run hung in exactly those, on the same job. A third-party mirror is likelier to stall than the
+Ubuntu archive, not less.
+
+**Keep the retry budget under the job's `timeout-minutes`.** Attempts times the per-attempt
+timeout is what a stalling runner costs, and a job cut off part way through its retries pays
+the delay and gets none of the benefit. That happened too: a 15 minute timeout against a
+30 minute worst case cancelled the job before the retries could finish. The format job's worst
+case is now 1170 seconds against a 25 minute timeout.
 
 That reduces the problem, it does not remove it. A runner that stalls three times in a row
 still fails the job, and the remedy below is still the answer.

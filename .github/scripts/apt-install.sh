@@ -8,17 +8,18 @@
 # Install system packages, Install clang-format 19, and Install Doxygen. Every
 # re-run on a fresh runner was clean, so the branch was never the cause.
 #
-# A timeout turns that hang into a failed attempt, and the retry usually
-# succeeds. So a stall costs a minute rather than a cancel, a re-run, and
-# whatever time passed before somebody noticed.
+# **The worst case here has to fit inside the job's timeout-minutes.** Three
+# attempts of an update and an install is 3 x (90 + 180) = 810 seconds. A job
+# cut off part way through its retries pays the delay and gets no benefit,
+# which is exactly what happened on the first run of this script.
 #
 # Usage: apt-install.sh <package> [package ...]
 
 set -euo pipefail
 
 readonly kAttempts=3
-readonly kUpdateSeconds=180
-readonly kInstallSeconds=420
+readonly kUpdateSeconds=90
+readonly kInstallSeconds=180
 
 if [ "$#" -eq 0 ]; then
     echo "apt-install.sh needs at least one package."
