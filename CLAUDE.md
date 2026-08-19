@@ -896,10 +896,12 @@ state once by hand** and report from that, not from the monitor's summary.
 
 ### A job that will not finish
 
-**A runner hangs from time to time, and it is not the branch.** It has happened twice, both
-times on `build (linux-clang, ...)` and both times on `Install system packages`. The first ran
-43 minutes while its sibling finished in 19. A re-run on a fresh runner took 14 minutes, and
-the branch needed no change.
+**A runner hangs from time to time, and it is not the branch.** It has happened three times.
+Twice on `build (linux-clang, ...)` at `Install system packages`, and once on `format` at
+`Install clang-format 19`. **The common factor is installing packages on a fresh runner, not
+any one job**, so do not go looking only at the build jobs. The first ran 43 minutes while its
+sibling finished in 19. Every re-run on a fresh runner has been clean and no branch has ever
+needed a change.
 
 **Tell a hung job from a slow one by its step, never by the clock.** A healthy build job takes
 14 to 19 minutes, so elapsed time alone says nothing. Read two things instead. A hang sits on
@@ -915,7 +917,8 @@ gh api repos/instinkt900/camina/actions/runs/<run>/jobs \
 
 A monitor that warns on elapsed time alone cries wolf on a good run. That happened once, on a
 job sitting on `Test`, which is the last step. Make the warning print the current step,
-because the step is what answers the question.
+because the step is what answers the question. With the step printed, the same warning has
+since caught a real hang on the first look and cost nothing to dismiss on a false one.
 
 **The remedy, in order.** `gh run rerun --job` refuses a job that is still going, so:
 
