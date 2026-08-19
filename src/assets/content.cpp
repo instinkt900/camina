@@ -168,4 +168,45 @@ namespace engine::assets {
         return output != nullptr && read_bytes(*output, out);
     }
 
+    bool Content::assets_for(std::string_view source, std::vector<AssetRecord>& out) const {
+        out.clear();
+        const ManifestEntry* entry = find(source);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("{} is not in the manifest. The cooker did not make it.", source);
+            return false;
+        }
+        // No rule writes an entry with no outputs, so this reports a manifest
+        // somebody edited or a write that was cut off.
+        if (entry->outputs.empty()) {
+            ENGINE_LOG_ERROR("{} has no cooked files in the manifest. Cook the content tree "
+                             "again.",
+                             source);
+            return false;
+        }
+
+        out.reserve(entry->outputs.size());
+        for (const ManifestOutput& output : entry->outputs) {
+            out.push_back(AssetRecord{
+                .guid = output.guid, .source = entry->source, .name = output.cooked });
+        }
+        return true;
+    }
+
+    bool Content::assets_of_kind(std::string_view suffix, std::vector<AssetRecord>& out) const {
+        out.clear();
+        for (const ManifestEntry& entry : manifest_.entries) {
+            for (const ManifestOutput& output : entry.outputs) {
+                if (std::string_view{ output.cooked }.ends_with(suffix)) {
+                    out.push_back(AssetRecord{
+                        .guid = output.guid, .source = entry.source, .name = output.cooked });
+                }
+            }
+        }
+        return true;
+    }
+
+    bool Content::read(Guid guid, std::vector<std::byte>& out) const {
+        return read_bytes(guid, out);
+    }
+
 } // namespace engine::assets

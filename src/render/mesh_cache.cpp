@@ -79,7 +79,7 @@ namespace engine::render {
         ENGINE_ASSERT(loaded_.empty(), "MeshCache::destroy was not called, so GPU buffers leaked.");
     }
 
-    const GpuMesh* MeshCache::get(gfx::Device* device, const assets::Content& content, Guid guid) {
+    const GpuMesh* MeshCache::get(gfx::Device* device, const assets::AssetSource& content, Guid guid) {
         if (const auto found = loaded_.find(guid); found != loaded_.end()) {
             return &found->second;
         }
@@ -91,7 +91,7 @@ namespace engine::render {
 
         std::vector<std::byte> bytes;
         assets::Mesh mesh;
-        if (!content.read_bytes(guid, bytes) ||
+        if (!content.read(guid, bytes) ||
             !assets::read_mesh(bytes, mesh, guid.to_text())) {
             failed_.emplace(guid, true);
             return nullptr;

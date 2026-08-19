@@ -81,7 +81,7 @@ namespace engine::render {
 
     } // namespace
 
-    bool SceneRenderer::create(gfx::Device* device, const assets::Content& content,
+    bool SceneRenderer::create(gfx::Device* device, const assets::AssetSource& content,
                                gfx::Extent2D extent) {
         ENGINE_CHECK(device != nullptr, "SceneRenderer::create needs a device.");
         device_ = device;
@@ -118,7 +118,7 @@ namespace engine::render {
         return true;
     }
 
-    bool SceneRenderer::reload_shaders(const assets::Content& content) {
+    bool SceneRenderer::reload_shaders(const assets::AssetSource& content) {
         // Every pass, and each reports on its own. One that will not build
         // keeps the pipelines it had, so a broken shader costs the picture of
         // that pass rather than the program.
@@ -223,7 +223,7 @@ namespace engine::render {
     }
 
     bool SceneRenderer::draw_scene(gfx::CommandList* commands, const scene::World& world,
-                                   const assets::Content& content, const SceneView& view) {
+                                   const assets::AssetSource& content, const SceneView& view) {
         // The render graph, before anything opens a rendering scope.
         // gfx::begin_frame() leaves the frame images in Undefined and this is
         // what moves them, because the graph is what knows which pass needs

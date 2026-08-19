@@ -28,34 +28,34 @@ namespace engine::play {
         };
     }
 
-    void Session::load_scripts(assets::Content& content) {
+    void Session::load_scripts(assets::AssetSource& content) {
         std::size_t loaded = 0;
         std::size_t failed = 0;
 
-        for (const assets::ManifestEntry& entry : content.manifest().entries) {
-            for (const assets::ManifestOutput& output : entry.outputs) {
-                if (!std::string_view{ output.cooked }.ends_with(assets::kScriptExtension)) {
-                    continue;
-                }
+        std::vector<assets::AssetRecord> records;
+        if (!content.assets_of_kind(assets::kScriptExtension, records)) {
+            ENGINE_LOG_ERROR("The scripts could not be listed, so none were loaded.");
+            return;
+        }
 
-                std::vector<std::byte> bytes;
-                if (!content.read_bytes(output, bytes)) {
-                    ENGINE_LOG_ERROR("{} is in the manifest and will not read.", output.cooked);
-                    ++failed;
-                    continue;
-                }
-                if (scripts_.load(output.guid, output.cooked, bytes)) {
-                    ++loaded;
-                } else {
-                    ++failed;
-                }
+        for (const assets::AssetRecord& record : records) {
+            std::vector<std::byte> bytes;
+            if (!content.read(record.guid, bytes)) {
+                ENGINE_LOG_ERROR("{} is in the project and will not read.", record.name);
+                ++failed;
+                continue;
+            }
+            if (scripts_.load(record.guid, record.name, bytes)) {
+                ++loaded;
+            } else {
+                ++failed;
             }
         }
 
         ENGINE_LOG_INFO("Loaded {} script(s), {} failed.", loaded, failed);
     }
 
-    void Session::reload_scripts(assets::Content& content,
+    void Session::reload_scripts(assets::AssetSource& content,
                                  const std::vector<assets::AssetChange>& changed) {
         for (const assets::AssetChange& change : changed) {
             if (change.gone ||
@@ -64,7 +64,7 @@ namespace engine::play {
             }
 
             std::vector<std::byte> bytes;
-            if (!content.read_bytes(change.guid, bytes)) {
+            if (!content.read(change.guid, bytes)) {
                 ENGINE_LOG_ERROR("{} cooked and will not read, so it was not loaded again.",
                                  change.cooked);
                 continue;
@@ -81,9 +81,9 @@ namespace engine::play {
 
 #else
 
-    void Session::load_scripts(assets::Content& content) { (void)content; }
+    void Session::load_scripts(assets::AssetSource& content) { (void)content; }
 
-    void Session::reload_scripts(assets::Content& content,
+    void Session::reload_scripts(assets::AssetSource& content,
                                  const std::vector<assets::AssetChange>& changed) {
         (void)content;
         (void)changed;

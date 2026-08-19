@@ -5,7 +5,7 @@
  * @brief Renders the scene depth from a directional light, for shadowing.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
 #include "render/mesh_cache.h"
@@ -75,7 +75,7 @@ namespace engine::render {
          * @param content The engine content tree, which holds the shader.
          * @return True when both were built.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content);
+        [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content);
 
         /// @brief Frees the map and the pipeline.
         void destroy();
@@ -92,7 +92,7 @@ namespace engine::render {
          * @warning Call this between frames and never while a command list is
          * open. It waits for the GPU, which cannot happen mid-frame.
          */
-        [[nodiscard]] bool reload_shaders(const assets::Content& content);
+        [[nodiscard]] bool reload_shaders(const assets::AssetSource& content);
 
         /**
          * @brief What this pass reads and writes, for the render graph.
@@ -127,7 +127,7 @@ namespace engine::render {
          * one of its own over the shadow map.
          */
         void draw(gfx::CommandList* commands, const scene::World& world,
-                  const assets::Content& content, MeshCache& meshes,
+                  const assets::AssetSource& content, MeshCache& meshes,
                   const Mat4& camera_view_projection);
 
         /// @brief The map the mesh pass samples.
@@ -210,7 +210,7 @@ namespace engine::render {
         };
 
         /// Builds the depth-only pipeline from the shader in @p content.
-        [[nodiscard]] bool build_pipeline(const assets::Content& content,
+        [[nodiscard]] bool build_pipeline(const assets::AssetSource& content,
                                           gfx::PipelineHandle& out);
 
         /// The sphere around one slice of the camera frustum, in world space.
@@ -221,7 +221,7 @@ namespace engine::render {
         /// Works out every cascade matrix from the light, the camera, and the
         /// scene. Returns false when there is no directional light, or nothing
         /// to cast.
-        [[nodiscard]] bool fit_cascades(const scene::World& world, const assets::Content& content,
+        [[nodiscard]] bool fit_cascades(const scene::World& world, const assets::AssetSource& content,
                                         MeshCache& meshes, const Mat4& camera_view_projection);
 
         gfx::Device* device_ = nullptr;

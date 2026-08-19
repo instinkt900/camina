@@ -84,19 +84,20 @@ namespace engine::render {
         constexpr float kSmallestRange = 1.0e-4F;
 
         /// Reads the cooked shadow shader, which has one form and no variants.
-        [[nodiscard]] bool read_shadow_shader(const assets::Content& content,
+        [[nodiscard]] bool read_shadow_shader(const assets::AssetSource& content,
                                               assets::Shader& out) {
-            const assets::ManifestEntry* entry = content.find("shadow.vert");
-            if (entry == nullptr || entry->outputs.empty()) {
-                ENGINE_LOG_ERROR("shadow.vert is not in the cooked content tree.");
+            // assets_for() says which source it could not find, so there is no
+            // message here.
+            std::vector<assets::AssetRecord> forms;
+            if (!content.assets_for("shadow.vert", forms)) {
                 return false;
             }
             std::vector<std::byte> bytes;
-            if (!content.read_bytes(entry->outputs.front(), bytes)) {
+            if (!content.read(forms.front().guid, bytes)) {
                 ENGINE_LOG_ERROR("shadow.vert would not read.");
                 return false;
             }
-            return assets::read_shader(bytes, out, entry->outputs.front().cooked);
+            return assets::read_shader(bytes, out, forms.front().name);
         }
 
     } // namespace
@@ -148,7 +149,7 @@ namespace engine::render {
         return PassDesc{ .name = "shadow", .reads = {}, .writes = kWrites };
     }
 
-    bool ShadowPass::build_pipeline(const assets::Content& content, gfx::PipelineHandle& out) {
+    bool ShadowPass::build_pipeline(const assets::AssetSource& content, gfx::PipelineHandle& out) {
         assets::Shader vertex;
         if (!read_shadow_shader(content, vertex)) {
             return false;
@@ -183,7 +184,7 @@ namespace engine::render {
         return gfx::succeeded(gfx::create_graphics_pipeline(device_, desc, &out));
     }
 
-    bool ShadowPass::create(gfx::Device* device, const assets::Content& content) {
+    bool ShadowPass::create(gfx::Device* device, const assets::AssetSource& content) {
         ENGINE_ASSERT(device != nullptr, "ShadowPass::create needs a device.");
         device_ = device;
 
@@ -218,7 +219,7 @@ namespace engine::render {
         device_ = nullptr;
     }
 
-    bool ShadowPass::reload_shaders(const assets::Content& content) {
+    bool ShadowPass::reload_shaders(const assets::AssetSource& content) {
         if (device_ == nullptr) {
             return false;
         }
@@ -238,7 +239,7 @@ namespace engine::render {
         return true;
     }
 
-    bool ShadowPass::fit_cascades(const scene::World& world, const assets::Content& content,
+    bool ShadowPass::fit_cascades(const scene::World& world, const assets::AssetSource& content,
                                   MeshCache& meshes, const Mat4& camera_view_projection) {
         // The first directional light. The frame block carries several, and only
         // one casts, because there is one map.
@@ -349,7 +350,7 @@ namespace engine::render {
     }
 
     void ShadowPass::draw(gfx::CommandList* commands, const scene::World& world,
-                          const assets::Content& content, MeshCache& meshes,
+                          const assets::AssetSource& content, MeshCache& meshes,
                           const Mat4& camera_view_projection) {
         draw_count_ = 0;
         culled_count_ = 0;

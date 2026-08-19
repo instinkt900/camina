@@ -22,24 +22,25 @@ namespace engine::render {
 
         /// Reads one cooked shader out of the engine content tree. The same
         /// helper TonemapPass and UiPass each keep privately. Issue #197.
-        [[nodiscard]] bool read_one_shader(const assets::Content& content, std::string_view source,
+        [[nodiscard]] bool read_one_shader(const assets::AssetSource& content, std::string_view source,
                                            assets::Shader& out) {
-            const assets::ManifestEntry* entry = content.find(source);
-            if (entry == nullptr || entry->outputs.empty()) {
-                ENGINE_LOG_ERROR("{} is not in the cooked content tree.", source);
+            // assets_for() says which source it could not find, so there is no
+            // message here.
+            std::vector<assets::AssetRecord> forms;
+            if (!content.assets_for(source, forms)) {
                 return false;
             }
             std::vector<std::byte> bytes;
-            if (!content.read_bytes(entry->outputs.front(), bytes)) {
+            if (!content.read(forms.front().guid, bytes)) {
                 ENGINE_LOG_ERROR("{} would not read.", source);
                 return false;
             }
-            return assets::read_shader(bytes, out, entry->outputs.front().cooked);
+            return assets::read_shader(bytes, out, forms.front().name);
         }
 
     } // namespace
 
-    bool DebugLinePass::create(gfx::Device* device, const assets::Content& content) {
+    bool DebugLinePass::create(gfx::Device* device, const assets::AssetSource& content) {
         ENGINE_ASSERT(device != nullptr, "DebugLinePass::create needs a device.");
         device_ = device;
 

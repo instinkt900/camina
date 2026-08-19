@@ -13,6 +13,7 @@
  * only a GUID, so a rename inside the content tree changes nothing.
  */
 
+#include "assets/asset_source.h"
 #include "assets/manifest.h"
 
 #include <cstddef>
@@ -47,6 +48,12 @@ namespace engine::assets {
     /**
      * @brief One cooked content directory, open for reading.
      *
+     * This is the cooked implementation of AssetSource. It answers more than
+     * that interface does, because a cooked tree knows things a source tree
+     * cannot: what a cook produced, and what moved since the last one. A
+     * caller that needs those names this class. Everything else takes the
+     * interface. See `DESIGN.md` §10 M13.
+     *
      * @code
      * engine::assets::Content content;
      * if (content.open(directory)) {
@@ -55,7 +62,7 @@ namespace engine::assets {
      * }
      * @endcode
      */
-    class Content {
+    class Content : public AssetSource {
     public:
         /**
          * @brief Opens a cooked directory and reads its manifest.
@@ -132,6 +139,32 @@ namespace engine::assets {
         /// @brief The manifest the cooker wrote.
         /// @return The manifest.
         [[nodiscard]] const Manifest& manifest() const { return manifest_; }
+
+        /**
+         * @brief Every cooked output of one source path. See AssetSource.
+         * @param source The source path, as find() takes it.
+         * @param out The records. It is cleared first.
+         * @return True when the manifest holds that path with an output.
+         */
+        [[nodiscard]] bool assets_for(std::string_view source,
+                                      std::vector<AssetRecord>& out) const override;
+
+        /**
+         * @brief Every cooked output whose path ends with a suffix. See AssetSource.
+         * @param suffix The end of the cooked path, with the dot.
+         * @param out The records. It is cleared first.
+         * @return True. A cooked tree with none of that kind is not a fault.
+         */
+        [[nodiscard]] bool assets_of_kind(std::string_view suffix,
+                                          std::vector<AssetRecord>& out) const override;
+
+        /**
+         * @brief Reads the bytes of a cooked asset by identity. See AssetSource.
+         * @param guid The identity.
+         * @param out The bytes.
+         * @return True when the manifest holds that identity and the file read.
+         */
+        [[nodiscard]] bool read(Guid guid, std::vector<std::byte>& out) const override;
 
     private:
         /// The one output of a source, or nullptr with a reason in the log.

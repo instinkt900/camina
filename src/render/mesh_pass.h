@@ -18,7 +18,7 @@
  * irradiance coefficients, the prefiltered cubemap, and the shared lookup table.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "assets/irradiance.h"
 #include "core/guid.h"
 #include "gfx/device.h"
@@ -245,7 +245,7 @@ namespace engine::render {
          * ShadowPass::map(). The shader reads it as a comparison sampler and
          * there is no fallback that would serve, so this fails without one.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content,
+        [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content,
                                   gfx::TextureHandle shadow_map);
 
         /**
@@ -274,10 +274,12 @@ namespace engine::render {
          * @brief Lets go of the assets that changed, so the next draw reloads them.
          *
          * This is the render half of hot reload. `assets::Content::reload()`
-         * says what moved and this frees it. An identity the caches never
-         * loaded costs nothing, so the caller passes the whole list.
+         * says what moved and this frees it, so the list comes from whoever
+         * owns the cooked tree rather than through the asset seam. An identity
+         * the caches never loaded costs nothing, so the caller passes the whole
+         * list.
          *
-         * @param changed The identities that changed, from the content.
+         * @param changed The identities that changed, from the content owner.
          *
          * @warning Call this between frames and never while a command list is
          * open. It waits for the GPU, which cannot happen mid-frame.
@@ -306,7 +308,7 @@ namespace engine::render {
          * @warning Call this between frames and never while a command list is
          * open. It waits for the GPU, which cannot happen mid-frame.
          */
-        [[nodiscard]] bool reload_shaders(const assets::Content& content);
+        [[nodiscard]] bool reload_shaders(const assets::AssetSource& content);
 
         /**
          * @brief Drops the split sum lookup table and reads it again.
@@ -321,7 +323,7 @@ namespace engine::render {
          * @warning Call this between frames and never while a command list is
          * open. It waits for the GPU, which cannot happen mid-frame.
          */
-        [[nodiscard]] bool reload_brdf_lut(const assets::Content& content);
+        [[nodiscard]] bool reload_brdf_lut(const assets::AssetSource& content);
 
         /**
          * @brief What this pass reads and writes, for the render graph.
@@ -377,7 +379,7 @@ namespace engine::render {
          * block it binds would be the one the frame before it wrote.
          */
         void cull(gfx::CommandList* commands, const scene::World& world,
-                  const assets::Content& content, const Mat4& view_projection,
+                  const assets::AssetSource& content, const Mat4& view_projection,
                   const Vec3& camera_position, const ClusterView& view);
 
         /**
@@ -405,7 +407,7 @@ namespace engine::render {
          * there too.
          */
         void draw(gfx::CommandList* commands, const scene::World& world,
-                  const assets::Content& content, const Vec3& camera_position);
+                  const assets::AssetSource& content, const Vec3& camera_position);
 
         /**
          * @brief The mesh cache, so another pass can draw the same geometry.
@@ -620,7 +622,7 @@ namespace engine::render {
 
         /// Builds every pipeline from the shaders in @p content, into @p out.
         /// Frees whatever it built when any one of them fails.
-        [[nodiscard]] bool build_pipelines(const assets::Content& content, PipelineSet& out);
+        [[nodiscard]] bool build_pipelines(const assets::AssetSource& content, PipelineSet& out);
 
         /// Builds one pipeline from two already-read modules.
         /// @param blend True for the pipeline that blends and does not write depth.
@@ -647,7 +649,7 @@ namespace engine::render {
          * @param content The game content tree, for the mesh and material loads.
          * @param camera_position Where the camera is, for the blended depth sort.
          */
-        void gather_draws(const scene::World& world, const assets::Content& content,
+        void gather_draws(const scene::World& world, const assets::AssetSource& content,
                           const Vec3& camera_position);
 
         /// Draws what gather_draws() collected, back to front.
@@ -661,15 +663,15 @@ namespace engine::render {
 
         /// Resolves the cubemap and the irradiance the world names, and rebuilds
         /// the frame sets when the cubemap is not the one they already bind.
-        void update_environment(const scene::World& world, const assets::Content& content);
+        void update_environment(const scene::World& world, const assets::AssetSource& content);
 
         /// Reads the irradiance sub-asset of @p environment into the member.
         /// Falls back to the constant that matches whatever cubemap is bound.
-        void update_irradiance(const assets::Content& content, Guid environment, bool fallback);
+        void update_irradiance(const assets::AssetSource& content, Guid environment, bool fallback);
 
         /// Finds the split sum lookup table in the engine content tree and
         /// uploads it. It is one table for every environment and every scene.
-        [[nodiscard]] bool resolve_brdf_lut(const assets::Content& content);
+        [[nodiscard]] bool resolve_brdf_lut(const assets::AssetSource& content);
 
         gfx::Device* device_ = nullptr;
         /**
@@ -780,7 +782,7 @@ namespace engine::render {
         bool warned_missing_cull_ = false;
 
         /// @brief Reads and uploads the cluster cull compute shader, and builds its pipeline.
-        [[nodiscard]] bool build_compute_pipeline(const assets::Content& content);
+        [[nodiscard]] bool build_compute_pipeline(const assets::AssetSource& content);
 
         /// @brief Builds the per-frame compute descriptor sets. Call after build_frame_sets().
         [[nodiscard]] bool build_compute_sets();

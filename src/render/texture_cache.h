@@ -21,7 +21,7 @@
  * as a black void.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "core/guid.h"
 #include "gfx/device.h"
 
@@ -109,13 +109,13 @@ namespace engine::render {
          * that names a missing texture reports once rather than on every frame.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The texture identity, as a material stores it. A null GUID
          * is not an error and gives the fallback.
          * @return The texture, or the fallback when there is nothing to load.
          */
         [[nodiscard]] gfx::TextureHandle get(gfx::Device* device,
-                                             const assets::Content& content, Guid guid);
+                                             const assets::AssetSource& content, Guid guid);
 
         /**
          * @brief get(), with the size the texture was cooked at.
@@ -125,12 +125,12 @@ namespace engine::render {
          * time to find out would read the whole file again.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The texture identity. A null GUID gives the fallback.
          * @return The texture and its size. A miss gives the fallback, which
          * is one texel square.
          */
-        [[nodiscard]] TextureInfo get_info(gfx::Device* device, const assets::Content& content,
+        [[nodiscard]] TextureInfo get_info(gfx::Device* device, const assets::AssetSource& content,
                                            Guid guid);
 
         /**
@@ -143,13 +143,13 @@ namespace engine::render {
          * binding a flat texture where the layout declares a cube is undefined.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The cubemap identity. A null GUID is not an error and
          * gives the cube fallback.
          * @return The cubemap, or the cube fallback when there is nothing to load.
          */
         [[nodiscard]] gfx::TextureHandle get_cube(gfx::Device* device,
-                                                  const assets::Content& content, Guid guid);
+                                                  const assets::AssetSource& content, Guid guid);
 
         /// @brief The single white texel every unresolved flat reference binds.
         /// @return The fallback, which is null until create() has run.
@@ -191,7 +191,7 @@ namespace engine::render {
 
     private:
         /// The shared body of get() and get_cube(). @p faces is 1 or 6.
-        [[nodiscard]] TextureInfo load(gfx::Device* device, const assets::Content& content,
+        [[nodiscard]] TextureInfo load(gfx::Device* device, const assets::AssetSource& content,
                                        Guid guid, std::uint32_t faces);
 
         /**

@@ -13,7 +13,7 @@
  * their include directories.
  *
  * The host reads no asset. The caller resolves a GUID through
- * `assets::Content` and passes the bytes to load(), which keeps the interpreter
+ * `assets::AssetSource` and passes the bytes to load(), which keeps the interpreter
  * free of the asset layer and lets a test drive it with a string literal.
  *
  * @code

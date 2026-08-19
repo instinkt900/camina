@@ -5,7 +5,7 @@
  * @brief Draws world-space lines, which today means the physics wireframe.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
 #include "physics/debug_draw.h"
@@ -39,11 +39,11 @@ namespace engine::render {
          * @brief Builds the line pipeline.
          *
          * @param device The device to build on. Held, not owned.
-         * @param content The engine content tree, which holds the cooked
-         *                debug_line shaders.
+         * @param content The engine content tree, which holds the debug_line
+         *                shaders.
          * @return False when the pipeline did not build.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content);
+        [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content);
 
         /// @brief Releases everything create() built. Safe to call twice.
         void destroy();

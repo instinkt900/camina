@@ -5,7 +5,7 @@
  * @brief Draws what engine::ui::Renderer recorded, over the finished frame.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "gfx/device.h"
 #include "ui/renderer.h"
 
@@ -39,11 +39,11 @@ namespace engine::ui {
          * @brief Builds the pipelines this pass draws with.
          *
          * @param device The device to build on. Held, not owned.
-         * @param content The engine content tree, which holds the cooked ui
+         * @param content The engine content tree, which holds the ui
          * shaders.
          * @return False when a pipeline did not build.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content);
+        [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content);
 
         /// @brief Releases everything create() built. Safe to call twice.
         void destroy();

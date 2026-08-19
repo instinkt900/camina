@@ -96,23 +96,23 @@ namespace engine::render {
         return true;
     }
 
-    gfx::TextureHandle TextureCache::get(gfx::Device* device, const assets::Content& content,
+    gfx::TextureHandle TextureCache::get(gfx::Device* device, const assets::AssetSource& content,
                                          Guid guid) {
         return load(device, content, guid, 1).texture;
     }
 
     TextureInfo TextureCache::get_info(gfx::Device* device,
-                                       const assets::Content& content, Guid guid) {
+                                       const assets::AssetSource& content, Guid guid) {
         return load(device, content, guid, 1);
     }
 
     gfx::TextureHandle TextureCache::get_cube(gfx::Device* device,
-                                              const assets::Content& content, Guid guid) {
+                                              const assets::AssetSource& content, Guid guid) {
         return load(device, content, guid, assets::kCubeFaceCount).texture;
     }
 
     TextureInfo TextureCache::load(gfx::Device* device,
-                                   const assets::Content& content, Guid guid,
+                                   const assets::AssetSource& content, Guid guid,
                                    std::uint32_t faces) {
         const bool cube = faces == assets::kCubeFaceCount;
         // Both fallbacks are one texel square, which is what TextureInfo
@@ -139,7 +139,7 @@ namespace engine::render {
 
         std::vector<std::byte> bytes;
         assets::TextureView view;
-        if (!content.read_bytes(guid, bytes) ||
+        if (!content.read(guid, bytes) ||
             !assets::read_texture(bytes, view, guid.to_text())) {
             failed_.emplace(request, true);
             return fallback;

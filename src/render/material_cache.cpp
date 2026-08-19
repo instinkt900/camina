@@ -169,7 +169,7 @@ namespace engine::render {
         material.uniforms = gfx::BufferHandle{};
     }
 
-    const GpuMaterial& MaterialCache::get(gfx::Device* device, const assets::Content& content,
+    const GpuMaterial& MaterialCache::get(gfx::Device* device, const assets::AssetSource& content,
                                           TextureCache& textures, gfx::PipelineHandle pipeline,
                                           Guid guid) {
         if (guid.valid()) {
@@ -206,7 +206,7 @@ namespace engine::render {
 
         std::vector<std::byte> bytes;
         assets::Material material;
-        if (!content.read_bytes(guid, bytes) ||
+        if (!content.read(guid, bytes) ||
             !assets::read_material(bytes, material, guid.to_text())) {
             failed_.emplace(guid, true);
             return fallback_;

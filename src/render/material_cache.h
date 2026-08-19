@@ -16,7 +16,7 @@
  * DESIGN.md section 9 "Materials".
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "assets/material.h"
 #include "assets/shader.h"
 #include "core/guid.h"
@@ -188,7 +188,7 @@ namespace engine::render {
          * Such a submesh still draws, with the fallback texture.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param textures Where the textures this material names come from.
          * @param pipeline The pipeline whose layout the descriptor set must
          * match. A rebuilt pipeline means every set has to be built again.
@@ -197,7 +197,7 @@ namespace engine::render {
          * @return The material. It is never null, so a draw call needs no check.
          */
         [[nodiscard]] const GpuMaterial& get(gfx::Device* device,
-                                             const assets::Content& content,
+                                             const assets::AssetSource& content,
                                              TextureCache& textures, gfx::PipelineHandle pipeline,
                                              Guid guid);
 

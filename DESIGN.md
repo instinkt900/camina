@@ -2563,6 +2563,31 @@ There is exactly one place to put the seam. Every cache and pass reads an asset 
 with a cooked implementation and an importing one, reaches everything and changes nothing
 above it.
 
+**M13.1 put it in, and the callers ask three questions rather than two.** `assets::AssetSource`
+answers what a source path names, what the project holds of a kind, and what the bytes for an
+identity are. The third one was expected. The first has to answer with a list, because one file
+holds several assets: a glTF holds a mesh for each primitive, and a shader with a variant list
+holds a module for each form. **The order of that list is load-bearing**, because
+`mesh_variant_index` indexes into it, so a source that answered out of order would bind the
+wrong pipeline and draw a picture that looks right.
+
+The second question was the one the shape did not predict. `Session::load_scripts` and
+`sandbox::add_prefabs` hold no path to ask about, so both walked the whole manifest looking for
+an extension. `assets_of_kind` is that walk, and it is what stops those two reaching for a
+cooked tree.
+
+An `AssetRecord` carries a name beside the identity, and the name is not decoration.
+`prefab_name` reads it to work out the key a prefab goes into the library under, so an
+importing source has to give an asset the name the cooker would for the same reason it has to
+give it the bytes the cooker would.
+
+**Five callers keep naming `Content`, for two different reasons.** Three of them mean a cooked
+tree: `HotReload` cooks and compares manifests, the asset browser lists what a cook produced,
+and `save_scene_source` turns identities back into source references through the manifest,
+which is what M13.4 replaces. The other two, `ui::ImageFactory` and `ui::FontFactory`, do not
+mean a cooked tree at all. They resolve a layout's absolute path against the content root, and
+a root is not a question this interface answers.
+
 The importers move out of `tools/cooker/` into a library the editor can link, and their
 dependencies stay private to it so a runtime build links none of them. `cooker_lib` already
 knows no game, so the code is separable today and the work is where it sits rather than what
