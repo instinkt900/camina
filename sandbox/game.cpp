@@ -71,6 +71,47 @@ namespace sandbox {
             return true;
         }
 
+        /**
+         * Reads the opening scene through the asset source.
+         *
+         * The scene is an asset like any other, so it is found by the source
+         * path a person edits and read by identity. A source project resolves
+         * its references on the way through, because that is what the document
+         * rule does.
+         */
+        [[nodiscard]] bool load_scene_from(const engine::assets::AssetSource& assets,
+                                           engine::scene::World& world,
+                                           const engine::scene::ComponentRegistry& registry,
+                                           engine::scene::PrefabLibrary& library) {
+            std::vector<engine::assets::AssetRecord> found;
+            if (!assets.assets_for(kSceneFile, found) || found.empty()) {
+                ENGINE_LOG_ERROR("The project holds no {}.", kSceneFile);
+                return false;
+            }
+
+            std::vector<std::byte> bytes;
+            if (!assets.read(found.front().guid, bytes)) {
+                ENGINE_LOG_ERROR("{} would not read.", kSceneFile);
+                return false;
+            }
+
+            const nlohmann::json document = nlohmann::json::parse(
+                std::string_view{ reinterpret_cast<const char*>(bytes.data()), bytes.size() },
+                nullptr, false);
+            if (document.is_discarded()) {
+                ENGINE_LOG_ERROR("{} will not parse as a scene.", kSceneFile);
+                return false;
+            }
+
+            if (!engine::scene::load_scene(document, world, registry, library)) {
+                ENGINE_LOG_ERROR("The sandbox could not build the world from {}.", kSceneFile);
+                return false;
+            }
+
+            ENGINE_LOG_INFO("The sandbox loaded {} entities from {}.", world.size(), kSceneFile);
+            return true;
+        }
+
     } // namespace
 
     std::filesystem::path default_content_directory() {
@@ -98,6 +139,14 @@ namespace sandbox {
         // in there too, because the cooker copies what it has no rule for.
         if (assets != nullptr && !add_prefabs(*assets, library)) {
             return false;
+        }
+
+        // Through the asset source rather than off the disk. A cooked scene
+        // names its assets by identity already. A source scene names them by
+        // path, and reading it through the seam runs the document rule, which
+        // is what resolves them. So one path serves both kinds of project.
+        if (assets != nullptr) {
+            return load_scene_from(*assets, world, registry, library);
         }
 
         const std::filesystem::path scene = content / kSceneFile;

@@ -94,6 +94,29 @@ namespace engine::import {
         return true;
     }
 
+    void SourceAssets::build_manifest(const std::vector<std::filesystem::path>& sources) {
+        // One entry for each source, in the order the tree walk found them, so
+        // it reads like a cook of the same tree.
+        manifest_ = as::Manifest{};
+        manifest_.cooker = as::kCookerVersion;
+        for (const std::filesystem::path& relative : sources) {
+            const std::string source = as::manifest_path(relative);
+            const auto found = by_source_.find(source);
+            if (found == by_source_.end()) {
+                continue;
+            }
+            as::ManifestEntry entry;
+            entry.source = source;
+            const auto identity = identity_of_.find(source);
+            entry.guid = identity != identity_of_.end() ? identity->second : Guid{};
+            for (const std::size_t at : found->second) {
+                entry.outputs.push_back(
+                    as::ManifestOutput{ .cooked = records_[at].name, .guid = records_[at].guid });
+            }
+            manifest_.entries.push_back(std::move(entry));
+        }
+    }
+
     bool SourceAssets::open(const std::filesystem::path& content_root) {
         root_ = content_root;
         records_.clear();
@@ -101,6 +124,7 @@ namespace engine::import {
         by_guid_.clear();
         identity_of_.clear();
         failed_ = 0;
+        manifest_ = as::Manifest{};
 
         std::error_code error;
         const std::filesystem::recursive_directory_iterator walk(root_, error);
@@ -160,6 +184,8 @@ namespace engine::import {
             by_source_[records_[at].source].push_back(at);
             by_guid_.emplace(records_[at].guid, at);
         }
+
+        build_manifest(sources);
 
         ENGINE_LOG_INFO("Opened the source content at {} with {} assets, {} unreadable.",
                         root_.string(), records_.size(), failed_);

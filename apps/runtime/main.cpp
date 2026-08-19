@@ -795,7 +795,7 @@ namespace {
             // save here needs no cook of its own. The editor has no watcher and
             // does, which is why the panel reports one. See issue #341.
             (void)engine::editor::draw_world_panel(world, *context.selected, context.source_scene,
-                                                   *context.game_content);
+                                                   context.game_content->manifest());
             engine::editor::place_next_panel((2 * kPanelMargin) + kPanelWidth, kPanelMargin,
                                              kPanelWidth, kInspectorHeight);
             engine::editor::draw_inspector_panel(world, *context.selected);

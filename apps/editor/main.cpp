@@ -1207,7 +1207,7 @@ namespace {
             const char* blocked =
                 editor.play.running() ? "a session is running, so this is not your scene" : nullptr;
             if (engine::editor::draw_world_panel(editor.world, editor.selected,
-                                                 editor.source_scene, editor.content,
+                                                 editor.source_scene, editor.content.manifest(),
                                                  &panels.world, blocked, &editor.history)) {
                 // The panel wrote the source scene. The cooked tree is what this
                 // program reads, so it has to be brought up to date now.
@@ -1220,7 +1220,7 @@ namespace {
                                                  &editor.field_edit);
         }
         if (panels.assets) {
-            engine::editor::draw_assets_panel(editor.content, editor.asset_filter,
+            engine::editor::draw_assets_panel(editor.content.manifest(), editor.asset_filter,
                                               &panels.assets);
         }
         if (panels.view) {

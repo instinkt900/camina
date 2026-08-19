@@ -23,6 +23,7 @@
  */
 
 #include "assets/asset_source.h"
+#include "assets/manifest.h"
 #include "core/guid.h"
 #include "scene/component_registry.h"
 
@@ -136,6 +137,23 @@ namespace engine::import {
          */
         [[nodiscard]] bool resolve(std::string_view reference, Guid& out) const;
 
+        /**
+         * @brief What the tree holds, in the form a manifest states it.
+         *
+         * The index already knows every identity, the source that names it and
+         * what it is called, which is what a manifest is. So everything that
+         * reads a manifest works over a source tree with no change of its own:
+         * the asset browser, `assets::reference_for`, and
+         * `scene::restore_references`.
+         *
+         * **It carries no inputs and no hashes.** Those answer "does this need
+         * cooking again", which is a question about a cooked tree. Nothing that
+         * reads this manifest asks it.
+         *
+         * @return The manifest, built when the tree was opened.
+         */
+        [[nodiscard]] const assets::Manifest& manifest() const { return manifest_; }
+
         /// @brief The directory this was opened on.
         /// @return The source content root.
         [[nodiscard]] const std::filesystem::path& root() const { return root_; }
@@ -151,6 +169,9 @@ namespace engine::import {
     private:
         /// Appends every asset one source file names. False when it would not read.
         [[nodiscard]] bool index_one(const std::filesystem::path& relative);
+
+        /// States the finished index as a manifest. See @ref manifest.
+        void build_manifest(const std::vector<std::filesystem::path>& sources);
 
         std::filesystem::path root_;
 
@@ -171,6 +192,9 @@ namespace engine::import {
         std::map<Guid, std::size_t> by_guid_;
 
         std::size_t failed_ = 0;
+
+        /// The index stated as a manifest, for everything that reads one.
+        assets::Manifest manifest_;
 
         /// The component types a document is read against. Null means the
         /// engine's own, which is right for a tree with no game in it.

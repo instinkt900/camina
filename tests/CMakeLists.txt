@@ -236,7 +236,14 @@ engine_enable_clang_tidy(test_editor)
 add_test(NAME editor COMMAND test_editor)
 
 add_executable(test_sandbox test_sandbox.cpp)
-target_link_libraries(test_sandbox PRIVATE camina::sandbox)
+target_link_libraries(test_sandbox PRIVATE camina::sandbox engine::import)
+
+# M13.4a compares a load from the cooked tree against a load from the source
+# tree, so this test needs to know where the source tree is. apps/editor does
+# the same thing for the same reason.
+target_compile_definitions(test_sandbox PRIVATE
+    ENGINE_GAME_CONTENT_SOURCE="${CMAKE_SOURCE_DIR}/sandbox/content"
+)
 engine_set_warnings(test_sandbox)
 engine_enable_clang_tidy(test_sandbox)
 

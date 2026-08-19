@@ -712,7 +712,7 @@ namespace {
         std::error_code ignored;
         std::filesystem::remove(file, ignored);
 
-        check(engine::editor::save_scene_source(file, world, content), "the panel's save writes");
+        check(engine::editor::save_scene_source(file, world, content.manifest()), "the panel's save writes");
         check(std::filesystem::exists(file), "and the file is there");
 
         // Read the file rather than load it. A source scene names its assets by

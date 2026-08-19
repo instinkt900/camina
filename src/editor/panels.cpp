@@ -3,7 +3,6 @@
 
 #include "editor/panels.h"
 
-#include "assets/content.h"
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/guid.h"
@@ -350,7 +349,7 @@ namespace engine::editor {
     } // namespace
 
     bool draw_world_panel(scene::World& world, entt::entity& selected,
-                          const std::filesystem::path& scene_path, const assets::Content& content,
+                          const std::filesystem::path& scene_path, const assets::Manifest& manifest,
                           bool* open, const char* save_blocked, History* history) {
         ENGINE_PROFILE_ZONE_N("draw_world_panel");
 
@@ -366,7 +365,7 @@ namespace engine::editor {
             const bool can_save = !scene_path.empty() && save_blocked == nullptr;
             ImGui::BeginDisabled(!can_save);
             if (ImGui::Button("Save scene") && can_save) {
-                if (save_scene_source(scene_path, world, content)) {
+                if (save_scene_source(scene_path, world, manifest)) {
                     saved = true;
                 } else {
                     ENGINE_LOG_ERROR("The scene did not write to {}.", scene_path.string());
@@ -688,14 +687,13 @@ namespace engine::editor {
 
     } // namespace
 
-    void draw_assets_panel(const assets::Content& content, std::string& filter, bool* open) {
+    void draw_assets_panel(const assets::Manifest& manifest, std::string& filter, bool* open) {
         ENGINE_PROFILE_ZONE_N("draw_assets_panel");
 
         if (ImGui::Begin("Assets", open)) {
             ImGui::TextUnformatted("Drag a row onto an asset field.");
             ImGui::InputText("filter", &filter);
 
-            const assets::Manifest& manifest = content.manifest();
             std::size_t shown = 0;
 
             for (const assets::ManifestEntry& entry : manifest.entries) {
@@ -726,9 +724,9 @@ namespace engine::editor {
     }
 
     bool save_scene_source(const std::filesystem::path& path, const scene::World& world,
-                           const assets::Content& content) {
+                           const assets::Manifest& manifest) {
         nlohmann::json document = scene::save_scene(world);
-        const std::size_t restored = scene::restore_references(document, content.manifest());
+        const std::size_t restored = scene::restore_references(document, manifest);
 
         // Through a temporary in the same directory, then a rename. Writing
         // over the scene directly means a disk that fills up, or a close that
