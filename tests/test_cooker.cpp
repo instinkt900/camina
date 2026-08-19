@@ -3034,6 +3034,132 @@ void test_the_index_skips_a_gltf_buffer() {
 }
 
 
+// M13.3b. The whole point of the milestone: what the editor imports and
+// what the cooker writes are the same bytes. If they ever differ, the
+// editor's picture and the runtime's stop being comparable and an
+// offscreen capture stops being worth taking.
+void test_an_import_gives_the_cooked_bytes() {
+    const std::filesystem::path source = scratch("import/src");
+    const std::filesystem::path out = scratch("import/out");
+    std::filesystem::create_directories(source / "models");
+
+    write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+    write_file(source / "many.frag", R"(#version 450
+layout(location = 0) out vec4 color;
+void main() { color = vec4(1.0); }
+)");
+    write_file(source / "many.frag.meta", R"({
+  "guid": "8d3d5c1a-5e6b-4f2a-9c7d-1e2f3a4b5c6d",
+  "shader": { "variants": [ { "name": "base", "defines": [] },
+                            { "name": "normal", "defines": [ "WITH_NORMAL_MAP" ] } ] }
+})");
+    write_file(source / "flat.hdr", constant_panorama(64, 32, 64, 64));
+    write_file(source / "flat.hdr.meta", R"({
+  "guid": "1f2e3d4c-5b6a-4988-b766-554433221100",
+  "environment": { "face_size": 8, "specular_samples": 4 }
+})");
+    write_tga(source / "wall.tga", 8, 8, std::vector<std::uint8_t>(8 * 8 * 4, 128));
+    write_file(source / "start.scene",
+               R"({"__version":1,"entities":[{"parent":-1,"components":{)"
+               R"("MeshRenderer":{"__version":1,"mesh":"asset:models/crate.gltf#mesh:1"}}}]})");
+    write_file(source / "spin.lua", "return {}\n");
+
+    engine::import::Options options{ .content = source, .out = out };
+    engine::import::Result result;
+    check(engine::import::cook_all(options, result), "the tree cooks");
+
+    as::Manifest manifest;
+    check(as::load_manifest(out, manifest), "and the cook wrote a manifest");
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the same tree opens as a source project");
+    check(assets.imports() == 0, "and opening it imports nothing");
+
+    // Every asset the cook produced, read back through the import and
+    // compared against the file on disk. Byte for byte, not by size.
+    std::size_t compared = 0;
+    bool all_same = true;
+    for (const as::ManifestEntry& entry : manifest.entries) {
+        for (const as::ManifestOutput& output : entry.outputs) {
+            std::vector<std::byte> imported;
+            if (!assets.read(output.guid, imported)) {
+                ENGINE_LOG_ERROR("{} would not import", output.cooked);
+                all_same = false;
+                continue;
+            }
+            const std::string cooked = read_file(out / output.cooked);
+            const std::string got{ reinterpret_cast<const char*>(imported.data()),
+                                   imported.size() };
+            if (cooked != got) {
+                ENGINE_LOG_ERROR("{}: cooked {} bytes and imported {}", output.cooked,
+                                 cooked.size(), got.size());
+                all_same = false;
+            }
+            ++compared;
+        }
+    }
+
+    check(compared >= 8, "every cooked asset was compared");
+    check(all_same, "an imported asset is byte for byte the cooked one");
+}
+
+// A glTF holds several assets and one rule makes them all, so asking for
+// any of them must import the file once.
+void test_an_import_is_kept_for_the_session() {
+    const std::filesystem::path source = scratch("import_cache/src");
+    std::filesystem::create_directories(source / "models");
+    write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the project opens");
+
+    std::vector<as::AssetRecord> parts;
+    check(assets.assets_for("models/crate.gltf", parts), "the glTF is found");
+    check(assets.imports() == 0, "and naming it imports nothing");
+
+    std::vector<std::byte> first;
+    check(assets.read(parts[0].guid, first), "the first mesh imports");
+    check(assets.imports() == 1, "which ran the rule once");
+
+    // Every other part of the same glTF is already in hand.
+    for (const as::AssetRecord& part : parts) {
+        std::vector<std::byte> bytes;
+        check(assets.read(part.guid, bytes), "every other part reads");
+    }
+    check(assets.imports() == 1, "and none of them ran the rule again");
+
+    std::vector<std::byte> again;
+    check(assets.read(parts[0].guid, again), "the first mesh reads a second time");
+    check(again == first, "and gives the same bytes");
+}
+
+// One asset that will not import must not take the editor with it.
+void test_a_failed_import_does_not_stop_the_project() {
+    const std::filesystem::path source = scratch("import_bad/src");
+    std::filesystem::create_directories(source / "models");
+    write_file(source / "models" / "broken.gltf", kTwoMeshGltf);
+    write_file(source / "spin.lua", "return {}\n");
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the project opens");
+
+    std::vector<as::AssetRecord> parts;
+    check(assets.assets_for("models/broken.gltf", parts), "the glTF is indexed");
+
+    // Break it after the index read it, so the import is what fails.
+    write_file(source / "models" / "broken.gltf", "this is not glTF any more");
+
+    std::vector<std::byte> bytes;
+    check(!assets.read(parts.front().guid, bytes), "the import fails and says so");
+
+    std::vector<as::AssetRecord> scripts;
+    check(assets.assets_of_kind(".lua", scripts), "the project still answers");
+    check(scripts.size() == 1, "and the good asset is still there");
+    std::vector<std::byte> script;
+    check(assets.read(scripts.front().guid, script), "and it still imports");
+}
+
+
 int main() {
     test::section("hashing");
     test_hash_is_content_not_time();
@@ -3092,6 +3218,10 @@ int main() {
     test_the_index_resolves_a_reference();
     test_a_bad_file_does_not_stop_the_index();
     test_the_index_skips_a_gltf_buffer();
+    test::section("importing from source");
+    test_an_import_gives_the_cooked_bytes();
+    test_an_import_is_kept_for_the_session();
+    test_a_failed_import_does_not_stop_the_project();
     test::section("asset references");
     test_a_reference_reads_into_its_parts();
     test_a_document_names_a_mesh_by_path();

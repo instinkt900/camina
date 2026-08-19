@@ -2642,6 +2642,43 @@ tree walk already drops it and the skip is never consulted. The skip does work o
 buffer file has an extension that carries a rule, so the test names its buffer `payload.lua`.
 The cooker's own copy of that skip is still unreached by any test, which is #364.
 
+**M13.3b routes every rule through a writer, and the editor gives it memory.** A rule used to
+open its own destination file. There were nine such sites, and each already held the finished
+bytes when it opened the stream. They write through `import::Writer` now: `FileWriter` for the
+cooker, `MemoryWriter` for the editor. So an import needs no cooked tree and no place to put
+one, and the bytes come from the same rule either way.
+
+The proof is the same as M13.2's, plus one more. The cooker's output is byte for byte what it
+was over both content trees. And every asset a cook produced, read back through the import and
+compared against the file on disk, is identical. Four mutations fail that suite: a cache that
+is never consulted, a read that answers another asset's bytes, an irradiance payload sized by
+`size()` rather than `sizeof`, and the M13.3a set.
+
+**What an import costs**, measured with `tools/cooker/measure.cpp` over the two content trees
+on the reference machine. Each number is the first read of an asset, which is the read that
+runs the rule.
+
+| Source | Files | Each | Total |
+|---|---|---|---|
+| `.hdr` environment | 1 | 1797 ms | 1797 ms |
+| `.brdf` table | 1 | 1692 ms | 1692 ms |
+| `.png` texture | 17 | 37.8 ms | 642 ms |
+| `.frag` shader | 4 | 136 ms | 543 ms |
+| `.vert` shader | 5 | 79 ms | 396 ms |
+| `.comp` shader | 1 | 84 ms | 84 ms |
+| `.gltf` model | 5 | 4.0 ms | 20 ms |
+| documents and scripts | 7 | under 0.3 ms | 0.7 ms |
+
+**Two assets are the whole problem and neither is geometry.** The environment prefilter and the
+split sum table are each about 1.7 seconds, and together they are three quarters of the 4.2
+seconds both trees cost cold. Everything a person actually edits is cheap: a glTF is 4 ms and a
+texture is 38 ms.
+
+That is what makes on demand the right answer rather than a shortcut. A scene that names no
+environment never pays the 1.8 seconds, and no asset is imported until something asks for it.
+The BRDF table depends on nothing at all, which is why #366 proposes shipping it rather than
+integrating it in every editor session.
+
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an
 incremental one is about a tenth of a second. So the editor imports one asset at a time and

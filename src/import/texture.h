@@ -11,6 +11,7 @@
 
 #include "assets/meta.h"
 #include "assets/texture.h"
+#include "import/writer.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -67,13 +68,14 @@ namespace engine::import {
      * @brief Cooks one image into one cooked texture file.
      *
      * @param source The image to read. PNG, JPG, TGA, BMP, or PSD.
-     * @param destination The cooked file to write. The directory must exist.
+     * @param writer Where the cooked file goes.
+     * @param cooked The cooked path, relative to the cooked root.
      * @param settings What the sidecar says to do.
      * @return True when the cooked file was written. False reports why in the
      * log, by source path.
      */
-    [[nodiscard]] bool cook_texture(const std::filesystem::path& source,
-                                    const std::filesystem::path& destination,
+    [[nodiscard]] bool cook_texture(const std::filesystem::path& source, Writer& writer,
+                                    const std::filesystem::path& cooked,
                                     const engine::assets::TextureImport& settings);
 
     /**
@@ -84,7 +86,8 @@ namespace engine::import {
      * decides its import settings. The glTF rule supplies them.
      *
      * @param bytes The encoded image, in any format stb_image reads.
-     * @param destination The cooked file to write. The directory must exist.
+     * @param writer Where the cooked file goes.
+     * @param cooked The cooked path, relative to the cooked root.
      * @param settings What to do with it. The glTF rule works these out from
      * the material slot the image is used in, because there is no file name to
      * guess from.
@@ -92,8 +95,8 @@ namespace engine::import {
      * @return True when the cooked file was written. False reports why in the
      * log.
      */
-    [[nodiscard]] bool cook_texture_bytes(std::span<const std::byte> bytes,
-                                          const std::filesystem::path& destination,
+    [[nodiscard]] bool cook_texture_bytes(std::span<const std::byte> bytes, Writer& writer,
+                                          const std::filesystem::path& cooked,
                                           const engine::assets::TextureImport& settings,
                                           std::string_view where);
 

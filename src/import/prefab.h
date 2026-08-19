@@ -17,6 +17,7 @@
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/guid.h"
+#include "import/writer.h"
 
 #include <filesystem>
 #include <vector>
@@ -41,7 +42,7 @@ namespace engine::import {
      *
      * @param data The parsed glTF. The buffers need not be loaded.
      * @param source The glTF file itself, for the log and for the root name.
-     * @param out_root The cooked root to write under.
+     * @param writer Where the cooked files go.
      * @param relative The source path relative to the content root. It names the
      * cooked files, so `robot.gltf` gives `robot.gltf.0.prefab`.
      * @param parent The GUID of the glTF file, from its sidecar.
@@ -51,8 +52,7 @@ namespace engine::import {
      * @return True when every prefab was written. False reports why in the log.
      */
     [[nodiscard]] bool cook_prefabs(const cgltf_data& data,
-                                    const std::filesystem::path& source,
-                                    const std::filesystem::path& out_root,
+                                    const std::filesystem::path& source, Writer& writer,
                                     const std::filesystem::path& relative, engine::Guid parent,
                                     const std::vector<engine::Guid>& meshes,
                                     std::vector<engine::assets::ManifestOutput>& outputs);

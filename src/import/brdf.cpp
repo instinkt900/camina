@@ -151,31 +151,14 @@ namespace engine::import {
             bias = sum_bias / static_cast<float>(samples);
         }
 
-        [[nodiscard]] bool write_file(const std::filesystem::path& destination,
-                                      const as::TextureHeader& header,
-                                      const std::vector<std::byte>& payload) {
-            std::ofstream out(destination, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                ENGINE_LOG_ERROR("{}: cannot open it to write.", destination.string());
-                return false;
-            }
-            out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-            out.write(reinterpret_cast<const char*>(payload.data()),
-                      static_cast<std::streamsize>(payload.size()));
-            if (!out) {
-                ENGINE_LOG_ERROR("{}: the write failed part way.", destination.string());
-                return false;
-            }
-            return true;
-        }
-
     } // namespace
 
     bool is_brdf_extension(const std::string& extension) {
         return lowered(extension) == ".brdf";
     }
 
-    bool cook_brdf(const std::filesystem::path& destination, const as::BrdfImport& settings) {
+    bool cook_brdf(Writer& writer, const std::filesystem::path& cooked,
+                   const as::BrdfImport& settings) {
         if (settings.size == 0 || settings.size > as::kMaxBrdfSize) {
             ENGINE_LOG_ERROR("The sidecar asks for a BRDF table of {} texels, and the range "
                              "is 1 to {}.",
@@ -243,7 +226,7 @@ namespace engine::import {
         header.payload_size = static_cast<std::uint32_t>(payload.size());
         header.face_count = 1;
 
-        return write_file(destination, header, payload);
+        return write_with_header(writer, cooked, header, payload);
     }
 
 } // namespace engine::import

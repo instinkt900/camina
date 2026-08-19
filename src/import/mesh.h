@@ -17,6 +17,7 @@
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/guid.h"
+#include "import/writer.h"
 
 #include <filesystem>
 #include <string>
@@ -127,7 +128,7 @@ namespace engine::import {
      * skip a source, so a glTF file has to keep naming its first mesh there.
      *
      * @param source The glTF or GLB file to read.
-     * @param out_root The cooked root to write under.
+     * @param writer Where the cooked files go.
      * @param relative The source path relative to the content root. It names
      * the cooked files, so `robot.gltf` gives `robot.gltf.0.mesh` and up.
      * @param parent The GUID of the glTF file, from its sidecar. Every part
@@ -135,8 +136,7 @@ namespace engine::import {
      * @param outputs The cooked files and their identities, appended.
      * @return True when every part was written. False reports why in the log.
      */
-    [[nodiscard]] bool cook_gltf(const std::filesystem::path& source,
-                                 const std::filesystem::path& out_root,
+    [[nodiscard]] bool cook_gltf(const std::filesystem::path& source, Writer& writer,
                                  const std::filesystem::path& relative, engine::Guid parent,
                                  std::vector<engine::assets::ManifestOutput>& outputs);
 

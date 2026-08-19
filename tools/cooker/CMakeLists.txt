@@ -12,6 +12,13 @@
 add_executable(cooker main.cpp)
 target_link_libraries(cooker PRIVATE engine::import camina::sandbox)
 
+# Measures what importing each asset type costs. DESIGN.md section 10 M13 holds
+# the numbers, and this is how to take them again after a change to a rule.
+add_executable(measure_import measure.cpp)
+target_link_libraries(measure_import PRIVATE engine::import camina::sandbox)
+engine_set_warnings(measure_import)
+engine_enable_clang_tidy(measure_import)
+
 engine_set_warnings(cooker)
 engine_enable_clang_tidy(cooker)
 

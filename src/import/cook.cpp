@@ -2,6 +2,8 @@
 
 #include "import/rules.h"
 
+#include <fstream>
+
 #include "assets/manifest.h"
 #include "assets/mesh.h"
 #include "assets/meta.h"
@@ -48,16 +50,23 @@ namespace engine::import {
             return options.components != nullptr ? *options.components : kEngineOnly;
         }
 
-        [[nodiscard]] bool copy_through(const std::filesystem::path& source,
-                                        const std::filesystem::path& destination) {
-            std::error_code error;
-            std::filesystem::copy_file(source, destination,
-                                       std::filesystem::copy_options::overwrite_existing, error);
-            if (error) {
-                ENGINE_LOG_ERROR("{}: could not copy it. {}", source.string(), error.message());
+        /// A rule that changes nothing still goes through the writer, so an
+        /// import in memory gets the bytes rather than nothing at all.
+        [[nodiscard]] bool copy_through(const std::filesystem::path& source, Writer& writer,
+                                        const std::filesystem::path& cooked) {
+            std::ifstream file(source, std::ios::binary | std::ios::ate);
+            if (!file) {
+                ENGINE_LOG_ERROR("{}: could not open it to copy.", source.string());
                 return false;
             }
-            return true;
+            const auto size = static_cast<std::streamsize>(file.tellg());
+            file.seekg(0);
+            std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+            if (size > 0 && !file.read(reinterpret_cast<char*>(bytes.data()), size)) {
+                ENGINE_LOG_ERROR("{}: the read failed part way through.", source.string());
+                return false;
+            }
+            return writer.write(cooked, bytes);
         }
 
         /**
@@ -68,7 +77,7 @@ namespace engine::import {
          * identity of the source asset, so a reference to the shader itself still
          * resolves. Every other variant derives one.
          */
-        [[nodiscard]] bool cook_shader_variants(const Options& options,
+        [[nodiscard]] bool cook_shader_variants(Writer& writer,
                                                 const std::filesystem::path& source,
                                                 const std::filesystem::path& relative,
                                                 const as::AssetMeta& meta,
@@ -95,11 +104,7 @@ namespace engine::import {
                 const as::ShaderVariant& variant = variants[at];
                 const std::filesystem::path cooked =
                     cooked_name(relative, Rule::Shader, static_cast<std::uint32_t>(at));
-                const std::filesystem::path destination = options.out / cooked;
-
-                std::error_code error;
-                std::filesystem::create_directories(destination.parent_path(), error);
-                if (!cook_shader(source, destination, variant.defines)) {
+                if (!cook_shader(source, writer, cooked, variant.defines)) {
                     ENGINE_LOG_ERROR("{}: variant {} did not compile.", relative.string(),
                                      variant.name.empty() ? "with no name" : variant.name);
                     return false;
@@ -123,7 +128,7 @@ namespace engine::import {
          * own, because a prefab has to name one mesh. That rule derives them
          * itself, because it alone knows how many parts of each kind there are.
          */
-        [[nodiscard]] bool cook_one(const Options& options, Rule rule,
+        [[nodiscard]] bool cook_one(const Options& options, Writer& writer, Rule rule,
                                     const std::filesystem::path& relative,
                                     const as::AssetMeta& meta,
                                     std::vector<as::ManifestOutput>& outputs) {
@@ -131,10 +136,7 @@ namespace engine::import {
 
             const auto single = [&](auto&& run) {
                 const std::filesystem::path cooked = cooked_name(relative, rule, 0);
-                const std::filesystem::path destination = options.out / cooked;
-                std::error_code error;
-                std::filesystem::create_directories(destination.parent_path(), error);
-                if (!run(destination)) {
+                if (!run(cooked)) {
                     return false;
                 }
                 outputs.push_back(as::ManifestOutput{ .cooked = as::manifest_path(cooked),
@@ -144,27 +146,28 @@ namespace engine::import {
 
             switch (rule) {
             case Rule::Shader:
-                return cook_shader_variants(options, source, relative, meta, outputs);
+                return cook_shader_variants(writer, source, relative, meta, outputs);
             case Rule::Texture:
                 return single([&](const std::filesystem::path& to) {
-                    return cook_texture(source, to, meta.texture);
+                    return cook_texture(source, writer, to, meta.texture);
                 });
             case Rule::Environment:
                 // Two outputs, so it cannot use single(). The cubemap keeps the
                 // source identity and the irradiance derives one beside it.
-                return cook_environment(source, options.out, relative, meta.guid,
+                return cook_environment(source, writer, relative, meta.guid,
                                         meta.environment, outputs);
             case Rule::Brdf:
                 // The source file is read for nothing but its identity. Every
                 // number the table needs is in the sidecar.
                 return single([&](const std::filesystem::path& to) {
-                    return cook_brdf(to, meta.brdf);
+                    return cook_brdf(writer, to, meta.brdf);
                 });
             case Rule::Mesh:
-                return cook_gltf(source, options.out, relative, meta.guid, outputs);
+                return cook_gltf(source, writer, relative, meta.guid, outputs);
             case Rule::Document:
                 return single([&](const std::filesystem::path& to) {
-                    return cook_document(source, to, options.content, components_of(options));
+                    return cook_document(source, writer, to, options.content,
+                                         components_of(options));
                 });
             case Rule::Script:
                 // The bytes go through unchanged, the same as a copy. The rule
@@ -176,8 +179,9 @@ namespace engine::import {
                 // type, and this rule is where that step will go.
                 break;
             }
-            return single(
-                [&](const std::filesystem::path& to) { return copy_through(source, to); });
+            return single([&](const std::filesystem::path& to) {
+                return copy_through(source, writer, to);
+            });
         }
 
         /// Every regular file under the tree, sorted, so two runs agree on the order.
@@ -412,7 +416,7 @@ namespace engine::import {
         }
 
         /// Cooks one source file, or says why it did not.
-        [[nodiscard]] Outcome cook_source(const Options& options,
+        [[nodiscard]] Outcome cook_source(const Options& options, Writer& writer,
                                           const std::filesystem::path& relative,
                                           const as::Manifest& previous, const Named& named,
                                           bool same_cooker, as::ManifestEntry& entry) {
@@ -445,7 +449,7 @@ namespace engine::import {
                 return Outcome::Skipped;
             }
 
-            if (!cook_one(options, rule, relative, meta, entry.outputs)) {
+            if (!cook_one(options, writer, rule, relative, meta, entry.outputs)) {
                 return Outcome::Failed;
             }
 
@@ -458,6 +462,37 @@ namespace engine::import {
         }
 
     } // namespace
+
+    bool import_one(const std::filesystem::path& content_root,
+                    const std::filesystem::path& relative, Writer& writer,
+                    const engine::scene::ComponentRegistry& types,
+                    std::vector<as::ManifestOutput>& outputs) {
+        const std::filesystem::path source = content_root / relative;
+
+        const std::optional<Rule> found = rule_for(relative);
+        if (!found) {
+            ENGINE_LOG_ERROR("{}: nothing gives it a rule, so it is not an asset.",
+                             source.string());
+            return false;
+        }
+
+        // The same split cook_source() makes. An image goes through
+        // image_meta(), which fills in the colour space guess for a sidecar it
+        // has to write.
+        as::AssetMeta meta;
+        const bool read = *found == Rule::Texture ? image_meta(source, meta)
+                                                  : as::meta_for(source, meta);
+        if (!read) {
+            return false;
+        }
+
+        // No cooked root. A rule reaches the file system through the writer
+        // now, so an import needs no directory to write into.
+        const Options options{
+            .content = content_root, .out = {}, .force = false, .components = &types
+        };
+        return cook_one(options, writer, *found, relative, meta, outputs);
+    }
 
     /// Removes cooked files that nothing in the manifest names.
     void prune_orphan_outputs(const std::filesystem::path& out, const as::Manifest& manifest) {
@@ -522,6 +557,10 @@ namespace engine::import {
             return false;
         }
 
+        // The cooker puts every rule's result on disk. The editor gives the
+        // same rules a MemoryWriter instead, which is the whole of M13.3b.
+        FileWriter writer(options.out);
+
         std::vector<std::filesystem::path> sources;
         if (!gather(options.content, sources)) {
             return false;
@@ -556,7 +595,7 @@ namespace engine::import {
             }
 
             as::ManifestEntry entry;
-            switch (cook_source(options, relative, previous, named, same_cooker, entry)) {
+            switch (cook_source(options, writer, relative, previous, named, same_cooker, entry)) {
             case Outcome::Cooked:
                 next.entries.push_back(std::move(entry));
                 ++result.cooked;

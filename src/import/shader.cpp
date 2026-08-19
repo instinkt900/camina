@@ -262,22 +262,6 @@ namespace engine::import {
         }
 
         /// Writes a whole cooked file.
-        [[nodiscard]] bool write_bytes(const std::filesystem::path& path,
-                                       std::span<const std::byte> bytes) {
-            std::ofstream file(path, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it to write.", path.string());
-                return false;
-            }
-            file.write(reinterpret_cast<const char*>(bytes.data()),
-                       static_cast<std::streamsize>(bytes.size()));
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: the cooked shader did not write.", path.string());
-                return false;
-            }
-            return true;
-        }
-
     } // namespace
 
     bool is_shader_extension(std::string_view extension) {
@@ -344,8 +328,8 @@ namespace engine::import {
         return shaderc_vertex_shader;
     }
 
-    bool cook_shader(const std::filesystem::path& source,
-                     const std::filesystem::path& destination,
+    bool cook_shader(const std::filesystem::path& source, Writer& writer,
+                     const std::filesystem::path& cooked,
                      const std::vector<std::string>& defines) {
         as::ShaderStage stage{};
         if (!shader_stage_for(source, stage)) {
@@ -412,7 +396,7 @@ namespace engine::import {
         shader.defines = defines;
 
         const std::vector<std::byte> bytes = as::write_shader(shader);
-        return write_bytes(destination, bytes);
+        return writer.write(cooked, bytes);
     }
 
 } // namespace engine::import

@@ -291,25 +291,11 @@ namespace engine::import {
             return true;
         }
 
-        [[nodiscard]] bool write_material(const std::filesystem::path& destination,
+        [[nodiscard]] bool write_material(Writer& writer,
+                                          const std::filesystem::path& cooked,
                                           const as::Material& material) {
-            std::error_code error;
-            std::filesystem::create_directories(destination.parent_path(), error);
-
-            std::ofstream file(destination, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it for writing.", destination.string());
-                return false;
-            }
-
             const as::MaterialHeader header = as::pack_material(material);
-            file.write(reinterpret_cast<const char*>(&header),
-                       static_cast<std::streamsize>(sizeof(header)));
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: the write failed part way through.", destination.string());
-                return false;
-            }
-            return true;
+            return write_with_header(writer, cooked, header, std::span<const std::byte>{});
         }
 
     } // namespace
@@ -328,7 +314,7 @@ namespace engine::import {
     }
 
     bool cook_inline_images(const cgltf_data& data, const std::filesystem::path& source,
-                            const std::filesystem::path& out_root,
+                            Writer& writer,
                             const std::filesystem::path& relative, engine::Guid parent,
                             InlineImages& out) {
         const std::filesystem::path directory = source.parent_path();
@@ -356,7 +342,7 @@ namespace engine::import {
                 part_record(relative, parent, as::kTexturePartKind, as::kTextureExtension,
                             static_cast<std::uint32_t>(index));
 
-            if (!cook_texture_bytes(bytes, out_root / record.name, settings, where)) {
+            if (!cook_texture_bytes(bytes, writer, record.name, settings, where)) {
                 return false;
             }
 
@@ -371,7 +357,7 @@ namespace engine::import {
     }
 
     bool cook_materials(const cgltf_data& data, const std::filesystem::path& source,
-                        const std::filesystem::path& out_root,
+                        Writer& writer,
                         const std::filesystem::path& relative, engine::Guid parent,
                         const InlineImages& images, CookedMaterials& out) {
         const std::filesystem::path directory = source.parent_path();
@@ -389,7 +375,7 @@ namespace engine::import {
                 part_record(relative, parent, as::kMaterialPartKind, as::kMaterialExtension,
                             static_cast<std::uint32_t>(at));
 
-            if (!write_material(out_root / record.name, material)) {
+            if (!write_material(writer, record.name, material)) {
                 return false;
             }
 

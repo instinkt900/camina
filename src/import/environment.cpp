@@ -479,43 +479,17 @@ namespace engine::import {
             }
         }
 
-        [[nodiscard]] bool write_file(const std::filesystem::path& destination,
-                                      const as::TextureHeader& header,
-                                      const std::vector<std::byte>& payload) {
-            std::ofstream out(destination, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                ENGINE_LOG_ERROR("{}: cannot open it to write.", destination.string());
-                return false;
-            }
-            out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-            out.write(reinterpret_cast<const char*>(payload.data()),
-                      static_cast<std::streamsize>(payload.size()));
-            if (!out) {
-                ENGINE_LOG_ERROR("{}: the write failed part way.", destination.string());
-                return false;
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool write_irradiance(const std::filesystem::path& destination,
+        [[nodiscard]] bool write_irradiance(Writer& writer,
+                                            const std::filesystem::path& cooked,
                                             const as::IrradianceSH& irradiance) {
-            std::ofstream out(destination, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                ENGINE_LOG_ERROR("{}: cannot open it to write.", destination.string());
-                return false;
-            }
-
-            const as::IrradianceHeader header;
-            out.write(reinterpret_cast<const char*>(&header), sizeof(header));
-            // The coefficients are a plain array of floats, so they go as they
-            // sit. assets::read_irradiance copies them back the same way.
-            out.write(reinterpret_cast<const char*>(irradiance.c.data()),
-                      static_cast<std::streamsize>(sizeof(irradiance.c)));
-            if (!out) {
-                ENGINE_LOG_ERROR("{}: the write failed part way.", destination.string());
-                return false;
-            }
-            return true;
+            as::IrradianceHeader header;
+            header.magic = as::kIrradianceMagic;
+            header.version = as::kIrradianceVersion;
+            // sizeof, not size(). Each coefficient is an RGB triple, so the
+            // payload is nine times three floats rather than nine.
+            const auto* first = reinterpret_cast<const std::byte*>(irradiance.c.data());
+            return write_with_header(writer, cooked, header,
+                                     std::span<const std::byte>{ first, sizeof(irradiance.c) });
         }
 
     } // namespace
@@ -525,7 +499,7 @@ namespace engine::import {
     }
 
     bool cook_environment(const std::filesystem::path& source,
-                          const std::filesystem::path& out_root,
+                          Writer& writer,
                           const std::filesystem::path& relative, engine::Guid parent,
                           const as::EnvironmentImport& settings,
                           std::vector<as::ManifestOutput>& outputs) {
@@ -635,10 +609,7 @@ namespace engine::import {
         // this environment needs no change and an older scene still resolves.
         const std::filesystem::path cubemap_name =
             std::filesystem::path(relative).concat(as::kTextureExtension);
-        const std::filesystem::path cubemap = out_root / cubemap_name;
-        std::error_code error;
-        std::filesystem::create_directories(cubemap.parent_path(), error);
-        if (!write_file(cubemap, header, payload)) {
+        if (!write_with_header(writer, cubemap_name, header, payload)) {
             return false;
         }
         outputs.push_back(as::ManifestOutput{ .cooked = as::manifest_path(cubemap_name),
@@ -649,7 +620,7 @@ namespace engine::import {
         // without the manifest telling it which is which.
         const std::filesystem::path irradiance_name =
             std::filesystem::path(relative).concat(as::kIrradianceExtension);
-        if (!write_irradiance(out_root / irradiance_name, project_irradiance(panorama))) {
+        if (!write_irradiance(writer, irradiance_name, project_irradiance(panorama))) {
             return false;
         }
         outputs.push_back(as::ManifestOutput{

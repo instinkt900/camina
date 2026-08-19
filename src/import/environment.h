@@ -18,6 +18,7 @@
 #include "assets/manifest.h"
 #include "assets/meta.h"
 #include "core/guid.h"
+#include "import/writer.h"
 
 #include <filesystem>
 #include <string>
@@ -57,7 +58,7 @@ namespace engine::import {
      * because an HDR file is already linear. See DESIGN.md section 3.
      *
      * @param source The `.hdr` file to read.
-     * @param out_root The cooked root every output is written under.
+     * @param writer Where the cooked files go.
      * @param relative The source path, relative to the content root.
      * @param parent The identity from the sidecar. The cubemap keeps it.
      * @param settings The face size and the ray budget, from the sidecar.
@@ -65,7 +66,7 @@ namespace engine::import {
      * @return True when the file was read, projected, and both parts written.
      */
     [[nodiscard]] bool cook_environment(
-        const std::filesystem::path& source, const std::filesystem::path& out_root,
+        const std::filesystem::path& source, Writer& writer,
         const std::filesystem::path& relative, engine::Guid parent,
         const engine::assets::EnvironmentImport& settings,
         std::vector<engine::assets::ManifestOutput>& outputs);
