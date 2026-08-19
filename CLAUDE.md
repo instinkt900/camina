@@ -23,7 +23,18 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
-M12 is complete, and M13 is next. M9.8 waits for M13.
+M13 is complete, and M9.8 is next. It was held for M13 and no longer is.
+
+**M13 gave the editor source assets.** It opens `sandbox/content` and never looks for a cooked
+game tree: it takes a rule for a file the way the cooker does, imports on demand through the
+same rules, and keeps what it imported for the session. A file edited in another program is
+imported again. `File > Cook project` is how a level reaches the runtime, which stays
+cooked-only. See `DESIGN.md` §10 M13.
+
+**The claim that the two paths agree is proved with bytes rather than pixels.** All 69 assets
+the sandbox ships import byte for byte identical to what the cooker writes, and the scene
+builds the same world from either tree. A pixel comparison needs a render path the editor does
+not have, which is #377.
 
 M2 is complete. A type describes itself once in a `Describe<T>` specialization, and two
 consumers read that one description. The ImGui inspector generates its widgets from the

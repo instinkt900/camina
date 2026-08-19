@@ -128,6 +128,11 @@ namespace {
         /// Watch the source tree and import a file that changed. Off makes a
         /// run reproducible, the way it does for the runtime.
         bool watch = true;
+        /// Cook the project on the first frame, as if somebody had picked the
+        /// menu item. A menu needs a hand on the mouse and there is no way to
+        /// inject one, so this is how that action gets exercised. `--select`
+        /// and `--gizmo` exist for the same reason.
+        bool cook = false;
     };
 
     void print_usage() {
@@ -141,6 +146,7 @@ namespace {
         ENGINE_LOG_INFO("  --gizmo-local       Line the handles up with the entity.");
         ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
         ENGINE_LOG_INFO("  --no-watch          Do not import a source file that changed.");
+        ENGINE_LOG_INFO("  --cook              Cook the project on the first frame and report.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
         ENGINE_LOG_INFO("  --no-vsync          Present without waiting for the display.");
@@ -204,6 +210,8 @@ namespace {
             out.own_windows = true;
         } else if (arg == "--no-watch") {
             out.watch = false;
+        } else if (arg == "--cook") {
+            out.cook = true;
         } else if (arg == "--gizmo-local") {
             out.gizmo.space = engine::editor::GizmoSpace::Local;
         } else if (arg == "--play") {
@@ -299,6 +307,14 @@ namespace {
         /// copy, so this string has to live as long as the overlay does.
         std::string layout_path;
         bool overlay = false; ///< True once ImGui owns resources on the device.
+        /// What the last cook said, for the popup that reports it. Empty until
+        /// somebody asks for one.
+        std::string cook_report;
+        /// True when that cook wrote a tree, false when it failed.
+        bool cook_ok = false;
+        /// Set for one frame to open the popup that shows @ref cook_report.
+        bool cook_reported = false;
+
         /// True once the watcher is running over the project. It sits with the
         /// other flags rather than beside the watcher, because a lone bool
         /// between two large members pads the struct out.
@@ -711,11 +727,22 @@ namespace {
      * It comes before the dockspace, because a main menu bar takes its height
      * out of the viewport work area and the dockspace fills what is left.
      */
+    // Defined below, beside the reload it sits next to. The menu is drawn
+    // before either of them in this file.
+    void cook_project(Editor& editor);
+
     void draw_menu_bar(Editor& editor, Panels& panels, bool& running) {
         if (!ImGui::BeginMainMenuBar()) {
             return;
         }
         if (ImGui::BeginMenu("File")) {
+            // Off while a session runs. The world under one is a game part way
+            // through a step, and the scene on disk is what a cook reads, so a
+            // cook then would write a tree that matches neither.
+            if (ImGui::MenuItem("Cook project", nullptr, false, !editor.play.running())) {
+                cook_project(editor);
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
                 running = false;
             }
@@ -1235,9 +1262,111 @@ namespace {
                         editor.world.size());
     }
 
+    /// The cooker that ships beside this executable.
+    [[nodiscard]] std::filesystem::path cooker_path() {
+#if defined(_WIN32)
+        constexpr const char* kCookerName = "cooker.exe";
+#else
+        constexpr const char* kCookerName = "cooker";
+#endif
+        return engine::platform::executable_directory() / kCookerName;
+    }
+
+    /**
+     * Cooks the project, so a level reaches the runtime.
+     *
+     * **The editor does not need this.** It reads the source tree and imports
+     * what it draws, which is M13.4b. A cook is how a level reaches the runtime,
+     * which reads a cooked tree and nothing else, so it is something a person
+     * asks for rather than something that happens after every save.
+     *
+     * The cooker skips what its manifest already holds, so asking twice costs
+     * almost nothing the second time.
+     *
+     * @param editor Everything the program owns.
+     */
+    void cook_project(Editor& editor) {
+        const std::filesystem::path source = editor.content.root();
+        if (source.empty()) {
+            editor.cook_ok = false;
+            editor.cook_report = "There is no project open, so there is nothing to cook.";
+            editor.cook_reported = true;
+            return;
+        }
+
+        const std::filesystem::path out = sandbox::default_content_directory();
+        ENGINE_LOG_INFO("Cooking {} into {}.", source.string(), out.string());
+
+        const std::vector<std::string> arguments{ "--content", source.string(), "--out",
+                                                  out.string() };
+        const engine::platform::ProcessResult result =
+            engine::platform::run_process(cooker_path(), arguments);
+
+        if (!result.ran) {
+            editor.cook_ok = false;
+            editor.cook_report = "The cooker would not run. It should sit beside the editor at " +
+                                 cooker_path().string() + ".";
+            ENGINE_LOG_ERROR("{}", editor.cook_report);
+            editor.cook_reported = true;
+            return;
+        }
+        if (result.exit_code != 0) {
+            editor.cook_ok = false;
+            editor.cook_report = "The cook failed and returned " + std::to_string(result.exit_code) +
+                                 ". The log says which asset, and the cooked tree still holds "
+                                 "what the last good cook wrote.";
+            ENGINE_LOG_ERROR("{}", editor.cook_report);
+            editor.cook_reported = true;
+            return;
+        }
+
+        // What it wrote, read back rather than assumed. The manifest is the
+        // cooker's own account of the run.
+        engine::assets::Content cooked;
+        if (!cooked.open(out)) {
+            editor.cook_ok = false;
+            editor.cook_report = "The cook reported success and wrote no readable manifest at " +
+                                 out.string() + ".";
+            ENGINE_LOG_ERROR("{}", editor.cook_report);
+            editor.cook_reported = true;
+            return;
+        }
+
+        std::size_t outputs = 0;
+        for (const engine::assets::ManifestEntry& entry : cooked.manifest().entries) {
+            outputs += entry.outputs.size();
+        }
+        editor.cook_ok = true;
+        editor.cook_report = "Cooked " + std::to_string(cooked.manifest().entries.size()) +
+                             " source asset(s) into " + std::to_string(outputs) + " file(s) at " +
+                             out.string() + ".";
+        ENGINE_LOG_INFO("{}", editor.cook_report);
+        editor.cook_reported = true;
+    }
+
+    /// Shows what the last cook did. Opened by cook_project().
+    void draw_cook_report(Editor& editor) {
+        if (editor.cook_reported) {
+            ImGui::OpenPopup("Cook project");
+            editor.cook_reported = false;
+        }
+        if (!ImGui::BeginPopupModal("Cook project", nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize)) {
+            return;
+        }
+        ImGui::TextUnformatted(editor.cook_ok ? "The project cooked." : "The cook did not finish.");
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", editor.cook_report.c_str());
+        if (ImGui::Button("Close")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(editor, panels, running);
+        draw_cook_report(editor);
 
         // After the menu bar, so a click on the item and the chord cannot both
         // fire on one frame.
@@ -1868,6 +1997,13 @@ int main(int argc, char** argv) {
     // mode otherwise has no way to check.
     if (options.play) {
         apply_play_request(editor, engine::editor::PlayRequest::Play);
+    }
+
+    // As if somebody had picked File > Cook project. The popup that reports it
+    // needs a frame to draw, so a run with --frames sees it and a run without
+    // one still cooks and still logs what it wrote.
+    if (options.cook) {
+        cook_project(editor);
     }
 
     const bool ok = run_frames(editor, options);

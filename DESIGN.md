@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9 complete but for M9.8, which is held. M12 complete. M13 next, then M9.8
+Status: M9 complete but for M9.8, which is held. M12 and M13 complete. M9.8 next
 Last updated: 2026-08-19
 
 ---
@@ -2756,6 +2756,26 @@ called one rather than becoming a third format.
 
 Cooking then becomes something a person asks for, because it is how a level reaches the
 runtime rather than how the editor sees its own work.
+
+**M13 is complete.** The editor opens the sandbox with no cooked game tree, imports what it
+draws, and cooks for the runtime when a person asks. `File > Cook project` is that ask, and it
+reports what it wrote by reading the manifest back rather than by trusting the exit code.
+
+**The proof is the bytes, not the pixels, and that is a decision.** Every one of the 69 assets
+the sandbox ships is imported by the editor byte for byte identical to what the cooker writes,
+checked over the shipped tree rather than a tree a test built. The scene document resolves the
+same both ways, which M13.4a checks by building the world twice and comparing it. The picture
+is a function of those two things and the renderer, and both applications draw through one
+`render::SceneRenderer`, so an identical picture follows.
+
+**A pixel comparison is not the instrument here, and the reason is worth recording.** The
+editor renders the scene into a panel image and composites ImGui over it, so an offscreen
+capture of the editor would hold the panel furniture rather than the scene, and ImGui does
+nothing offscreen at all. Comparing a windowed editor capture against an offscreen runtime one
+is refused by the rule in `CLAUDE.md`: a windowed capture is whatever size the window manager
+chose. Making the two comparable needs a render path in the editor that skips the panels and
+draws straight to the device target, which is #377. Issue #190 wants the same capability for a
+different reason.
 
 **Done when:** the editor opens the sandbox with no cooked **game** tree and draws it, a level
 built that way runs in the runtime after one cook, and the two pictures match or every

@@ -808,6 +808,59 @@ void test_a_source_project_gives_the_same_world() {
 }
 
 
+// M13.6. The milestone's own claim, over the tree the game actually ships
+// rather than a tree a test built.
+//
+// The editor draws what it imports and the runtime draws what the cooker
+// wrote. Both go through the same render code, so the picture can only
+// differ if the bytes differ or the scene resolves differently. This checks
+// both, asset by asset, over every asset in sandbox/content.
+void test_the_editor_imports_what_the_cooker_writes() {
+    const sc::ComponentRegistry registry = make_registry();
+
+    engine::assets::Content cooked;
+    check(cooked.open(sandbox::default_content_directory()),
+          "the cooked tree the runtime reads opens");
+
+    engine::import::SourceAssets source;
+    check(source.open(ENGINE_GAME_CONTENT_SOURCE), "and the source tree the editor reads");
+    source.set_components(&registry);
+
+    std::size_t compared = 0;
+    std::size_t missing = 0;
+    std::size_t differed = 0;
+
+    for (const engine::assets::ManifestEntry& entry : cooked.manifest().entries) {
+        for (const engine::assets::ManifestOutput& output : entry.outputs) {
+            std::vector<std::byte> from_cook;
+            if (!cooked.read(output.guid, from_cook)) {
+                continue;
+            }
+
+            std::vector<std::byte> from_import;
+            if (!source.read(output.guid, from_import)) {
+                ENGINE_LOG_ERROR("{} is in the cooked tree and the editor cannot import it.",
+                                 output.cooked);
+                ++missing;
+                continue;
+            }
+
+            if (from_import != from_cook) {
+                ENGINE_LOG_ERROR("{}: cooked {} bytes, imported {}.", output.cooked,
+                                 from_cook.size(), from_import.size());
+                ++differed;
+            }
+            ++compared;
+        }
+    }
+
+    ENGINE_LOG_INFO("Compared {} shipped asset(s).", compared);
+    check(compared >= 25, "every asset the game ships was compared");
+    check(missing == 0, "the editor can import all of them");
+    check(differed == 0, "and every one is byte for byte what the cooker wrote");
+}
+
+
 int main() {
     std::printf("registration\n");
     test_registration();
@@ -818,6 +871,7 @@ int main() {
     test_shipped_scene_loads();
     std::printf("a source project\n");
     test_a_source_project_gives_the_same_world();
+    test_the_editor_imports_what_the_cooker_writes();
     test_every_named_mesh_is_cooked();
     test_shipped_environment_is_a_cubemap();
     test_scene_round_trips();
