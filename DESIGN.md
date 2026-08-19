@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9 complete but for M9.8, which is held. M12 and M13 complete. M9.8 next
+Status: M9, M12 and M13 complete. M10 next
 Last updated: 2026-08-19
 
 ---
@@ -2807,16 +2807,31 @@ decides whether anyone can make a game with this engine, including you in a year
 **Start `sandbox/` at M3.** Choose something small and specific. A physics puzzle game fits
 well. It exercises Box3D, scripting, and PBR, and it needs no animation and little UI.
 
-**M9.8 waits for M13.** It is the milestone test of M9: build a level in the editor, press
-play, and ship it as a runtime build. M13 changes how the editor gets its assets, so running
-that test now would prove a loop that is about to change underneath. Its shipping half is
-already done and does not depend on M13: the runtime built with the editor on and off gives
-byte-identical captures, and a Release build with `with_editor=False` runs the level and
-carries no editor code. What is left is the authoring pass.
+**M9.8 is done, and M9 is complete.** It waited for M13, because M13 changed how the editor
+gets its assets and running the test before that would have proved a loop that was about to
+change underneath.
 
-That leaves M9 open across two milestones, which is unusual and is written here so nobody
-reads it as an oversight. M13.6 asks for much the same proof from the other side, so the two
-may well merge.
+**Hard rule 3 holds, re-checked after M13 rather than before it.** The runtime built with
+`ENGINE_WITH_EDITOR=ON` and with it off gives a byte-identical offscreen capture of the
+sandbox. `WITH_EDITOR` removes code and does not change what the remaining code does.
+
+**A two-build comparison has to hold every other option still.** The first attempt reported a
+difference and it was the harness: a fresh build directory given only
+`-DENGINE_WITH_EDITOR=OFF` also defaulted `ENGINE_WITH_UI` to off, so one runtime drew the game
+UI and the other did not. CMake says nothing when it defaults an option you did not name.
+
+**The editor and the runtime draw the level the same way**, and the two differences are named
+rather than tolerated. The runtime draws the game UI over the scene and the editor draws the
+scene alone. And the runtime steps physics and scripts, where an offscreen editor frame draws
+the world as authored. With those accounted for the two agree on geometry, framing and shading.
+`editor --offscreen --screenshot` is what makes that comparison possible at all, and it is
+reproducible across a full rebuild.
+
+**The authoring pass found nothing worth filing.** A level was built, saved, and cooked in the
+editor, and the runtime ran it. That is a weaker result than M8.6's, which turned up four
+engine gaps, and it is recorded because an exercise that found nothing is only evidence when
+somebody says it was actually run. The editor is expected to gain and lose things as it is
+used, so this is a working tool rather than a finished one.
 
 **M13 runs after M12.** Both are editor comfort and both are worth having, and undo comes
 first because every hour of authoring without it is an hour spent being careful. M13 also
