@@ -22,3 +22,7 @@ view.json
 # is one 133 MiB file and GitHub refuses anything over 100 MiB. The scene file
 # and the notes beside it are in git, and only the model is not. See issue #130.
 scenes/*/models/
+
+# A note between sessions, not part of the repository. The `handover` skill
+# writes it, the next session reads it and deletes it.
+handover.md
