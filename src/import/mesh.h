@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief Whether this rule handles a file with this extension.
@@ -117,4 +117,4 @@ namespace cooker {
                                  const std::filesystem::path& relative, engine::Guid parent,
                                  std::vector<engine::assets::ManifestOutput>& outputs);
 
-} // namespace cooker
+} // namespace engine::import

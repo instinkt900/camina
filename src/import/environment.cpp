@@ -1,10 +1,10 @@
-#include "environment.h"
+#include "import/environment.h"
 
 #include "assets/irradiance.h"
 #include "assets/reference.h"
 #include "assets/texture.h"
 #include "core/log.h"
-#include "to_half.h"
+#include "import/to_half.h"
 
 #include <stb_image.h>
 
@@ -20,7 +20,7 @@
 
 namespace as = engine::assets;
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -659,4 +659,4 @@ namespace cooker {
         return true;
     }
 
-} // namespace cooker
+} // namespace engine::import

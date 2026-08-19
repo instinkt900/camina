@@ -16,8 +16,8 @@
 #include "assets/meta.h"
 #include "assets/texture.h"
 #include "check.h"
-#include "cook.h"
-#include "mesh.h"
+#include "import/cook.h"
+#include "import/mesh.h"
 
 #include <nlohmann/json.hpp>
 
@@ -422,7 +422,7 @@ namespace {
     bool cook_gltf(const std::filesystem::path& source, const std::filesystem::path& out,
                    const std::filesystem::path& relative,
                    std::vector<as::ManifestOutput>& outputs) {
-        return cooker::cook_gltf(source, out, relative, kParent, outputs);
+        return engine::import::cook_gltf(source, out, relative, kParent, outputs);
     }
 
     void test_glb_cooks() {
@@ -970,9 +970,9 @@ namespace {
         const std::filesystem::path out = scratch("ident/out");
         write_glb(source / "pair.glb", build_triangle(), 2);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
         check(result.cooked == 1, "one source cooked");
 
         as::Manifest manifest;
@@ -1002,8 +1002,8 @@ namespace {
 
         // A second cook must derive the same identities. They are not stored,
         // so a derivation that drifted would break every reference silently.
-        cooker::Result again;
-        check(cooker::cook_all(options, again), "a second cook works");
+        engine::import::Result again;
+        check(engine::import::cook_all(options, again), "a second cook works");
         check(again.skipped == 1, "and it skips the glTF");
 
         test::remove_tree(source.parent_path());
@@ -1014,9 +1014,9 @@ namespace {
         const std::filesystem::path out = scratch("bin/out");
         write_gltf(source / "solo.gltf", build_triangle(), 1);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
@@ -1038,8 +1038,8 @@ namespace {
         check(manifest.entries.size() == 1, "and the .bin is not an asset of its own");
         check(!std::filesystem::exists(out / "solo.bin"), "so nothing copied it through");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.skipped == 1, "and it cooks nothing");
 
         // Move a corner. The JSON does not change at all, so an entry that
@@ -1049,8 +1049,8 @@ namespace {
         std::memcpy(moved.buffer.data() + (3 * sizeof(float)), &wider, sizeof(wider));
         write_bytes(source / "solo.bin", moved.buffer);
 
-        cooker::Result third;
-        check(cooker::cook_all(options, third), "the third cook works");
+        engine::import::Result third;
+        check(engine::import::cook_all(options, third), "the third cook works");
         check(third.cooked == 1, "a changed .bin cooks the glTF again");
 
         as::Mesh mesh;
@@ -1066,16 +1066,16 @@ namespace {
         const std::filesystem::path out = scratch("part/out");
         write_glb(source / "pair.glb", build_triangle(), 2);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         // Deleting one of the two outputs leaves the other one there and the
         // manifest unchanged. An entry that checked only its first output would
         // call this fresh and the second mesh would never come back.
         std::filesystem::remove(out / "pair.glb.1.mesh");
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 1, "one missing part cooks the source again");
         check(std::filesystem::exists(out / "pair.glb.1.mesh"), "and the part came back");
 
@@ -1141,9 +1141,9 @@ namespace {
         write_tga(source / "skin_BaseColor.tga");
         write_glb(source / "one.glb", build_triangle(), 1, "skin_BaseColor.tga");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a glTF with a material cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a glTF with a material cooks");
 
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
@@ -1197,12 +1197,12 @@ namespace {
         write_tga(source / "skin_BaseColor.tga");
         write_glb(source / "one.glb", build_triangle(), 1, "skin_BaseColor.tga");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 0, "and nothing cooks twice");
 
         // Replace the image sidecar, which is what deleting one and cooking
@@ -1214,8 +1214,8 @@ namespace {
         check(as::save_meta(source / "skin_BaseColor.tga", replaced),
               "a new identity writes to the sidecar");
 
-        cooker::Result third;
-        check(cooker::cook_all(options, third), "the third cook works");
+        engine::import::Result third;
+        check(engine::import::cook_all(options, third), "the third cook works");
         check(third.cooked == 2, "a replaced image sidecar cooks the image and the glTF");
 
         const as::Material material = read_material_file(out / "one.glb.0.material");
@@ -1237,9 +1237,9 @@ namespace {
         write_tga(source / "skin_Normal.tga");
         write_glb(source / "a.glb", build_triangle(), 1, "skin_Normal.tga");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::AssetMeta image;
         check(as::load_meta(source / "skin_Normal.tga", image), "the image sidecar reads");
@@ -1263,9 +1263,9 @@ namespace {
                                                "skin%20BaseColor.tga");
         write_bytes(source / "one.gltf", std::as_bytes(std::span{ json.data(), json.size() }));
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a glTF whose URIs hold an escaped space cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a glTF whose URIs hold an escaped space cooks");
 
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
@@ -1310,9 +1310,9 @@ namespace {
         const std::string json = geometry_json(build_triangle(), 1, "inline.bin", uri);
         write_bytes(source / "inline.gltf", std::as_bytes(std::span{ json.data(), json.size() }));
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a glTF whose image is a data URI cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a glTF whose image is a data URI cooks");
 
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
@@ -1345,8 +1345,8 @@ namespace {
         }
         check(!names_a_data_uri, "and no input names the data URI");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "a second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "a second cook works");
         check(second.skipped == 1, "and it skips the glTF");
 
         test::remove_tree(source.parent_path());
@@ -1360,9 +1360,9 @@ namespace {
         // inside the .glb, so it has no URI at all.
         write_glb_with_image(source / "packed.glb", build_triangle(), tga_bytes());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a .glb carrying its image cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a .glb carrying its image cooks");
 
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
@@ -1399,9 +1399,9 @@ namespace {
         write_glb_with_image(source / "packed.glb", build_triangle(), tga_bytes(),
                              ImageSlot::Normal);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "it cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "it cooks");
 
         as::TextureView view;
         check(as::read_texture(read_bytes(out / "packed.glb.0.tex"), view, "packed"),
@@ -1422,9 +1422,9 @@ namespace {
         write_glb_with_image(source / "packed.glb", build_triangle(), tga_bytes(),
                              ImageSlot::Both);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "it cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "it cooks");
 
         as::TextureView view;
         check(as::read_texture(read_bytes(out / "packed.glb.0.tex"), view, "packed"),
@@ -1447,9 +1447,9 @@ namespace {
         // A model that names an image nobody shipped is a broken model. Cooking
         // it anyway would give a material with a null texture, and the surface
         // would draw white with nothing in the log naming the file.
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a material naming a missing image fails");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a material naming a missing image fails");
         check(result.failed == 1, "and the glTF is the source that failed");
 
         test::remove_tree(source.parent_path());
@@ -1467,9 +1467,9 @@ namespace {
         write_glb(source / "model.glb", build_triangle(), 2, {}, ImageSlot::Both,
                   NodeTree::Flat);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a glTF with a node tree cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a glTF with a node tree cooks");
 
         as::Manifest manifest;
         check(as::load_manifest(out, manifest), "the manifest reads back");
@@ -1535,9 +1535,9 @@ namespace {
         write_glb(source / "solo.glb", build_triangle(), 1, {}, ImageSlot::Both,
                   NodeTree::Single);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "it cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "it cooks");
 
         const nlohmann::json document = read_prefab(out / "solo.glb.0.prefab");
         check(!document.is_discarded(), "the cooked prefab parses");
@@ -1564,9 +1564,9 @@ namespace {
         write_glb(source / "deep.glb", build_triangle(), 2, {}, ImageSlot::Both,
                   NodeTree::Nested);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "it cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "it cooks");
 
         const nlohmann::json document = read_prefab(out / "deep.glb.0.prefab");
         check(!document.is_discarded(), "the cooked prefab parses");
@@ -1600,9 +1600,9 @@ namespace {
         write_glb(source / "chain.glb", build_triangle(), 2, {}, ImageSlot::Both,
                   NodeTree::Deep);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "it cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "it cooks");
 
         const nlohmann::json document = read_prefab(out / "chain.glb.0.prefab");
         check(!document.is_discarded(), "the cooked prefab parses");
@@ -1638,9 +1638,9 @@ namespace {
         write_glb(source / "flip.glb", build_triangle(), 1, {}, ImageSlot::Both,
                   NodeTree::Mirrored);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a node with a mirroring matrix cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a node with a mirroring matrix cooks");
 
         const nlohmann::json document = read_prefab(out / "flip.glb.0.prefab");
         check(!document.is_discarded(), "the cooked prefab parses");
@@ -1675,9 +1675,9 @@ namespace {
         // A Transform holds a position, a rotation, and a scale, and none of
         // those says shear. Writing the nearest transform instead would place
         // the part somewhere the model never put it, with nothing said.
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a node whose matrix holds shear fails");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a node whose matrix holds shear fails");
         check(result.failed == 1, "and the glTF is the source that failed");
         check(!std::filesystem::exists(out / "skew.glb.0.prefab"),
               "and no prefab was left behind");
@@ -1691,9 +1691,9 @@ namespace {
         write_glb(source / "bare.glb", build_triangle(), 1, {}, ImageSlot::Both,
                   NodeTree::EmptyScene);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a glTF whose scene lists no node still cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a glTF whose scene lists no node still cooks");
 
         // The mesh is still worth cooking. A scene can name it, and a person
         // may have exported a file whose scene graph is empty by accident.

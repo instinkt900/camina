@@ -33,7 +33,7 @@
 #include <filesystem>
 #include <vector>
 
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief Reads every source path a document names, before anything cooks.
@@ -98,4 +98,4 @@ namespace cooker {
                                      const std::filesystem::path& content_root,
                                      const engine::scene::ComponentRegistry& types);
 
-} // namespace cooker
+} // namespace engine::import

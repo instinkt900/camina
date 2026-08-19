@@ -23,7 +23,7 @@
 #include <string_view>
 #include <vector>
 
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief Whether this rule handles a file with this extension.
@@ -80,4 +80,4 @@ namespace cooker {
                                    const std::filesystem::path& destination,
                                    const std::vector<std::string>& defines);
 
-} // namespace cooker
+} // namespace engine::import

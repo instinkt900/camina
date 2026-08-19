@@ -20,8 +20,13 @@ set_source_files_properties(../screenshot.cpp PROPERTIES
 # third_party/CMakeLists.txt and DESIGN.md section 5 give: every recipe on Conan
 # Center pins an ImGui this engine cannot take. It is linked here and nowhere
 # else, because the editor application is the only thing that draws a gizmo.
+# engine::import is what M13 is for: the editor runs the same import rules the
+# cooker runs, so its picture comes from the bytes the runtime will draw from.
+# The runtime does not link it, which is what keeps stb, cgltf, meshoptimizer,
+# bc7enc and shaderc out of a shipped game.
 target_link_libraries(editor PRIVATE
     engine::core
+    engine::import
     camina::sandbox
     SDL3::SDL3
     imgui::imgui

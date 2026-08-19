@@ -367,9 +367,12 @@ engine/
     assets/            runtime asset DB, handles, streaming, hot reload
     ui/                moth_ui IRenderer/IImage/IFont implementations, see §8
     audio/             IAudioDevice and the miniaudio implementation
+    import/            the import rules: source assets in, cooked assets out.
+                       engine::import knows no game. The cooker and the editor
+                       both link it, a runtime build does not. See §10 M13
   tools/
-    cooker/            source assets to cooked assets, separate executable.
-                       cooker_lib knows no game, the executable links one
+    cooker/            the command line over src/import/, separate executable
+                       so a cook runs on a machine with no graphics driver
   apps/
     editor/            engine_core with the ImGui editor
     runtime/           engine_core, loads a project and runs it
@@ -1396,7 +1399,7 @@ cannot depend on `scene/`. The manifest arrives as a parameter instead.
 
 **So the cooker has to hold the descriptors of every component a document can carry.** The
 engine's own are not enough, because a game defines its own types and one of them may name an
-asset. `cooker_lib` therefore takes the registry as an input and knows no game, and the
+asset. `engine::import` therefore takes the registry as an input and knows no game, and the
 `cooker` executable links the game module and registers it, exactly as `apps/runtime` does.
 That makes the cooker specific to one game. It is the same compromise the runtime already
 makes, and it is one place rather than two when a project system chooses a game instead.
@@ -2588,10 +2591,26 @@ which is what M13.4 replaces. The other two, `ui::ImageFactory` and `ui::FontFac
 mean a cooked tree at all. They resolve a layout's absolute path against the content root, and
 a root is not a question this interface answers.
 
-The importers move out of `tools/cooker/` into a library the editor can link, and their
-dependencies stay private to it so a runtime build links none of them. `cooker_lib` already
-knows no game, so the code is separable today and the work is where it sits rather than what
-it does.
+**M13.2 moved the importers into `src/import/`, as `engine::import`.** `tools/cooker/` keeps
+`main.cpp` and nothing else, so the cooker is the command line over those rules rather than
+their owner. The library was separable before the move: `cooker_lib` already knew no game, and
+`tools/cooker` was already configured before `apps/editor`, so the editor could have linked it
+where it stood. The work was therefore where the code sits rather than what it does.
+
+It sits in `src/` because a directory two applications depend on is engine code, and because
+`tools/` is for programs a build machine runs. Two things follow from the move that did not
+follow from the old place. The Doxygen gate reads `src/` only, so these headers are now checked
+like any other public header. And the namespace is `engine::import` rather than `cooker`, which
+is what every other directory under `src/` does.
+
+**Every importer dependency stays PRIVATE**, so stb, cgltf, meshoptimizer, bc7enc and shaderc
+reach the cooker and the editor and never a runtime build. `nm` over the three binaries is how
+that is checked rather than argued.
+
+**The proof that a move is only a move is the bytes.** The cooker built before the move and the
+cooker built after it were each run over both content trees, and the 85 cooked files are
+identical byte for byte. A move that changed an import would show up there and nowhere else,
+because no test reads a cooked file and compares it against another cooker.
 
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an

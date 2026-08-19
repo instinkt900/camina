@@ -24,7 +24,7 @@
 
 struct cgltf_data;
 
-namespace cooker {
+namespace engine::import {
 
     /// @brief What cook_inline_images() made from one glTF file.
     struct InlineImages {
@@ -100,4 +100,4 @@ namespace cooker {
                                       engine::Guid parent, const InlineImages& images,
                                       CookedMaterials& out);
 
-} // namespace cooker
+} // namespace engine::import

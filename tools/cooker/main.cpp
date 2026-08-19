@@ -1,4 +1,4 @@
-#include "cook.h"
+#include "import/cook.h"
 
 #include "core/log.h"
 #include "sandbox/game.h"
@@ -14,7 +14,7 @@ namespace {
     }
 
     /// Reads the command line. Reports what is wrong rather than guessing.
-    [[nodiscard]] bool parse(int argc, char** argv, cooker::Options& options) {
+    [[nodiscard]] bool parse(int argc, char** argv, engine::import::Options& options) {
         for (int i = 1; i < argc; ++i) {
             const std::string_view argument{ argv[i] };
             const bool has_value = i + 1 < argc;
@@ -43,7 +43,7 @@ namespace {
 int main(int argc, char** argv) {
     engine::log::init();
 
-    cooker::Options options;
+    engine::import::Options options;
     if (!parse(argc, argv, options)) {
         usage();
         return 2;
@@ -57,12 +57,12 @@ int main(int argc, char** argv) {
     // does. That is what makes the cooker specific to one game, and it is the
     // same place a project system would choose one instead. See DESIGN.md
     // section 6.
-    engine::scene::ComponentRegistry types = cooker::engine_components();
+    engine::scene::ComponentRegistry types = engine::import::engine_components();
     sandbox::register_components(types);
     options.components = &types;
 
-    cooker::Result result;
-    const bool ok = cooker::cook_all(options, result);
+    engine::import::Result result;
+    const bool ok = engine::import::cook_all(options, result);
 
     ENGINE_LOG_INFO("Cooked {}, skipped {}, failed {}.", result.cooked, result.skipped,
                     result.failed);

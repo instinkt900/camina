@@ -13,7 +13,7 @@
  * It names no game either. A document names an asset in a component field, and
  * which field that is comes from the descriptors. So the caller hands in the
  * component registry, and an application that cooks a game's content registers
- * that game's components first. See @ref cooker::engine_components.
+ * that game's components first. See @ref engine::import::engine_components.
  */
 
 #include "scene/component_registry.h"
@@ -23,7 +23,7 @@
 #include <string>
 
 /// @brief The asset cooker. It reads source assets and writes cooked ones.
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief The component types the engine itself defines.
@@ -89,4 +89,4 @@ namespace cooker {
      */
     [[nodiscard]] bool cook_all(const Options& options, Result& result);
 
-} // namespace cooker
+} // namespace engine::import

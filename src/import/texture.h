@@ -17,7 +17,7 @@
 #include <span>
 #include <string_view>
 
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief Whether this rule handles a file with this extension.
@@ -97,4 +97,4 @@ namespace cooker {
                                           const engine::assets::TextureImport& settings,
                                           std::string_view where);
 
-} // namespace cooker
+} // namespace engine::import

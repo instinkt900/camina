@@ -17,8 +17,8 @@
 #include "assets/shader.h"
 #include "assets/texture.h"
 #include "check.h"
-#include "cook.h"
-#include "document.h"
+#include "import/cook.h"
+#include "import/document.h"
 #include "core/guid.h"
 #include "platform/paths.h"
 #include "reflect/attributes.h"
@@ -184,9 +184,9 @@ namespace {
         write_file(source / "one.lua", "{}");
         write_file(source / "nested" / "two.lua", "{}");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the first cook works");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the first cook works");
         check(result.cooked == 2 && result.skipped == 0, "and it cooks both assets");
         check(std::filesystem::exists(out / "one.lua"), "the asset landed");
         check(std::filesystem::exists(out / "nested" / "two.lua"),
@@ -197,30 +197,30 @@ namespace {
         check(std::filesystem::exists(as::meta_path(source / "one.lua")),
               "the first cook wrote a sidecar");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 0 && second.skipped == 2, "and it cooks nothing");
 
         // Touching a file moves its time but not its bytes.
         std::filesystem::last_write_time(source / "one.lua",
                                          std::filesystem::file_time_type::clock::now());
-        cooker::Result touched;
-        check(cooker::cook_all(options, touched), "a touched tree cooks");
+        engine::import::Result touched;
+        check(engine::import::cook_all(options, touched), "a touched tree cooks");
         check(touched.cooked == 0 && touched.skipped == 2, "and a new time alone cooks nothing");
 
         // A real change cooks that asset, and only that asset.
         write_file(source / "one.lua", "{\"changed\":true}");
-        cooker::Result changed;
-        check(cooker::cook_all(options, changed), "a changed tree cooks");
+        engine::import::Result changed;
+        check(engine::import::cook_all(options, changed), "a changed tree cooks");
         check(changed.cooked == 1 && changed.skipped == 1, "and it cooks only what changed");
         check(read_file(out / "one.lua") == "{\"changed\":true}",
               "the new bytes reached the output");
 
         // --force is the escape hatch when somebody distrusts the manifest.
-        cooker::Options forced = options;
+        engine::import::Options forced = options;
         forced.force = true;
-        cooker::Result all;
-        check(cooker::cook_all(forced, all), "a forced cook works");
+        engine::import::Result all;
+        check(engine::import::cook_all(forced, all), "a forced cook works");
         check(all.cooked == 2 && all.skipped == 0, "and it cooks everything again");
 
         test::remove_tree(source.parent_path());
@@ -233,9 +233,9 @@ namespace {
         constexpr std::string_view kScript = "function on_update(dt)\n  return dt\nend\n";
         write_file(source / "scripts" / "spin.lua", kScript);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "a tree with a script cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "a tree with a script cooks");
         check(first.cooked == 1, "and the script is the one asset in it");
 
         // The cooked form is the source text. See src/assets/script.h for why
@@ -277,13 +277,13 @@ namespace {
 
         // The rule changes no output, so the freshness check has to behave the
         // same way it does for every other asset.
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 0 && second.skipped == 1, "an unchanged script cooks nothing");
 
         write_file(source / "scripts" / "spin.lua", "function on_update() end\n");
-        cooker::Result changed;
-        check(cooker::cook_all(options, changed), "an edited script cooks");
+        engine::import::Result changed;
+        check(engine::import::cook_all(options, changed), "an edited script cooks");
         check(changed.cooked == 1, "and the edit is what cooked it");
         check(read_file(cooked) == "function on_update() end\n",
               "and the new text reached the cooked tree");
@@ -296,15 +296,15 @@ namespace {
         const std::filesystem::path out = scratch("gone/out");
         write_file(source / "one.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         // Somebody deleted the cooked file but left the manifest. The entry is
         // stale even though every input still hashes the same.
         std::filesystem::remove(out / "one.scene");
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 1, "a missing output cooks again");
         check(std::filesystem::exists(out / "one.scene"), "and the file came back");
 
@@ -316,9 +316,9 @@ namespace {
         const std::filesystem::path out = scratch("ident/out");
         write_file(source / "one.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Manifest before;
         check(as::load_manifest(out, before), "the manifest reads back");
@@ -328,8 +328,8 @@ namespace {
         // Deleting the sidecar gives the asset a new identity. Every reference
         // to it has to see the new one, so the entry cannot be reused.
         std::filesystem::remove(as::meta_path(source / "one.scene"));
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 1, "a new identity cooks again");
 
         as::Manifest after;
@@ -352,9 +352,9 @@ namespace {
         const std::filesystem::path out = scratch("dup/out");
         write_file(source / "one.scene", "{}");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
         check(first.cooked == 1, "it cooked one asset");
 
         std::filesystem::copy_file(source / "one.scene", source / "copy.scene");
@@ -362,8 +362,8 @@ namespace {
         const auto copied_sidecar = as::meta_path(source / "copy.scene");
         std::filesystem::copy_file(sidecar, copied_sidecar);
 
-        cooker::Result second;
-        check(!cooker::cook_all(options, second), "a duplicate identity fails the cook");
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second), "a duplicate identity fails the cook");
 
         test::remove_tree(source.parent_path());
     }
@@ -382,9 +382,9 @@ namespace {
 #endif
         write_file(source / name, "#version 450\nvoid main() {}\n");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a name a shell would expand now cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a name a shell would expand now cooks");
         check(result.cooked == 1, "it counted the cook");
         check(std::filesystem::exists(out / shader_part(name)),
               "the cooked shader was written");
@@ -439,9 +439,9 @@ void main() {
   }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a shader with two variants cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a shader with two variants cooks");
 
         const std::string base_bytes = read_file(out / shader_part("many.frag", 0));
         const std::string variant_bytes = read_file(out / shader_part("many.frag", 1));
@@ -523,9 +523,9 @@ void main() { out_color = vec4(1.0); }
   }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result),
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result),
               "a list whose first variant defines something fails the cook");
         check(result.failed == 1, "and it counts one failure");
         check(!std::filesystem::exists(out / shader_part("first.frag", 0)),
@@ -552,9 +552,9 @@ void main() {
 }
 )");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a shader with real bindings cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a shader with real bindings cooks");
 
         const std::string cooked =
             read_file(out / shader_part("look.frag"));
@@ -624,9 +624,9 @@ layout(location = 0) out vec4 out_color;
 void main() { out_color = push.model[0]; }
 )");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a shader with a late push block cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a shader with a late push block cooks");
 
         const std::string cooked =
             read_file(out / shader_part("late.frag"));
@@ -652,9 +652,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("broken_shader/out");
         write_file(source / "bad.frag", "#version 450\nthis is not GLSL\n");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a shader that will not compile fails the cook");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a shader that will not compile fails the cook");
         check(result.failed == 1, "and it counts one failure");
         check(!std::filesystem::exists(out / shader_part("bad.frag")),
               "no cooked shader was written");
@@ -751,9 +751,9 @@ void main() { out_color = push.model[0]; }
         write_tga(source / "crate_basecolor.tga", 2, 2, half_black_half_white());
         write_tga(source / "crate_normal.tga", 2, 2, half_black_half_white());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "both textures cook");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "both textures cook");
         check(result.cooked == 2, "and both are new");
 
         as::AssetMeta color;
@@ -811,13 +811,13 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path image = source / "plate.tga";
         write_tga(image, 2, 2, half_black_half_white());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
         check(first.cooked == 1, "and it cooks the texture");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.skipped == 1, "and it cooks nothing");
 
         // The sidecar is an input, not only a place to keep the identity. An
@@ -828,8 +828,8 @@ void main() { out_color = push.model[0]; }
         meta.texture.color_space = as::ColorSpace::Linear;
         check(as::save_meta(image, meta), "and the edit writes");
 
-        cooker::Result third;
-        check(cooker::cook_all(options, third), "the third cook works");
+        engine::import::Result third;
+        check(engine::import::cook_all(options, third), "the third cook works");
         check(third.cooked == 1, "a changed sidecar cooks the texture again");
 
         std::vector<std::byte> bytes;
@@ -845,9 +845,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("upgrade/out");
         write_file(source / "one.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         // A manifest an older cooker wrote, which named fewer inputs. is_fresh()
         // hashes the inputs the old entry names, so an entry like this would
@@ -864,8 +864,8 @@ void main() { out_color = push.model[0]; }
               "the shorter list hashes");
         check(as::save_manifest(out, older), "and the older manifest writes");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 1, "an entry with an older input list cooks again");
 
         as::Manifest now;
@@ -893,13 +893,13 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("cookerver/out");
         write_file(source / "one.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
         check(first.cooked == 1, "and it cooks the asset");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.skipped == 1, "and it skips, because nothing changed");
 
         // The manifest as an older cooker left it. save_manifest() stamps the
@@ -918,8 +918,8 @@ void main() { out_color = push.model[0]; }
         text.replace(stamped, field.size(), "\"cooker\": 1");
         write_file(file, text);
 
-        cooker::Result third;
-        check(cooker::cook_all(options, third), "the third cook works");
+        engine::import::Result third;
+        check(engine::import::cook_all(options, third), "the third cook works");
         check(third.cooked == 1, "a manifest from an older cooker cooks again");
 
         // A manifest older still, from before the field existed. It has to read
@@ -933,8 +933,8 @@ void main() { out_color = push.model[0]; }
         text.erase(at, text.find('\n', at) + 1 - at);
         write_file(file, text);
 
-        cooker::Result fourth;
-        check(cooker::cook_all(options, fourth), "the fourth cook works");
+        engine::import::Result fourth;
+        check(engine::import::cook_all(options, fourth), "the fourth cook works");
         check(fourth.cooked == 1, "and a manifest with no cooker field cooks again too");
 
         test::remove_tree(source.parent_path());
@@ -955,9 +955,9 @@ void main() { out_color = push.model[0]; }
         }
         write_tga(image, kSize, kSize, texels);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the texture cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the texture cooks");
 
         std::vector<std::byte> bytes;
         as::TextureView view;
@@ -975,8 +975,8 @@ void main() { out_color = push.model[0]; }
         meta.texture.mips = false;
         check(as::save_meta(image, meta), "and the edit writes");
 
-        cooker::Result again;
-        check(cooker::cook_all(options, again), "it cooks again");
+        engine::import::Result again;
+        check(engine::import::cook_all(options, again), "it cooks again");
         check(again.cooked == 1, "because the sidecar changed");
 
         check(read_cooked(out / "wall.tga.tex", bytes, view), "the new file reads");
@@ -1040,9 +1040,9 @@ void main() { out_color = push.model[0]; }
             write_tga(source / name, size.width, size.height, texels);
         }
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "every awkward size cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "every awkward size cooks");
         check(result.cooked == sizes.size(), "and all of them are new");
 
         for (const Size& size : sizes) {
@@ -1068,9 +1068,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("keep_old/out");
         write_tga(source / "wall.tga", 2, 2, half_black_half_white());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content before;
         check(before.open(out), "the cooked directory opens");
@@ -1079,8 +1079,8 @@ void main() { out_color = push.model[0]; }
         // Break the source and cook again. A rule that fails writes no output,
         // so the cooked file from the first run is still there and still good.
         write_file(source / "wall.tga", "this is not a TGA at all");
-        cooker::Result second;
-        check(!cooker::cook_all(options, second), "the cook after the break fails");
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second), "the cook after the break fails");
         check(second.failed == 1, "and it counts one failure");
 
         // The point of the test. Dropping the entry would hide a cooked file
@@ -1105,9 +1105,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("keep_none/out");
         write_tga(source / "wall.tga", 2, 2, half_black_half_white());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content before;
         check(before.open(out), "the cooked directory opens");
@@ -1122,8 +1122,8 @@ void main() { out_color = push.model[0]; }
         std::filesystem::remove(cooked);
         write_file(source / "wall.tga", "this is not a TGA at all");
 
-        cooker::Result second;
-        check(!cooker::cook_all(options, second), "the cook after the break fails");
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second), "the cook after the break fails");
 
         as::Content after;
         check(after.open(out), "the cooked directory still opens");
@@ -1138,9 +1138,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("broken/out");
         write_file(source / "not_an_image.tga", "this is not a TGA at all");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a file stb cannot read fails the cook");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a file stb cannot read fails the cook");
         check(result.failed == 1, "and it counts as a failure");
         check(!std::filesystem::exists(out / "not_an_image.tga.tex"),
               "and no cooked file was left behind");
@@ -1160,9 +1160,9 @@ void main() { out_color = push.model[0]; }
         // what its license is, next to the files it describes. Cooking one
         // would give it a GUID, write it a sidecar, and copy it into the cooked
         // tree where nothing reads it.
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
         check(result.cooked == 1, "and it cooks the asset and not the documentation");
         check(!std::filesystem::exists(out / "README.md"), "the README was not copied through");
         check(!std::filesystem::exists(out / "LICENSE"), "nor a file with no extension");
@@ -1188,9 +1188,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "one.scene", "{}");
         write_file(source / "generate.py", "print('writes room.gltf')");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
         check(result.cooked == 1, "and it cooks the scene alone");
 
         check(!std::filesystem::exists(as::meta_path(source / "generate.py")),
@@ -1225,9 +1225,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "ui" / "fonts" / "body.ttf", "not a real face");
         write_file(source / "ui" / "main.mothui", "{\"layout\":true}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
         check(result.cooked == 2, "and it cooks both");
 
         check(std::filesystem::exists(out / "ui" / "fonts" / "body.ttf"),
@@ -1255,9 +1255,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "ONE.SCENE", "{}");
         write_file(source / "BODY.TTF", "not a real face");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
         check(result.cooked == 2, "and an upper case extension still finds its rule");
         check(std::filesystem::exists(out / "ONE.SCENE"), "the scene reached the cooked tree");
         check(std::filesystem::exists(out / "BODY.TTF"), "and so did the face");
@@ -1267,10 +1267,10 @@ void main() { out_color = push.model[0]; }
 
     void test_bad_input() {
         const std::filesystem::path out = scratch("bad/out");
-        cooker::Result result;
+        engine::import::Result result;
 
-        const cooker::Options missing{ .content = out / "not_there", .out = out };
-        check(!cooker::cook_all(missing, result), "a content directory that is not there fails");
+        const engine::import::Options missing{ .content = out / "not_there", .out = out };
+        check(!engine::import::cook_all(missing, result), "a content directory that is not there fails");
 
         test::remove_tree(out.parent_path());
     }
@@ -1280,9 +1280,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("read/out");
         write_file(source / "one.lua", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -1351,9 +1351,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "a.scene", "{}");
         write_file(source / "b.prefab", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
@@ -1368,8 +1368,8 @@ void main() { out_color = push.model[0]; }
         // The property the whole feature rests on. A reload that named every
         // asset would re-upload the entire tree every time one file is saved.
         write_file(source / "a.scene", "{\"changed\":true}");
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(content.reload(changed), "the reload reads the new manifest");
         check(changed.size() == 1, "and it names one asset");
         if (changed.size() != 1) {
@@ -1389,9 +1389,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "a.scene", "{}");
         write_file(source / "b.prefab", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
@@ -1401,8 +1401,8 @@ void main() { out_color = push.model[0]; }
         // drawing it, so the reload has to report it.
         std::filesystem::remove(source / "b.prefab");
         std::filesystem::remove(as::meta_path(source / "b.prefab"));
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the cook after the delete works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the cook after the delete works");
 
         std::vector<as::AssetChange> changed;
         check(content.reload(changed), "the reload reads the new manifest");
@@ -1422,9 +1422,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "b.prefab", "{}");
         write_tga(source / "wall.tga", 2, 2, half_black_half_white());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
@@ -1435,8 +1435,8 @@ void main() { out_color = push.model[0]; }
         // that prefab stood until a restart.
         std::filesystem::remove(source / "b.prefab");
         std::filesystem::remove(as::meta_path(source / "b.prefab"));
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the cook after the delete works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the cook after the delete works");
 
         std::vector<as::AssetChange> changed;
         check(content.reload(changed), "the reload reads the new manifest");
@@ -1456,16 +1456,16 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("changed_kind/out");
         write_file(source / "a.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
 
         write_file(source / "a.scene", R"({"changed":true})");
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
 
         std::vector<as::AssetChange> changed;
         check(content.reload(changed) && changed.size() == 1, "the reload names one asset");
@@ -1484,9 +1484,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("bad_manifest/out");
         write_file(source / "a.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
@@ -1510,9 +1510,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("hot/out");
         write_file(source / "a.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
@@ -1551,9 +1551,9 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("hot_bad/out");
         write_file(source / "a.scene", "{}");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         as::Content content;
         check(content.open(out), "the content opens");
@@ -1692,9 +1692,9 @@ void main() { out_color = push.model[0]; }
                    R"({"__version":1,"entities":[{"parent":-1,"components":{)"
                    R"("MeshRenderer":{"__version":1,"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         // The identity the reference resolved to has to be the one the glTF
         // rule gave the mesh, or the prefab names a mesh nothing cooked.
@@ -1724,9 +1724,9 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":{"mesh":")" +
                        written.to_text() + R"("}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
         check(cooked_mesh(out / "a.prefab") == written.to_text(),
               "a document that already holds a GUID keeps it");
 
@@ -1740,12 +1740,12 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/gone.gltf#mesh:0"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
         // The whole point. Before this a wrong identity drew nothing and
         // reported one line at runtime, which looks exactly like a mesh that
         // failed to upload.
-        check(!cooker::cook_all(options, result), "a reference to a file that is not there fails");
+        check(!engine::import::cook_all(options, result), "a reference to a file that is not there fails");
         check(result.failed == 1, "and it is reported as a failure");
 
         test::remove_tree(source.parent_path());
@@ -1761,12 +1761,12 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
         // Passing it through as an ordinary string is the failure to avoid.
         // The cooked prefab would then hold "asset:models/crate.gltf#mesh"
         // where a GUID goes, and the mesh would simply never load.
-        check(!cooker::cook_all(options, result),
+        check(!engine::import::cook_all(options, result),
               "a reference that will not read fails the cook");
         check(result.failed == 1, "and it is reported as a failure");
 
@@ -1801,13 +1801,13 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh:7"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
         // Guid::derive answers for any index, so this used to cook happily and
         // give the prefab an identity nothing wrote. The scene then drew
         // nothing, which is the failure naming an asset by path is meant to
         // remove.
-        check(!cooker::cook_all(options, result),
+        check(!engine::import::cook_all(options, result),
               "a reference to a part that is not there fails the cook");
         check(result.failed == 1, "and it is reported as a failure");
 
@@ -1822,9 +1822,9 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh:1"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
 
         // Replace the model with one that holds a single mesh. It is a valid
         // model and it cooks, so nothing fails on its own account. The prefab
@@ -1832,8 +1832,8 @@ void main() { out_color = push.model[0]; }
         // looks stale either. Only the finished manifest can say the identity
         // it names is gone.
         write_file(source / "models" / "crate.gltf", kMinimalGltf);
-        cooker::Result second;
-        check(!cooker::cook_all(options, second),
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second),
               "a model that lost the part fails the cook of the document naming it");
         check(second.failed == 1, "and the failure is the document, not the model");
 
@@ -1845,11 +1845,11 @@ void main() { out_color = push.model[0]; }
         const std::filesystem::path out = scratch("bad_document/out");
         write_file(source / "a.scene", "this is not json");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
         // A scene used to be copied through, so a broken one reached the
         // runtime and emptied the world there instead.
-        check(!cooker::cook_all(options, result), "a scene that will not parse fails the cook");
+        check(!engine::import::cook_all(options, result), "a scene that will not parse fails the cook");
         check(result.failed == 1, "and it is reported as a failure");
 
         test::remove_tree(source.parent_path());
@@ -1863,21 +1863,21 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result first;
-        check(cooker::cook_all(options, first), "the first cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
         const std::string before = cooked_mesh(out / "a.prefab");
 
-        cooker::Result second;
-        check(cooker::cook_all(options, second), "the second cook works");
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
         check(second.cooked == 0, "and an unchanged tree cooks nothing");
 
         // Replacing the sidecar gives the glTF a new identity, so every
         // identity derived from it moves. The prefab has to be cooked again or
         // it names a mesh that no longer exists.
         std::filesystem::remove(as::meta_path(source / "models" / "crate.gltf"));
-        cooker::Result third;
-        check(cooker::cook_all(options, third), "the cook after the sidecar went works");
+        engine::import::Result third;
+        check(engine::import::cook_all(options, third), "the cook after the sidecar went works");
         check(cooked_mesh(out / "a.prefab") != before,
               "a new identity for the glTF moves what the prefab names");
 
@@ -1912,9 +1912,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
         write_tga(source / "wall.tga", 2, 2, half_black_half_white());
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -1959,9 +1959,9 @@ void main() { out_color = push.model[0]; }
                       half_black_half_white());
         }
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -1998,9 +1998,9 @@ void main() { out_color = push.model[0]; }
         sc::ComponentRegistry types;
         sc::register_builtin_components(types);
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -2046,9 +2046,9 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -2090,9 +2090,9 @@ void main() { out_color = push.model[0]; }
                    R"("added":[{"parent":0,"components":{"MeshRenderer":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -2134,12 +2134,12 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"Billboard":)"
                    R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
 
-        engine::scene::ComponentRegistry types = cooker::engine_components();
+        engine::scene::ComponentRegistry types = engine::import::engine_components();
         types.add<test_game::Billboard>();
 
-        const cooker::Options options{ .content = source, .out = out, .components = &types };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the cook works with the game registered");
+        const engine::import::Options options{ .content = source, .out = out, .components = &types };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works with the game registered");
 
         as::Content content;
         check(content.open(out), "the cooked directory opens");
@@ -2186,9 +2186,9 @@ void main() { out_color = push.model[0]; }
                    R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
 
         // No registry named, so the cooker uses the engine's own components.
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result),
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result),
               "a reference the cooker cannot place fails the cook");
         check(!std::filesystem::exists(out / "a.prefab"),
               "and it writes no cooked document to be read later");
@@ -2216,9 +2216,9 @@ void main() { out_color = push.model[0]; }
                    R"({"entities":[{"components":{"Name":)"
                    R"({"value":"asset:models/crate.gltf"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a reference in a plain string fails the cook");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a reference in a plain string fails the cook");
         check(!std::filesystem::exists(out / "a.prefab"), "and nothing is written");
         check(result.failed == 1, "and one fault counts once");
 
@@ -2238,9 +2238,9 @@ void main() { out_color = push.model[0]; }
         write_file(source / "a.prefab",
                    R"({"entities":[{"components":{"Name":{"value":"assets go here"}}}]})");
 
-        const cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "an ordinary name cooks");
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "an ordinary name cooks");
 
         nlohmann::json cooked = nlohmann::json::parse(read_file(out / "a.prefab"), nullptr, false);
         check(!cooked.is_discarded(), "the cooked prefab parses");
@@ -2280,9 +2280,9 @@ void main() { out_color = push.model[0]; }
 })");
 
         // This test cooks no shader, so libshaderc is never called.
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "an HDR panorama cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "an HDR panorama cooks");
 
         const std::string bytes = read_file(out / "sky.hdr.tex");
         check(!bytes.empty(), "the cubemap was written");
@@ -2361,9 +2361,9 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 8, "specular_samples": 16 }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a constant environment cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a constant environment cooks");
 
         const std::string bytes = read_file(out / "flat.hdr.irr");
         check(!bytes.empty(), "the irradiance was written");
@@ -2503,9 +2503,9 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 4, "specular_samples": 8 }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "a band limited environment cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "a band limited environment cooks");
 
         const std::string bytes = read_file(out / "bands.hdr.irr");
         engine::assets::IrradianceSH sh;
@@ -2590,9 +2590,9 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 8, "specular_samples": 64 }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the environment cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the environment cooks");
 
         const std::string bytes = read_file(out / "flat.hdr.tex");
         engine::assets::TextureView view;
@@ -2652,9 +2652,9 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 4, "specular_samples": 8 }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(cooker::cook_all(options, result), "the environment cooks");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the environment cooks");
 
         engine::assets::Manifest manifest;
         check(engine::assets::load_manifest(out, manifest), "the manifest reads");
@@ -2698,9 +2698,9 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 4, "specular_samples": 0 }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a ray budget of zero fails the cook");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a ray budget of zero fails the cook");
         check(result.failed == 1, "and it counts one failure");
 
         test::remove_tree(source.parent_path());
@@ -2711,9 +2711,9 @@ void main() { out_color = push.model[0]; }
                                        const std::filesystem::path& out, const char* meta) {
         write_file(source / "ibl.brdf", "# no data, see the sidecar\n");
         write_file(source / "ibl.brdf.meta", meta);
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        return cooker::cook_all(options, result);
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        return engine::import::cook_all(options, result);
     }
 
     /**
@@ -2846,9 +2846,9 @@ void main() { out_color = push.model[0]; }
   "environment": { "__version": 1, "face_size": 8192 }
 })");
 
-        cooker::Options options{ .content = source, .out = out };
-        cooker::Result result;
-        check(!cooker::cook_all(options, result), "a face size past the bound fails the cook");
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "a face size past the bound fails the cook");
         check(result.failed == 1, "and it counts one failure");
 
         test::remove_tree(source.parent_path());
