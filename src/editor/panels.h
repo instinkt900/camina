@@ -33,11 +33,13 @@
 #include <entt/entity/fwd.hpp>
 
 #include <cstdint>
+#include "assets/manifest.h"
+
 #include <filesystem>
 #include <string>
 
 namespace engine::assets {
-    class Content;
+    struct Manifest;
 }
 
 namespace engine::scene {
@@ -162,7 +164,7 @@ namespace engine::editor {
      * @param selected The selected entity, changed when the user clicks one.
      * Pass entt::null for nothing selected.
      * @param scene_path The source scene to save to, or empty for no save.
-     * @param content The open cooked content, which turns an identity back into
+     * @param manifest What the project holds, which turns an identity back into
      * the reference a person wrote.
      * @param open Cleared when the user closes the panel. Pass null for a panel
      * the user cannot close.
@@ -181,7 +183,7 @@ namespace engine::editor {
      */
     [[nodiscard]] bool draw_world_panel(scene::World& world, entt::entity& selected,
                                         const std::filesystem::path& scene_path,
-                                        const assets::Content& content, bool* open = nullptr,
+                                        const assets::Manifest& manifest, bool* open = nullptr,
                                         const char* save_blocked = nullptr,
                                         History* history = nullptr);
 
@@ -265,13 +267,13 @@ namespace engine::editor {
      * "refuse an asset the cook has not produced" rule in issue #303: an asset
      * that was not cooked is not in this panel to drag.
      *
-     * @param content The open cooked content. Its manifest is the list.
+     * @param manifest What the project holds, which is the list.
      * @param filter What the user typed in the filter box, changed in place. A
      * source path that does not hold it is left out.
      * @param open Cleared when the user closes the panel. Pass null for a panel
      * the user cannot close.
      */
-    void draw_assets_panel(const assets::Content& content, std::string& filter,
+    void draw_assets_panel(const assets::Manifest& manifest, std::string& filter,
                            bool* open = nullptr);
 
     /**
@@ -288,11 +290,11 @@ namespace engine::editor {
      *
      * @param path The source scene to write.
      * @param world The world to save.
-     * @param content The open cooked content, for the references.
+     * @param manifest What the project holds, for the references.
      * @return True when the whole file reached the disk under @p path.
      */
     [[nodiscard]] bool save_scene_source(const std::filesystem::path& path,
                                          const scene::World& world,
-                                         const assets::Content& content);
+                                         const assets::Manifest& manifest);
 
 } // namespace engine::editor

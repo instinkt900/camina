@@ -2920,6 +2920,28 @@ void main() { color = vec4(1.0); }
 
     check(!cooked.empty(), "the cook produced something to compare against");
     check(indexed == cooked, "the index names exactly what the cook wrote");
+
+    // M13.4a. The same answer stated as a manifest, which is what the asset
+    // browser, assets::reference_for and scene::restore_references all read.
+    // Anything that reads a manifest then works over a source tree with no
+    // change of its own.
+    std::set<std::string> stated;
+    for (const as::ManifestEntry& entry : index.manifest().entries) {
+        for (const as::ManifestOutput& output : entry.outputs) {
+            stated.insert(output.guid.to_text() + " " + entry.source + " " + output.cooked);
+        }
+    }
+    check(stated == cooked, "and its manifest states the same thing");
+
+    // A manifest entry also carries the identity of the source file, which is
+    // not the identity of any one output when the source holds several.
+    const as::ManifestEntry* gltf = as::find_by_source(index.manifest(), "models/crate.gltf");
+    check(gltf != nullptr, "the glTF has a manifest entry");
+    if (gltf != nullptr) {
+        as::AssetMeta meta;
+        check(as::meta_for(source / "models" / "crate.gltf", meta), "its sidecar reads");
+        check(gltf->guid == meta.guid, "and the entry carries the identity of the file");
+    }
     if (indexed != cooked) {
         for (const std::string& one : cooked) {
             if (!indexed.contains(one)) {

@@ -2679,6 +2679,29 @@ environment never pays the 1.8 seconds, and no asset is imported until something
 The BRDF table depends on nothing at all, which is why #366 proposes shipping it rather than
 integrating it in every editor session.
 
+**M13.4a made the editor's remaining cooked-tree assumptions into project questions.** Three
+things named a cooked tree and meant "what the project holds". `SourceAssets` answers with a
+`Manifest` now, built from the index it already has, so `assets::reference_for`,
+`scene::restore_references` and the asset browser work over a source tree with no change of
+their own. The panels take a `Manifest` rather than a `Content` for the same reason.
+
+**`sandbox::load` reads its opening scene through the asset seam** rather than opening the file
+itself. That is behaviour-preserving for a cooked tree and it is what makes a source tree work
+at all: reading a `.scene` through the seam runs the document rule, and the document rule is
+what resolves the references a source scene names by path.
+
+**The two trees build the same world**, which is the claim the whole milestone rests on. The
+test loads the shipped sandbox from the cooked tree and from the source tree and compares the
+two worlds as documents. It compares them without the entity identities, because an entity that
+comes back with no id in the file is given a fresh one and no two loads agree there. Everything
+that says what the world is stays in.
+
+**A document rule resolves a reference only inside a component it knows.** The first version of
+that test built a registry by hand, missed `ScriptComponent`, and the source load failed on
+`asset:scripts/spin.lua` while the cooked load was fine. The cooker never meets this because its
+executable links the game. An editor that registers less than the cooker cannot open what the
+cooker wrote.
+
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an
 incremental one is about a tenth of a second. So the editor imports one asset at a time and

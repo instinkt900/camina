@@ -5,6 +5,7 @@
 // are what the runtime opens.
 
 #include "assets/content.h"
+#include "import/source_assets.h"
 #include "assets/reference.h"
 #include "assets/texture.h"
 #include "check.h"
@@ -61,6 +62,21 @@ namespace {
 #endif
         sandbox::register_components(registry);
         return registry;
+    }
+
+    /// Drops every generated entity identity, which no two loads agree on.
+    void strip_identities(nlohmann::json& document) {
+        if (document.is_object()) {
+            document.erase("id");
+        }
+        // A range-for over a JSON object walks its values, which is what this
+        // wants. items() would give a proxy that clang-tidy asks to be const,
+        // and these values are edited.
+        if (document.is_object() || document.is_array()) {
+            for (nlohmann::json& value : document) {
+                strip_identities(value);
+            }
+        }
     }
 
     /// Every name in the world, so a test can say what arrived.
@@ -744,6 +760,54 @@ namespace {
 
 } // namespace
 
+// M13.4a. The whole of M13 rests on this: a project read from source and
+// the same project read from a cooked tree build the same world. If they
+// ever differ, the editor and the runtime are two engines and comparing
+// their pictures means nothing.
+void test_a_source_project_gives_the_same_world() {
+    // make_registry(), not a hand-built one. The document rule resolves a
+    // reference only in a component it knows, so a registry missing
+    // ScriptComponent cannot resolve the script a scene names.
+    const sc::ComponentRegistry registry = make_registry();
+
+    sc::World cooked_world;
+    sc::PrefabLibrary cooked_library;
+    check(load_shipped(cooked_world, registry, cooked_library),
+          "the cooked project loads");
+
+    engine::import::SourceAssets source;
+    check(source.open(ENGINE_GAME_CONTENT_SOURCE), "the source project opens");
+    source.set_components(&registry);
+
+    sc::World source_world;
+    sc::PrefabLibrary source_library;
+    check(sandbox::load(ENGINE_GAME_CONTENT_SOURCE, &source, source_world, registry,
+                        source_library),
+          "and the same project loads from source");
+
+    check(source_world.size() == cooked_world.size(),
+          "both worlds hold the same number of entities");
+
+    // The whole world as a document, not just a count. A count would pass
+    // while every transform and every asset reference was wrong.
+    //
+    // Without the identities. An entity that comes back with no id in the
+    // file is given a fresh one, so two loads of the same scene disagree
+    // there and always will. Everything that says what the world is stays
+    // in: the components, the parents, the order, and the asset each
+    // renderer names.
+    nlohmann::json from_cooked = sc::save_scene(cooked_world);
+    nlohmann::json from_source = sc::save_scene(source_world);
+    strip_identities(from_cooked);
+    strip_identities(from_source);
+    check(from_source == from_cooked, "and the two worlds write out the same document");
+    if (from_source != from_cooked) {
+        ENGINE_LOG_ERROR("cooked: {}", from_cooked.dump().substr(0, 400));
+        ENGINE_LOG_ERROR("source: {}", from_source.dump().substr(0, 400));
+    }
+}
+
+
 int main() {
     std::printf("registration\n");
     test_registration();
@@ -752,6 +816,8 @@ int main() {
     std::printf("shipped content\n");
     test_content_is_there();
     test_shipped_scene_loads();
+    std::printf("a source project\n");
+    test_a_source_project_gives_the_same_world();
     test_every_named_mesh_is_cooked();
     test_shipped_environment_is_a_cubemap();
     test_scene_round_trips();
