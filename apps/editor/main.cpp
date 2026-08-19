@@ -13,6 +13,7 @@
 
 #include "assets/content.h"
 #include "import/source_assets.h"
+#include "platform/watch.h"
 #include "assets/reference.h"
 #include "assets/manifest.h"
 #include "core/log.h"
@@ -124,6 +125,9 @@ namespace {
         std::string select;
         /// Which handles to start on, for the same reason.
         engine::editor::GizmoControls gizmo;
+        /// Watch the source tree and import a file that changed. Off makes a
+        /// run reproducible, the way it does for the runtime.
+        bool watch = true;
     };
 
     void print_usage() {
@@ -136,6 +140,7 @@ namespace {
         ENGINE_LOG_INFO("  --gizmo <mode>      Start on move, turn, or size handles.");
         ENGINE_LOG_INFO("  --gizmo-local       Line the handles up with the entity.");
         ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
+        ENGINE_LOG_INFO("  --no-watch          Do not import a source file that changed.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
         ENGINE_LOG_INFO("  --no-vsync          Present without waiting for the display.");
@@ -197,6 +202,8 @@ namespace {
     [[nodiscard]] bool parse_flag(std::string_view arg, Options& out) {
         if (arg == "--own-windows") {
             out.own_windows = true;
+        } else if (arg == "--no-watch") {
+            out.watch = false;
         } else if (arg == "--gizmo-local") {
             out.gizmo.space = engine::editor::GizmoSpace::Local;
         } else if (arg == "--play") {
@@ -292,6 +299,10 @@ namespace {
         /// copy, so this string has to live as long as the overlay does.
         std::string layout_path;
         bool overlay = false; ///< True once ImGui owns resources on the device.
+        /// True once the watcher is running over the project. It sits with the
+        /// other flags rather than beside the watcher, because a lone bool
+        /// between two large members pads the struct out.
+        bool watching = false;
 
         /// The engine's own cooked assets: the shaders and the split sum table.
         engine::assets::Content engine_content;
@@ -311,6 +322,11 @@ namespace {
         /// follows it at the top of the next one, because an image cannot be
         /// rebuilt while a frame is recording.
         engine::gfx::Extent2D wanted_viewport{};
+
+        /// Watches the source tree, so a file edited in another program is
+        /// imported again. There is no cook here: the editor imports in
+        /// memory, so a change is a cache entry to drop.
+        engine::platform::DirectoryWatcher watcher;
 
         /// The project the scene reads, straight out of the source tree. The
         /// editor never opens a cooked game tree now, which is M13.4b: what it
@@ -1122,6 +1138,103 @@ namespace {
         ENGINE_LOG_WARN("No entity is named {}, so nothing is selected.", name);
     }
 
+    /**
+     * Whether a changed identity is one the world was built out of.
+     *
+     * A mesh or a texture swaps in behind the entities that name it, so the
+     * world stands. A scene or a prefab is what the entities were built from,
+     * so it has to be built again.
+     *
+     * The reload says what each identity was, a removal included, so a deleted
+     * prefab is caught by its cooked name rather than by a lookup that can no
+     * longer find it.
+     */
+    [[nodiscard]] bool world_was_built_from(const engine::scene::World& world,
+                                            const std::vector<engine::assets::AssetChange>& changed) {
+        (void)world;
+        for (const engine::assets::AssetChange& change : changed) {
+            const std::string_view name{ change.cooked };
+            if (name.ends_with(engine::assets::kPrefabExtension) ||
+                name.ends_with(sandbox::kSceneFile)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Imports a source file that changed, and swaps it in.
+     *
+     * There is no cook. The editor imports in memory, so a file that changed is
+     * a cache entry to drop and the next read of it imports again.
+     *
+     * Call this between frames. `MeshPass::reload` waits for the frames in
+     * flight before it frees anything, which cannot happen mid-frame.
+     *
+     * **Nothing reloads while a session runs.** The world under one is a game
+     * part way through a step, and a stop reads a snapshot back over anything a
+     * reload did. That is the same reason undo is off during play. A file
+     * edited while the game runs is picked up on the frame after the stop,
+     * because the watcher reports it whenever it is next polled.
+     */
+    void apply_reload(Editor& editor) {
+        if (!editor.watching || editor.play.running()) {
+            return;
+        }
+
+        std::vector<engine::platform::WatchEvent> events;
+        if (!editor.watcher.poll(events) || events.empty()) {
+            return;
+        }
+
+        std::vector<std::filesystem::path> sources;
+        sources.reserve(events.size());
+        for (const engine::platform::WatchEvent& event : events) {
+            sources.push_back(event.relative);
+        }
+
+        std::vector<engine::assets::AssetChange> changed;
+        if (!editor.content.reload(sources, changed) || changed.empty()) {
+            return;
+        }
+
+        std::vector<engine::Guid> identities;
+        identities.reserve(changed.size());
+        for (const engine::assets::AssetChange& change : changed) {
+            identities.push_back(change.guid);
+        }
+        // A mesh or a texture swapped in behind the entities that name it, so
+        // the world stands and whatever was selected is still that entity.
+        editor.scene.mesh().reload(identities);
+
+        if (!world_was_built_from(editor.world, changed)) {
+            return;
+        }
+
+        // Every entity goes and comes back, so anything holding one lets go.
+        //
+        // **The undo history goes with them.** An edit names its entity by
+        // identity, and a scene file carries those identities only from version
+        // 4, which is what the editor writes. The shipped sandbox scene is
+        // version 2, so its entities come back with new identities and every
+        // entry on the stack would name an entity that is not there. Each one
+        // then reports and does nothing, which is worse than an empty stack.
+        // Issue #371 is keeping the history when the identities do survive.
+        editor.selected = entt::null;
+        editor.history.clear();
+        editor.world.clear();
+        engine::scene::prefabs().clear();
+
+        if (!sandbox::load(editor.watcher.root(), &editor.content, editor.world)) {
+            ENGINE_LOG_ERROR("The scene did not load, so the world is empty. Fix the file "
+                             "and save it again.");
+            return;
+        }
+        bind_camera(editor);
+        ENGINE_LOG_INFO("The project was read again. The world holds {} entities.",
+                        editor.world.size());
+    }
+
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(editor, panels, running);
@@ -1527,6 +1640,10 @@ namespace {
                 continue;
             }
 
+            // Between frames, because MeshPass::reload waits for the frames in
+            // flight before it frees anything.
+            apply_reload(editor);
+
             // Before the frame opens. The panel asked for this size on the
             // frame before, so one frame of a dragged edge shows the old
             // picture, which is invisible at a normal frame rate.
@@ -1667,6 +1784,14 @@ namespace {
 
         ENGINE_LOG_INFO("Opened the source project at {} with {} entities.", content.string(),
                         editor.world.size());
+
+        if (options.watch) {
+            // start() reports a tree that is not there, so the editor carries
+            // on without a watcher rather than refusing to open.
+            editor.watching = editor.watcher.start(content);
+        } else {
+            ENGINE_LOG_INFO("The source tree is not watched, because --no-watch was given.");
+        }
     }
 
 } // namespace

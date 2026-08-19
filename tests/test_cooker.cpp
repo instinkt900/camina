@@ -3182,6 +3182,83 @@ void test_a_failed_import_does_not_stop_the_project() {
 }
 
 
+// M13.5. A source file that changes is imported again. There is no cook
+// here, so a change is a cache entry to drop and nothing more.
+void test_a_changed_file_is_imported_again() {
+    const std::filesystem::path source = scratch("reimport/src");
+    std::filesystem::create_directories(source);
+    write_tga(source / "wall.tga", 8, 8, std::vector<std::uint8_t>(8 * 8 * 4, 40));
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the project opens");
+
+    std::vector<as::AssetRecord> records;
+    check(assets.assets_for("wall.tga", records), "the texture is there");
+    const engine::Guid guid = records.front().guid;
+
+    std::vector<std::byte> first;
+    check(assets.read(guid, first), "it imports");
+    check(assets.imports() == 1, "which ran the rule once");
+
+    // A different image under the same name and the same sidecar, so the
+    // identity does not move and only the bytes do.
+    write_tga(source / "wall.tga", 8, 8, std::vector<std::uint8_t>(8 * 8 * 4, 220));
+
+    std::vector<as::AssetChange> changed;
+    check(assets.reload({ "wall.tga" }, changed), "the change is taken");
+    check(changed.size() == 1, "and it names one asset to load again");
+    check(changed.front().guid == guid, "the same asset, because the sidecar kept it");
+    check(!changed.front().gone, "and it did not go away");
+
+    std::vector<std::byte> second;
+    check(assets.read(guid, second), "it imports again");
+    check(assets.imports() == 2, "which ran the rule a second time");
+    check(second != first, "and the bytes are the new ones");
+}
+
+// A change can add an asset or take one away, not only replace bytes.
+void test_a_reload_reports_what_came_and_went() {
+    const std::filesystem::path source = scratch("reimport_shape/src");
+    std::filesystem::create_directories(source / "models");
+    write_file(source / "models" / "crate.gltf", kMinimalGltf);
+    write_file(source / "spin.lua", "return {}\n");
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the project opens");
+
+    std::vector<as::AssetRecord> before;
+    check(assets.assets_for("models/crate.gltf", before), "the glTF is there");
+    const std::size_t one_mesh = before.size();
+
+    // The same file with a second mesh in it.
+    write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+    std::vector<as::AssetChange> changed;
+    check(assets.reload({ "models/crate.gltf" }, changed), "the change is taken");
+
+    std::vector<as::AssetRecord> after;
+    check(assets.assets_for("models/crate.gltf", after), "the glTF is still there");
+    check(after.size() > one_mesh, "and it names more than it did");
+    check(changed.size() >= after.size(), "the reload named every part of it");
+
+    // And a file that goes away is reported as gone, so a cache holding it
+    // knows to let it go.
+    std::vector<as::AssetRecord> script;
+    check(assets.assets_of_kind(".lua", script), "the script is there");
+    const engine::Guid script_guid = script.front().guid;
+    std::filesystem::remove(source / "spin.lua");
+    std::filesystem::remove(source / "spin.lua.meta");
+
+    check(assets.reload({ "spin.lua" }, changed), "the delete is taken");
+    bool reported_gone = false;
+    for (const as::AssetChange& one : changed) {
+        if (one.guid == script_guid && one.gone) {
+            reported_gone = true;
+        }
+    }
+    check(reported_gone, "and the asset that went away is reported gone");
+}
+
+
 int main() {
     test::section("hashing");
     test_hash_is_content_not_time();
@@ -3244,6 +3321,9 @@ int main() {
     test_an_import_gives_the_cooked_bytes();
     test_an_import_is_kept_for_the_session();
     test_a_failed_import_does_not_stop_the_project();
+    test::section("reimporting");
+    test_a_changed_file_is_imported_again();
+    test_a_reload_reports_what_came_and_went();
     test::section("asset references");
     test_a_reference_reads_into_its_parts();
     test_a_document_names_a_mesh_by_path();

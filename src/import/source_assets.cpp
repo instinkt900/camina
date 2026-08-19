@@ -192,6 +192,67 @@ namespace engine::import {
         return true;
     }
 
+    bool SourceAssets::reload(const std::vector<std::filesystem::path>& sources,
+                              std::vector<as::AssetChange>& out) {
+        out.clear();
+
+        // What those sources named before the tree is walked again, so an asset
+        // that goes away can be reported. Nothing can be looked up about it
+        // afterwards.
+        std::set<std::string> touched;
+        std::map<Guid, std::string> before;
+        for (const std::filesystem::path& relative : sources) {
+            const std::string source = as::manifest_path(relative);
+            touched.insert(source);
+            const auto found = by_source_.find(source);
+            if (found == by_source_.end()) {
+                continue;
+            }
+            for (const std::size_t at : found->second) {
+                before.emplace(records_[at].guid, records_[at].name);
+            }
+        }
+
+        // Drop what those sources produced. The next read imports it again.
+        for (const auto& [guid, name] : before) {
+            cache_.erase(name);
+        }
+        for (const std::string& source : touched) {
+            imported_.erase(source);
+        }
+
+        // The whole tree again, because a change can add an asset or take one
+        // away rather than only replace its bytes.
+        const std::filesystem::path root = root_;
+        if (!open(root)) {
+            return false;
+        }
+
+        for (const auto& [guid, name] : before) {
+            const bool gone = by_guid_.find(guid) == by_guid_.end();
+            out.push_back(as::AssetChange{ .guid = guid, .cooked = name, .gone = gone });
+        }
+
+        // Anything those sources name now that they did not name before, which
+        // is a glTF that gained a mesh or a shader that gained a variant.
+        for (const std::string& source : touched) {
+            const auto found = by_source_.find(source);
+            if (found == by_source_.end()) {
+                continue;
+            }
+            for (const std::size_t at : found->second) {
+                if (!before.contains(records_[at].guid)) {
+                    out.push_back(as::AssetChange{
+                        .guid = records_[at].guid, .cooked = records_[at].name, .gone = false });
+                }
+            }
+        }
+
+        ENGINE_LOG_INFO("{} source file(s) changed, so {} asset(s) load again.", sources.size(),
+                        out.size());
+        return true;
+    }
+
     bool SourceAssets::assets_for(std::string_view source,
                                   std::vector<as::AssetRecord>& out) const {
         out.clear();

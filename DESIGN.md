@@ -2716,6 +2716,37 @@ empty world and no obvious cause.
 Verified by deleting the cooked game tree and starting the editor: it imports the models on
 demand and loads all 43 entities of the sandbox from source.
 
+**M13.5 reimports a source file that changed, and there is no cook in it.**
+`platform::DirectoryWatcher` already polls a tree and holds a change back until the file stops
+moving, so the editor polls it between frames and hands the changed paths to
+`SourceAssets::reload`. A file that changed is a cache entry to drop, and the next read of it
+imports again.
+
+**The changed list comes from the watcher rather than from a diff of the index.** An index says
+what a tree holds, not what is inside the files, so editing the pixels of a texture changes
+nothing it can see. `assets::Content` can diff two manifests because the cooker hashes every
+input. A source index has no hash and needs none.
+
+The whole tree is indexed again on a change all the same, because a change can alter what a
+project holds rather than only what is in it: a glTF gains a mesh, a shader gains a variant, a
+file is deleted. So the reload reports what came and what went as well as what moved.
+
+**A texture swaps under the entities that name it, and a scene or a prefab rebuilds the world.**
+Both were run rather than argued: touching `crate.png` while the editor runs reloads one asset
+and leaves the world standing, and touching `main.scene` rebuilds all 43 entities about two and
+a half seconds later, which is the watcher settling.
+
+**Nothing reloads while a play session runs.** The world under one is a game part way through a
+step, and a stop reads a snapshot back over anything a reload did. That is the same reason undo
+is off during play.
+
+**The undo history is cleared when a reload rebuilds the world, and that is a limit rather than
+a decision.** An edit names its entity by identity, and a scene file carries identities only
+from version 4, which is what the editor writes. The shipped sandbox scene is version 2 and
+carries none, so its entities come back new and every entry would name an entity that is not
+there. Each one then reports and does nothing, which is worse than an empty stack. Issue #371
+holds the fix, which is to keep the history when every identity did come back.
+
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an
 incremental one is about a tenth of a second. So the editor imports one asset at a time and
