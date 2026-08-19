@@ -2612,6 +2612,36 @@ cooker built after it were each run over both content trees, and the 85 cooked f
 identical byte for byte. A move that changed an import would show up there and nowhere else,
 because no test reads a cooked file and compares it against another cooker.
 
+**M13.3 split into an index and an import.** Every question but "what are the bytes" can be
+answered from the source tree and its sidecars with no importer running, so #345 is
+`import::SourceAssets` answering `assets_for`, `assets_of_kind` and a reference resolve, and
+#363 is the import behind `read`.
+
+**The index agrees with the cooker by construction rather than by coincidence.** A second copy
+of what a file cooks into would drift the first time a rule changed, and the drift would be
+silent: the editor would name an asset differently from the runtime and nothing would report
+it. So the shared answers moved into `import/rules.h`. `rule_for` says what counts as content,
+`cooked_name` says what a whole file is called, and `part_record` names a numbered part and
+derives its identity. The glTF rule, the material rule, the prefab rule and the index all call
+`part_record`, and `gltf_parts` and `cook_gltf` both take their inline image set from
+`gltf_inline_images`.
+
+**The proof is a cook and an index of one tree, compared as sets of the whole record.**
+Comparing counts would pass while every name was wrong. Five mutations each fail it: a
+forgotten irradiance, a forgotten prefab, a shader that gives one form instead of its variants,
+a resolve that reads the wrong parent, and a glTF buffer treated as an asset.
+
+**A reference resolves against the sidecar of the named file, not against the first asset that
+file produced.** A glTF names only derived parts, so no record of one carries the identity of
+the file itself. Taking the first record resolved every reference to a glTF against its first
+mesh. The test caught it, and it caught it only because it compared against the identity the
+part actually goes by rather than against "not the other one".
+
+**A `.bin` buffer proves nothing about the buffer skip.** Nothing gives `.bin` a rule, so the
+tree walk already drops it and the skip is never consulted. The skip does work only when a
+buffer file has an extension that carries a rule, so the test names its buffer `payload.lua`.
+The cooker's own copy of that skip is still unreached by any test, which is #364.
+
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an
 incremental one is about a tenth of a second. So the editor imports one asset at a time and

@@ -6,6 +6,8 @@
 # no graphics driver, and CI is exactly that machine.
 add_library(engine_import STATIC
     cook.cpp
+    rules.cpp
+    source_assets.cpp
     document.cpp
     brdf.cpp
     environment.cpp

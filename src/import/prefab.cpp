@@ -1,5 +1,7 @@
 #include "import/prefab.h"
 
+#include "import/rules.h"
+
 #include "core/log.h"
 #include "math/transform.h"
 #include "reflect/json.h"
@@ -285,18 +287,16 @@ namespace engine::import {
             document["__version"] = engine::scene::kPrefabVersion;
             document["entities"] = std::move(entities);
 
-            std::filesystem::path cooked = relative;
-            cooked += "." + std::to_string(at);
-            cooked += as::kPrefabExtension;
+            const as::AssetRecord record =
+                part_record(relative, parent, as::kPrefabPartKind, as::kPrefabExtension,
+                            static_cast<std::uint32_t>(at));
 
-            if (!write_prefab(out_root / cooked, document)) {
+            if (!write_prefab(out_root / record.name, document)) {
                 return false;
             }
 
-            outputs.push_back(as::ManifestOutput{
-                .cooked = as::manifest_path(cooked),
-                .guid = engine::Guid::derive(parent, as::kPrefabPartKind,
-                                             static_cast<std::uint32_t>(at)) });
+            outputs.push_back(
+                as::ManifestOutput{ .cooked = record.name, .guid = record.guid });
         }
         return true;
     }

@@ -19,6 +19,7 @@
 #include "check.h"
 #include "import/cook.h"
 #include "import/document.h"
+#include "import/source_assets.h"
 #include "core/guid.h"
 #include "platform/paths.h"
 #include "reflect/attributes.h"
@@ -36,6 +37,7 @@
 #include <fstream>
 #include <limits>
 #include <span>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -2856,6 +2858,182 @@ void main() { out_color = push.model[0]; }
 
 } // namespace
 
+// M13.3a. The editor's index of a source tree, checked against a cook of
+// the same tree. Both name every asset, and they have to agree exactly:
+// the editor draws what the index names and the runtime draws what the
+// cook wrote, so a disagreement is two engines rather than one.
+void test_the_index_matches_a_cook() {
+    const std::filesystem::path source = scratch("index/src");
+    const std::filesystem::path out = scratch("index/out");
+    std::filesystem::create_directories(source / "models");
+
+    // One of every rule that names more than one asset, plus the plain
+    // ones. A glTF gives meshes and a prefab, a shader with a variant list
+    // gives several forms, and an environment gives a cubemap and its
+    // irradiance.
+    write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+    write_file(source / "many.frag", R"(#version 450
+layout(location = 0) out vec4 color;
+void main() { color = vec4(1.0); }
+)");
+    write_file(source / "many.frag.meta", R"({
+  "guid": "8d3d5c1a-5e6b-4f2a-9c7d-1e2f3a4b5c6d",
+  "shader": { "variants": [ { "name": "base", "defines": [] }, { "name": "normal", "defines": [ "WITH_NORMAL_MAP" ] } ] }
+})");
+    write_file(source / "flat.hdr", constant_panorama(64, 32, 64, 64));
+    write_file(source / "flat.hdr.meta", R"({
+  "guid": "1f2e3d4c-5b6a-4988-b766-554433221100",
+  "environment": { "face_size": 8, "specular_samples": 4 }
+})");
+    write_tga(source / "wall.tga", 8, 8, std::vector<std::uint8_t>(8 * 8 * 4, 128));
+    write_file(source / "start.scene",
+               R"({"__version":1,"entities":[{"parent":-1,"components":{)"
+               R"("MeshRenderer":{"__version":1,"mesh":"asset:models/crate.gltf#mesh:1"}}}]})");
+    write_file(source / "spin.lua", "return {}\n");
+
+    engine::import::Options options{ .content = source, .out = out };
+    engine::import::Result result;
+    check(engine::import::cook_all(options, result), "the tree cooks");
+
+    as::Manifest manifest;
+    check(as::load_manifest(out, manifest), "and the cook wrote a manifest");
+
+    engine::import::SourceAssets index;
+    check(index.open(source), "the index opens the same tree");
+    check(index.failed() == 0, "and every file in it was readable");
+
+    // Compare as sets of the whole record. Comparing counts alone would
+    // pass while every name was wrong.
+    std::set<std::string> cooked;
+    for (const as::ManifestEntry& entry : manifest.entries) {
+        for (const as::ManifestOutput& output : entry.outputs) {
+            cooked.insert(output.guid.to_text() + " " + entry.source + " " + output.cooked);
+        }
+    }
+
+    std::set<std::string> indexed;
+    std::vector<as::AssetRecord> all;
+    check(index.assets_of_kind("", all), "the index lists everything it holds");
+    for (const as::AssetRecord& record : all) {
+        indexed.insert(record.guid.to_text() + " " + record.source + " " + record.name);
+    }
+
+    check(!cooked.empty(), "the cook produced something to compare against");
+    check(indexed == cooked, "the index names exactly what the cook wrote");
+    if (indexed != cooked) {
+        for (const std::string& one : cooked) {
+            if (!indexed.contains(one)) {
+                ENGINE_LOG_ERROR("the cook has {} and the index does not", one);
+            }
+        }
+        for (const std::string& one : indexed) {
+            if (!cooked.contains(one)) {
+                ENGINE_LOG_ERROR("the index has {} and the cook does not", one);
+            }
+        }
+    }
+}
+
+// A source path names every part of itself, in the order the cooker wrote
+// them. mesh_variant_index() indexes into that order for a shader.
+void test_the_index_answers_by_source_path() {
+    const std::filesystem::path source = scratch("index_path/src");
+    std::filesystem::create_directories(source / "models");
+    write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+
+    engine::import::SourceAssets index;
+    check(index.open(source), "the index opens");
+
+    std::vector<as::AssetRecord> parts;
+    check(index.assets_for("models/crate.gltf", parts), "the glTF is found by its path");
+    check(parts.size() >= 3, "and it names its meshes and its prefab");
+    check(parts[0].name == "models/crate.gltf.0.mesh", "the first mesh comes first");
+    check(parts[1].name == "models/crate.gltf.1.mesh", "then the second");
+    check(parts.back().name == "models/crate.gltf.0.prefab", "and the prefab comes last");
+
+    std::vector<as::AssetRecord> missing{ parts };
+    check(!index.assets_for("models/gone.gltf", missing), "a path the tree lacks is false");
+    check(missing.empty(), "and the answer is cleared");
+}
+
+// A source scene names an asset by path. The editor resolves that as it
+// loads, where the cooker resolves it as it copies.
+void test_the_index_resolves_a_reference() {
+    const std::filesystem::path source = scratch("index_ref/src");
+    std::filesystem::create_directories(source / "models");
+    write_file(source / "models" / "crate.gltf", kTwoMeshGltf);
+
+    engine::import::SourceAssets index;
+    check(index.open(source), "the index opens");
+
+    std::vector<as::AssetRecord> parts;
+    check(index.assets_for("models/crate.gltf", parts), "the glTF is found");
+
+    engine::Guid resolved;
+    check(index.resolve("asset:models/crate.gltf#mesh:1", resolved),
+          "a reference to a part resolves");
+    check(resolved == parts[1].guid, "to the identity that part goes by");
+
+    // Against the sidecar, not against "not a part". A glTF names only
+    // derived parts, so nothing in the record list is the file itself, and
+    // a resolve that used the first record would pass a weaker check.
+    as::AssetMeta meta;
+    check(as::meta_for(source / "models" / "crate.gltf", meta), "the sidecar reads back");
+    check(index.resolve("asset:models/crate.gltf", resolved),
+          "a reference to the file itself resolves");
+    check(resolved == meta.guid, "to the identity in its sidecar");
+
+    check(!index.resolve("asset:models/gone.gltf#mesh:0", resolved),
+          "a reference to a file the tree lacks is refused");
+}
+
+// One broken asset must not take the project with it.
+void test_a_bad_file_does_not_stop_the_index() {
+    const std::filesystem::path source = scratch("index_bad/src");
+    std::filesystem::create_directories(source / "models");
+    write_file(source / "models" / "broken.gltf", "this is not glTF");
+    write_file(source / "spin.lua", "return {}\n");
+
+    engine::import::SourceAssets index;
+    check(index.open(source), "the index still opens");
+    check(index.failed() == 1, "and it counts the file it could not read");
+
+    std::vector<as::AssetRecord> scripts;
+    check(index.assets_of_kind(".lua", scripts), "the rest is still there");
+    check(scripts.size() == 1, "so the good asset survived the bad one");
+}
+
+
+// A glTF buffer is payload, not an asset. The cooker skips one and so must
+// the index, or the editor would list a file the runtime never sees.
+//
+// The case only exists when the buffer file has an extension that carries a
+// rule. A `.bin` is already skipped, because nothing gives it one, so a
+// test with a `.bin` buffer would pass with the skip deleted.
+void test_the_index_skips_a_gltf_buffer() {
+    const std::filesystem::path source = scratch("index_buffer/src");
+    std::filesystem::create_directories(source / "models");
+
+    // The buffer is named payload.lua, which the script rule would
+    // otherwise make an asset of its own.
+    std::string gltf = kMinimalGltf;
+    const std::size_t at = gltf.find("data:application/octet-stream;base64,");
+    check(at != std::string::npos, "the fixture carries an inline buffer to replace");
+    gltf = gltf.substr(0, at) + "payload.lua\"}]}";
+    write_file(source / "models" / "crate.gltf", gltf);
+    write_file(source / "models" / "payload.lua", "not really a script");
+    write_file(source / "real.lua", "return {}\n");
+
+    engine::import::SourceAssets index;
+    check(index.open(source), "the index opens");
+
+    std::vector<as::AssetRecord> scripts;
+    check(index.assets_of_kind(".lua", scripts), "the scripts are listed");
+    check(scripts.size() == 1, "and the buffer is not one of them");
+    check(scripts.front().source == "real.lua", "only the real script is an asset");
+}
+
+
 int main() {
     test::section("hashing");
     test_hash_is_content_not_time();
@@ -2908,6 +3086,12 @@ int main() {
     test_hot_reload_cooks_what_changed();
     test_hot_reload_lives_through_a_cook_that_fails();
     test_hot_reload_is_off_when_it_cannot_cook();
+    test::section("the source index");
+    test_the_index_matches_a_cook();
+    test_the_index_answers_by_source_path();
+    test_the_index_resolves_a_reference();
+    test_a_bad_file_does_not_stop_the_index();
+    test_the_index_skips_a_gltf_buffer();
     test::section("asset references");
     test_a_reference_reads_into_its_parts();
     test_a_document_names_a_mesh_by_path();
