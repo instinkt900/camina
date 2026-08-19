@@ -64,6 +64,80 @@ jobs:
   # The engine targets Clang on Linux and MSVC on Windows. See DESIGN.md
   # section 2. Every step below runs under bash, including on Windows, so that
   # one script serves both legs.
+  # clang-tidy, over the whole tree, without compiling it. It used to run inside
+  # the Linux build through CMAKE_CXX_CLANG_TIDY, which made that build take
+  # about twice as long as the same build on MSVC and held the test results
+  # behind the lint.
+  #
+  # It lints the editor configuration, which is the superset: rule 4.3 says
+  # WITH_EDITOR removes code and never changes it, so a file compiled with the
+  # editor off is also compiled with it on. with_ui is on for the same reason.
+  #
+  # A green build no longer means the lint gate passed. These are two checks.
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system packages
+        run: |
+          .github/scripts/apt-install.sh ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev \
+            libudev-dev
+
+      - name: Install LLVM 19
+        run: |
+          .github/scripts/retry.sh 60 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
+          .github/scripts/retry.sh 120 'sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main"'
+          .github/scripts/apt-install.sh clang-19 clang-tidy-19
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan profile detect --force
+
+      - name: Add the moth_ui remote
+        run: |
+          conan remote add --force artifactory \
+            https://artifactory.matthewcotton.net/artifactory/api/conan/conan-local
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-linux-clang-uitrue-editortrue-${{ hashFiles('conanfile.py') }}
+          # The same packages the editor build job uses, so the two share a
+          # cache rather than each building the tree from source.
+          restore-keys: |
+            conan-linux-clang-uitrue-editortrue-
+            conan-linux-clang-uitrue-
+            conan-linux-clang-
+
+      - name: Conan install
+        run: |
+          conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
+            -b missing -o "&:with_ui=True" -o "&:with_editor=True"
+
+      # Configure only. clang-tidy reads the compilation database, and nothing
+      # in this project generates a header at build time, so there is nothing to
+      # compile first.
+      - name: Configure
+        run: cmake --preset conan-relwithdebinfo -DENGINE_ENABLE_CLANG_TIDY=OFF
+
+      - name: Lint
+        run: .github/scripts/lint.sh build/RelWithDebInfo
+
   build:
     name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }}, editor=${{ matrix.with_editor }})
     runs-on: ${{ matrix.os }}
@@ -203,8 +277,12 @@ jobs:
             -o "&:with_editor=${{ matrix.with_editor && 'True' || 'False' }}" \
             ${{ matrix.conan_conf }}
 
+      # clang-tidy is off here and runs in the lint job instead. It used to run
+      # inside this compile, which made a Linux build take about twice as long
+      # as the same build on MSVC. A build says whether the code compiles and
+      # the tests pass, and it no longer waits for the lint to say so.
       - name: Configure
-        run: cmake --preset conan-relwithdebinfo
+        run: cmake --preset conan-relwithdebinfo -DENGINE_ENABLE_CLANG_TIDY=OFF
 
       - name: Build
         run: cmake --build --preset conan-relwithdebinfo

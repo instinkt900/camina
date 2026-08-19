@@ -891,7 +891,7 @@ Two traps, both of which have produced a false green:
   unambiguous, and read `conclusion` only after that.
 - **A bare `length > 0` exits far too early.** The review bot registers before the workflow
   jobs do, so the loop sees one finished check and reports success before the build starts.
-  Require the expected count, which is **seven**: `format`, `docs`, `containment`, and
+  Require the expected count, which is **eight**: `format`, `docs`, `containment`, `lint`, and
   four `build` jobs. The build matrix is two platforms times both options off and both on,
   and the job names carry which, for example
   `build (linux-clang, ui=true, editor=true)`.
@@ -1112,8 +1112,26 @@ here, consider whether moth_ui wants the same change.
   clang-format before you commit. CI fails on any diff.
 - **Lint.** `.clang-tidy` starts from moth_ui and adds engine-specific entries at the
   end of the list. `tests/.clang-tidy` relaxes magic numbers for test code.
-  `cmake/ClangTidy.cmake` runs clang-tidy in the compile step, but only in a Debug
-  build or when `CI` is set. A missing clang-tidy fails the build in CI.
+  `cmake/ClangTidy.cmake` runs clang-tidy in the compile step, in a Debug build or
+  when `CI` is set. A missing clang-tidy fails the build in CI.
+
+  **In CI it runs in a `lint` job of its own, not inside the build.** The build jobs
+  configure with `-DENGINE_ENABLE_CLANG_TIDY=OFF`, and `.github/scripts/lint.sh` runs
+  `run-clang-tidy` over the compilation database instead, without compiling. Running
+  it inside the compile made a Linux build take about twice as long as the same build
+  on MSVC, and held the test results behind the lint.
+
+  **So a green build no longer means the lint gate passed.** They are two checks and
+  both have to be green before a merge.
+
+  The lint job reads the skip list off the compile command rather than keeping one of
+  its own: every file with `SKIP_LINTING` also carries `-w`, and a compilation
+  database knows nothing about a CMake source file property. A file that gains
+  `SKIP_LINTING` without `-w` gets linted and reports, which is the loud failure
+  rather than the quiet one.
+
+  Locally, `cmake --build build/tidy` still lints inside the compile. That is the
+  same gate by a different route, and it is what to run before a push.
 - **clang-tidy must be 19, and a wrong one fails open rather than loudly.**
   `ExcludeHeaderFilterRegex` needs clang-tidy 19. Version 18 rejects that key,
   and rejecting one key throws the whole file away: it prints
