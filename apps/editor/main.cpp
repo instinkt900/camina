@@ -12,6 +12,7 @@
 // panel shows that image. The camera in the view panel is the camera it uses.
 
 #include "assets/content.h"
+#include "import/source_assets.h"
 #include "assets/reference.h"
 #include "assets/manifest.h"
 #include "core/log.h"
@@ -102,7 +103,7 @@ namespace {
     struct Options {
         /// How many frames to draw before stopping. Zero runs until the user quits.
         std::uint64_t frames = 0;
-        /// The cooked content to open. Empty takes the game's own directory.
+        /// The source content to open. Empty takes the game's own source tree.
         std::string content;
         /// Where to write the last frame as a PNG. Empty writes none.
         std::string screenshot;
@@ -127,7 +128,7 @@ namespace {
 
     void print_usage() {
         ENGINE_LOG_INFO("Usage: editor [options]");
-        ENGINE_LOG_INFO("  --content <dir>     Open this cooked content instead of the game's.");
+        ENGINE_LOG_INFO("  --content <dir>     Open this source content instead of the game's.");
         ENGINE_LOG_INFO("  --frames <n>        Stop after n frames. 0 runs until you quit.");
         ENGINE_LOG_INFO("  --play              Start a play session on the first frame.");
         ENGINE_LOG_INFO("  --own-windows       Give every floating panel an OS window of its own.");
@@ -311,8 +312,10 @@ namespace {
         /// rebuilt while a frame is recording.
         engine::gfx::Extent2D wanted_viewport{};
 
-        /// The cooked content the scene reads. Open, or empty when there is none.
-        engine::assets::Content content;
+        /// The project the scene reads, straight out of the source tree. The
+        /// editor never opens a cooked game tree now, which is M13.4b: what it
+        /// saves is what it reads next time, with no cook in between.
+        engine::import::SourceAssets content;
         /// The entities. Empty when no scene loaded, and the panels then say so.
         engine::scene::World world;
         /// The camera and the exposure, which the panel edits and the scene
@@ -1119,50 +1122,6 @@ namespace {
         ENGINE_LOG_WARN("No entity is named {}, so nothing is selected.", name);
     }
 
-    /// The cooker that ships beside this executable.
-    [[nodiscard]] std::filesystem::path cooker_path() {
-#if defined(_WIN32)
-        constexpr const char* kCookerName = "cooker.exe";
-#else
-        constexpr const char* kCookerName = "cooker";
-#endif
-        return engine::platform::executable_directory() / kCookerName;
-    }
-
-    /**
-     * Cooks the source tree, so what was saved is what the next start reads.
-     *
-     * **The editor writes the source scene and reads the cooked one.** Between
-     * those two sits the cooker, and without this the file on disk is right
-     * while the program keeps reading the one from before the save. Every edit
-     * then looks lost, and nothing reports an error. That was issue #341.
-     *
-     * The cooker walks the tree and skips what the manifest already holds, so a
-     * save costs one scene file rather than a whole tree.
-     *
-     * @param editor Everything the program owns.
-     * @param source The source content tree the scene was written into.
-     */
-    void cook_after_save(Editor& editor, const std::filesystem::path& source) {
-        const std::vector<std::string> arguments{ "--content", source.string(), "--out",
-                                                  editor.content.root().string() };
-        const engine::platform::ProcessResult result =
-            engine::platform::run_process(cooker_path(), arguments);
-
-        if (!result.ran) {
-            ENGINE_LOG_ERROR("The scene was saved and the cooker would not run, so the cooked "
-                             "content still holds the scene from before it.");
-            return;
-        }
-        if (result.exit_code != 0) {
-            ENGINE_LOG_ERROR("The scene was saved and the cook returned {}, so the cooked "
-                             "content and the source no longer agree.",
-                             result.exit_code);
-            return;
-        }
-        ENGINE_LOG_INFO("The scene was saved and cooked.");
-    }
-
     /// Draws every panel of one frame, inside the open ImGui frame.
     void draw_ui(Editor& editor, Panels& panels, bool& running) {
         draw_menu_bar(editor, panels, running);
@@ -1211,7 +1170,8 @@ namespace {
                                                  &panels.world, blocked, &editor.history)) {
                 // The panel wrote the source scene. The cooked tree is what this
                 // program reads, so it has to be brought up to date now.
-                cook_after_save(editor, editor.source_scene.parent_path());
+                // No cook. The editor reads the tree it just wrote, which is
+                // what M13.4b bought and what closed #341.
             }
         }
         if (panels.inspector) {
@@ -1662,12 +1622,23 @@ namespace {
      */
     void load_world(Editor& editor, const Options& options) {
         const std::filesystem::path content = options.content.empty()
-                                                  ? sandbox::default_content_directory()
+                                                  ? game_source_directory()
                                                   : std::filesystem::path{ options.content };
 
+        if (content.empty()) {
+            ENGINE_LOG_ERROR("This build has no source content tree beside it, so there is "
+                             "nothing to open. The editor opens with an empty world.");
+            return;
+        }
+
+        // The document rule resolves a reference only inside a component it
+        // knows, so the game's own types have to be registered before an asset
+        // is imported. Without this a scene naming a script fails to import and
+        // the world comes up empty.
+        editor.content.set_components(&engine::scene::components());
+
         if (!editor.content.open(content)) {
-            ENGINE_LOG_ERROR("No cooked content at {}. Build the cooker target. The editor "
-                             "opens with an empty world.",
+            ENGINE_LOG_ERROR("No source content at {}. The editor opens with an empty world.",
                              content.string());
             return;
         }
@@ -1677,10 +1648,9 @@ namespace {
             return;
         }
 
-        const std::filesystem::path source = game_source_directory();
-        if (!source.empty()) {
-            editor.source_scene = source / sandbox::kSceneFile;
-        }
+        // The tree the editor opened is the tree it saves into, which is the
+        // whole of #341: there is no second copy to fall out of step with.
+        editor.source_scene = content / sandbox::kSceneFile;
         bind_camera(editor);
 
         // What an AssetRef field shows instead of an identity nobody can read.
@@ -1695,7 +1665,8 @@ namespace {
                 return engine::assets::reference_for(editor.content.manifest(), identity);
             });
 
-        ENGINE_LOG_INFO("Opened {} with {} entities.", content.string(), editor.world.size());
+        ENGINE_LOG_INFO("Opened the source project at {} with {} entities.", content.string(),
+                        editor.world.size());
     }
 
 } // namespace
