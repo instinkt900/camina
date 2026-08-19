@@ -684,11 +684,17 @@ same on both scenes and a snapshot does not**, which is the whole of the transac
 decision. Sponza is large in triangles rather than entities, so this is the shape rather than
 the extreme. `DESIGN.md` §10 M12 holds the table and the rejected measurement.
 
-**The editor cooks after it saves**, which closed #341. It writes `sandbox/content` and reads
-the cooked tree beside the executable, so without a cook every edit looked lost on the next
-start while the file on disk was right. Nothing reported an error, because nothing had
-failed. The runtime never had this, because `HotReload` watches and cooks for it. M13.4 is
-what settles it properly, by having the editor read what it writes.
+**The editor reads the tree it writes**, which is M13.4b and what finally settled #341. It
+opens `sandbox/content` through `import::SourceAssets` and imports on demand, so a save is
+read back on the next start with no cook in between. Before that it wrote the source tree and
+read the cooked one, so every edit looked lost while the file on disk was right, and nothing
+reported an error because nothing had failed. The cook-on-save that worked around it is gone.
+
+**The engine content tree is still cooked**, and deliberately. Every shader and the split sum
+table are needed before a frame can be drawn, so none of it can wait to be asked for, and from
+source it costs about 2.7 seconds on every editor start. The build cooks that tree anyway. So
+the editor survives a deleted cooked **game** tree and not a deleted cooked engine tree. See
+`DESIGN.md` §10 M13 and issue #366.
 
 **The inspector adds and removes components, and the World panel deletes an entity.**
 `ComponentOps::create` and `remove` came from the M9.8 run: without them a dropped prefab

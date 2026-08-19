@@ -2702,6 +2702,20 @@ that test built a registry by hand, missed `ScriptComponent`, and the source loa
 executable links the game. An editor that registers less than the cooker cannot open what the
 cooker wrote.
 
+**M13.4b points the editor at the source tree and the cook-on-save is gone.** `load_world`
+opens `sandbox/content` through `import::SourceAssets`, so the tree the editor saves into is
+the tree it reads. That is what #341 asked for: the workaround there was to run the cooker
+after every save, because the editor wrote one tree and read another, and every edit looked
+lost while the file on disk was right.
+
+**A registry has to be set before an asset is imported, not after.** The document rule resolves
+a reference only inside a component it knows, so `set_components` comes before `open`. Without
+it a scene naming `asset:scripts/spin.lua` fails to import and the editor comes up with an
+empty world and no obvious cause.
+
+Verified by deleting the cooked game tree and starting the editor: it imports the models on
+demand and loads all 43 entities of the sandbox from source.
+
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an
 incremental one is about a tenth of a second. So the editor imports one asset at a time and
@@ -2712,9 +2726,20 @@ called one rather than becoming a third format.
 Cooking then becomes something a person asks for, because it is how a level reaches the
 runtime rather than how the editor sees its own work.
 
-**Done when:** the editor opens the sandbox with no cooked tree at all and draws it, a level
+**Done when:** the editor opens the sandbox with no cooked **game** tree and draws it, a level
 built that way runs in the runtime after one cook, and the two pictures match or every
 difference is named here.
+
+**The engine content tree stays cooked, and that is a decision rather than an omission.**
+`src/render/content` holds ten shaders and the split sum table, and `SceneRenderer::create`
+builds every pipeline at startup, so none of it can wait for something to ask. From source it
+is about 2.7 seconds on every editor start: 1692 ms for the table and about 1023 ms for the
+shaders. The build already cooks that tree as a build step, so it is always present and never
+stale, and a project in this milestone means the game rather than the engine. Deleting the
+cooked game tree is what the editor has to survive. Deleting the cooked engine tree is not.
+
+M13.4b was measured before this was settled, and #366 is what would make the other answer
+cheap.
 
 ### After that, as the game demands
 ozz-animation, which you pull forward as soon as you need a character. The `gfx::` plugin
