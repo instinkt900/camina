@@ -23,6 +23,7 @@
  */
 
 #include "assets/asset_source.h"
+#include "assets/content.h"
 #include "assets/manifest.h"
 #include "core/guid.h"
 #include "scene/component_registry.h"
@@ -122,6 +123,29 @@ namespace engine::import {
          * @return The count.
          */
         [[nodiscard]] std::size_t imports() const { return imports_; }
+
+        /**
+         * @brief Takes source files that changed and says what to load again.
+         *
+         * The editor imports in memory, so there is no cook here. A file that
+         * changed is a cache entry to drop, and the next read of it imports
+         * again. The whole tree is indexed again as well, because a change can
+         * add an asset or take one away: a glTF gains a mesh, a shader gains a
+         * variant, a file is deleted.
+         *
+         * **The changed list comes from a watcher rather than from a diff of
+         * the index.** An index says what a tree holds and not what is in the
+         * files, so editing the pixels of a texture changes nothing it can see.
+         * `assets::Content` can diff, because the cooker hashes every input.
+         *
+         * @param sources The source paths that changed, relative, with forward
+         * slashes. A path the tree never held is ignored.
+         * @param out Every identity to load again, and every one that went
+         * away. It is cleared first.
+         * @return True when the tree was indexed again.
+         */
+        [[nodiscard]] bool reload(const std::vector<std::filesystem::path>& sources,
+                                  std::vector<assets::AssetChange>& out);
 
         /**
          * @brief The identity a reference names.
