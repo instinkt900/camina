@@ -136,10 +136,16 @@ jobs:
             conan-linux-clang-uitrue-
             conan-linux-clang-
 
+      # The same two settings the Linux build jobs pass. Conan defaults
+      # tools.system.package_manager:mode to "check", so xorg/system stops and
+      # asks a user to install its packages. There is no user on a runner, and
+      # leaving these out fails the conan install rather than the lint.
       - name: Conan install
         run: |
           conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
-            -b missing -o "&:with_ui=True" -o "&:with_editor=True"
+            -b missing -o "&:with_ui=True" -o "&:with_editor=True" \
+            -c tools.system.package_manager:mode=install \
+            -c tools.system.package_manager:sudo=True
 
       # Configure only. clang-tidy reads the compilation database, and nothing
       # in this project generates a header at build time, so there is nothing to
