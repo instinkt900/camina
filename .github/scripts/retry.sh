@@ -31,6 +31,11 @@ for attempt in $(seq 1 "${kAttempts}"); do
         exit 0
     fi
     echo "::warning::attempt ${attempt} of ${kAttempts} did not finish within ${seconds}s: ${command}"
+
+    # timeout kills the command and not what the command started. Every retry in
+    # this project is around a package operation, and a killed one can leave apt
+    # holding its lock, which would make every later attempt fail at once.
+    "$(dirname "$0")/apt-unlock.sh"
     sleep 5
 done
 

@@ -34,9 +34,7 @@ for attempt in $(seq 1 "${kAttempts}"); do
 
     echo "::warning::apt attempt ${attempt} of ${kAttempts} did not finish. Retrying."
 
-    # A killed apt can leave a package half configured, and the next attempt
-    # then refuses to start. This is a no-op when nothing was interrupted.
-    sudo dpkg --configure -a || true
+    "$(dirname "$0")/apt-unlock.sh"
     sleep 10
 done
 

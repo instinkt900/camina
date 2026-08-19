@@ -919,6 +919,14 @@ rather than a cancel and a re-run.
 run hung in exactly those, on the same job. A third-party mirror is likelier to stall than the
 Ubuntu archive, not less.
 
+**`timeout` kills the command, not what the command started.** `add-apt-repository` runs an
+`apt-get update` of its own. Killing it on a timeout left that update alive and holding
+`/var/lib/apt/lists/lock`, so every later attempt failed at once with "Could not get lock" and
+the retry could not help: the thing holding the lock was the thing the retry had orphaned.
+`.github/scripts/apt-unlock.sh` clears that between attempts, and the workflow writes the
+apt.llvm.org source file directly rather than calling `add-apt-repository`, so there is no
+nested apt to leak a lock in the first place.
+
 **Keep the retry budget under the job's `timeout-minutes`.** Attempts times the per-attempt
 timeout is what a stalling runner costs, and a job cut off part way through its retries pays
 the delay and gets none of the benefit. That happened too: a 15 minute timeout against a
