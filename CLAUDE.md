@@ -891,8 +891,22 @@ Two traps, both of which have produced a false green:
   unambiguous, and read `conclusion` only after that.
 - **A bare `length > 0` exits far too early.** The review bot registers before the workflow
   jobs do, so the loop sees one finished check and reports success before the build starts.
-  Require the expected count, which is **seven**: `format`, `docs`, `containment`, and
-  four `build` jobs. The build matrix is two platforms times both options off and both on,
+  Require the expected count, which is **eight**: `format`, `docs`, `containment`, `lint`,
+  and four `build` jobs.
+
+- **A skipped job is still an entry, and it reports `COMPLETED` at once.** `lint` does not
+  run on a pull request, and it comes back as `status=COMPLETED, conclusion=SKIPPED` from
+  the first poll. So there are eight entries of which seven do work, and a loop that waits
+  for seven `COMPLETED` can finish while a build is still going: the skipped one plus the
+  three quick jobs plus three builds is already seven.
+
+  **Wait for every entry to be `COMPLETED`, not for a count of them**, and treat `SKIPPED`
+  as neither a pass nor a failure:
+
+  ```bash
+  jq -e 'all(.status == "COMPLETED")' <<<"$s"
+  jq -r '.[] | select(.conclusion != "SUCCESS" and .conclusion != "SKIPPED") | .name' <<<"$s"
+  ``` The build matrix is two platforms times both options off and both on,
   and the job names carry which, for example
   `build (linux-clang, ui=true, editor=true)`.
 
@@ -919,11 +933,29 @@ rather than a cancel and a re-run.
 run hung in exactly those, on the same job. A third-party mirror is likelier to stall than the
 Ubuntu archive, not less.
 
-**Keep the retry budget under the job's `timeout-minutes`.** Attempts times the per-attempt
-timeout is what a stalling runner costs, and a job cut off part way through its retries pays
-the delay and gets none of the benefit. That happened too: a 15 minute timeout against a
-30 minute worst case cancelled the job before the retries could finish. The format job's worst
-case is now 1170 seconds against a 25 minute timeout.
+**`timeout` kills the command, not what the command started.** `add-apt-repository` runs an
+`apt-get update` of its own. Killing it on a timeout left that update alive and holding
+`/var/lib/apt/lists/lock`, so every later attempt failed at once with "Could not get lock" and
+the retry could not help: the thing holding the lock was the thing the retry had orphaned.
+`.github/scripts/apt-unlock.sh` clears that between attempts, and the workflow writes the
+apt.llvm.org source file directly rather than calling `add-apt-repository`, so there is no
+nested apt to leak a lock in the first place.
+
+**Judge a stall by silence, never by how long the command has taken.** A hung apt sat for 25 to
+43 minutes and never finished. A working one took 912 seconds on the same day. No total timeout
+separates those: one short enough to catch the hang also kills the install that would have
+succeeded. A first attempt at this used total timeouts and turned two slow-but-working jobs
+into failures, which is worse than the problem it was meant to fix.
+
+**Most of that step should not run at all.** `apt-install.sh` asks dpkg what is missing before
+it asks the network, and the runner image already carries most of what this build needs. When
+nothing is missing the step does no network work. When something is, the install runs on its
+own first: the runner's package lists are usually current, and `apt-get update` is the slow
+half. On a bad day the update alone took 200 seconds while the install took 20.
+
+`.github/scripts/run-until-stalled.sh` watches the output instead. A working command prints as
+it goes, whatever the pace, and a hung one prints nothing at all. `timeout-minutes` is then the
+last line of defence rather than the mechanism.
 
 That reduces the problem, it does not remove it. A runner that stalls three times in a row
 still fails the job, and the remedy below is still the answer.
@@ -1112,8 +1144,30 @@ here, consider whether moth_ui wants the same change.
   clang-format before you commit. CI fails on any diff.
 - **Lint.** `.clang-tidy` starts from moth_ui and adds engine-specific entries at the
   end of the list. `tests/.clang-tidy` relaxes magic numbers for test code.
-  `cmake/ClangTidy.cmake` runs clang-tidy in the compile step, but only in a Debug
-  build or when `CI` is set. A missing clang-tidy fails the build in CI.
+  `cmake/ClangTidy.cmake` runs clang-tidy in the compile step, in a Debug build or
+  when `CI` is set. A missing clang-tidy fails the build in CI.
+
+  **In CI it runs in a `lint` job of its own, and that job does not run on a pull
+  request.** The build jobs configure with `-DENGINE_ENABLE_CLANG_TIDY=OFF`, and
+  `.github/scripts/lint.sh` runs `run-clang-tidy` over the compilation database
+  instead, without compiling. Running it inside the compile made a Linux build take
+  about twice as long as the same build on MSVC and held the test results behind the
+  lint: 18.6 minutes against 5.9 for the same job now.
+
+  At about nine minutes the lint was then the slowest check on every review, so it
+  runs on a push to main and on request instead. **A green pull request therefore
+  says nothing about clang-tidy.** Run `cmake --build build/tidy` before a push, which
+  is the same gate by a different route. Deleting the `if:` on the job puts it back on
+  pull requests.
+
+  The lint job reads the skip list off the compile command rather than keeping one of
+  its own: every file with `SKIP_LINTING` also carries `-w`, and a compilation
+  database knows nothing about a CMake source file property. A file that gains
+  `SKIP_LINTING` without `-w` gets linted and reports, which is the loud failure
+  rather than the quiet one.
+
+  Locally, `cmake --build build/tidy` still lints inside the compile. That is the
+  same gate by a different route, and it is what to run before a push.
 - **clang-tidy must be 19, and a wrong one fails open rather than loudly.**
   `ExcludeHeaderFilterRegex` needs clang-tidy 19. Version 18 rejects that key,
   and rejecting one key throws the whole file away: it prints

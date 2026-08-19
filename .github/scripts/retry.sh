@@ -1,36 +1,35 @@
 #!/usr/bin/env bash
 #
-# Runs a command with a timeout, and tries again when it does not finish.
+# Runs a command, and tries again when it stalls.
 #
-# GitHub's hosted runners stall inside network commands rather than failing, so
-# a step can sit until the job timeout with nothing in the log. A timeout turns
-# that into a failed attempt, and the retry usually succeeds.
+# The stall is judged by silence rather than by a total duration, because a
+# runner that is merely slow must not be killed. See run-until-stalled.sh.
 #
-# **Keep the worst case under the job's timeout-minutes.** Attempts times the
-# per-attempt timeout is what a stalling runner costs, and a job cut off part
-# way through its retries gets the delay without the benefit. See
-# .github/workflows/ci.yml.
-#
-# Usage: retry.sh <seconds> <shell command>
+# Usage: retry.sh <silent-seconds> <shell command>
 
-set -euo pipefail
+set -uo pipefail
 
 readonly kAttempts=2
+readonly here="$(dirname "$0")"
 
 if [ "$#" -lt 2 ]; then
-    echo "retry.sh needs a timeout in seconds and a command."
+    echo "retry.sh needs a silence timeout in seconds and a command."
     exit 2
 fi
 
-readonly seconds="$1"
+readonly silence="$1"
 shift
 readonly command="$*"
 
 for attempt in $(seq 1 "${kAttempts}"); do
-    if timeout "${seconds}" bash -c "${command}"; then
+    if "${here}/run-until-stalled.sh" "${silence}" "${command}"; then
         exit 0
     fi
-    echo "::warning::attempt ${attempt} of ${kAttempts} did not finish within ${seconds}s: ${command}"
+    echo "::warning::attempt ${attempt} of ${kAttempts} did not finish: ${command}"
+
+    # A killed command can leave apt holding its lock. Every retry in this
+    # project is around a package operation.
+    "${here}/apt-unlock.sh"
     sleep 5
 done
 
