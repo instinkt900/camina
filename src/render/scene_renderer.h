@@ -18,7 +18,7 @@
  * picture is drawn into, and draws whatever else goes over it.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "gfx/device.h"
 #include "math/conventions.h"
 #include "render/mesh_pass.h"
@@ -122,7 +122,7 @@ namespace engine::render {
          * @return False when a pass did not build, which leaves nothing able to
          * draw. The caller calls destroy() either way.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content,
+        [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content,
                                   gfx::Extent2D extent);
 
         /// @brief Releases everything create() built. Safe to call twice.
@@ -149,7 +149,7 @@ namespace engine::render {
          * @param content The engine content tree.
          * @return True when every pass took the new shaders.
          */
-        [[nodiscard]] bool reload_shaders(const assets::Content& content);
+        [[nodiscard]] bool reload_shaders(const assets::AssetSource& content);
 
         /**
          * @brief Resets the timestamp pool and reads what the last frame wrote.
@@ -180,7 +180,7 @@ namespace engine::render {
          * dispatch and a dispatch cannot happen inside one.
          */
         [[nodiscard]] bool draw_scene(gfx::CommandList* commands, const scene::World& world,
-                                      const assets::Content& content, const SceneView& view);
+                                      const assets::AssetSource& content, const SceneView& view);
 
         /**
          * @brief Maps the scene image down and writes it out.

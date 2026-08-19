@@ -32,19 +32,20 @@ namespace engine::render {
          * @param out Receives the module.
          * @return False when the file is missing or will not read.
          */
-        [[nodiscard]] bool read_one_shader(const assets::Content& content,
+        [[nodiscard]] bool read_one_shader(const assets::AssetSource& content,
                                            std::string_view source, assets::Shader& out) {
-            const assets::ManifestEntry* entry = content.find(source);
-            if (entry == nullptr || entry->outputs.empty()) {
-                ENGINE_LOG_ERROR("{} is not in the cooked content tree.", source);
+            // assets_for() says which source it could not find, so there is no
+            // message here.
+            std::vector<assets::AssetRecord> forms;
+            if (!content.assets_for(source, forms)) {
                 return false;
             }
             std::vector<std::byte> bytes;
-            if (!content.read_bytes(entry->outputs.front(), bytes)) {
+            if (!content.read(forms.front().guid, bytes)) {
                 ENGINE_LOG_ERROR("{} would not read.", source);
                 return false;
             }
-            return assets::read_shader(bytes, out, entry->outputs.front().cooked);
+            return assets::read_shader(bytes, out, forms.front().name);
         }
 
     } // namespace
@@ -85,7 +86,7 @@ namespace engine::render {
         return true;
     }
 
-    bool TonemapPass::build_pipeline(const assets::Content& content, gfx::PipelineHandle& out) {
+    bool TonemapPass::build_pipeline(const assets::AssetSource& content, gfx::PipelineHandle& out) {
         assets::Shader vertex;
         assets::Shader fragment;
         if (!read_one_shader(content, "tonemap.vert", vertex) ||
@@ -152,7 +153,7 @@ namespace engine::render {
         return true;
     }
 
-    bool TonemapPass::create(gfx::Device* device, const assets::Content& content,
+    bool TonemapPass::create(gfx::Device* device, const assets::AssetSource& content,
                              gfx::Extent2D extent) {
         ENGINE_ASSERT(device != nullptr, "TonemapPass::create needs a device.");
         device_ = device;
@@ -200,7 +201,7 @@ namespace engine::render {
         return build_target(extent) && build_set(pipeline_, set_);
     }
 
-    bool TonemapPass::reload_shaders(const assets::Content& content) {
+    bool TonemapPass::reload_shaders(const assets::AssetSource& content) {
         if (device_ == nullptr) {
             return false;
         }

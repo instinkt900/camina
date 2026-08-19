@@ -27,7 +27,7 @@
 #include <memory>
 
 namespace engine::assets {
-    class Content;
+    class AssetSource;
 }
 
 namespace engine::scene {
@@ -60,8 +60,8 @@ namespace engine::editor {
      * being written into the editor, which knows no game.
      */
     struct PlayDesc {
-        /// @brief The cooked tree the scripts are read from. Null loads none.
-        assets::Content* content = nullptr;
+        /// @brief The project the scripts are read from. Null loads none.
+        assets::AssetSource* content = nullptr;
 
         /// @brief Binds the game's actions on the session input. Null binds
         /// nothing, and every action a script reads is then false.

@@ -27,42 +27,41 @@ namespace sandbox {
          * prefabs. They are told apart by extension rather than by position,
          * because the cooker is free to change the order it writes them in.
          *
-         * This walks the whole manifest rather than a list of paths the game
-         * holds. A game that named its models in C++ could load only its own
-         * content tree, and the large test scene of issue #130 is a tree the
-         * sandbox never sees at build time.
+         * This asks the source for every prefab rather than reading a list of
+         * paths the game holds. A game that named its models in C++ could load
+         * only its own content tree, and the large test scene of issue #130 is
+         * a tree the sandbox never sees at build time.
          */
-        [[nodiscard]] bool add_prefabs(const engine::assets::Content& cooked,
+        [[nodiscard]] bool add_prefabs(const engine::assets::AssetSource& source,
                                        engine::scene::PrefabLibrary& library) {
             std::size_t added = 0;
 
-            for (const engine::assets::ManifestEntry& entry : cooked.manifest().entries) {
-                for (const engine::assets::ManifestOutput& output : entry.outputs) {
-                    if (!std::string_view{ output.cooked }.ends_with(
-                            engine::assets::kPrefabExtension)) {
-                        continue;
-                    }
+            std::vector<engine::assets::AssetRecord> records;
+            if (!source.assets_of_kind(engine::assets::kPrefabExtension, records)) {
+                ENGINE_LOG_ERROR("The prefabs could not be listed.");
+                return false;
+            }
 
-                    std::vector<std::byte> bytes;
-                    if (!cooked.read_bytes(output, bytes)) {
-                        return false;
-                    }
-                    const nlohmann::json document =
-                        nlohmann::json::parse(std::string_view{
-                                                  reinterpret_cast<const char*>(bytes.data()),
-                                                  bytes.size() },
-                                              nullptr, false);
-                    if (document.is_discarded()) {
-                        ENGINE_LOG_ERROR("{} will not parse as a prefab.", output.cooked);
-                        return false;
-                    }
-                    if (!library.add(engine::assets::prefab_name(entry.source, output.cooked),
-                                     document)) {
-                        ENGINE_LOG_ERROR("{} is not a prefab this build can use.", output.cooked);
-                        return false;
-                    }
-                    ++added;
+            for (const engine::assets::AssetRecord& record : records) {
+                std::vector<std::byte> bytes;
+                if (!source.read(record.guid, bytes)) {
+                    return false;
                 }
+                const nlohmann::json document =
+                    nlohmann::json::parse(std::string_view{
+                                              reinterpret_cast<const char*>(bytes.data()),
+                                              bytes.size() },
+                                          nullptr, false);
+                if (document.is_discarded()) {
+                    ENGINE_LOG_ERROR("{} will not parse as a prefab.", record.name);
+                    return false;
+                }
+                if (!library.add(engine::assets::prefab_name(record.source, record.name),
+                                 document)) {
+                    ENGINE_LOG_ERROR("{} is not a prefab this build can use.", record.name);
+                    return false;
+                }
+                ++added;
             }
 
             ENGINE_LOG_INFO("The sandbox registered {} prefabs.", added);
@@ -85,18 +84,16 @@ namespace sandbox {
         registry.add<Goal>();
     }
 
-    bool load(const std::filesystem::path& content, const engine::assets::Content* cooked,
+    bool load(const std::filesystem::path& content, const engine::assets::AssetSource* assets,
               engine::scene::World& world, const engine::scene::ComponentRegistry& registry,
               engine::scene::PrefabLibrary& library) {
         // The prefabs go in first. A scene that names one the library does not
         // hold cannot build its entities.
         //
-        // They come out of the cooker rather than out of the source tree, so
-        // they are found through the manifest and read by identity. A
-        // hand-authored prefab is in there too, because the cooker copies what
-        // it has no rule for. The path is what a person edits, and the manifest
-        // says what that path became.
-        if (cooked != nullptr && !add_prefabs(*cooked, library)) {
+        // They are found by kind and read by identity, so the game does not
+        // learn whether they were cooked or imported. A hand-authored prefab is
+        // in there too, because the cooker copies what it has no rule for.
+        if (assets != nullptr && !add_prefabs(*assets, library)) {
             return false;
         }
 

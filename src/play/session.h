@@ -30,7 +30,7 @@
 #include <vector>
 
 namespace engine::assets {
-    class Content;
+    class AssetSource;
     struct AssetChange;
 } // namespace engine::assets
 
@@ -98,27 +98,28 @@ namespace engine::play {
         /**
          * @brief Reads every cooked script in a content tree into the host.
          *
-         * This walks the manifest rather than a list the game holds, so a tree
-         * the application never saw at build time still works. A script that
+         * This asks the source for every script rather than reading a list
+         * the game holds, so a tree the application never saw at build time
+         * still works. A script that
          * will not compile is reported and skipped, and the rest still load.
          *
          * Without Lua this loads nothing and reports nothing.
          *
-         * @param content The open content tree to walk.
+         * @param content The open project to read the scripts out of.
          */
-        void load_scripts(assets::Content& content);
+        void load_scripts(assets::AssetSource& content);
 
         /**
          * @brief Loads every changed script again, and restarts what runs it.
          *
-         * **A script the manifest no longer holds is left alone.** Its bytes
+         * **A script the project no longer holds is left alone.** Its bytes
          * are already in this process and the entities running it keep running
          * it. Deleting a source file during a session should not stop a game.
          *
          * @param content The tree the new bytes are read from.
          * @param changed What the cook reported.
          */
-        void reload_scripts(assets::Content& content,
+        void reload_scripts(assets::AssetSource& content,
                             const std::vector<assets::AssetChange>& changed);
 
         /**

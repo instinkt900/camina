@@ -13,7 +13,7 @@
  * application decides how to show it.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "platform/input.h"
 #include "scene/component_registry.h"
 #include "scene/prefab.h"
@@ -108,15 +108,14 @@ namespace sandbox {
      * The world must be empty. The prefabs go in first, because the scene names
      * them.
      *
-     * Every prefab in the cooked tree is registered, under the name
-     * prefab_name() gives it. So this reads any cooked content tree and not
-     * only the sandbox's own, which is what the large test scene of issue #130
-     * needs.
+     * Every prefab the source holds is registered, under the name
+     * prefab_name() gives it. So this reads any project and not only the
+     * sandbox's own, which is what the large test scene of issue #130 needs.
      *
      * @param content The directory holding the prefabs and the scene.
-     * @param cooked The open cooked content, which holds every prefab and the
-     * source path each one came from. Pass null to register no prefab at all,
-     * which is what a test with no cooked tree does.
+     * @param assets The open project, which holds every prefab and the source
+     * path each one came from. Pass null to register no prefab at all, which
+     * is what a test with no assets does.
      * @param world The world to fill.
      * @param registry The component types to build. Register the game types
      * first, or the scene loses them.
@@ -124,7 +123,7 @@ namespace sandbox {
      * @return True when every file parsed and the scene loaded.
      */
     [[nodiscard]] bool load(const std::filesystem::path& content,
-                            const engine::assets::Content* cooked, engine::scene::World& world,
+                            const engine::assets::AssetSource* assets, engine::scene::World& world,
                             const engine::scene::ComponentRegistry& registry =
                                 engine::scene::components(),
                             engine::scene::PrefabLibrary& library = engine::scene::prefabs());

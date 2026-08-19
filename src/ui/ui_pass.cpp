@@ -27,19 +27,20 @@ namespace engine::ui {
          * than shared because src/ui is a separate target and the render one is
          * not public. Issue #197 records it.
          */
-        [[nodiscard]] bool read_one_shader(const assets::Content& content,
+        [[nodiscard]] bool read_one_shader(const assets::AssetSource& content,
                                            std::string_view source, assets::Shader& out) {
-            const assets::ManifestEntry* entry = content.find(source);
-            if (entry == nullptr || entry->outputs.empty()) {
-                ENGINE_LOG_ERROR("{} is not in the cooked content tree.", source);
+            // assets_for() says which source it could not find, so there is no
+            // message here.
+            std::vector<assets::AssetRecord> forms;
+            if (!content.assets_for(source, forms)) {
                 return false;
             }
             std::vector<std::byte> bytes;
-            if (!content.read_bytes(entry->outputs.front(), bytes)) {
+            if (!content.read(forms.front().guid, bytes)) {
                 ENGINE_LOG_ERROR("{} would not read.", source);
                 return false;
             }
-            return assets::read_shader(bytes, out, entry->outputs.front().cooked);
+            return assets::read_shader(bytes, out, forms.front().name);
         }
 
         /// Whether a moth_ui blend mode needs the blending pipeline.
@@ -54,7 +55,7 @@ namespace engine::ui {
 
     } // namespace
 
-    bool UiPass::create(gfx::Device* device, const assets::Content& content) {
+    bool UiPass::create(gfx::Device* device, const assets::AssetSource& content) {
         ENGINE_ASSERT(device != nullptr, "UiPass::create needs a device.");
         // Every failure below clears this again. draw() takes a null device to
         // mean the pass is not ready, so leaving it set after a failed build

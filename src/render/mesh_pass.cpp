@@ -162,25 +162,26 @@ namespace engine::render {
          * Content::read_bytes(source), because that call refuses a source with
          * more than one output and cannot say which form was wanted.
          */
-        [[nodiscard]] bool read_stage(const assets::Content& content, const char* source,
+        [[nodiscard]] bool read_stage(const assets::AssetSource& content, const char* source,
                                       std::vector<assets::Shader>& out) {
-            const assets::ManifestEntry* entry = content.find(source);
-            if (entry == nullptr || entry->outputs.empty()) {
-                ENGINE_LOG_ERROR("{} is not in the cooked content tree.", source);
+            // assets_for() says which source it could not find, so there is no
+            // message here. It answers in the order the importer made the
+            // forms, which is the order mesh_variant_index() numbers them in.
+            std::vector<assets::AssetRecord> forms;
+            if (!content.assets_for(source, forms)) {
                 return false;
             }
 
             out.clear();
-            out.reserve(entry->outputs.size());
-            for (const assets::ManifestOutput& output : entry->outputs) {
+            out.reserve(forms.size());
+            for (const assets::AssetRecord& record : forms) {
                 std::vector<std::byte> bytes;
-                if (!content.read_bytes(output, bytes)) {
-                    ENGINE_LOG_ERROR("{}: the cooked form {} would not read.", source,
-                                     output.cooked);
+                if (!content.read(record.guid, bytes)) {
+                    ENGINE_LOG_ERROR("{}: the form {} would not read.", source, record.name);
                     return false;
                 }
                 assets::Shader form;
-                if (!assets::read_shader(bytes, form, output.cooked)) {
+                if (!assets::read_shader(bytes, form, record.name)) {
                     return false;
                 }
                 out.push_back(std::move(form));
@@ -327,7 +328,7 @@ namespace engine::render {
         destroy();
     }
 
-    bool MeshPass::create(gfx::Device* device, const assets::Content& content,
+    bool MeshPass::create(gfx::Device* device, const assets::AssetSource& content,
                           gfx::TextureHandle shadow_map) {
         if (device == nullptr) {
             ENGINE_LOG_ERROR("MeshPass::create needs a device.");
@@ -384,16 +385,16 @@ namespace engine::render {
      * the same way every other asset does, so nothing here has to be kept in
      * step with a number in a file.
      */
-    bool MeshPass::resolve_brdf_lut(const assets::Content& content) {
-        const assets::ManifestEntry* entry = content.find(kBrdfSource);
-        if (entry == nullptr) {
-            ENGINE_LOG_ERROR("{} is not in the cooked engine content tree, so there is no "
-                             "split sum lookup and no image based lighting.",
+    bool MeshPass::resolve_brdf_lut(const assets::AssetSource& content) {
+        std::vector<assets::AssetRecord> table;
+        if (!content.assets_for(kBrdfSource, table)) {
+            ENGINE_LOG_ERROR("{} is not in the engine content, so there is no split sum "
+                             "lookup and no image based lighting.",
                              kBrdfSource);
             return false;
         }
 
-        const gfx::TextureHandle resolved = textures_.get(device_, content, entry->guid);
+        const gfx::TextureHandle resolved = textures_.get(device_, content, table.front().guid);
         if (!resolved.valid() || resolved == textures_.fallback()) {
             ENGINE_LOG_ERROR("{} did not load, and the cache has said why. The pass cannot "
                              "shade without the table.",
@@ -401,7 +402,7 @@ namespace engine::render {
             return false;
         }
 
-        brdf_guid_ = entry->guid;
+        brdf_guid_ = table.front().guid;
         brdf_lut_ = resolved;
         return true;
     }
@@ -633,7 +634,7 @@ namespace engine::render {
         }
     }
 
-    bool MeshPass::build_compute_pipeline(const assets::Content& content) {
+    bool MeshPass::build_compute_pipeline(const assets::AssetSource& content) {
         std::vector<assets::Shader> forms;
         if (!read_stage(content, kClusterCullSource, forms) || forms.empty()) {
             ENGINE_LOG_ERROR("{} would not read from the content tree.", kClusterCullSource);
@@ -793,7 +794,7 @@ namespace engine::render {
      * scene appearing.
      */
     void MeshPass::update_environment(const scene::World& world,
-                                      const assets::Content& content) {
+                                      const assets::AssetSource& content) {
         bool extra = false;
         const Guid wanted = find_environment(world, extra);
         if (extra && !environments_overflowed_) {
@@ -843,7 +844,7 @@ namespace engine::render {
      * @param fallback True when the grey cubemap is what got bound, either
      * because the scene named none or because the one it named would not load.
      */
-    void MeshPass::update_irradiance(const assets::Content& content, Guid environment,
+    void MeshPass::update_irradiance(const assets::AssetSource& content, Guid environment,
                                      bool fallback) {
         if (fallback) {
             irradiance_ = fallback_irradiance();
@@ -853,7 +854,7 @@ namespace engine::render {
         const Guid derived = Guid::derive(environment, assets::kIrradiancePartKind, 0);
         std::vector<std::byte> bytes;
         assets::IrradianceSH read;
-        if (content.read_bytes(derived, bytes) &&
+        if (content.read(derived, bytes) &&
             assets::read_irradiance(bytes, read, "the environment irradiance")) {
             irradiance_ = read;
             return;
@@ -878,7 +879,7 @@ namespace engine::render {
      * eight pipelines over four fragment modules, and reading each module twice
      * would be four wasted reads and four wasted reflections on every reload.
      */
-    bool MeshPass::build_pipelines(const assets::Content& content, PipelineSet& out) {
+    bool MeshPass::build_pipelines(const assets::AssetSource& content, PipelineSet& out) {
         std::vector<assets::Shader> vertex_forms;
         std::vector<assets::Shader> fragment_forms;
         if (!read_stage(content, kVertexShaderSource, vertex_forms) ||
@@ -1039,7 +1040,7 @@ namespace engine::render {
         return true;
     }
 
-    bool MeshPass::reload_shaders(const assets::Content& content) {
+    bool MeshPass::reload_shaders(const assets::AssetSource& content) {
         if (device_ == nullptr) {
             return false;
         }
@@ -1091,7 +1092,7 @@ namespace engine::render {
         return true;
     }
 
-    bool MeshPass::reload_brdf_lut(const assets::Content& content) {
+    bool MeshPass::reload_brdf_lut(const assets::AssetSource& content) {
         if (device_ == nullptr) {
             return false;
         }
@@ -1205,7 +1206,7 @@ namespace engine::render {
             //
             // The irradiance is matched as well, though today it can never
             // arrive alone: it is a sub-asset of the same source, and
-            // assets::Content hashes a whole entry rather than each output, so
+            // assets::AssetSource hashes a whole entry rather than each output, so
             // the two identities always change together. That is a fact about
             // another file. Matching both keeps this one right on its own.
             if (guid == environment_guid_ ||
@@ -1217,7 +1218,7 @@ namespace engine::render {
     }
 
     void MeshPass::cull(gfx::CommandList* commands, const scene::World& world,
-                        const assets::Content& content, const Mat4& view_projection,
+                        const assets::AssetSource& content, const Mat4& view_projection,
                         const Vec3& camera_position, const ClusterView& view) {
         if (!layout_pipeline().valid()) {
             return;
@@ -1306,7 +1307,7 @@ namespace engine::render {
     }
 
     void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,
-                        const assets::Content& content, const Vec3& camera_position) {
+                        const assets::AssetSource& content, const Vec3& camera_position) {
         draw_count_ = 0;
         pipeline_switches_ = 0;
         culled_meshes_ = 0;
@@ -1365,7 +1366,7 @@ namespace engine::render {
         draw_blended(commands);
     }
 
-    void MeshPass::gather_draws(const scene::World& world, const assets::Content& content,
+    void MeshPass::gather_draws(const scene::World& world, const assets::AssetSource& content,
                                 const Vec3& camera_position) {
         blended_.clear();
         opaque_.clear();

@@ -5,7 +5,7 @@
  * @brief Writes the scene image to the swapchain, through a full-screen pass.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "gfx/device.h"
 #include "render/render_graph.h"
 
@@ -54,7 +54,7 @@ namespace engine::render {
          * @param extent The size of the swapchain, which the target matches.
          * @return False when the target or the pipeline did not build.
          */
-        [[nodiscard]] bool create(gfx::Device* device, const assets::Content& content,
+        [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content,
                                   gfx::Extent2D extent);
 
         /// @brief Releases everything create() built. Safe to call twice.
@@ -81,7 +81,7 @@ namespace engine::render {
          * @param content The engine content tree.
          * @return True when the pipeline was replaced.
          */
-        [[nodiscard]] bool reload_shaders(const assets::Content& content);
+        [[nodiscard]] bool reload_shaders(const assets::AssetSource& content);
 
         /**
          * @brief The image the scene renders into.
@@ -109,7 +109,7 @@ namespace engine::render {
         /// Builds the half float target at @p extent.
         [[nodiscard]] bool build_target(gfx::Extent2D extent);
         /// Builds a pipeline from the cooked shaders into @p out.
-        [[nodiscard]] bool build_pipeline(const assets::Content& content,
+        [[nodiscard]] bool build_pipeline(const assets::AssetSource& content,
                                           gfx::PipelineHandle& out);
         /**
          * Builds the set that binds the target into @p out.

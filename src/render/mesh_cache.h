@@ -14,7 +14,7 @@
  * replace a mesh while the program runs.
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "assets/mesh.h"
 #include "core/guid.h"
 #include "gfx/device.h"
@@ -67,7 +67,7 @@ namespace engine::render {
          * @param guid The mesh identity, as a scene stores it.
          * @return The mesh, or nullptr when it will not load.
          */
-        [[nodiscard]] const GpuMesh* get(gfx::Device* device, const assets::Content& content,
+        [[nodiscard]] const GpuMesh* get(gfx::Device* device, const assets::AssetSource& content,
                                          Guid guid);
 
         /**

@@ -16,7 +16,7 @@
  * DESIGN.md section 9 "Materials".
  */
 
-#include "assets/content.h"
+#include "assets/asset_source.h"
 #include "assets/material.h"
 #include "assets/shader.h"
 #include "core/guid.h"
@@ -197,7 +197,7 @@ namespace engine::render {
          * @return The material. It is never null, so a draw call needs no check.
          */
         [[nodiscard]] const GpuMaterial& get(gfx::Device* device,
-                                             const assets::Content& content,
+                                             const assets::AssetSource& content,
                                              TextureCache& textures, gfx::PipelineHandle pipeline,
                                              Guid guid);
 

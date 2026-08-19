@@ -3,6 +3,9 @@
 // A sidecar gives an asset its identity, and a rename keeps that
 // identity. The cooked texture and material formats are what the cooker
 
+#include "assets/content.h"
+#include "assets/reference.h"
+#include "assets/script.h"
 #include "assets/material.h"
 #include "assets/meta.h"
 #include "assets/texture.h"
@@ -367,6 +370,120 @@ namespace {
               "and so is a roughness that runs off to infinity");
     }
 
+    /// A cooked tree with one shader of two forms, one prefab, and one script.
+    /// Enough to drive all three questions the interface answers.
+    std::filesystem::path make_cooked_tree(as::Manifest& out) {
+        const std::filesystem::path root = scratch_directory() / "cooked";
+        std::filesystem::create_directories(root);
+
+        const Guid shader = Guid::generate();
+        as::ManifestEntry shader_entry;
+        shader_entry.source = "mesh.frag";
+        shader_entry.guid = shader;
+        shader_entry.outputs.push_back(as::ManifestOutput{ "mesh.frag.0.shader", shader });
+        shader_entry.outputs.push_back(
+            as::ManifestOutput{ "mesh.frag.1.shader",
+                                Guid::derive(shader, "shader", 1) });
+
+        as::ManifestEntry prefab_entry;
+        prefab_entry.source = "models/crate/crate.gltf";
+        prefab_entry.guid = Guid::generate();
+        prefab_entry.outputs.push_back(
+            as::ManifestOutput{ "models/crate/crate.gltf.0.prefab", prefab_entry.guid });
+
+        as::ManifestEntry script_entry;
+        script_entry.source = "scripts/spin.lua";
+        script_entry.guid = Guid::generate();
+        script_entry.outputs.push_back(
+            as::ManifestOutput{ "scripts/spin.lua", script_entry.guid });
+
+        out.entries = { shader_entry, prefab_entry, script_entry };
+
+        for (const as::ManifestEntry& entry : out.entries) {
+            for (const as::ManifestOutput& output : entry.outputs) {
+                const std::filesystem::path file = root / output.cooked;
+                std::filesystem::create_directories(file.parent_path());
+                write_file(file, output.cooked);
+            }
+        }
+        check(as::save_manifest(root, out), "the test manifest was written");
+        return root;
+    }
+
+    void test_a_source_path_names_every_form() {
+        as::Manifest manifest;
+        as::Content content;
+        check(content.open(make_cooked_tree(manifest)), "the cooked tree opened");
+
+        // Through the interface and not through Content, because that is the
+        // thing under test. A caller must not be able to tell which it holds.
+        const as::AssetSource& source = content;
+
+        std::vector<as::AssetRecord> forms;
+        check(source.assets_for("mesh.frag", forms), "a source path that cooked is found");
+        check(forms.size() == 2, "and it names both of its forms");
+
+        // The order is what mesh_variant_index() indexes into, so a source that
+        // answered out of order would bind the wrong pipeline and draw a
+        // correct-looking picture with the wrong shader.
+        check(forms[0].name == "mesh.frag.0.shader", "the base form comes first");
+        check(forms[1].name == "mesh.frag.1.shader", "and the variants follow in order");
+        check(forms[0].guid == manifest.entries[0].guid,
+              "the base form keeps the identity of its source");
+        check(forms[0].source == "mesh.frag", "and every record says where it came from");
+
+        std::vector<as::AssetRecord> missing{ forms };
+        check(!source.assets_for("nothing.frag", missing), "a path that cooked nothing is false");
+        check(missing.empty(), "and the answer is cleared rather than left as it was");
+    }
+
+    void test_a_kind_finds_what_holds_no_path() {
+        as::Manifest manifest;
+        as::Content content;
+        check(content.open(make_cooked_tree(manifest)), "the cooked tree opened");
+        const as::AssetSource& source = content;
+
+        std::vector<as::AssetRecord> prefabs;
+        check(source.assets_of_kind(as::kPrefabExtension, prefabs), "the prefabs are listed");
+        check(prefabs.size() == 1, "and only the prefab answers");
+        check(prefabs.front().source == "models/crate/crate.gltf",
+              "the record carries the source path prefab_name() reads");
+
+        std::vector<as::AssetRecord> scripts;
+        check(source.assets_of_kind(as::kScriptExtension, scripts), "the scripts are listed");
+        check(scripts.size() == 1, "and only the script answers");
+
+        // A project with none of a kind is a project, not a fault. The script
+        // host loads nothing and carries on.
+        std::vector<as::AssetRecord> none;
+        check(source.assets_of_kind(".nothing", none), "a kind nothing cooked is still true");
+        check(none.empty(), "and the answer is empty");
+    }
+
+    void test_bytes_come_back_by_identity() {
+        as::Manifest manifest;
+        as::Content content;
+        check(content.open(make_cooked_tree(manifest)), "the cooked tree opened");
+        const as::AssetSource& source = content;
+
+        std::vector<as::AssetRecord> forms;
+        check(source.assets_for("mesh.frag", forms), "the shader is found");
+
+        // Each file holds its own cooked name, so this checks that the identity
+        // reached the right file rather than only that some file read.
+        for (const as::AssetRecord& record : forms) {
+            std::vector<std::byte> bytes;
+            check(source.read(record.guid, bytes), "an identity the source names reads");
+            const std::string_view text{ reinterpret_cast<const char*>(bytes.data()),
+                                         bytes.size() };
+            check(text == record.name, "and the bytes are the ones that identity names");
+        }
+
+        std::vector<std::byte> bytes;
+        check(!source.read(Guid::generate(), bytes),
+              "an identity the source does not hold is false");
+    }
+
 } // namespace
 
 int main() {
@@ -380,6 +497,10 @@ int main() {
     test_mip_arithmetic();
     test_read_texture_refuses_a_bad_file();
     test_color_space_text();
+    test::section("the asset source seam");
+    test_a_source_path_names_every_form();
+    test_a_kind_finds_what_holds_no_path();
+    test_bytes_come_back_by_identity();
     test::section("the cooked material format");
     test_material_round_trips();
     test_read_material_refuses_a_bad_file();
