@@ -891,8 +891,22 @@ Two traps, both of which have produced a false green:
   unambiguous, and read `conclusion` only after that.
 - **A bare `length > 0` exits far too early.** The review bot registers before the workflow
   jobs do, so the loop sees one finished check and reports success before the build starts.
-  Require the expected count, which is **seven**: `format`, `docs`, `containment`, and four
-  `build` jobs. The `lint` job does not run on a pull request, so it is not one of them. The build matrix is two platforms times both options off and both on,
+  Require the expected count, which is **eight**: `format`, `docs`, `containment`, `lint`,
+  and four `build` jobs.
+
+- **A skipped job is still an entry, and it reports `COMPLETED` at once.** `lint` does not
+  run on a pull request, and it comes back as `status=COMPLETED, conclusion=SKIPPED` from
+  the first poll. So there are eight entries of which seven do work, and a loop that waits
+  for seven `COMPLETED` can finish while a build is still going: the skipped one plus the
+  three quick jobs plus three builds is already seven.
+
+  **Wait for every entry to be `COMPLETED`, not for a count of them**, and treat `SKIPPED`
+  as neither a pass nor a failure:
+
+  ```bash
+  jq -e 'all(.status == "COMPLETED")' <<<"$s"
+  jq -r '.[] | select(.conclusion != "SUCCESS" and .conclusion != "SKIPPED") | .name' <<<"$s"
+  ``` The build matrix is two platforms times both options off and both on,
   and the job names carry which, for example
   `build (linux-clang, ui=true, editor=true)`.
 
