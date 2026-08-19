@@ -79,8 +79,18 @@ jobs:
   # WITH_EDITOR removes code and never changes it, so a file compiled with the
   # editor off is also compiled with it on. with_ui is on for the same reason.
   #
-  # A green build no longer means the lint gate passed. These are two checks.
+  # **This does not run on a pull request.** It takes about nine minutes against
+  # about six for a build, so it set the pace of every review for the thing that
+  # was wanted least. It runs on a push to main, where nobody waits on it, and on
+  # request from the Actions tab.
+  #
+  # The gate has not gone. `cmake/ClangTidy.cmake` still turns clang-tidy on for
+  # a Debug build and for `build/tidy`, which is what CLAUDE.md says to run
+  # before a push. This job is the backstop rather than the gate.
+  #
+  # To put it back on pull requests, delete the `if:` below.
   lint:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
