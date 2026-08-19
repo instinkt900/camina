@@ -422,7 +422,8 @@ namespace {
     bool cook_gltf(const std::filesystem::path& source, const std::filesystem::path& out,
                    const std::filesystem::path& relative,
                    std::vector<as::ManifestOutput>& outputs) {
-        return engine::import::cook_gltf(source, out, relative, kParent, outputs);
+        engine::import::FileWriter writer(out);
+        return engine::import::cook_gltf(source, writer, relative, kParent, outputs);
     }
 
     void test_glb_cooks() {

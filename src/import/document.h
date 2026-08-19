@@ -29,6 +29,7 @@
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "scene/component_registry.h"
+#include "import/writer.h"
 
 #include <filesystem>
 #include <vector>
@@ -84,7 +85,8 @@ namespace engine::import {
      * @brief Cooks one scene or prefab, resolving every reference it holds.
      *
      * @param source The document to read.
-     * @param destination Where the cooked document goes.
+     * @param writer Where the cooked file goes.
+     * @param cooked The cooked path, relative to the cooked root.
      * @param content_root The content root the reference paths are relative to.
      * @param types The component types that say which fields name an asset.
      * @return True when the document parsed and every reference resolved.
@@ -93,8 +95,8 @@ namespace engine::import {
      * file has none yet. It has to, because a document may be cooked before
      * the asset it names, and both have to agree on the identity.
      */
-    [[nodiscard]] bool cook_document(const std::filesystem::path& source,
-                                     const std::filesystem::path& destination,
+    [[nodiscard]] bool cook_document(const std::filesystem::path& source, Writer& writer,
+                                     const std::filesystem::path& cooked,
                                      const std::filesystem::path& content_root,
                                      const engine::scene::ComponentRegistry& types);
 

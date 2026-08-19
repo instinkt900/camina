@@ -15,16 +15,21 @@
  * changed, and the drift would be quiet: the editor would name an asset
  * differently from the runtime and nothing would report it.
  *
- * @warning M13.3a builds the index and imports nothing, so `read` always
- * fails. Issue #363 is the import.
+ * **An import is on demand and it is kept.** Nothing is imported when the tree
+ * opens, because a cold cook of the sandbox is about 2.8 seconds and most of
+ * that is BC7 and the environment prefilter. The first `read` of an asset runs
+ * its rule and keeps every asset that rule produced, so a glTF is imported once
+ * however many of its meshes are drawn.
  */
 
 #include "assets/asset_source.h"
 #include "core/guid.h"
+#include "scene/component_registry.h"
 
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,12 +84,43 @@ namespace engine::import {
                                           std::vector<assets::AssetRecord>& out) const override;
 
         /**
-         * @brief Imports an asset and answers with its bytes. See AssetSource.
+         * @brief Imports an asset if it has to, and answers with its bytes.
+         *
+         * The bytes are the bytes the cooker would write, because the same rule
+         * produced them. See AssetSource.
+         *
          * @param guid The identity.
          * @param out The bytes.
-         * @return False, always. The import is issue #363.
+         * @return True when the asset imported and its bytes were found. An
+         * import that fails is reported and leaves the rest of the project
+         * usable.
          */
         [[nodiscard]] bool read(Guid guid, std::vector<std::byte>& out) const override;
+
+        /**
+         * @brief The component types a document may carry.
+         *
+         * A scene and a prefab name an asset in a field that carries
+         * `reflect::AssetRef`, and only the descriptors say which field that
+         * is. An application with a game of its own registers that game's
+         * components and hands the registry in here.
+         *
+         * @param types The registry. Nothing owns it, so it must outlive this.
+         */
+        void set_components(const engine::scene::ComponentRegistry* types) {
+            components_ = types;
+        }
+
+        /**
+         * @brief How many times a rule has been run.
+         *
+         * This counts imports, not sources, so it goes up when an import
+         * happens a second time. That is what makes it a measurement of the
+         * cache rather than of what has been asked for.
+         *
+         * @return The count.
+         */
+        [[nodiscard]] std::size_t imports() const { return imports_; }
 
         /**
          * @brief The identity a reference names.
@@ -135,6 +171,17 @@ namespace engine::import {
         std::map<Guid, std::size_t> by_guid_;
 
         std::size_t failed_ = 0;
+
+        /// The component types a document is read against. Null means the
+        /// engine's own, which is right for a tree with no game in it.
+        const engine::scene::ComponentRegistry* components_ = nullptr;
+
+        // Mutable, because reading an asset is a const question with an
+        // expensive answer. The cache is what makes the second read free, and
+        // a caller should not have to hold a mutable source to ask.
+        mutable std::map<std::string, std::vector<std::byte>> cache_;
+        mutable std::set<std::string> imported_;
+        mutable std::size_t imports_ = 0;
     };
 
 } // namespace engine::import

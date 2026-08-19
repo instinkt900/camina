@@ -241,7 +241,7 @@ namespace engine::import {
     }
 
     bool cook_document(const std::filesystem::path& source,
-                       const std::filesystem::path& destination,
+                       Writer& writer, const std::filesystem::path& cooked,
                        const std::filesystem::path& content_root,
                        const engine::scene::ComponentRegistry& types) {
         nlohmann::json document;
@@ -257,17 +257,9 @@ namespace engine::import {
             return false;
         }
 
-        std::ofstream out(destination, std::ios::trunc);
-        if (!out) {
-            ENGINE_LOG_ERROR("{}: could not open it for writing.", destination.string());
-            return false;
-        }
-        out << document.dump(kIndent) << '\n';
-        if (!out) {
-            ENGINE_LOG_ERROR("{}: the write failed part way through.", destination.string());
-            return false;
-        }
-        return true;
+        const std::string text = document.dump(kIndent) + "\n";
+        const auto* first = reinterpret_cast<const std::byte*>(text.data());
+        return writer.write(cooked, std::span<const std::byte>{ first, text.size() });
     }
 
 } // namespace engine::import

@@ -8,6 +8,7 @@ add_library(engine_import STATIC
     cook.cpp
     rules.cpp
     source_assets.cpp
+    writer.cpp
     document.cpp
     brdf.cpp
     environment.cpp

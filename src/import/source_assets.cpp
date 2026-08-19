@@ -6,6 +6,7 @@
 #include "assets/irradiance.h"
 #include "assets/texture.h"
 #include "core/log.h"
+#include "import/cook.h"
 #include "import/mesh.h"
 #include "import/rules.h"
 
@@ -192,11 +193,51 @@ namespace engine::import {
     }
 
     bool SourceAssets::read(Guid guid, std::vector<std::byte>& out) const {
-        (void)out;
-        ENGINE_LOG_ERROR("The source content cannot import {} yet, so nothing reads it. That is "
-                         "issue #363.",
-                         guid.to_text());
-        return false;
+        const auto record = by_guid_.find(guid);
+        if (record == by_guid_.end()) {
+            ENGINE_LOG_ERROR("{} is not an asset the source content at {} holds.",
+                             guid.to_text(), root_.string());
+            return false;
+        }
+        const as::AssetRecord& wanted = records_[record->second];
+
+        // A rule produces every part of its source at once, so one glTF is
+        // imported once however many of its meshes are asked for.
+        if (!imported_.contains(wanted.source)) {
+            imported_.insert(wanted.source);
+            ++imports_;
+
+            MemoryWriter writer;
+            std::vector<as::ManifestOutput> produced;
+            static const scene::ComponentRegistry kEngineOnly = engine_components();
+            const scene::ComponentRegistry& types =
+                components_ != nullptr ? *components_ : kEngineOnly;
+
+            if (!import_one(root_, wanted.source, writer, types, produced)) {
+                // The source stays in imported_, so a file that will not import
+                // is not retried on every frame that asks for it. The editor
+                // keeps running with the asset missing, the same way a missing
+                // cooked asset behaves.
+                ENGINE_LOG_ERROR("{} did not import, so nothing it holds can be drawn.",
+                                 wanted.source);
+                return false;
+            }
+
+            for (const auto& [name, bytes] : writer.files()) {
+                cache_[name] = bytes;
+            }
+        }
+
+        const auto found = cache_.find(wanted.name);
+        if (found == cache_.end()) {
+            ENGINE_LOG_ERROR("{} imported and produced no {}, so the index and the rule "
+                             "disagree about what it holds.",
+                             wanted.source, wanted.name);
+            return false;
+        }
+
+        out = found->second;
+        return true;
     }
 
     bool SourceAssets::resolve(std::string_view reference, Guid& out) const {

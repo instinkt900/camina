@@ -467,7 +467,7 @@ namespace engine::import {
         struct MeshCook {
             const cgltf_data& data;
             const std::string& name; ///< The source path, which the log names.
-            const std::filesystem::path& out_root;
+            Writer& writer;
             const std::filesystem::path& relative;
             engine::Guid parent;
             const CookedMaterials& materials;
@@ -513,23 +513,6 @@ namespace engine::import {
             return key;
         }
 
-        [[nodiscard]] bool write_bytes(const std::filesystem::path& path,
-                                       std::span<const std::byte> bytes) {
-            std::error_code error;
-            std::filesystem::create_directories(path.parent_path(), error);
-            std::ofstream file(path, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it for writing.", path.string());
-                return false;
-            }
-            file.write(reinterpret_cast<const char*>(bytes.data()),
-                       static_cast<std::streamsize>(bytes.size()));
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: the write failed part way through.", path.string());
-                return false;
-            }
-            return true;
-        }
 
         /// Cooks one glTF mesh and writes it. `at` is the index of the mesh in
         /// the file, which both names the output and derives its identity.
@@ -594,7 +577,7 @@ namespace engine::import {
             if (bytes.empty()) {
                 return false;
             }
-            if (!write_bytes(cook.out_root / cooked_relative, bytes)) {
+            if (!cook.writer.write(cooked_relative, bytes)) {
                 return false;
             }
 
@@ -693,7 +676,7 @@ namespace engine::import {
         return true;
     }
 
-    bool cook_gltf(const std::filesystem::path& source, const std::filesystem::path& out_root,
+    bool cook_gltf(const std::filesystem::path& source, Writer& writer,
                    const std::filesystem::path& relative, engine::Guid parent,
                    std::vector<as::ManifestOutput>& outputs) {
         const std::string name = source.string();
@@ -736,12 +719,12 @@ namespace engine::import {
         // first output to decide whether it may skip a source, so a glTF file
         // has to keep naming its first mesh there.
         InlineImages images;
-        if (!cook_inline_images(*held.data, source, out_root, relative, parent, images)) {
+        if (!cook_inline_images(*held.data, source, writer, relative, parent, images)) {
             return false;
         }
 
         CookedMaterials materials;
-        if (!cook_materials(*held.data, source, out_root, relative, parent, images, materials)) {
+        if (!cook_materials(*held.data, source, writer, relative, parent, images, materials)) {
             return false;
         }
 
@@ -750,7 +733,7 @@ namespace engine::import {
 
         const MeshCook cook{ .data = *held.data,
                              .name = name,
-                             .out_root = out_root,
+                             .writer = writer,
                              .relative = relative,
                              .parent = parent,
                              .materials = materials };
@@ -766,7 +749,7 @@ namespace engine::import {
         outputs.insert(outputs.end(), materials.outputs.begin(), materials.outputs.end());
         outputs.insert(outputs.end(), images.outputs.begin(), images.outputs.end());
 
-        return cook_prefabs(*held.data, source, out_root, relative, parent, mesh_guids, outputs);
+        return cook_prefabs(*held.data, source, writer, relative, parent, mesh_guids, outputs);
     }
 
 } // namespace engine::import

@@ -16,6 +16,8 @@
  * that game's components first. See @ref engine::import::engine_components.
  */
 
+#include "assets/manifest.h"
+#include "import/writer.h"
 #include "scene/component_registry.h"
 
 #include <cstddef>
@@ -88,5 +90,29 @@ namespace engine::import {
      * log then names each failure.
      */
     [[nodiscard]] bool cook_all(const Options& options, Result& result);
+
+    /**
+     * @brief Runs the rules for one source asset, into a writer.
+     *
+     * This is the cook of a single file with no manifest, no freshness check
+     * and no tree walk. The editor calls it with a `MemoryWriter` to import an
+     * asset it needs, and it is the same rule the cooker runs, so the bytes are
+     * the bytes the runtime will draw from.
+     *
+     * A source that holds several assets produces all of them, because the rule
+     * does. One glTF gives its meshes, its materials and its prefab together.
+     *
+     * @param content_root The source content tree.
+     * @param relative The source path, relative to that root.
+     * @param writer Where the results go.
+     * @param types The component types a document may carry. See
+     * @ref Options::components.
+     * @param outputs Every asset the rule produced, appended.
+     * @return True when the rule ran and every output was written.
+     */
+    [[nodiscard]] bool import_one(const std::filesystem::path& content_root,
+                                  const std::filesystem::path& relative, Writer& writer,
+                                  const engine::scene::ComponentRegistry& types,
+                                  std::vector<engine::assets::ManifestOutput>& outputs);
 
 } // namespace engine::import

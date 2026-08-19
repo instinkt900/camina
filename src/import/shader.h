@@ -15,6 +15,7 @@
  */
 
 #include "assets/shader.h"
+#include "import/writer.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -71,13 +72,14 @@ namespace engine::import {
      * writes the module and its description together.
      *
      * @param source The GLSL source to read.
-     * @param destination The cooked file to write. The directory must exist.
+     * @param writer Where the cooked file goes.
+     * @param cooked The cooked path, relative to the cooked root.
      * @param defines The defines to compile with. An empty list is the base form.
      * @return True when the cooked file was written. False reports why in the
      * log, by source path.
      */
-    [[nodiscard]] bool cook_shader(const std::filesystem::path& source,
-                                   const std::filesystem::path& destination,
+    [[nodiscard]] bool cook_shader(const std::filesystem::path& source, Writer& writer,
+                                   const std::filesystem::path& cooked,
                                    const std::vector<std::string>& defines);
 
 } // namespace engine::import

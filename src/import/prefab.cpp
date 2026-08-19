@@ -215,29 +215,18 @@ namespace engine::import {
             return true;
         }
 
-        [[nodiscard]] bool write_prefab(const std::filesystem::path& destination,
+        [[nodiscard]] bool write_prefab(Writer& writer, const std::filesystem::path& cooked,
                                         const nlohmann::json& document) {
-            std::error_code error;
-            std::filesystem::create_directories(destination.parent_path(), error);
-
-            std::ofstream file(destination, std::ios::trunc);
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it for writing.", destination.string());
-                return false;
-            }
             constexpr int kIndent = 2;
-            file << document.dump(kIndent) << '\n';
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: the write failed part way through.", destination.string());
-                return false;
-            }
-            return true;
+            const std::string text = document.dump(kIndent) + "\n";
+            const auto* first = reinterpret_cast<const std::byte*>(text.data());
+            return writer.write(cooked, std::span<const std::byte>{ first, text.size() });
         }
 
     } // namespace
 
     bool cook_prefabs(const cgltf_data& data, const std::filesystem::path& source,
-                      const std::filesystem::path& out_root,
+                      Writer& writer,
                       const std::filesystem::path& relative, engine::Guid parent,
                       const std::vector<engine::Guid>& meshes,
                       std::vector<as::ManifestOutput>& outputs) {
@@ -291,7 +280,7 @@ namespace engine::import {
                 part_record(relative, parent, as::kPrefabPartKind, as::kPrefabExtension,
                             static_cast<std::uint32_t>(at));
 
-            if (!write_prefab(out_root / record.name, document)) {
+            if (!write_prefab(writer, record.name, document)) {
                 return false;
             }
 

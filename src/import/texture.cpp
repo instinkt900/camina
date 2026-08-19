@@ -231,33 +231,8 @@ namespace engine::import {
             payload.insert(payload.end(), first, first + level.texels.size());
         }
 
-        [[nodiscard]] bool write_file(const std::filesystem::path& destination,
-                                      const as::TextureHeader& header,
-                                      const std::vector<std::byte>& payload) {
-            std::ofstream file(destination, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: could not open it for writing.", destination.string());
-                return false;
-            }
-            file.write(reinterpret_cast<const char*>(&header), sizeof(header));
-            file.write(reinterpret_cast<const char*>(payload.data()),
-                       static_cast<std::streamsize>(payload.size()));
-            if (!file) {
-                ENGINE_LOG_ERROR("{}: the write failed part way through.", destination.string());
-                return false;
-            }
-            return true;
-        }
-
-        /**
-         * Builds the mip chain and writes the file, once the texels are decoded.
-         *
-         * Two entry points decode into this. One reads a file, and one reads
-         * bytes a glTF carried inside itself. Everything after the decode is the
-         * same for both, so it lives here rather than in each of them.
-         */
-        [[nodiscard]] bool cook_decoded(const StbImage& image,
-                                        const std::filesystem::path& destination,
+        [[nodiscard]] bool cook_decoded(const StbImage& image, Writer& writer,
+                                        const std::filesystem::path& cooked,
                                         const as::TextureImport& settings,
                                         std::string_view where) {
             if (image.width <= 0 || image.height <= 0) {
@@ -318,7 +293,7 @@ namespace engine::import {
             header.mip_count = mip_count;
             header.payload_size = static_cast<std::uint32_t>(payload.size());
 
-            return write_file(destination, header, payload);
+            return write_with_header(writer, cooked, header, payload);
         }
 
     } // namespace
@@ -371,9 +346,8 @@ namespace engine::import {
         return true;
     }
 
-    bool cook_texture(const std::filesystem::path& source,
-                      const std::filesystem::path& destination,
-                      const as::TextureImport& settings) {
+    bool cook_texture(const std::filesystem::path& source, Writer& writer,
+                      const std::filesystem::path& cooked, const as::TextureImport& settings) {
         StbImage image;
         int channels = 0;
         // Four channels always, whatever the file holds. A three-channel upload
@@ -386,11 +360,11 @@ namespace engine::import {
                              stbi_failure_reason());
             return false;
         }
-        return cook_decoded(image, destination, settings, source.string());
+        return cook_decoded(image, writer, cooked, settings, source.string());
     }
 
-    bool cook_texture_bytes(std::span<const std::byte> bytes,
-                            const std::filesystem::path& destination,
+    bool cook_texture_bytes(std::span<const std::byte> bytes, Writer& writer,
+                            const std::filesystem::path& cooked,
                             const as::TextureImport& settings, std::string_view where) {
         StbImage image;
         int channels = 0;
@@ -402,7 +376,7 @@ namespace engine::import {
             ENGINE_LOG_ERROR("{}: stb_image will not read it. {}", where, stbi_failure_reason());
             return false;
         }
-        return cook_decoded(image, destination, settings, where);
+        return cook_decoded(image, writer, cooked, settings, where);
     }
 
 } // namespace engine::import

@@ -19,6 +19,7 @@
  */
 
 #include "assets/meta.h"
+#include "import/writer.h"
 
 #include <filesystem>
 #include <string>
@@ -48,11 +49,12 @@ namespace engine::import {
      * The source file is read for nothing but its identity. Everything the rule
      * needs is in @p settings.
      *
-     * @param destination Where to write the cooked table.
+     * @param writer Where the cooked table goes.
+     * @param cooked The cooked path, relative to the cooked root.
      * @param settings The size and the ray budget, from the sidecar.
      * @return True when the table was integrated and written.
      */
-    [[nodiscard]] bool cook_brdf(const std::filesystem::path& destination,
+    [[nodiscard]] bool cook_brdf(Writer& writer, const std::filesystem::path& cooked,
                                  const engine::assets::BrdfImport& settings);
 
 } // namespace engine::import

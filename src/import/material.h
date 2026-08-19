@@ -16,6 +16,7 @@
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/guid.h"
+#include "import/writer.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -73,7 +74,7 @@ namespace engine::import {
      * @param data The parsed glTF. cgltf_load_buffers() must have run, because
      * a buffer view image reads through it.
      * @param source The glTF file itself, for the log.
-     * @param out_root The cooked root to write under.
+     * @param writer Where the cooked files go.
      * @param relative The source path relative to the content root. It names the
      * cooked files, so `robot.glb` gives `robot.glb.0.tex` and up.
      * @param parent The GUID of the glTF file, from its sidecar.
@@ -81,8 +82,7 @@ namespace engine::import {
      * @return True when every image was written. False reports why in the log.
      */
     [[nodiscard]] bool cook_inline_images(const cgltf_data& data,
-                                          const std::filesystem::path& source,
-                                          const std::filesystem::path& out_root,
+                                          const std::filesystem::path& source, Writer& writer,
                                           const std::filesystem::path& relative,
                                           engine::Guid parent, InlineImages& out);
 
@@ -103,7 +103,7 @@ namespace engine::import {
      *
      * @param data The parsed glTF. The buffers need not be loaded.
      * @param source The glTF file itself. An image URI resolves beside it.
-     * @param out_root The cooked root to write under.
+     * @param writer Where the cooked files go.
      * @param relative The source path relative to the content root. It names the
      * cooked files, so `robot.gltf` gives `robot.gltf.0.material` and up.
      * @param parent The GUID of the glTF file, from its sidecar.
@@ -113,8 +113,7 @@ namespace engine::import {
      * @return True when every material was written. False reports why in the log.
      */
     [[nodiscard]] bool cook_materials(const cgltf_data& data,
-                                      const std::filesystem::path& source,
-                                      const std::filesystem::path& out_root,
+                                      const std::filesystem::path& source, Writer& writer,
                                       const std::filesystem::path& relative,
                                       engine::Guid parent, const InlineImages& images,
                                       CookedMaterials& out);
