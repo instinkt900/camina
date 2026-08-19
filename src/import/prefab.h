@@ -23,7 +23,7 @@
 
 struct cgltf_data;
 
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief Writes one prefab for each scene in a glTF file.
@@ -57,4 +57,4 @@ namespace cooker {
                                     const std::vector<engine::Guid>& meshes,
                                     std::vector<engine::assets::ManifestOutput>& outputs);
 
-} // namespace cooker
+} // namespace engine::import

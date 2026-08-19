@@ -105,9 +105,15 @@ if(ENGINE_WITH_UI)
     add_subdirectory(src/ui)
 endif()
 
-# The cooker comes after src, because it links engine::core. It looks for
-# glslc and fails when it is missing, so it must come after the docs-only
-# return above. The docs job has no Conan and no glslc.
+# The import rules come after src, because they link engine::core. They are a
+# target of their own rather than part of engine_core, so that stb, cgltf,
+# meshoptimizer, bc7enc and shaderc reach the cooker and the editor and never a
+# runtime build. DESIGN.md section 10 M13.
+add_subdirectory(src/import)
+
+# The cooker comes after src/import, because it is the command line over those
+# rules. It looks for glslc and fails when it is missing, so it must come after
+# the docs-only return above. The docs job has no Conan and no glslc.
 add_subdirectory(tools/cooker)
 
 # The game module comes before the applications, because both link it. Rule 4.3.

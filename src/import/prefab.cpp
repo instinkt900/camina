@@ -1,4 +1,4 @@
-#include "prefab.h"
+#include "import/prefab.h"
 
 #include "core/log.h"
 #include "math/transform.h"
@@ -14,7 +14,7 @@
 #include <fstream>
 #include <string>
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -301,4 +301,4 @@ namespace cooker {
         return true;
     }
 
-} // namespace cooker
+} // namespace engine::import

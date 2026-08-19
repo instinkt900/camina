@@ -12,27 +12,35 @@
 #include <cstdint>
 #include <cstring>
 
-namespace cooker {
+namespace engine::import {
 
-    /// Where each part of a 32-bit float sits, and what a half float holds.
+    /// @brief How many mantissa bits a 32-bit float carries.
     constexpr std::uint32_t kFloatMantissaBits = 23;
+    /// @brief The exponent of a 32-bit float, once shifted down.
     constexpr std::uint32_t kFloatExponentMask = 0xFFU;
+    /// @brief The mantissa of a 32-bit float, in place.
     constexpr std::uint32_t kFloatMantissaMask = 0x7FFFFFU;
+    /// @brief The one a normal float leaves out of its mantissa.
     constexpr std::uint32_t kFloatImplicitOne = 0x800000U;
+    /// @brief What a 32-bit float adds to its exponent to keep it unsigned.
     constexpr std::int32_t kFloatExponentBias = 127;
+    /// @brief How many mantissa bits a half float carries.
     constexpr std::uint32_t kHalfMantissaBits = 10;
+    /// @brief What a half float adds to its exponent to keep it unsigned.
     constexpr std::int32_t kHalfExponentBias = 15;
+    /// @brief The exponent a half float uses for infinity and NaN.
     constexpr std::int32_t kHalfExponentMax = 0x1F;
-    /// The sign bit of a half, reached by shifting a float down.
+    /// @brief The sign bit of a half, reached by shifting a float down.
     constexpr std::uint32_t kHalfSignShift = 16;
+    /// @brief The sign bit of a half, in place.
     constexpr std::uint32_t kHalfSignMask = 0x8000U;
-    /// The largest finite half float: exponent 30, every mantissa bit set.
+    /// @brief The largest finite half float: exponent 30, every mantissa bit set.
     constexpr std::uint32_t kHalfLargestFinite = 0x7BFFU;
-    /// Below this the value cannot be a denormal half either.
+    /// @brief Below this the value cannot be a denormal half either.
     constexpr std::int32_t kHalfDenormalFloor = -10;
 
     /**
-     * Turns a float into a 16-bit half float.
+     * @brief Turns a float into a 16-bit half float.
      *
      * This handles the three cases a naive shift gets wrong: a value too large for
      * half, which clamps to the largest finite half rather than becoming infinity,
@@ -74,4 +82,4 @@ namespace cooker {
             (mantissa >> (kFloatMantissaBits - kHalfMantissaBits)));
     }
 
-} // namespace cooker
+} // namespace engine::import

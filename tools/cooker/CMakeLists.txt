@@ -1,59 +1,16 @@
 # The asset cooker. DESIGN.md section 6 makes it a separate executable, so a
 # cook runs on a build machine with no graphics driver.
 #
-# The logic is a library and main.cpp is only the command line, so a test can
-# cook a tree and check what came out.
-add_library(cooker_lib STATIC
-    cook.cpp
-    document.cpp
-    brdf.cpp
-    environment.cpp
-    material.cpp
-    mesh.cpp
-    prefab.cpp
-    shader.cpp
-    texture.cpp
-    stb_image_impl.cpp
-    to_half.h
-)
-
-# stb_image carries its own implementation, and this file asks for it. It holds
-# nothing of ours, so the engine warning set and clang-tidy stay off it. Rule
-# 4.4 keeps the file in the Conan cache rather than in third_party/, because we
-# do not patch it.
-set_source_files_properties(stb_image_impl.cpp PROPERTIES
-    SKIP_LINTING ON
-    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
-)
-
-target_include_directories(cooker_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
-# engine::core brings the GUID, the sidecar, and the manifest. It brings no
-# Vulkan into this target, because engine_core keeps volk PRIVATE.
+# The rules moved to src/import/ at M13.2, because the editor runs them too.
+# What is left here is the command line and the content targets.
 #
-# stb and bc7enc are PRIVATE. They are how this target reads an image and
-# compresses it, and no consumer of the cooker needs either one.
-target_link_libraries(cooker_lib
-    PUBLIC
-        engine::core
-    PRIVATE
-        stb::stb
-        bc7enc
-        cgltf::cgltf
-        meshoptimizer::meshoptimizer
-        spirv-reflect-static
-        shaderc::shaderc
-)
-
-engine_set_warnings(cooker_lib)
-engine_enable_clang_tidy(cooker_lib)
-
-# cooker_lib knows no game. The executable picks one, the same way apps/runtime
-# does, because a document may carry a component the game defines and only the
-# descriptors say which of its fields name an asset. camina::sandbox links
-# engine::core and nothing else, so this brings in no driver and no window.
+# engine::import knows no game. The executable picks one, the same way
+# apps/runtime does, because a document may carry a component the game defines
+# and only the descriptors say which of its fields name an asset.
+# camina::sandbox links engine::core and nothing else, so this brings in no
+# driver and no window.
 add_executable(cooker main.cpp)
-target_link_libraries(cooker PRIVATE cooker_lib camina::sandbox)
+target_link_libraries(cooker PRIVATE engine::import camina::sandbox)
 
 engine_set_warnings(cooker)
 engine_enable_clang_tidy(cooker)

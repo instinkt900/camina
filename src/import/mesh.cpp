@@ -1,9 +1,9 @@
-#include "mesh.h"
+#include "import/mesh.h"
 
 #include "assets/mesh.h"
 #include "core/log.h"
-#include "material.h"
-#include "prefab.h"
+#include "import/material.h"
+#include "import/prefab.h"
 
 #include <cgltf.h>
 #include <meshoptimizer.h>
@@ -16,7 +16,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -729,4 +729,4 @@ namespace cooker {
         return cook_prefabs(*held.data, source, out_root, relative, parent, mesh_guids, outputs);
     }
 
-} // namespace cooker
+} // namespace engine::import

@@ -23,7 +23,7 @@
 #include <filesystem>
 #include <string>
 
-namespace cooker {
+namespace engine::import {
 
     /**
      * @brief Whether this rule handles a file with this extension.
@@ -55,4 +55,4 @@ namespace cooker {
     [[nodiscard]] bool cook_brdf(const std::filesystem::path& destination,
                                  const engine::assets::BrdfImport& settings);
 
-} // namespace cooker
+} // namespace engine::import

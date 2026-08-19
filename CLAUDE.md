@@ -235,7 +235,7 @@ get wrong. So the tests also drive a band-limited source and check the coefficie
 direct cosine-weighted integral. Corrupting any band constant fails that one, and corrupting
 band 1 or 2 fails nothing without it.
 
-The third part of the split sum is `tools/cooker/brdf.cpp`, keyed on the `.brdf` extension. It
+The third part of the split sum is `src/import/brdf.cpp`, keyed on the `.brdf` extension. It
 integrates the table from `src/render/content/ibl.brdf`, a source file that carries no data
 because the table depends on nothing. Its sidecar holds the size and the ray budget.
 
@@ -739,7 +739,7 @@ reading almost nothing, which was issue #242. Both are closed.
 The gate is live now, which #252 closed. `cmake/ClangTidy.cmake` asks for `clang-tidy-19` by
 name and refuses to configure when that binary rejects either `.clang-tidy`. Turning it on
 needed `cook_gltf` and `run_frames` split, because both were over the cognitive complexity
-threshold. `add_primitive` in `tools/cooker/mesh.cpp` sits at exactly 25 against a threshold
+threshold. `add_primitive` in `src/import/mesh.cpp` sits at exactly 25 against a threshold
 of 25, so one more branch in it fails the build.
 
 ## Development flow
@@ -1139,7 +1139,7 @@ here, consider whether moth_ui wants the same change.
   library needs. See `DESIGN.md` §5.
 - **Third-party sources we compile.** `SKIP_LINTING` is a source file property, not a
   target property. Setting it on a target does nothing and reports nothing.
-  `gfx/vulkan/vk_vma.cpp`, `tools/cooker/stb_image_impl.cpp`, `bc7enc.cpp`, and every
+  `gfx/vulkan/vk_vma.cpp`, `src/import/stb_image_impl.cpp`, `bc7enc.cpp`, and every
   Box3D source all carry it on the file, with `-w` alongside. A source file property
   belongs to the directory that declared the file, so the Box3D sources need the
   `DIRECTORY` form of `set_source_files_properties`.

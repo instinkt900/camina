@@ -1,10 +1,10 @@
-#include "material.h"
+#include "import/material.h"
 
 #include "assets/material.h"
 #include "assets/meta.h"
 #include "core/log.h"
-#include "mesh.h"
-#include "texture.h"
+#include "import/mesh.h"
+#include "import/texture.h"
 
 #include <cgltf.h>
 
@@ -18,7 +18,7 @@
 #include <string_view>
 #include <vector>
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -393,4 +393,4 @@ namespace cooker {
         return true;
     }
 
-} // namespace cooker
+} // namespace engine::import

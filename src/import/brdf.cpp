@@ -1,8 +1,8 @@
-#include "brdf.h"
+#include "import/brdf.h"
 
 #include "assets/texture.h"
 #include "core/log.h"
-#include "to_half.h"
+#include "import/to_half.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@
 
 namespace as = engine::assets;
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -246,4 +246,4 @@ namespace cooker {
         return write_file(destination, header, payload);
     }
 
-} // namespace cooker
+} // namespace engine::import

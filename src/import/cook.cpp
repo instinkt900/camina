@@ -1,4 +1,4 @@
-#include "cook.h"
+#include "import/cook.h"
 
 #include "assets/manifest.h"
 #include "assets/mesh.h"
@@ -13,12 +13,12 @@
 #if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
 #endif
-#include "brdf.h"
-#include "document.h"
-#include "environment.h"
-#include "mesh.h"
-#include "shader.h"
-#include "texture.h"
+#include "import/brdf.h"
+#include "import/document.h"
+#include "import/environment.h"
+#include "import/mesh.h"
+#include "import/shader.h"
+#include "import/texture.h"
 
 #include <algorithm>
 #include <map>
@@ -27,7 +27,7 @@
 #include <system_error>
 #include <vector>
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -752,4 +752,4 @@ namespace cooker {
         return result.failed == 0;
     }
 
-} // namespace cooker
+} // namespace engine::import

@@ -57,31 +57,31 @@ engine_enable_clang_tidy(test_guid)
 
 add_test(NAME guid COMMAND test_guid)
 
-# The cooker. This links cooker_lib rather than the executable, so a test can
+# The cooker. This links engine::import rather than the executable, so a test can
 # cook a tree in a temporary directory and read the counts back.
 add_executable(test_cooker test_cooker.cpp)
-target_link_libraries(test_cooker PRIVATE cooker_lib)
+target_link_libraries(test_cooker PRIVATE engine::import)
 engine_set_warnings(test_cooker)
 engine_enable_clang_tidy(test_cooker)
 
 # The M4.5 tests run the cooker executable, because that is how hot reload
-# cooks. Linking cooker_lib does not build it, and both land in the same
+# cooks. Linking engine::import does not build it, and both land in the same
 # output directory, so building this target alone would otherwise leave a test
 # looking for a program that is not there yet.
 add_dependencies(test_cooker cooker)
 
 add_test(NAME cooker COMMAND test_cooker)
 
-# The glTF importer and the cooked mesh format. This links cooker_lib for the
+# The glTF importer and the cooked mesh format. This links engine::import for the
 # same reason test_cooker does.
 add_executable(test_mesh test_mesh.cpp)
-target_link_libraries(test_mesh PRIVATE cooker_lib)
+target_link_libraries(test_mesh PRIVATE engine::import)
 engine_set_warnings(test_mesh)
 engine_enable_clang_tidy(test_mesh)
 
 add_test(NAME mesh COMMAND test_mesh)
 
-# The cooked shader format. It links engine::core rather than cooker_lib,
+# The cooked shader format. It links engine::core rather than engine::import,
 # because the format is what the two sides agree on and the runtime is one of
 # them. The reflection that fills it needs glslc, so it is tested in
 # test_cooker.cpp instead.
@@ -93,9 +93,9 @@ engine_enable_clang_tidy(test_shader)
 add_test(NAME shader COMMAND test_shader)
 
 # The half-float converter the cooker uses for environments and the BRDF table.
-# This links cooker_lib for the include path to to_half.h.
+# This links engine::import for the include path to to_half.h.
 add_executable(test_half test_half.cpp)
-target_link_libraries(test_half PRIVATE cooker_lib)
+target_link_libraries(test_half PRIVATE engine::import)
 engine_set_warnings(test_half)
 engine_enable_clang_tidy(test_half)
 

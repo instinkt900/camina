@@ -1,4 +1,4 @@
-#include "texture.h"
+#include "import/texture.h"
 
 #include "core/log.h"
 
@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace cooker {
+namespace engine::import {
 
     namespace {
 
@@ -405,4 +405,4 @@ namespace cooker {
         return cook_decoded(image, destination, settings, where);
     }
 
-} // namespace cooker
+} // namespace engine::import
