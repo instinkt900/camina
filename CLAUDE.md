@@ -23,7 +23,17 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
-M13 is complete, and M9.8 is next. It was held for M13 and no longer is.
+M9, M12 and M13 are complete. M10 is next.
+
+**M9 closed with M9.8**, the milestone test: a level built in the editor, saved, cooked, and
+run by the runtime. Hard rule 3 was re-checked after M13 rather than before it, and it holds:
+the runtime built with `ENGINE_WITH_EDITOR` on and off gives a byte-identical offscreen
+capture. **A two-build comparison has to hold every other option still** — the first attempt
+reported a difference and it was the harness, because a build directory given only
+`-DENGINE_WITH_EDITOR=OFF` also defaulted `ENGINE_WITH_UI` to off.
+
+The authoring pass found nothing worth filing, which is recorded because an exercise that
+found nothing is only evidence when somebody says it was run. See `DESIGN.md` §10.
 
 **M13 gave the editor source assets.** It opens `sandbox/content` and never looks for a cooked
 game tree: it takes a rule for a file the way the cooker does, imports on demand through the
