@@ -1206,7 +1206,8 @@ namespace engine::render {
             //
             // The irradiance is matched as well, though today it can never
             // arrive alone: it is a sub-asset of the same source, and
-            // assets::AssetSource hashes a whole entry rather than each output, so
+            // assets::Content hashes a whole manifest entry rather than each
+            // output, so
             // the two identities always change together. That is a fact about
             // another file. Matching both keeps this one right on its own.
             if (guid == environment_guid_ ||

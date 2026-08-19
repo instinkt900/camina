@@ -115,7 +115,7 @@ namespace engine::render {
          * are built.
          *
          * @param device The device to build on. Held, not owned.
-         * @param content The engine content tree, which holds the cooked shaders
+         * @param content The engine content tree, which holds the shaders
          * and the split sum lookup table.
          * @param extent The size the scene renders at, which is the size the
          * swapchain settled on rather than the size that was asked for.

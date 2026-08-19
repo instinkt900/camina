@@ -49,8 +49,8 @@ namespace engine::render {
          * @brief Builds the target, the pipeline, and the set that binds them.
          *
          * @param device The device to build on. Held, not owned.
-         * @param content The engine content tree, which holds the cooked
-         * tonemap shaders.
+         * @param content The engine content tree, which holds the tonemap
+         * shaders.
          * @param extent The size of the swapchain, which the target matches.
          * @return False when the target or the pipeline did not build.
          */

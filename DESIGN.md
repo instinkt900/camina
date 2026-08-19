@@ -2581,11 +2581,12 @@ An `AssetRecord` carries a name beside the identity, and the name is not decorat
 importing source has to give an asset the name the cooker would for the same reason it has to
 give it the bytes the cooker would.
 
-**Three callers keep naming `Content`, and each means a cooked tree.** `HotReload` cooks and
-compares manifests. The asset browser lists what a cook produced. `save_scene_source` turns
-identities back into source references through the manifest, which is what M13.4 replaces.
-`ui::ImageFactory` and `ui::FontFactory` also keep it, because they resolve a layout's absolute
-path against the content root, and a root is not a question this interface answers.
+**Five callers keep naming `Content`, for two different reasons.** Three of them mean a cooked
+tree: `HotReload` cooks and compares manifests, the asset browser lists what a cook produced,
+and `save_scene_source` turns identities back into source references through the manifest,
+which is what M13.4 replaces. The other two, `ui::ImageFactory` and `ui::FontFactory`, do not
+mean a cooked tree at all. They resolve a layout's absolute path against the content root, and
+a root is not a question this interface answers.
 
 The importers move out of `tools/cooker/` into a library the editor can link, and their
 dependencies stay private to it so a runtime build links none of them. `cooker_lib` already

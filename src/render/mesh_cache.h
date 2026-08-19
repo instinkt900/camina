@@ -63,7 +63,7 @@ namespace engine::render {
          * names a missing mesh reports once rather than on every frame.
          *
          * @param device The device that owns the buffers.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The mesh identity, as a scene stores it.
          * @return The mesh, or nullptr when it will not load.
          */

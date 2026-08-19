@@ -273,11 +273,13 @@ namespace engine::render {
         /**
          * @brief Lets go of the assets that changed, so the next draw reloads them.
          *
-         * This is the render half of hot reload. `assets::AssetSource::reload()`
-         * says what moved and this frees it. An identity the caches never
-         * loaded costs nothing, so the caller passes the whole list.
+         * This is the render half of hot reload. `assets::Content::reload()`
+         * says what moved and this frees it, so the list comes from whoever
+         * owns the cooked tree rather than through the asset seam. An identity
+         * the caches never loaded costs nothing, so the caller passes the whole
+         * list.
          *
-         * @param changed The identities that changed, from the content.
+         * @param changed The identities that changed, from the content owner.
          *
          * @warning Call this between frames and never while a command list is
          * open. It waits for the GPU, which cannot happen mid-frame.

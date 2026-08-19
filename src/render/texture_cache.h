@@ -109,7 +109,7 @@ namespace engine::render {
          * that names a missing texture reports once rather than on every frame.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The texture identity, as a material stores it. A null GUID
          * is not an error and gives the fallback.
          * @return The texture, or the fallback when there is nothing to load.
@@ -125,7 +125,7 @@ namespace engine::render {
          * time to find out would read the whole file again.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The texture identity. A null GUID gives the fallback.
          * @return The texture and its size. A miss gives the fallback, which
          * is one texel square.
@@ -143,7 +143,7 @@ namespace engine::render {
          * binding a flat texture where the layout declares a cube is undefined.
          *
          * @param device The device that owns the textures.
-         * @param content The cooked content to read from.
+         * @param content The assets to read from, cooked or imported.
          * @param guid The cubemap identity. A null GUID is not an error and
          * gives the cube fallback.
          * @return The cubemap, or the cube fallback when there is nothing to load.

@@ -39,7 +39,7 @@ namespace engine::ui {
          * @brief Builds the pipelines this pass draws with.
          *
          * @param device The device to build on. Held, not owned.
-         * @param content The engine content tree, which holds the cooked ui
+         * @param content The engine content tree, which holds the ui
          * shaders.
          * @return False when a pipeline did not build.
          */

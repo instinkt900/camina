@@ -45,6 +45,9 @@ namespace sandbox {
             for (const engine::assets::AssetRecord& record : records) {
                 std::vector<std::byte> bytes;
                 if (!source.read(record.guid, bytes)) {
+                    // AssetSource promises a bool and nothing else, so an
+                    // implementation can fail without a message of its own.
+                    ENGINE_LOG_ERROR("{} is in the project and will not read.", record.name);
                     return false;
                 }
                 const nlohmann::json document =

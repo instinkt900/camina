@@ -39,8 +39,8 @@ namespace engine::render {
          * @brief Builds the line pipeline.
          *
          * @param device The device to build on. Held, not owned.
-         * @param content The engine content tree, which holds the cooked
-         *                debug_line shaders.
+         * @param content The engine content tree, which holds the debug_line
+         *                shaders.
          * @return False when the pipeline did not build.
          */
         [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content);
