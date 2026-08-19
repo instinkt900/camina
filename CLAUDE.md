@@ -739,6 +739,23 @@ header exists to stop repeating.
 over the top so up is readable. Its width is the editor's aspect rather than one the camera
 holds, because a scene says nothing about the shape it frames. Issue #327 holds that.
 
+**`editor --offscreen` draws the scene with no window, through the scene camera**, and
+`--screenshot` writes it. That is the editor's picture in the form a runtime capture can be
+compared against: a normal editor frame is panels with the scene inside one of them, and ImGui
+does nothing without a window, so a capture of that says nothing about the scene. It draws
+straight to the frame target the way `apps/runtime` does, through the same
+`render::SceneRenderer`. Three runs give one image.
+
+**An offscreen frame has to call `World::update` itself.** Nothing else in that path does, and
+without it every world matrix is identity: the camera sits at the origin, the picture is the
+inside of a wall, and no geometry is where it belongs. The panel path gets away with it because
+the panels call it first.
+
+**Two differences from a runtime capture of the same scene, both by design.** The runtime draws
+the game UI over the scene and the editor draws the scene alone. And the runtime steps physics
+and scripts while an offscreen editor frame draws the world as authored. So the two agree on
+geometry and shading and not on either of those, and a comparison has to account for them.
+
 **`editor --select <name>` and `--gizmo <move|turn|size>`** exist so a capture can show the
 handles. A gizmo otherwise needs a hand on the mouse, and there is no way to inject one.
 

@@ -128,6 +128,16 @@ namespace {
         /// Watch the source tree and import a file that changed. Off makes a
         /// run reproducible, the way it does for the runtime.
         bool watch = true;
+        /// Draw with no window at all, and capture what the scene camera sees.
+        /// This is the only way to compare the editor's picture against the
+        /// runtime's: a windowed capture is whatever size the window manager
+        /// chose, and the editor's normal frame is panels with the scene inside
+        /// one of them. See issue #377 and `CLAUDE.md`.
+        bool offscreen = false;
+        /// What an offscreen run renders at. Ignored with a window.
+        engine::gfx::Extent2D resolution{ engine::gfx::kDefaultOffscreenWidth,
+                                          engine::gfx::kDefaultOffscreenHeight };
+
         /// Cook the project on the first frame, as if somebody had picked the
         /// menu item. A menu needs a hand on the mouse and there is no way to
         /// inject one, so this is how that action gets exercised. `--select`
@@ -147,6 +157,8 @@ namespace {
         ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
         ENGINE_LOG_INFO("  --no-watch          Do not import a source file that changed.");
         ENGINE_LOG_INFO("  --cook              Cook the project on the first frame and report.");
+        ENGINE_LOG_INFO("  --offscreen         Draw with no window, through the scene camera.");
+        ENGINE_LOG_INFO("  --resolution <WxH>  What an offscreen run renders at.");
         ENGINE_LOG_INFO("  --no-validation     Turn the Vulkan validation layer off.");
         ENGINE_LOG_INFO("  --sync-validation   Turn synchronization validation on.");
         ENGINE_LOG_INFO("  --no-vsync          Present without waiting for the display.");
@@ -212,6 +224,8 @@ namespace {
             out.watch = false;
         } else if (arg == "--cook") {
             out.cook = true;
+        } else if (arg == "--offscreen") {
+            out.offscreen = true;
         } else if (arg == "--gizmo-local") {
             out.gizmo.space = engine::editor::GizmoSpace::Local;
         } else if (arg == "--play") {
@@ -226,6 +240,38 @@ namespace {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Reads a `<width>x<height>` pair for an offscreen run.
+     *
+     * The same shape apps/runtime uses, so a capture from each can be asked for
+     * at one size and compared.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the size. Untouched unless the whole pair parsed.
+     */
+    void parse_resolution(std::string_view text, engine::gfx::Extent2D& out) {
+        const auto read = [](std::string_view part, std::uint32_t& value) {
+            if (part.empty()) {
+                return false;
+            }
+            const char* first = part.data();
+            const char* last = part.data() + part.size();
+            const std::from_chars_result parsed = std::from_chars(first, last, value);
+            return parsed.ec == std::errc{} && parsed.ptr == last && value != 0;
+        };
+
+        const std::size_t cross = text.find('x');
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        if (cross == std::string_view::npos || !read(text.substr(0, cross), width) ||
+            !read(text.substr(cross + 1), height)) {
+            ENGINE_LOG_WARN("--resolution wants <width>x<height> above zero, so {} was ignored.",
+                            text);
+            return;
+        }
+        out = engine::gfx::Extent2D{ width, height };
     }
 
     /**
@@ -245,6 +291,8 @@ namespace {
             ok = parse_gizmo(value, out.gizmo.operation);
         } else if (arg == "--select") {
             out.select = value;
+        } else if (arg == "--resolution") {
+            parse_resolution(value, out.resolution);
         } else if (arg == "--content") {
             out.content = value;
         } else if (arg == "--screenshot") {
@@ -512,18 +560,24 @@ namespace {
         // Escape clears the selection here rather than closing the window. A
         // key that throws away unsaved work when somebody meant to deselect
         // something is the worst kind of shortcut. File > Exit is the way out.
-        const engine::platform::WindowDesc window_desc{ .title = kWindowTitle,
-                                                        .quit_on_escape = false };
-        if (!editor.window.create(window_desc)) {
-            return false;
+        // An offscreen run opens no window at all. It exists to be compared
+        // against a runtime capture, and a windowed capture is whatever size
+        // the window manager decided. See `CLAUDE.md`.
+        if (!options.offscreen) {
+            const engine::platform::WindowDesc window_desc{ .title = kWindowTitle,
+                                                            .quit_on_escape = false };
+            if (!editor.window.create(window_desc)) {
+                return false;
+            }
         }
 
         const engine::gfx::DeviceDesc device_desc{
-            .window = editor.window.native(),
+            .window = options.offscreen ? nullptr : editor.window.native(),
             .app_name = "camina-editor",
             .enable_validation = options.validation,
             .enable_sync_validation = options.sync_validation,
             .vsync = options.vsync,
+            .offscreen_extent = options.resolution,
         };
         const engine::gfx::Result result = engine::gfx::create_device(device_desc, &editor.device);
         if (!engine::gfx::succeeded(result)) {
@@ -532,24 +586,28 @@ namespace {
             return false;
         }
 
-        // Docking and a layout file, which is what separates the editor overlay
-        // from the runtime one. See DESIGN.md section 10, M9.
-        editor.layout_path = layout_path();
-        const engine::gfx::ImGuiDesc imgui_desc{
-            .sdl_window = editor.window.native(),
-            .docking = true,
-            // A panel dragged off the window becomes an OS window of its own.
-            // The runtime overlay asks for neither this nor docking, so a run
-            // looks the same every time. See DESIGN.md section 10, M9.
-            .viewports = true,
-            .merge_viewports = !options.own_windows,
-            .ini_path = editor.layout_path.c_str(),
-        };
-        if (!engine::gfx::succeeded(engine::gfx::imgui_init(editor.device, imgui_desc))) {
-            ENGINE_LOG_CRITICAL("The overlay did not start, so there is no editor.");
-            return false;
+        // No overlay offscreen. ImGui needs the window, and an offscreen
+        // capture is the scene rather than the panels around it.
+        if (!options.offscreen) {
+            // Docking and a layout file, which is what separates the editor overlay
+            // from the runtime one. See DESIGN.md section 10, M9.
+            editor.layout_path = layout_path();
+            const engine::gfx::ImGuiDesc imgui_desc{
+                .sdl_window = editor.window.native(),
+                .docking = true,
+                // A panel dragged off the window becomes an OS window of its own.
+                // The runtime overlay asks for neither this nor docking, so a run
+                // looks the same every time. See DESIGN.md section 10, M9.
+                .viewports = true,
+                .merge_viewports = !options.own_windows,
+                .ini_path = editor.layout_path.c_str(),
+            };
+            if (!engine::gfx::succeeded(engine::gfx::imgui_init(editor.device, imgui_desc))) {
+                ENGINE_LOG_CRITICAL("The overlay did not start, so there is no editor.");
+                return false;
+            }
+            editor.overlay = true;
         }
-        editor.overlay = true;
 
         // The scene passes, after the device. The image they tonemap into is
         // the size the swapchain settled on rather than the size asked for.
@@ -565,12 +623,16 @@ namespace {
         }
 
         // After the overlay, because the binding the panel draws through comes
-        // out of the pool the overlay owns.
-        if (!editor.viewport.create(editor.device, extent, extent)) {
-            ENGINE_LOG_CRITICAL("The viewport target did not build.");
-            return false;
+        // out of the pool the overlay owns. An offscreen run draws into the
+        // frame target instead, the way the runtime does, so it needs none of
+        // this.
+        if (!options.offscreen) {
+            if (!editor.viewport.create(editor.device, extent, extent)) {
+                ENGINE_LOG_CRITICAL("The viewport target did not build.");
+                return false;
+            }
+            editor.wanted_viewport = editor.viewport.extent();
         }
-        editor.wanted_viewport = editor.viewport.extent();
 
         // The camera keys. The game's own actions are bound on the session
         // input when a session starts, which is sandbox::bind_actions.
@@ -1742,6 +1804,105 @@ namespace {
     }
 
     /// Runs frames until the user quits, the frame limit lands, or a frame fails.
+    /**
+     * Draws the scene with no window, through the scene camera, and captures it.
+     *
+     * **This is the editor's picture in the form the runtime's can be compared
+     * against.** A normal editor frame is panels with the scene inside one of
+     * them, and ImGui does nothing without a window, so a capture of that says
+     * nothing about the scene. This draws straight to the frame target the way
+     * `apps/runtime` does, through the same `render::SceneRenderer`.
+     *
+     * It flies no camera and reads no input. The camera is the one the scene
+     * carries, because that is the camera the runtime draws through, and a
+     * comparison of two pictures taken from two different places says nothing.
+     *
+     * @param editor Everything the program owns.
+     * @param options The frame count and where to write the capture.
+     * @return True when every frame drew.
+     */
+    [[nodiscard]] bool run_offscreen(Editor& editor, const Options& options) {
+        // One frame is enough to draw, but the caller may ask for more so that
+        // a comparison against a runtime run of the same length is honest about
+        // anything that settles over time.
+        const std::uint64_t wanted = options.frames == 0 ? 1 : options.frames;
+        const bool capture = !options.screenshot.empty();
+
+        for (std::uint64_t frame = 0; frame < wanted; ++frame) {
+            engine::gfx::FrameInfo info{};
+            const engine::gfx::Result result =
+                engine::gfx::begin_frame(editor.device, &info);
+            if (!engine::gfx::succeeded(result)) {
+                ENGINE_LOG_CRITICAL("begin_frame failed: {}", engine::gfx::result_name(result));
+                return false;
+            }
+
+            editor.scene.begin_frame(info.commands);
+
+            // The world matrices, before anything reads one. Without this the
+            // camera sits at the origin and the picture is the inside of a
+            // wall. apps/runtime calls the same thing for the same reason.
+            editor.world.update();
+
+            const float aspect = aspect_ratio(info.extent);
+            engine::Mat4 clip_from_world{ 1.0F };
+            engine::Vec3 camera_position{ 0.0F, 0.0F, 0.0F };
+            // The scene's, the way a normal editor frame reads it, and the way
+            // the runtime does. A scene with no camera tonemaps at one.
+            float exposure = 1.0F;
+            if (editor.camera == entt::null) {
+                // No camera in the scene, so the editor's own view is all there
+                // is. A runtime run of the same scene has the same problem and
+                // falls back the same way.
+                clip_from_world = engine::editor::fly_clip_from_world(
+                    editor.view_camera, aspect, engine::editor::kFallbackFov,
+                    engine::kDefaultNearPlane);
+                camera_position = editor.view_camera.position;
+            } else {
+                clip_from_world =
+                    engine::scene::clip_from_world(editor.world, editor.camera, aspect);
+                engine::Vec3 forward{ 0.0F, 0.0F, -1.0F };
+                engine::scene::camera_pose(editor.world, editor.camera, camera_position, forward);
+                exposure =
+                    editor.world.registry().get<const engine::scene::Camera>(editor.camera).exposure;
+            }
+
+            const engine::render::SceneView view{
+                .clip_from_world = clip_from_world,
+                .camera_position = camera_position,
+                .clear_color = { editor.view.clear_color.r, editor.view.clear_color.g,
+                                 editor.view.clear_color.b, 1.0F },
+                .extent = info.extent,
+                // A null handle, so the tonemap writes the frame target itself.
+                // That is what apps/runtime passes, and it is what makes the
+                // two captures comparable.
+                .output = {},
+            };
+            if (!editor.scene.draw_scene(info.commands, editor.world, editor.content, view)) {
+                return false;
+            }
+
+            constexpr engine::gfx::ColorRGBA kSceneClear{ 0.0F, 0.0F, 0.0F, 1.0F };
+            engine::gfx::cmd_begin_rendering(info.commands, kSceneClear, false);
+            editor.scene.draw_tonemap(info.commands, exposure);
+            engine::gfx::cmd_end_rendering(info.commands);
+
+            if (capture && frame + 1 == wanted) {
+                engine::gfx::request_capture(editor.device);
+            }
+
+            // The presented result does not matter offscreen: there is no
+            // swapchain to go out of date, and the capture reads what this
+            // copied.
+            (void)engine::gfx::end_frame(editor.device);
+            editor.scene.reset_output_state();
+        }
+
+        // After end_frame and before any next begin_frame, which is the only
+        // moment there is a finished frame to read.
+        return !capture || apps::write_screenshot(editor.device, options.screenshot);
+    }
+
     [[nodiscard]] bool run_frames(Editor& editor, const Options& options) {
         Panels panels;
         bool running = true;
@@ -2006,7 +2167,8 @@ int main(int argc, char** argv) {
         cook_project(editor);
     }
 
-    const bool ok = run_frames(editor, options);
+    const bool ok = options.offscreen ? run_offscreen(editor, options)
+                                      : run_frames(editor, options);
 
     // Before the world goes, so a script that runs on_destroy still finds the
     // simulation it may reach. A session left running at exit is the normal
