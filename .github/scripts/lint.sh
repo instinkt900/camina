@@ -25,6 +25,16 @@
 # A file that gains SKIP_LINTING without `-w` is linted anyway, and reports.
 # That is the loud failure rather than the quiet one.
 #
+# ## It needs a configured tree, not a built one
+#
+# The build directory must be configured with `CMAKE_CXX_SCAN_FOR_MODULES=OFF`.
+# With Ninja and C++20, CMake puts an `@...o.modmap` on every compile line, and
+# the build writes that file. Without the flag, linting an unbuilt tree fails on
+# every translation unit with "no such file or directory".
+#
+# That trap hides on a machine where the tree has already been built, because
+# the modmap files are then sitting there from the last build.
+#
 # Usage: lint.sh <build directory>
 
 set -euo pipefail

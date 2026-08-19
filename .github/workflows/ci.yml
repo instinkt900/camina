@@ -147,11 +147,19 @@ jobs:
             -c tools.system.package_manager:mode=install \
             -c tools.system.package_manager:sudo=True
 
-      # Configure only. clang-tidy reads the compilation database, and nothing
-      # in this project generates a header at build time, so there is nothing to
-      # compile first.
+      # Configure only, so this job never pays for a compile.
+      #
+      # **CMAKE_CXX_SCAN_FOR_MODULES=OFF is what makes that possible.** With
+      # Ninja and C++20, CMake puts an `@...o.modmap` on every compile line, and
+      # that file is written by the build rather than by the configure. Linting
+      # an unbuilt tree then fails with "no such file or directory" on every
+      # translation unit. This project uses no C++20 module, so the scan buys
+      # nothing here. It stays on for the build jobs, which do build.
       - name: Configure
-        run: cmake --preset conan-relwithdebinfo -DENGINE_ENABLE_CLANG_TIDY=OFF
+        run: |
+          cmake --preset conan-relwithdebinfo \
+            -DENGINE_ENABLE_CLANG_TIDY=OFF \
+            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
 
       - name: Lint
         run: .github/scripts/lint.sh build/RelWithDebInfo
