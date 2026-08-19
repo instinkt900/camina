@@ -894,6 +894,39 @@ Make the loop print the per-check result it decided on, so a wrong exit is visib
 event rather than hidden behind the word "success". After the monitor reports, **query the
 state once by hand** and report from that, not from the monitor's summary.
 
+### A job that will not finish
+
+**A runner hangs from time to time, and it is not the branch.** It has happened twice, both
+times on `build (linux-clang, ...)` and both times on `Install system packages`. The first ran
+43 minutes while its sibling finished in 19. A re-run on a fresh runner took 14 minutes, and
+the branch needed no change.
+
+**Tell a hung job from a slow one by its step, never by the clock.** A healthy build job takes
+14 to 19 minutes, so elapsed time alone says nothing. Read two things instead. A hang sits on
+an early step with every later step still `pending`, while a sibling job that builds strictly
+more has already gone green. A slow but healthy run is on the last step with everything before
+it done.
+
+```bash
+gh api repos/instinkt900/camina/actions/runs/<run>/jobs \
+  --jq '.jobs[] | select(.status=="in_progress")
+        | .name, (.steps[] | "  \(.number) \(.name): \(.status)")'
+```
+
+A monitor that warns on elapsed time alone cries wolf on a good run. That happened once, on a
+job sitting on `Test`, which is the last step. Make the warning print the current step,
+because the step is what answers the question.
+
+**The remedy, in order.** `gh run rerun --job` refuses a job that is still going, so:
+
+1. Stop the monitor, so it cannot report against a run you are replacing.
+2. `gh run cancel <run>`.
+3. Wait for the run to reach `completed`.
+4. `gh run rerun <run> --failed`.
+
+Only the failed job runs again. Every check that already passed keeps its result, so nothing
+green is thrown away and the passing checks still stand for that commit.
+
 ### Reading the review
 
 **The automated review is a nice-to-have. It is not a gate.** CodeRabbit is an extra pair
