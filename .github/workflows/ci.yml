@@ -12,10 +12,10 @@ jobs:
   # locally. Pin it to the compiler version from profiles/linux-clang.
   format:
     runs-on: ubuntu-24.04
-    # A hung runner must fail rather than sit, but not before the retries have
-    # run. The worst case here is 2x60 + 2x120 + 3x(90+180) = 1170s of stalling.
-    # See .github/scripts/retry.sh.
-    timeout-minutes: 25
+    # The last line of defence. A stalled command is killed on silence long
+    # before this, so reaching it means something else went wrong. A working but
+    # slow install has taken 912s on this runner, so this is generous on purpose.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install clang-format 19
@@ -24,7 +24,7 @@ jobs:
           # Ubuntu archive does, so both of these are wrapped as well. The first
           # version of this hardening wrapped only apt-get, and the job hung
           # here instead.
-          .github/scripts/retry.sh 60 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
+          .github/scripts/retry.sh 90 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
           # The source is written directly rather than through
           # add-apt-repository, which runs an apt-get update of its own. Killing
           # that on a timeout left the update alive and holding the apt lock,
@@ -43,7 +43,7 @@ jobs:
   # no dependencies, so it runs on its own and reports quickly.
   docs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install Doxygen
@@ -58,7 +58,7 @@ jobs:
   # build fails. Both steps run, because one violation must not hide the other.
   containment:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Check Vulkan containment
@@ -98,7 +98,7 @@ jobs:
 
       - name: Install LLVM 19
         run: |
-          .github/scripts/retry.sh 60 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
+          .github/scripts/retry.sh 90 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
           # The source is written directly rather than through
           # add-apt-repository, which runs an apt-get update of its own. Killing
           # that on a timeout left the update alive and holding the apt lock,
@@ -227,7 +227,7 @@ jobs:
       - name: Install LLVM 19
         if: runner.os == 'Linux'
         run: |
-          .github/scripts/retry.sh 60 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
+          .github/scripts/retry.sh 90 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
           # The source is written directly rather than through
           # add-apt-repository, which runs an apt-get update of its own. Killing
           # that on a timeout left the update alive and holding the apt lock,

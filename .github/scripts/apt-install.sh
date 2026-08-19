@@ -8,33 +8,35 @@
 # Install system packages, Install clang-format 19, and Install Doxygen. Every
 # re-run on a fresh runner was clean, so the branch was never the cause.
 #
-# **The worst case here has to fit inside the job's timeout-minutes.** Three
-# attempts of an update and an install is 3 x (90 + 180) = 810 seconds. A job
-# cut off part way through its retries pays the delay and gets no benefit,
-# which is exactly what happened on the first run of this script.
+# **This waits on silence rather than on a total duration.** On the same day a
+# working install took 912 seconds, so any total timeout short enough to catch
+# a hang also kills an install that would have finished. See
+# run-until-stalled.sh, which is where that reasoning lives.
 #
 # Usage: apt-install.sh <package> [package ...]
 
 set -euo pipefail
 
 readonly kAttempts=3
-readonly kUpdateSeconds=90
-readonly kInstallSeconds=180
+readonly kSilentSeconds=120
+readonly here="$(dirname "$0")"
 
 if [ "$#" -eq 0 ]; then
     echo "apt-install.sh needs at least one package."
     exit 2
 fi
 
+readonly packages="$*"
+
 for attempt in $(seq 1 "${kAttempts}"); do
-    if timeout "${kUpdateSeconds}" sudo apt-get update &&
-        timeout "${kInstallSeconds}" sudo apt-get install -y "$@"; then
+    if "${here}/run-until-stalled.sh" "${kSilentSeconds}" "sudo apt-get update" &&
+        "${here}/run-until-stalled.sh" "${kSilentSeconds}" \
+            "sudo apt-get install -y ${packages}"; then
         exit 0
     fi
 
     echo "::warning::apt attempt ${attempt} of ${kAttempts} did not finish. Retrying."
-
-    "$(dirname "$0")/apt-unlock.sh"
+    "${here}/apt-unlock.sh"
     sleep 10
 done
 
