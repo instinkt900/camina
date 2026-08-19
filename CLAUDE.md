@@ -933,6 +933,12 @@ separates those: one short enough to catch the hang also kills the install that 
 succeeded. A first attempt at this used total timeouts and turned two slow-but-working jobs
 into failures, which is worse than the problem it was meant to fix.
 
+**Most of that step should not run at all.** `apt-install.sh` asks dpkg what is missing before
+it asks the network, and the runner image already carries most of what this build needs. When
+nothing is missing the step does no network work. When something is, the install runs on its
+own first: the runner's package lists are usually current, and `apt-get update` is the slow
+half. On a bad day the update alone took 200 seconds while the install took 20.
+
 `.github/scripts/run-until-stalled.sh` watches the output instead. A working command prints as
 it goes, whatever the pace, and a hung one prints nothing at all. `timeout-minutes` is then the
 last line of defence rather than the mechanism.
