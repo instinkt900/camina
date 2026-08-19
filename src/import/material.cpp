@@ -4,6 +4,7 @@
 #include "assets/meta.h"
 #include "core/log.h"
 #include "import/mesh.h"
+#include "import/rules.h"
 #include "import/texture.h"
 
 #include <cgltf.h>
@@ -313,6 +314,19 @@ namespace engine::import {
 
     } // namespace
 
+    std::vector<std::size_t> gltf_inline_images(const cgltf_data& data,
+                                                const std::filesystem::path& directory) {
+        std::vector<std::size_t> indices;
+        for (const auto& [index, space] : image_uses(data)) {
+            std::filesystem::path named;
+            if (gltf_uri_path(data.images[index].uri, directory, named)) {
+                continue;
+            }
+            indices.push_back(index);
+        }
+        return indices;
+    }
+
     bool cook_inline_images(const cgltf_data& data, const std::filesystem::path& source,
                             const std::filesystem::path& out_root,
                             const std::filesystem::path& relative, engine::Guid parent,
@@ -320,15 +334,12 @@ namespace engine::import {
         const std::filesystem::path directory = source.parent_path();
         const std::map<std::size_t, as::ColorSpace> uses = image_uses(data);
 
-        for (const auto& [index, space] : uses) {
+        // gltf_inline_images() decides the set, and the editor's index calls
+        // it too. An image with a URI that names a file is a real asset with a
+        // sidecar, and the texture rule cooks that one instead.
+        for (const std::size_t index : gltf_inline_images(data, directory)) {
+            const as::ColorSpace space = uses.at(index);
             const cgltf_image& image = data.images[index];
-
-            // An image with a URI that names a file is a real asset. It has a
-            // sidecar, and the texture rule cooks it.
-            std::filesystem::path named;
-            if (gltf_uri_path(image.uri, directory, named)) {
-                continue;
-            }
 
             const std::string where = source.string() + " image " + std::to_string(index);
 
@@ -341,19 +352,17 @@ namespace engine::import {
             // from the slot the material used the image in.
             const as::TextureImport settings{ .color_space = space };
 
-            std::filesystem::path cooked = relative;
-            cooked += "." + std::to_string(index);
-            cooked += as::kTextureExtension;
+            const as::AssetRecord record =
+                part_record(relative, parent, as::kTexturePartKind, as::kTextureExtension,
+                            static_cast<std::uint32_t>(index));
 
-            if (!cook_texture_bytes(bytes, out_root / cooked, settings, where)) {
+            if (!cook_texture_bytes(bytes, out_root / record.name, settings, where)) {
                 return false;
             }
 
-            const engine::Guid guid =
-                engine::Guid::derive(parent, as::kTexturePartKind, static_cast<std::uint32_t>(index));
+            const engine::Guid guid = record.guid;
             out.guids.emplace(index, guid);
-            out.outputs.push_back(
-                as::ManifestOutput{ .cooked = as::manifest_path(cooked), .guid = guid });
+            out.outputs.push_back(as::ManifestOutput{ .cooked = record.name, .guid = guid });
 
             ENGINE_LOG_INFO("{}: it has no file, so it cooked as {} and reads as {}.", where,
                             guid.to_text(), as::to_text(space));
@@ -376,19 +385,17 @@ namespace engine::import {
                 return false;
             }
 
-            std::filesystem::path cooked = relative;
-            cooked += "." + std::to_string(at);
-            cooked += as::kMaterialExtension;
+            const as::AssetRecord record =
+                part_record(relative, parent, as::kMaterialPartKind, as::kMaterialExtension,
+                            static_cast<std::uint32_t>(at));
 
-            if (!write_material(out_root / cooked, material)) {
+            if (!write_material(out_root / record.name, material)) {
                 return false;
             }
 
-            const engine::Guid guid =
-                engine::Guid::derive(parent, as::kMaterialPartKind, static_cast<std::uint32_t>(at));
-            out.guids.push_back(guid);
+            out.guids.push_back(record.guid);
             out.outputs.push_back(
-                as::ManifestOutput{ .cooked = as::manifest_path(cooked), .guid = guid });
+                as::ManifestOutput{ .cooked = record.name, .guid = record.guid });
         }
         return true;
     }

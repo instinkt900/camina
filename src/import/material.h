@@ -35,6 +35,25 @@ namespace engine::import {
     };
 
     /**
+     * @brief Which images a glTF carries inside itself, in index order.
+     *
+     * An image with a URI that names a file is a real asset with a sidecar of
+     * its own, and the texture rule cooks that one. An image in a buffer view
+     * or a data URI has no file, so it becomes a part of the glTF with a
+     * derived identity. This says which images those are.
+     *
+     * @ref cook_inline_images cooks exactly this set, and the editor's index
+     * names exactly this set, so the two cannot disagree about what a glTF
+     * holds.
+     *
+     * @param data The parsed glTF.
+     * @param directory The directory the glTF sits in, for resolving a URI.
+     * @return The image indices, ascending.
+     */
+    [[nodiscard]] std::vector<std::size_t> gltf_inline_images(
+        const cgltf_data& data, const std::filesystem::path& directory);
+
+    /**
      * @brief Cooks every image a glTF carries inside itself.
      *
      * An image with a URI is a real asset with a sidecar, and the texture rule

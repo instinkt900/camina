@@ -1,9 +1,12 @@
 #include "import/mesh.h"
 
+#include "assets/material.h"
 #include "assets/mesh.h"
+#include "assets/texture.h"
 #include "core/log.h"
 #include "import/material.h"
 #include "import/prefab.h"
+#include "import/rules.h"
 
 #include <cgltf.h>
 #include <meshoptimizer.h>
@@ -579,9 +582,13 @@ namespace engine::import {
                 seen_geometry.emplace(key, CachedGeometry{ built.vertices, built.indices });
             }
 
-            std::filesystem::path cooked_relative = cook.relative;
-            cooked_relative += "." + std::to_string(at);
-            cooked_relative += as::kMeshExtension;
+            // part_record() names the part and derives its identity. The
+            // editor's index calls the same function, so the two cannot
+            // disagree about what this mesh is called or what it is.
+            const as::AssetRecord record =
+                part_record(cook.relative, cook.parent, as::kMeshPartKind, as::kMeshExtension,
+                            static_cast<std::uint32_t>(at));
+            const std::filesystem::path cooked_relative = record.name;
 
             const std::vector<std::byte> bytes = build_mesh_bytes(built);
             if (bytes.empty()) {
@@ -591,15 +598,48 @@ namespace engine::import {
                 return false;
             }
 
-            const engine::Guid mesh_guid =
-                engine::Guid::derive(cook.parent, as::kMeshPartKind, static_cast<std::uint32_t>(at));
-            mesh_guids.push_back(mesh_guid);
-            outputs.push_back(
-                as::ManifestOutput{ .cooked = as::manifest_path(cooked_relative), .guid = mesh_guid });
+            mesh_guids.push_back(record.guid);
+            outputs.push_back(as::ManifestOutput{ .cooked = record.name, .guid = record.guid });
             return true;
         }
 
     } // namespace
+
+    bool gltf_parts(const std::filesystem::path& source, const std::filesystem::path& relative,
+                    Guid parent, std::vector<as::AssetRecord>& out) {
+        const std::string name = source.string();
+
+        cgltf_options options{};
+        GltfData held;
+        if (cgltf_parse_file(&options, name.c_str(), &held.data) != cgltf_result_success) {
+            ENGINE_LOG_ERROR("{}: it will not parse as glTF, so nothing in it can be named.",
+                             name);
+            return false;
+        }
+
+        // The order matters. It is the order cook_gltf() writes its outputs in,
+        // and a caller that compares this against a cooked manifest compares
+        // the lists in order.
+        const cgltf_data& data = *held.data;
+        for (cgltf_size at = 0; at < data.meshes_count; ++at) {
+            out.push_back(part_record(relative, parent, as::kMeshPartKind, as::kMeshExtension,
+                                      static_cast<std::uint32_t>(at)));
+        }
+        for (const std::size_t index : gltf_inline_images(data, source.parent_path())) {
+            out.push_back(part_record(relative, parent, as::kTexturePartKind,
+                                      as::kTextureExtension,
+                                      static_cast<std::uint32_t>(index)));
+        }
+        for (cgltf_size at = 0; at < data.materials_count; ++at) {
+            out.push_back(part_record(relative, parent, as::kMaterialPartKind,
+                                      as::kMaterialExtension, static_cast<std::uint32_t>(at)));
+        }
+        for (cgltf_size at = 0; at < data.scenes_count; ++at) {
+            out.push_back(part_record(relative, parent, as::kPrefabPartKind,
+                                      as::kPrefabExtension, static_cast<std::uint32_t>(at)));
+        }
+        return true;
+    }
 
     bool gltf_references(const std::filesystem::path& source,
                          const std::filesystem::path& relative, GltfReferences& out) {

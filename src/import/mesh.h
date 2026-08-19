@@ -13,6 +13,7 @@
  * together could not be referenced.
  */
 
+#include "assets/asset_source.h"
 #include "assets/manifest.h"
 #include "assets/reference.h"
 #include "core/guid.h"
@@ -90,6 +91,28 @@ namespace engine::import {
     [[nodiscard]] bool gltf_references(const std::filesystem::path& source,
                                        const std::filesystem::path& relative,
                                        GltfReferences& out);
+
+    /**
+     * @brief Every asset a glTF file names, without importing any of them.
+     *
+     * This parses the glTF for its counts and nothing more. It decodes no
+     * geometry, reads no buffer and compresses no image, so it costs what
+     * reading the JSON costs.
+     *
+     * The editor needs to know what a project holds before it imports any of
+     * it, and it must agree with the cooker exactly. So this and @ref cook_gltf
+     * both name their parts through @ref part_record, and both take the inline
+     * image set from @ref gltf_inline_images.
+     *
+     * @param source The glTF file to read.
+     * @param relative The source path, relative to the content root.
+     * @param parent The identity of the glTF, from its sidecar.
+     * @param out The records, appended in the order the cooker writes them.
+     * @return True when the glTF parsed.
+     */
+    [[nodiscard]] bool gltf_parts(const std::filesystem::path& source,
+                                  const std::filesystem::path& relative, Guid parent,
+                                  std::vector<assets::AssetRecord>& out);
 
     /**
      * @brief Cooks every mesh and every material in one glTF file.
