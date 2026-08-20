@@ -2421,6 +2421,19 @@ in moth_ui, at `src/nodes/node_image.cpp`, and one implementation in moth_graphi
 calls none of them, because `NodeImage::GetImage` is a different method that returns the image
 a node already holds. The rest are mocks and API-surface tests.
 
+**moth_editor is still touched, through the write path rather than the read path.**
+`editor_panel_canvas.cpp` builds a `LayoutEntityImage` from a drag-drop path, so moth_editor is
+where an image reference is created. A first count of this read only `GetImage` and missed it.
+So the change reaches three repositories and the engine. That is fewer than §8.4 estimated and
+more than a count of the read path alone suggests.
+
+**Whoever creates a reference now owns normalizing it.** moth_ui stops calling
+`std::filesystem::absolute` and `std::filesystem::relative`, so it no longer turns a path into a
+project-relative one on the way through. moth_editor has to do that before it makes the entity.
+Otherwise a layout authored there stores an absolute path and stops working on another machine.
+That failure compiles, and it draws correctly on the machine that authored it. So the identity
+type takes explicit construction, and the compiler names every site that has to be read again.
+
 **A path must stay a valid identity**, because moth_graphics and the VanishingPoint game both
 name an image that way and neither reads a cooked tree. So the identity is a type a path
 converts into, rather than a type that replaces a path. `LayoutEntityImage::Deserialize` also
