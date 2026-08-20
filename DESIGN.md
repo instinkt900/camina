@@ -885,9 +885,15 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   is not the next version of the line this engine uses. So `[>=1.8 <2]` means what it says,
   and widening the ceiling takes the engine to a different library rather than a newer one.
 
-  The 1.x tags are not in release order. 1.5.0, 1.6.0 and 1.7.0 shipped in April 2026, and
-  the August 2026 work released 1.1.2 and 1.1.3 **below** them. M10.1 releases 1.8.0, which
-  is the first version since April that is actually the newest. Issue #390 holds the rest.
+  **The git tags run ahead of the published line, and an unpublished tag is still a claim on
+  a number.** Artifactory holds 1.0.0, 1.1.0, 1.1.1, 1.1.2 and 1.1.3. The repository also
+  carries tags 1.5.0, 1.6.0 and 1.7.0, made between 2026-03-25 and 2026-04-04 and never
+  published. So the published line never went backwards. The tags sit above it.
+
+  That still matters, because `conan create` on the 1.7.0 tag produces a real 1.7.0, and a
+  version range takes the highest it can find rather than the newest. A release numbered
+  1.2.0 would lose to it. M10.1 releases **1.8.0** to sit above every tag, which removes the
+  question rather than depending on nobody building one. Issue #390 holds the rest.
 - **A Conan editable is for development, not for a build somebody else runs.** Develop against
   the editable when a change spans both repositories. Then release moth_ui and move the engine
   to the pin. A green build that only works because of a local editable is a broken build for
