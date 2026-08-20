@@ -15,6 +15,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <span>
 
 namespace engine::ui {
 
@@ -99,10 +100,19 @@ namespace engine::ui {
      * `sandbox/content/ui/panel.png`. moth_ui carries that string and never
      * reads it, so the meaning is this engine's alone.
      *
-     * This owns a texture cache of its own rather than sharing the one inside
-     * `render::MeshPass`. A UI image and a material texture then upload twice
-     * when a scene uses one file for both, which no scene does. In return, a
-     * mesh reload cannot free a texture a layout still points at.
+     * **This owns a texture cache of its own rather than sharing the one inside
+     * `render::MeshPass`, and M10.4 is what settled that.** A UI image and a
+     * material texture upload twice when a scene names one file for both, which
+     * no scene does today. That cost is paid on purpose.
+     *
+     * Sharing one cache would mean a mesh reload frees a texture a layout still
+     * points at. Before M10.4 nothing dropped, so the separation cost a
+     * duplicate upload and bought nothing measurable. Now both sides drop, and
+     * each knows only its own holders: `MeshPass::reload` cannot tell `UiPass`
+     * to forget a descriptor set, and it cannot tell a `moth_ui::NodeImage` to
+     * ask again. One shared cache would need one reload path that knows every
+     * holder on both sides, which is a larger thing than a second upload of an
+     * image no scene shares.
      *
      * @code
      * engine::ui::ImageFactory factory;
@@ -137,6 +147,29 @@ namespace engine::ui {
 
         /// @brief Frees every texture this loaded. Safe to call twice.
         void destroy();
+
+        /**
+         * @brief Frees every image an identity in @p changed names.
+         *
+         * M10.4. A UI image used to load once and keep its texture for the
+         * whole run, so editing the source showed nothing until a restart. This
+         * is what hot reload calls.
+         *
+         * It waits for the frames in flight before it frees anything, the way
+         * `render::MeshPass::reload` does. A frame the GPU has not finished may
+         * still read the texture about to go.
+         *
+         * **Dropping the texture is only half of it.** A `moth_ui::NodeImage`
+         * holds the image it was given, with the handle inside, and
+         * `engine::ui::UiPass` holds a descriptor set naming that handle. Both
+         * have to be told, which is why this reports whether anything was
+         * really let go rather than returning void.
+         *
+         * @param changed The identities that were cooked again.
+         * @return True when at least one image this held was freed. The caller
+         * must then call `UiPass::forget_sets` and reload its node tree.
+         */
+        [[nodiscard]] bool reload(std::span<const Guid> changed);
 
         /// @cond
         // This implements moth_ui::IImageFactory. See the note on Image above

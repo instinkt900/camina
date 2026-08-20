@@ -719,8 +719,15 @@ namespace {
         /// The recording ui_pass draws. Recorded inside draw_frame, because
         /// only there is the settled swapchain size known.
         engine::ui::Renderer* ui_renderer = nullptr;
-        /// M6.3. The image the probe draws, or null when it did not resolve.
-        const moth_ui::IImage* ui_image = nullptr;
+        /**
+         * M6.3. Where the image the probe draws lives, or null when the runtime
+         * has none.
+         *
+         * A pointer to the owner rather than to the image, for the reason
+         * @ref ui_layout gives: a reload frees the texture and hands back a new
+         * image, and a raw pointer taken once at start would name the old one.
+         */
+        const std::unique_ptr<moth_ui::IImage>* ui_image = nullptr;
         /// The font the probe draws text with, or null when none loaded.
         moth_ui::IFont* ui_font = nullptr;
         /**
@@ -883,8 +890,10 @@ namespace {
             // and a layout that was freed is not drawn.
             moth_ui::Node* const layout =
                 context.ui_layout != nullptr ? context.ui_layout->get() : nullptr;
-            record_ui_probe(*context.ui_renderer, info.extent, context.ui_image,
-                            context.ui_font, layout);
+            const moth_ui::IImage* const probe =
+                context.ui_image != nullptr ? context.ui_image->get() : nullptr;
+            record_ui_probe(*context.ui_renderer, info.extent, probe, context.ui_font,
+                            layout);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -985,6 +994,17 @@ namespace {
      * that is not an error. The program runs on with the assets it already
      * has, which is what a shipped build does.
      */
+    /// The identities out of a change list, which is what the caches take.
+    std::vector<engine::Guid> identities_of(
+        const std::vector<engine::assets::AssetChange>& changed) {
+        std::vector<engine::Guid> out;
+        out.reserve(changed.size());
+        for (const engine::assets::AssetChange& change : changed) {
+            out.push_back(change.guid);
+        }
+        return out;
+    }
+
 #if defined(ENGINE_WITH_UI)
     /**
      * Builds a moth_ui node tree out of the bytes of a cooked layout.
@@ -1090,6 +1110,58 @@ namespace {
         ENGINE_LOG_INFO("The UI layout {} reloaded.", sandbox::kUiLayoutFile);
     }
 
+    /// The one image the M6 probe draws, beside whatever the layout draws.
+    constexpr const char* kUiProbeImage = "ui/panel.png";
+
+    /**
+     * Fetches the image the probe draws.
+     *
+     * Called at start and again after a reload, because a reload frees the
+     * texture and `moth_ui::IImage` keeps the handle inside it. The probe is
+     * not part of the layout, so nothing else would tell it.
+     */
+    void load_ui_probe_image(Runtime& runtime) {
+        runtime.ui_image = runtime.ui_images.GetImage(moth_ui::AssetId{ kUiProbeImage });
+    }
+
+    /**
+     * Shows the new pixels of a UI image somebody just saved.
+     *
+     * M10.4. Four things hold on to a UI texture and all four have to let go,
+     * in this order:
+     *
+     * 1. `ImageFactory` frees the texture, so the next ask uploads it again.
+     * 2. `UiPass` forgets its descriptor sets, because each names a handle that
+     *    has just gone. Binding one of those is undefined rather than an error.
+     * 3. The node tree asks the factory again. `moth_ui::NodeImage` keeps the
+     *    image it was given, with the handle inside it, so a node nobody told
+     *    would draw a texture that no longer exists.
+     * 4. The probe asks again, for the same reason. It is not part of the
+     *    layout, so step 3 does not reach it.
+     *
+     * **The fourth one was found by comparing pictures rather than by a crash.**
+     * A run that swapped the image part way through drew a different frame from
+     * a run that started with it, and the difference was exactly the probe. It
+     * was binding a freed texture and getting away with it.
+     *
+     * `ReloadEntity` rebuilds the nodes from the layout entities already in
+     * memory rather than reading the layout again. Only the image changed, so
+     * reading the layout would be work for nothing.
+     */
+    void reload_ui_images(Runtime& runtime,
+                          const std::vector<engine::assets::AssetChange>& changed) {
+        if (!runtime.ui_images.reload(identities_of(changed))) {
+            return;
+        }
+
+        runtime.ui_pass.forget_sets();
+        if (runtime.ui_layout) {
+            runtime.ui_layout->ReloadEntity();
+        }
+        load_ui_probe_image(runtime);
+        ENGINE_LOG_INFO("A UI image changed, so the layout asked for its images again.");
+    }
+
     /**
      * Reloads the layout when the change list names it.
      *
@@ -1168,17 +1240,6 @@ namespace {
         return false;
     }
 
-    /// The identities out of a change list, which is what the caches take.
-    std::vector<engine::Guid> identities_of(
-        const std::vector<engine::assets::AssetChange>& changed) {
-        std::vector<engine::Guid> out;
-        out.reserve(changed.size());
-        for (const engine::assets::AssetChange& change : changed) {
-            out.push_back(change.guid);
-        }
-        return out;
-    }
-
     /**
      * Cooks whatever changed and swaps it in.
      *
@@ -1236,6 +1297,10 @@ namespace {
         session.reload_scripts(runtime.game_content, changed);
 
 #if defined(ENGINE_WITH_UI)
+        // Images first. Rebuilding the layout re-asks the factory for every
+        // image, so a texture freed after that would leave the fresh nodes
+        // holding a dead handle.
+        reload_ui_images(runtime, changed);
         reload_ui_layout_if_changed(runtime, changed);
 #endif
 
@@ -1912,14 +1977,13 @@ int main(int argc, char** argv) {
     // draws its shapes and no image, and the log says which one did not
     // resolve.
     //
-    // This resolves once and a reload never revisits it, so editing a UI image
-    // needs a restart. The handle cannot go stale, because the factory owns the
-    // only cache that holds it and nothing drops from that cache. Issue #210
-    // holds the reload path.
+    // M10.4. A reload frees the texture and this holds the handle, so
+    // reload_ui_images() asks again. It used to resolve once for the whole run,
+    // which was safe only while nothing ever dropped from the factory's cache.
     if (!runtime.ui_images.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI image factory did not start. No layout image will draw.");
     } else {
-        runtime.ui_image = runtime.ui_images.GetImage(moth_ui::AssetId{ "ui/panel.png" });
+        load_ui_probe_image(runtime);
     }
 
     // The same resolution story as the image above, and the same restart rule.
@@ -1992,7 +2056,7 @@ int main(int argc, char** argv) {
 #if defined(ENGINE_WITH_UI)
         .ui_pass = &runtime.ui_pass,
         .ui_renderer = &runtime.ui_renderer,
-        .ui_image = runtime.ui_image.get(),
+        .ui_image = &runtime.ui_image,
         .ui_font = runtime.ui_font.get(),
         .ui_layout = &runtime.ui_layout,
 #endif
