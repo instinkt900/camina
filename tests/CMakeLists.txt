@@ -324,6 +324,15 @@ if(ENGINE_WITH_UI)
 
     add_test(NAME ui_renderer COMMAND test_ui_renderer)
 
+    # M10.3. Reading a cooked layout by identity. It links the importer as well,
+    # because the realistic failure cases need real cooked assets of other kinds
+    # rather than files a test wrote by hand.
+    add_executable(test_ui_layout test_ui_layout.cpp)
+    target_link_libraries(test_ui_layout PRIVATE engine::ui engine::import)
+    engine_set_warnings(test_ui_layout)
+    engine_enable_clang_tidy(test_ui_layout)
+    add_test(NAME ui_layout COMMAND test_ui_layout)
+
     # M6.4. The font rasterizes, packs, shapes, measures and wraps with no
     # device, which is why load() is separate from upload(). The path of the
     # sandbox font comes from CMake, so the test does not guess where anything

@@ -29,6 +29,17 @@ namespace sandbox {
     inline constexpr const char* kSceneFile = "main.scene";
 
     /**
+     * @brief The moth_ui layout the game draws, inside the content directory.
+     *
+     * A source path rather than an identity, for the reason every other name
+     * here is one: a cooked identity is derived and a person cannot know it
+     * until the cooker has run. The engine resolves this through the manifest,
+     * which is what makes a rename of the file the cooker's problem rather than
+     * the game's.
+     */
+    inline constexpr const char* kUiLayoutFile = "ui/main.mothui";
+
+    /**
      * @brief The crate the scene stacks, and the one the runtime throws.
      *
      * Named here because two places instance it now. The scene names it in a

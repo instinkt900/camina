@@ -888,6 +888,28 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   when this rule started writing a GUID. So an existing cooked tree stayed fresh and kept
   serving a layout full of paths. That was found by mutation testing rather than by a failing
   build, which is exactly the silent shape the constant exists to stop.
+- **M10.3 loads a layout by identity, and a layout hot reloads.** `engine::ui::read_layout`
+  takes the bytes from `assets::Content` rather than opening a file, so the same call serves
+  the first load and every one after it. `moth_ui::Layout::Load` is not used, because it
+  takes a path. The reading half opens no device, which is what lets `tests/test_ui_layout.cpp`
+  drive it with no GPU.
+
+  **A raw pointer to a node does not survive a reload.** `FrameContext` held
+  `moth_ui::Node*`, taken once at start, and the reload replaced the owner and freed the old
+  tree. The first frame after a save then segfaulted inside `Node::Draw`. The context points
+  at the owner now and reads through it each frame. Nothing reported this: the picture was
+  right, the reload logged success, and the crash came one frame later. Only running it found
+  it, which is why the milestone test is a run rather than a compile.
+
+  **A layout that will not parse keeps the one already drawing.** The cooker refuses it
+  first, so the cooked tree keeps the last good bytes and the change list names nothing. The
+  check in the runtime is a second line rather than the only one. A person editing a layout
+  passes through broken states on the way to a working one, and dropping the UI at each of
+  them is worse than drawing the last good version.
+
+  **The input scan stays quiet.** It reads every layout before anything cooks, and the rule
+  reads the same file a moment later. Both reporting doubled every message a broken layout
+  produced.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
