@@ -867,6 +867,27 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   and meaning another. The count of real call sites is what settled it, and §10 M10 holds the
   count. A path stays a valid identity, so moth_graphics and any game reading loose files keep
   working.
+- **M10.2 cooked the layout, and the authored form is moth_ui's own convention.** A layout
+  names an image by a path relative to its own directory, because `moth_editor` writes one
+  that way and `moth_packer` reads one that way. The engine follows the format rather than
+  imposing a second convention on it, and `src/import/layout.cpp` translates: it joins the
+  path to the layout's directory, resolves the sidecar, and writes the GUID. A path is the
+  authored form and a GUID is the cooked one, which is the split `cook_document` already
+  makes for a scene.
+
+  The image sidecar becomes an input of the layout, so replacing an image identity re-cooks
+  every layout that names it. The image itself is not an input: editing its pixels changes
+  the texture and not the layout.
+
+  `engine::ui::ImageFactory` reads both forms. A cooked layout gives it a GUID, and a caller
+  inside the engine gives it a source path, because a person writing C++ cannot know a
+  derived identity.
+
+  **A rule that writes its output differently has to raise `assets::kCookerVersion`.** The
+  freshness check compares identities, input names and input bytes, and none of those moved
+  when this rule started writing a GUID. So an existing cooked tree stayed fresh and kept
+  serving a layout full of paths. That was found by mutation testing rather than by a failing
+  build, which is exactly the silent shape the constant exists to stop.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus

@@ -17,7 +17,7 @@
         0.5,
         0.5
       ],
-      "imagePath": "ui/panel.png",
+      "imagePath": "panel.png",
       "sourceRect": {
         "topLeft": [
           0,

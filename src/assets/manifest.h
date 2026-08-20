@@ -88,7 +88,7 @@ namespace engine::assets {
      * message and no failing build. Cooking into a clean directory would fix it
      * and nothing would say so.
      */
-    inline constexpr std::uint32_t kCookerVersion = 8;
+    inline constexpr std::uint32_t kCookerVersion = 9;
 
     /// @brief Every cooked output from one run of the cooker.
     struct Manifest {
