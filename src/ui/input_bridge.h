@@ -140,6 +140,14 @@ namespace engine::ui {
         [[nodiscard]] bool owns(platform::MouseButton button) const;
 
     private:
+        /// Sends the pointer move and the button edges of one device frame.
+        void send_pointer(const platform::InputFrame& device, moth_ui::IEventListener* listener);
+        /// Sends the key edges of one device frame.
+        void send_keys(const platform::InputFrame& device, moth_ui::IEventListener* listener);
+        /// Ends a claim on anything now up, clears the rest, and says whether it took any.
+        [[nodiscard]] bool clear_owned(const platform::InputFrame& device,
+                                       platform::InputFrame& frame);
+
         /// The frame as the devices reported it, never as it was left after a take.
         platform::InputFrame previous_;
         std::array<bool, platform::kKeyCount> owned_keys_{};

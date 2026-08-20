@@ -52,23 +52,8 @@ namespace engine::ui {
         return root->Broadcast(event);
     }
 
-    bool InputBridge::take(platform::InputFrame& frame, moth_ui::IEventListener* listener) {
-        // What the devices reported, kept before anything is taken out of it.
-        // The next frame compares against this and never against what is left,
-        // because a key the UI owns reads as up in the frame the caller keeps.
-        // Comparing against that would report an up the person never made.
-        const platform::InputFrame device = frame;
-
-        if (listener == nullptr) {
-            // No layout means the UI owns nothing. Holding an old claim would
-            // leave the game unable to read a button until somebody pressed it
-            // again.
-            owned_keys_.fill(false);
-            owned_buttons_.fill(false);
-            previous_ = device;
-            return false;
-        }
-
+    void InputBridge::send_pointer(const platform::InputFrame& device,
+                                   moth_ui::IEventListener* listener) {
         // The move first, so a widget knows what is under the pointer before it
         // is asked about a press there.
         if (moved(device, previous_)) {
@@ -96,7 +81,10 @@ namespace engine::ui {
                 owned_buttons_.at(i) = true;
             }
         }
+    }
 
+    void InputBridge::send_keys(const platform::InputFrame& device,
+                                moth_ui::IEventListener* listener) {
         const int mods = moth_mods(device);
         for (std::size_t i = 0; i < platform::kKeyCount; ++i) {
             const bool down = device.keys.at(i);
@@ -111,10 +99,13 @@ namespace engine::ui {
                 owned_keys_.at(i) = true;
             }
         }
+    }
 
+    bool InputBridge::clear_owned(const platform::InputFrame& device,
+                                  platform::InputFrame& frame) {
         // A claim ends when the key or the button comes up. The release itself
-        // has already gone to the UI above, because a press taken on a menu owns
-        // its release too: that release is what activates a button.
+        // has already gone to the UI, because a press taken on a menu owns its
+        // release: that release is what activates a button.
         bool took = false;
         for (std::size_t i = 0; i < platform::kKeyCount; ++i) {
             if (!device.keys.at(i)) {
@@ -134,6 +125,28 @@ namespace engine::ui {
                 took = true;
             }
         }
+        return took;
+    }
+
+    bool InputBridge::take(platform::InputFrame& frame, moth_ui::IEventListener* listener) {
+        // What the devices reported, kept before anything is taken out of it.
+        // The next frame compares against this and never against what is left,
+        // because a key the UI owns reads as up in the frame the caller keeps.
+        // Comparing against that would report an up the person never made.
+        const platform::InputFrame device = frame;
+
+        if (listener == nullptr) {
+            // No layout means the UI owns nothing. Holding an old claim would
+            // leave the game unable to read a button until somebody pressed it
+            // again.
+            forget();
+            previous_ = device;
+            return false;
+        }
+
+        send_pointer(device, listener);
+        send_keys(device, listener);
+        const bool took = clear_owned(device, frame);
 
         previous_ = device;
         return took;
