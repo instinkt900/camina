@@ -860,7 +860,13 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   breaks the layout, and the engine solved that everywhere else at M4. The cooked layout type
   below is where it comes due: that rule rewrites an image reference, and it has to decide
   whether it writes a GUID into a `std::filesystem::path` or moth_ui learns a real identity type
-  by then. Issue #211 holds it. Revisit the choice there rather than earlier.
+  by then. Issue #211 holds it.
+
+  **M10 made that choice, and moth_ui learns the identity type.** Writing a GUID as text into a
+  `std::filesystem::path` works and reads badly, and it leaves the layout format saying one thing
+  and meaning another. The count of real call sites is what settled it, and §10 M10 holds the
+  count. A path stays a valid identity, so moth_graphics and any game reading loose files keep
+  working.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
@@ -2386,11 +2392,44 @@ to make the option resolve. Issue #308 holds the two ways out, and M9.5 needs on
 **Done when:** you build a level in the editor, press play, and ship it as a runtime build.
 
 ### M10 — Game UI
-Complete the moth_ui integration on the M6 foundation. Add the batching recorder, the font
-atlas and text rendering, layouts as cooked assets with hot reload, the SDL3 input bridge,
-and the Lua bindings. Add widgets when `sandbox/` needs them.
+Complete the moth_ui integration on the M6 foundation. Add widgets when `sandbox/` needs them.
 **Done when:** the sandbox game has a main menu, a pause menu, and a HUD. You author them in
 `moth_editor` and they hot-reload.
+
+**M6 already drew a layout, so M10 starts further along than this section used to say.** The
+spike built the batching recorder in M6.2, and the font atlas and text rendering in M6.4.
+`src/ui/renderer.h` holds the recorder and `src/ui/font.cpp` holds the text. An earlier version
+of this section listed all three as M10 work, and the GitHub milestone copied it. Neither was
+true after 2026-08-11. What M6 left is one layout that the runtime asks for by hand.
+
+So M10 is the four things the spike did not build:
+
+- **Layouts as cooked assets, with hot reload.** §8.4 names it and issue #211 holds it. M13
+  changed what an asset type has to do, because a rule now writes through `import::Writer` and
+  the editor imports the same bytes the cooker writes. A new cooked type needs both halves.
+- **The identity a layout stores.** M6.3 resolved an image path against the cooked manifest and
+  §8.4 deferred the decision to this milestone. **The decision is made: moth_ui takes an asset
+  identity, and the path stops being the identity.** The reasoning is below.
+- **The input bridge.** SDL3 events become moth_ui events. Controller navigation lives at this
+  seam.
+- **The Lua bindings.** A script drives a menu, which is the right way to author UI behavior.
+
+**The identity change is narrower than §8.4 estimated.** That section expected a change across
+moth_ui, moth_graphics and moth_editor together, and said so during a spike it wanted kept
+short. Reading the call sites gives a smaller number. `IImageFactory::GetImage` has one caller
+in moth_ui, at `src/nodes/node_image.cpp`, and one implementation in moth_graphics. moth_editor
+calls none of them, because `NodeImage::GetImage` is a different method that returns the image
+a node already holds. The rest are mocks and API-surface tests.
+
+**A path must stay a valid identity**, because moth_graphics and the VanishingPoint game both
+name an image that way and neither reads a cooked tree. So the identity is a type a path
+converts into, rather than a type that replaces a path. `LayoutEntityImage::Deserialize` also
+stops calling `std::filesystem::absolute` on what it read, which closes #218 and takes
+`engine::ui::source_path_for` away.
+
+**The engine pins moth_ui, so this milestone releases moth_ui and moves the pin.** §8.5 says a
+Conan editable is for development and not for a build somebody else runs. Develop the two
+repositories together against the editable, then release and pin.
 
 ### M11 — Audio
 miniaudio behind `IAudioDevice`. Positional 3D and buses.
