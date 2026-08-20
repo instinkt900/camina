@@ -853,8 +853,16 @@ namespace engine::script {
         impl_->lua.new_usertype<UiNodeHandle>(
             "ui_node", sol::no_constructor,
 
-            "layout", sol::readonly(&UiNodeHandle::layout),
-            "node", sol::readonly(&UiNodeHandle::node),
+            // A property with a lambda rather than sol::readonly on the member
+            // itself. Every other usertype in this engine is bound this way,
+            // and the member form is the one construct sol2 could not compile
+            // here: `upvalue_this_member_variable::call` carries a computed
+            // noexcept, and its address then does not match `lua_CFunction`.
+            // It built on this machine and on MSVC and failed on the Linux CI
+            // runner, which is the worst way for it to fail.
+            "layout",
+            sol::readonly_property([](const UiNodeHandle& self) { return self.layout; }),
+            "node", sol::readonly_property([](const UiNodeHandle& self) { return self.node; }),
 
             "text",
             [surface](const UiNodeHandle& self) -> std::string {
