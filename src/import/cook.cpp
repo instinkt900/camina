@@ -19,6 +19,7 @@
 #endif
 #include "import/brdf.h"
 #include "import/document.h"
+#include "import/layout.h"
 #include "import/environment.h"
 #include "import/mesh.h"
 #include "import/shader.h"
@@ -169,14 +170,16 @@ namespace engine::import {
                     return cook_document(source, writer, to, options.content,
                                          components_of(options));
                 });
+            case Rule::Layout:
+                return single([&](const std::filesystem::path& to) {
+                    return cook_layout(source, writer, to, relative, options.content);
+                });
             case Rule::Script:
                 // The bytes go through unchanged, the same as a copy. The rule
                 // exists so that a script is content by declaration, and so
                 // that issue #258 has a place to add a precompile step.
             case Rule::Font:
-            case Rule::Layout:
-                // The same again. Issue #211 turns the layout into a cooked
-                // type, and this rule is where that step will go.
+                // The same again. A face is opened by the name the source had.
                 break;
             }
             return single([&](const std::filesystem::path& to) {
@@ -284,6 +287,32 @@ namespace engine::import {
                 }
                 std::vector<std::filesystem::path> named;
                 document_references(options.content / relative, components_of(options), named);
+
+                std::vector<std::filesystem::path> inputs;
+                inputs.reserve(named.size());
+                for (const std::filesystem::path& path : named) {
+                    inputs.push_back(as::meta_path(path));
+                }
+                out.inputs.emplace(relative, std::move(inputs));
+            }
+        }
+
+        /**
+         * Reads every layout for the images it names, before cooking.
+         *
+         * The sidecar of a named image is an input, for the same reason a
+         * document's is: the cooked layout stores the identity out of that
+         * file. The image itself is not an input. Editing its pixels changes
+         * the texture and not the layout that names it.
+         */
+        void scan_layouts(const Options& options,
+                          const std::vector<std::filesystem::path>& sources, Named& out) {
+            for (const std::filesystem::path& relative : sources) {
+                if (rule_for(relative) != Rule::Layout) {
+                    continue;
+                }
+                std::vector<std::filesystem::path> named;
+                layout_references(options.content / relative, relative, named);
 
                 std::vector<std::filesystem::path> inputs;
                 inputs.reserve(named.size());
@@ -584,6 +613,7 @@ namespace engine::import {
         Named named;
         scan_gltf(options, sources, named);
         scan_documents(options, sources, named);
+        scan_layouts(options, sources, named);
 
         as::Manifest next;
         /// The sources that did not cook, so the check below leaves them alone.

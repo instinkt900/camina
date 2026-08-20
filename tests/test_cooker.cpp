@@ -1215,17 +1215,19 @@ void main() { out_color = push.model[0]; }
     /**
      * A font and a layout have a consumer, so both earn a rule.
      *
-     * Both rules copy the bytes. That is enough to make them content by
-     * declaration rather than by falling past every other rule, which is what
+     * The font rule copies the bytes, which is enough to make it content by
+     * declaration rather than by falling past every other rule. That is what
      * issue #178 asks for. src/ui/font_factory.h opens the face by the name the
-     * source had, so the cooked name has to match. Issue #211 turns the layout
-     * into a cooked type later.
+     * source had, so the cooked name has to match.
+     *
+     * The layout rule does more, and test_a_layout_names_its_image_by_identity
+     * covers that. Here it only has to stay content and keep its name.
      */
     void test_a_font_and_a_layout_are_content() {
         const std::filesystem::path source = scratch("uiassets/src");
         const std::filesystem::path out = scratch("uiassets/out");
         write_file(source / "ui" / "fonts" / "body.ttf", "not a real face");
-        write_file(source / "ui" / "main.mothui", "{\"layout\":true}");
+        write_file(source / "ui" / "main.mothui", "{\"children\":[]}");
 
         const engine::import::Options options{ .content = source, .out = out };
         engine::import::Result result;
@@ -1234,10 +1236,129 @@ void main() { out_color = push.model[0]; }
 
         check(std::filesystem::exists(out / "ui" / "fonts" / "body.ttf"),
               "the face reached the cooked tree under its own name");
+        check(read_file(out / "ui" / "fonts" / "body.ttf") == "not a real face",
+              "and the face went through unchanged");
         check(std::filesystem::exists(out / "ui" / "main.mothui"),
-              "and so did the layout");
-        check(read_file(out / "ui" / "main.mothui") == "{\"layout\":true}",
-              "and the layout went through unchanged");
+              "and the layout reached it under its own name too");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * M10.2. A cooked layout names its image by identity, not by path.
+     *
+     * A layout stores an image relative to its own directory, which is moth_ui's
+     * convention: moth_editor writes one that way and moth_packer reads one that
+     * way. The engine follows the format rather than imposing a second
+     * convention, and the rule translates. A path is the authored form and a
+     * GUID is the cooked one, the same split cook_document makes for a scene.
+     *
+     * Without this a rename of the image silently breaks the layout, which is
+     * what M4 gave every asset an identity to stop.
+     */
+    void test_a_layout_names_its_image_by_identity() {
+        const std::filesystem::path source = scratch("uilayout/src");
+        const std::filesystem::path out = scratch("uilayout/out");
+        write_tga(source / "ui" / "panel.tga", 2, 2, half_black_half_white());
+
+        // "panel.tga", not "ui/panel.tga". The layout sits in ui/ and names the
+        // image beside it.
+        write_file(source / "ui" / "main.mothui",
+                   R"({"children":[{"type":"Image","imagePath":"panel.tga"}]})");
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
+
+        as::AssetMeta image;
+        check(as::load_meta(source / "ui" / "panel.tga", image) && image.guid.valid(),
+              "the image has an identity");
+
+        const nlohmann::json cooked =
+            nlohmann::json::parse(read_file(out / "ui" / "main.mothui"));
+        const std::string stored = cooked.at("children").at(0).at("imagePath");
+        check(stored == image.guid.to_text(),
+              "and the cooked layout holds that identity rather than the path");
+
+        // The sidecar of the image is an input of the layout. Without it, giving
+        // the image a new identity leaves the layout holding the old one and
+        // nothing re-cooks it.
+        as::Manifest manifest;
+        check(as::load_manifest(out, manifest), "the manifest reads");
+        const as::ManifestEntry* entry = as::find_by_source(manifest, "ui/main.mothui");
+        check(entry != nullptr, "the layout is in the manifest");
+        if (entry != nullptr) {
+            const bool named =
+                std::find(entry->inputs.begin(), entry->inputs.end(), "ui/panel.tga.meta") !=
+                entry->inputs.end();
+            check(named, "and the image sidecar is one of its inputs");
+        }
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A layout naming an image that is not there fails the cook.
+     *
+     * The alternative is a layout carrying a GUID that resolves to nothing,
+     * which draws no image and reports one line at run time. That reads exactly
+     * like a texture that failed to upload, and it is the failure naming an
+     * asset by path exists to remove.
+     */
+    void test_a_layout_naming_a_missing_image_fails() {
+        const std::filesystem::path source = scratch("uimissing/src");
+        const std::filesystem::path out = scratch("uimissing/out");
+        write_file(source / "ui" / "main.mothui",
+                   R"({"children":[{"type":"Image","imagePath":"gone.tga"}]})");
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "the cook fails");
+        check(result.failed == 1, "and it counts the layout");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * An image entity nobody has assigned yet is not a failure.
+     *
+     * moth_editor makes an image entity before a person picks a file, and
+     * moth_ui draws nothing for one. A layout part way through being authored
+     * must still cook, or the editor cannot save its own work in progress.
+     */
+    void test_a_layout_with_no_image_still_cooks() {
+        const std::filesystem::path source = scratch("uiempty/src");
+        const std::filesystem::path out = scratch("uiempty/out");
+        write_file(source / "ui" / "main.mothui",
+                   R"({"children":[{"type":"Image","imagePath":""}]})");
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
+
+        const nlohmann::json cooked =
+            nlohmann::json::parse(read_file(out / "ui" / "main.mothui"));
+        check(cooked.at("children").at(0).at("imagePath").get<std::string>().empty(),
+              "and the empty identity is left alone");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A layout that climbs out of the content tree fails the cook.
+     *
+     * The manifest is keyed on a path relative to the content root, so a path
+     * reaching above it names no asset the cooker will ever write.
+     */
+    void test_a_layout_climbing_out_of_the_tree_fails() {
+        const std::filesystem::path source = scratch("uiescape/src");
+        const std::filesystem::path out = scratch("uiescape/out");
+        write_file(source / "ui" / "main.mothui",
+                   R"({"children":[{"type":"Image","imagePath":"../../secret.tga"}]})");
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(!engine::import::cook_all(options, result), "the cook fails");
 
         test::remove_tree(source.parent_path());
     }
@@ -3273,6 +3394,10 @@ int main() {
     test_documentation_is_not_an_asset();
     test_a_file_with_no_rule_is_not_content();
     test_a_font_and_a_layout_are_content();
+    test_a_layout_names_its_image_by_identity();
+    test_a_layout_naming_a_missing_image_fails();
+    test_a_layout_with_no_image_still_cooks();
+    test_a_layout_climbing_out_of_the_tree_fails();
     test_a_rule_ignores_the_case_of_the_extension();
     test_bad_input();
     test::section("shader reflection");

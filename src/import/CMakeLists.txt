@@ -10,6 +10,7 @@ add_library(engine_import STATIC
     source_assets.cpp
     writer.cpp
     document.cpp
+    layout.cpp
     brdf.cpp
     environment.cpp
     material.cpp

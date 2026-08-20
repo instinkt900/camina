@@ -1,5 +1,6 @@
 #include "ui/image.h"
 
+#include "core/guid.h"
 #include "core/log.h"
 
 #include <string>
@@ -77,24 +78,32 @@ namespace engine::ui {
             return nullptr;
         }
 
-        // The identity is a source path relative to the content root. See
-        // manifest_key_for().
-        const std::string source = manifest_key_for(id);
-        if (source.empty()) {
-            ENGINE_LOG_ERROR("The layout names the image '{}', which is not a source path "
-                             "inside the game content tree at {}.",
-                             id.str(), content_->root().generic_string());
-            return nullptr;
-        }
-        const assets::ManifestEntry* entry = content_->find(source);
-        if (entry == nullptr) {
-            ENGINE_LOG_ERROR("The layout names the image {}, which the cooked content tree "
-                             "does not hold. The path is relative to the game content root.",
-                             source);
-            return nullptr;
+        // A cooked layout names an image by GUID, because the layout rule
+        // resolved the authored path when it cooked. A caller inside the engine
+        // names one by source path, because a person writing C++ cannot know a
+        // derived identity. Both forms arrive here, so both are read.
+        Guid guid;
+        if (!Guid::parse(id.str(), guid)) {
+            const std::string source = manifest_key_for(id);
+            if (source.empty()) {
+                ENGINE_LOG_ERROR("The layout names the image '{}', which is neither an "
+                                 "identity nor a source path inside the game content tree "
+                                 "at {}.",
+                                 id.str(), content_->root().generic_string());
+                return nullptr;
+            }
+            const assets::ManifestEntry* entry = content_->find(source);
+            if (entry == nullptr) {
+                ENGINE_LOG_ERROR("The layout names the image {}, which the cooked content "
+                                 "tree does not hold. The path is relative to the game "
+                                 "content root.",
+                                 source);
+                return nullptr;
+            }
+            guid = entry->guid;
         }
 
-        const render::TextureInfo info = textures_.get_info(device_, *content_, entry->guid);
+        const render::TextureInfo info = textures_.get_info(device_, *content_, guid);
 
         // get_info() answers with the fallback rather than a failure, because a
         // material that names a missing texture must still draw. A layout must
@@ -102,7 +111,8 @@ namespace engine::ui {
         // texel would place it at one pixel square. So a miss is nullptr here,
         // which is what IImageFactory documents and what NodeImage checks.
         if (info.texture.value == textures_.fallback().value) {
-            ENGINE_LOG_ERROR("The image {} is in the manifest but it would not load.", source);
+            ENGINE_LOG_ERROR("The image {} is in the manifest but it would not load.",
+                             id.str());
             return nullptr;
         }
 
