@@ -72,6 +72,28 @@ namespace engine::ui {
         content_ = nullptr;
     }
 
+    bool ImageFactory::reload(std::span<const Guid> changed) {
+        if (device_ == nullptr || changed.empty()) {
+            return false;
+        }
+
+        // size() before and after says whether any of these identities was one
+        // this factory had really loaded. drop() is a no-op for the rest, and a
+        // reload names every asset the save touched rather than only the images.
+        const std::size_t before = textures_.size();
+
+        // A frame that has not finished may still read the texture about to be
+        // freed. render::MeshPass::reload gives the full reasoning. A reload
+        // follows a person saving a file, so the stall costs nothing anybody
+        // can see.
+        gfx::device_wait_idle(device_);
+
+        for (const Guid guid : changed) {
+            textures_.drop(device_, guid);
+        }
+        return textures_.size() != before;
+    }
+
     std::unique_ptr<moth_ui::IImage> ImageFactory::GetImage(const moth_ui::AssetId& id) {
         if (device_ == nullptr || content_ == nullptr) {
             ENGINE_LOG_ERROR("A layout asked for an image before the factory was created.");

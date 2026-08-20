@@ -910,6 +910,29 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   **The input scan stays quiet.** It reads every layout before anything cooks, and the rule
   reads the same file a moment later. Both reporting doubled every message a broken layout
   produced.
+- **M10.4 reloads a UI image, and four things had to let go of the texture.** The order is
+  `ImageFactory` frees it, `UiPass` forgets its descriptor sets, the node tree asks the
+  factory again, and the probe asks again. A set naming a freed texture is undefined rather
+  than an error, and `moth_ui::NodeImage` keeps the image it was handed with the handle
+  inside it.
+
+  **The fourth holder was found by comparing pictures, not by a crash.** A run that swapped
+  the image part way through drew a different frame from a run that started with it, and the
+  difference was exactly the probe's rectangle. It was binding a freed texture and getting
+  away with it. The test that proves this is the three-way one: reload the image mid-run and
+  the capture must be byte identical to a run that had the new image from the start.
+
+  **A raw pointer into the runtime does not survive a reload, and that is now twice.** M10.3
+  met it with the layout node and M10.4 met it again with the probe image, because
+  `FrameContext` held both by raw pointer taken once at start. Both point at the owner now.
+  Anything in that struct naming something a reload can replace has to.
+
+  **The separate texture cache is paid on purpose.** `ImageFactory` holds its own rather than
+  sharing `render::MeshPass`'s, so an image named by both a material and a layout uploads
+  twice. Before M10.4 nothing dropped and the separation bought nothing measurable. Now both
+  sides drop and each knows only its own holders, so one shared cache would need one reload
+  path that knows every holder on both sides. That is larger than a second upload of an image
+  no scene shares. See `src/ui/image.h`.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus

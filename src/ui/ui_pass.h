@@ -45,6 +45,24 @@ namespace engine::ui {
          */
         [[nodiscard]] bool create(gfx::Device* device, const assets::AssetSource& content);
 
+        /**
+         * @brief Forgets every descriptor set, so the next draw builds them again.
+         *
+         * A set names a texture, and a texture that was freed leaves the set
+         * naming nothing. Binding one of those is undefined rather than an
+         * error, so this runs whenever a UI texture is let go.
+         *
+         * Every set goes rather than the ones naming the freed textures. The
+         * pass is told which textures went by nobody, and a set costs one draw
+         * to build again, so working out the difference would cost more than it
+         * saves.
+         *
+         * @warning The sets go straight back to the device. The caller must
+         * already have waited for the frames in flight, the way
+         * `render::MeshPass::reload` does.
+         */
+        void forget_sets();
+
         /// @brief Releases everything create() built. Safe to call twice.
         void destroy();
 
@@ -112,9 +130,8 @@ namespace engine::ui {
          * two live textures cannot share one. The null key is @c white_.
          *
          * @warning A texture that is freed while a set here still names it
-         * leaves the set pointing at nothing. Nothing frees a UI texture today,
-         * because @c engine::ui::ImageFactory holds its own cache for the whole
-         * run. Hot reload of a UI image is issue #210.
+         * leaves the set pointing at nothing. `forget_sets()` is what stops
+         * that, and `engine::ui::ImageFactory::reload` is what calls it.
          */
         std::map<std::uint64_t, gfx::DescriptorSetHandle> sets_;
 

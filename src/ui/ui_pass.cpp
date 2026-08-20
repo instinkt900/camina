@@ -193,6 +193,16 @@ namespace engine::ui {
         return set;
     }
 
+    void UiPass::forget_sets() {
+        if (device_ == nullptr) {
+            return;
+        }
+        for (const auto& [key, set] : sets_) {
+            gfx::destroy_descriptor_set(device_, set);
+        }
+        sets_.clear();
+    }
+
     void UiPass::destroy() {
         if (device_ == nullptr) {
             return;
