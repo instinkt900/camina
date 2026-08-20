@@ -7,9 +7,8 @@
 
 namespace engine::ui {
 
-    std::string source_path_for(const std::filesystem::path& path,
-                                const std::filesystem::path& cooked_root) {
-        // A path that climbs out of the cooked tree is not a cooked asset, and
+    std::string manifest_key_for(const moth_ui::AssetId& id) {
+        // A path that climbs out of the content tree is not a cooked asset, and
         // returning it would send "../.." to the manifest as if it were a key.
         //
         // The test is the first component and not the first two characters. A
@@ -22,24 +21,20 @@ namespace engine::ui {
         // Normalize first, so "ui/../panel.png" reaches the manifest as
         // "panel.png". The manifest holds the path the cooker walked, which
         // never has a "." or a ".." in it.
-        const std::filesystem::path normalized = path.lexically_normal();
+        const std::filesystem::path normalized = id.path().lexically_normal();
 
-        if (!normalized.is_absolute()) {
-            if (escapes(normalized)) {
-                return {};
-            }
-            // generic_string() is what makes a layout authored on Windows find
-            // the same asset on Linux.
-            return normalized.generic_string();
-        }
-
-        std::error_code error;
-        const std::filesystem::path relative =
-            std::filesystem::relative(normalized, cooked_root.lexically_normal(), error);
-        if (error || relative.empty() || escapes(relative)) {
+        // An absolute identity names a file outside the content tree, and the
+        // manifest is keyed on a relative source path. moth_ui used to make
+        // every stored path absolute, and undoing that here was the whole job
+        // of the function this replaced. It does not any more, so an absolute
+        // identity now means somebody authored one.
+        if (normalized.empty() || normalized.is_absolute() || escapes(normalized)) {
             return {};
         }
-        return relative.generic_string();
+
+        // generic_string() is what makes a layout authored on Windows find the
+        // same asset on Linux.
+        return normalized.generic_string();
     }
 
     Image::Image(gfx::TextureHandle texture, int width, int height)
@@ -76,19 +71,19 @@ namespace engine::ui {
         content_ = nullptr;
     }
 
-    std::unique_ptr<moth_ui::IImage> ImageFactory::GetImage(const std::filesystem::path& path) {
+    std::unique_ptr<moth_ui::IImage> ImageFactory::GetImage(const moth_ui::AssetId& id) {
         if (device_ == nullptr || content_ == nullptr) {
             ENGINE_LOG_ERROR("A layout asked for an image before the factory was created.");
             return nullptr;
         }
 
-        // moth_ui absolutizes the path a layout stores, so this undoes that
-        // before the manifest sees it. See source_path_for().
-        const std::string source = source_path_for(path, content_->root());
+        // The identity is a source path relative to the content root. See
+        // manifest_key_for().
+        const std::string source = manifest_key_for(id);
         if (source.empty()) {
-            ENGINE_LOG_ERROR("The layout names the image {}, which is not inside the cooked "
-                             "content tree at {}.",
-                             path.generic_string(), content_->root().generic_string());
+            ENGINE_LOG_ERROR("The layout names the image '{}', which is not a source path "
+                             "inside the game content tree at {}.",
+                             id.str(), content_->root().generic_string());
             return nullptr;
         }
         const assets::ManifestEntry* entry = content_->find(source);

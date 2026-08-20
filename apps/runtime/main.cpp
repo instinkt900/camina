@@ -1793,9 +1793,10 @@ int main(int argc, char** argv) {
     }
 
 #if defined(ENGINE_WITH_UI)
-    // M6.3. After the game content opens, because the factory resolves a path
-    // against that manifest. A failure here is not fatal: the probe draws its
-    // shapes and no image, and the log says which path did not resolve.
+    // M6.3. After the game content opens, because the factory resolves an
+    // identity against that manifest. A failure here is not fatal: the probe
+    // draws its shapes and no image, and the log says which one did not
+    // resolve.
     //
     // This resolves once and a reload never revisits it, so editing a UI image
     // needs a restart. The handle cannot go stale, because the factory owns the
@@ -1804,7 +1805,8 @@ int main(int argc, char** argv) {
     if (!runtime.ui_images.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI image factory did not start. No layout image will draw.");
     } else {
-        runtime.ui_image = runtime.ui_images.GetImage("ui/panel.png");
+        runtime.ui_image =
+            runtime.ui_images.GetImage(moth_ui::AssetId{ std::string{ "ui/panel.png" } });
     }
 
     // The same resolution story as the image above, and the same restart rule.
@@ -1812,7 +1814,7 @@ int main(int argc, char** argv) {
     // A layout names a font by a registered name rather than by a path, so the
     // runtime registers the one the sandbox ships. That is the game telling the
     // engine what its fonts are called, and it has no equivalent for an image:
-    // moth_ui names an image by a path and a font by a name. See DESIGN.md
+    // moth_ui names an image by an identity and a font by a name. See DESIGN.md
     // section 8.4.
     if (!runtime.ui_fonts.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI font factory did not start. No layout text will draw.");

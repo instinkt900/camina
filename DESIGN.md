@@ -880,6 +880,14 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   engine editor later, because both use ImGui. It is not a milestone.
 - Keep moth_ui in its own repository with its own release cadence. Consume it by version
   pin. Do not vendor it.
+- **The engine consumes the moth_ui 1.x line, and the pin ceiling is load-bearing.**
+  `moth_ui/2.0.0` is a separate fork for a larger toolkit that also carries `moth_core`. It
+  is not the next version of the line this engine uses. So `[>=1.8 <2]` means what it says,
+  and widening the ceiling takes the engine to a different library rather than a newer one.
+
+  The 1.x tags are not in release order. 1.5.0, 1.6.0 and 1.7.0 shipped in April 2026, and
+  the August 2026 work released 1.1.2 and 1.1.3 **below** them. M10.1 releases 1.8.0, which
+  is the first version since April that is actually the newest. Issue #390 holds the rest.
 - **A Conan editable is for development, not for a build somebody else runs.** Develop against
   the editable when a change spans both repositories. Then release moth_ui and move the engine
   to the pin. A green build that only works because of a local editable is a broken build for
@@ -988,6 +996,12 @@ the code worked.
 Fixed in this milestone, engine side: the sampler request is carried rather than dropped, the
 layout path is resolved against the manifest, text forces its own blend mode, and the three
 editor-only factory methods assert and log.
+
+**M10.1 moved the second of those to the side it belonged on.** The spike said the path fix
+had landed on the wrong side, and it had. `moth_ui::AssetId` is now an opaque identity that
+moth_ui carries and never reads, `LayoutEntityImage` stops rewriting what it stores, and
+`engine::ui::source_path_for` is gone. What replaced it, `manifest_key_for`, validates an
+identity rather than undoing something moth_ui did to it. That closed #218.
 
 Filed: #209 the sampler, #210 UI hot reload, #213 on-demand glyph packing, #214 one atlas for
 each size, #216 shaping direction, and the moth_ui interface findings above. **None of the
