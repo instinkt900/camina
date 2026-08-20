@@ -24,9 +24,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -50,6 +53,143 @@ namespace {
     [[nodiscard]] bool load(sp::Host& host, engine::Guid guid, std::string_view text) {
         return host.load(guid, "test.lua", bytes_of(text));
     }
+
+    /**
+     * A UI surface a test drives, with no moth_ui under it.
+     *
+     * M10.6 puts `script::UiSurface` between the binding and the game UI, so
+     * `engine_core` never names a moth_ui type. That seam is what lets this file
+     * check the whole `ui` table with no window, no device and no layout file.
+     * The real one is `engine::ui::ScriptSurface`.
+     */
+    class FakeUi final : public sp::UiSurface {
+    public:
+        /// One node of one layout.
+        struct Node {
+            std::string text;
+            std::string image;
+            bool visible = true;
+        };
+
+        /// Adds a layout with the named nodes, hidden to start with.
+        void add(std::string layout, const std::vector<std::string>& nodes) {
+            Layout& made = layouts_[layout];
+            made.shown = false;
+            for (const std::string& node : nodes) {
+                made.nodes[node] = Node{};
+            }
+        }
+
+        /// Records a press, the way a frame does between two steps.
+        void press(std::string layout, std::string node) {
+            presses_.push_back(sp::UiPress{ std::move(layout), std::move(node) });
+        }
+
+        /// Reads one node back, for a check that Lua wrote what it meant to.
+        [[nodiscard]] const Node* node_of(const std::string& layout,
+                                          const std::string& node) const {
+            const auto found = layouts_.find(layout);
+            if (found == layouts_.end()) {
+                return nullptr;
+            }
+            const auto child = found->second.nodes.find(node);
+            return child == found->second.nodes.end() ? nullptr : &child->second;
+        }
+
+        bool show(std::string_view layout) override {
+            return set_shown(layout, true);
+        }
+        bool hide(std::string_view layout) override {
+            return set_shown(layout, false);
+        }
+        [[nodiscard]] bool visible(std::string_view layout) const override {
+            const Layout* found = find_layout(layout);
+            return found != nullptr && found->shown;
+        }
+        [[nodiscard]] bool has_node(std::string_view layout,
+                                    std::string_view node) const override {
+            return find_node(layout, node) != nullptr;
+        }
+        [[nodiscard]] std::string text(std::string_view layout,
+                                       std::string_view node) const override {
+            const Node* found = find_node(layout, node);
+            return found == nullptr ? std::string{} : found->text;
+        }
+        bool set_text(std::string_view layout, std::string_view node,
+                      std::string_view text) override {
+            Node* found = find_node(layout, node);
+            if (found == nullptr) {
+                return false;
+            }
+            found->text = std::string{ text };
+            return true;
+        }
+        [[nodiscard]] bool node_visible(std::string_view layout,
+                                        std::string_view node) const override {
+            const Node* found = find_node(layout, node);
+            return found != nullptr && found->visible;
+        }
+        bool set_node_visible(std::string_view layout, std::string_view node,
+                              bool visible) override {
+            Node* found = find_node(layout, node);
+            if (found == nullptr) {
+                return false;
+            }
+            found->visible = visible;
+            return true;
+        }
+        bool set_image(std::string_view layout, std::string_view node,
+                       std::string_view image) override {
+            Node* found = find_node(layout, node);
+            if (found == nullptr) {
+                return false;
+            }
+            found->image = std::string{ image };
+            return true;
+        }
+        [[nodiscard]] std::span<const sp::UiPress> presses() const override {
+            return presses_;
+        }
+        void clear_presses() override { presses_.clear(); }
+
+    private:
+        struct Layout {
+            bool shown = false;
+            std::map<std::string, Node> nodes;
+        };
+
+        [[nodiscard]] const Layout* find_layout(std::string_view layout) const {
+            const auto found = layouts_.find(std::string{ layout });
+            return found == layouts_.end() ? nullptr : &found->second;
+        }
+
+        [[nodiscard]] const Node* find_node(std::string_view layout,
+                                            std::string_view node) const {
+            const Layout* found = find_layout(layout);
+            if (found == nullptr) {
+                return nullptr;
+            }
+            const auto child = found->nodes.find(std::string{ node });
+            return child == found->nodes.end() ? nullptr : &child->second;
+        }
+
+        [[nodiscard]] Node* find_node(std::string_view layout, std::string_view node) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+            return const_cast<Node*>(std::as_const(*this).find_node(layout, node));
+        }
+
+        bool set_shown(std::string_view layout, bool shown) {
+            const auto found = layouts_.find(std::string{ layout });
+            if (found == layouts_.end()) {
+                return false;
+            }
+            found->second.shown = shown;
+            return true;
+        }
+
+        std::map<std::string, Layout> layouts_;
+        std::vector<sp::UiPress> presses_;
+    };
 
     /// An entity carrying a script, at the world origin.
     [[nodiscard]] entt::entity with_script(sc::World& world, engine::Guid guid) {
@@ -1746,6 +1886,310 @@ namespace {
         check(velocity.y > 0.0F, "and the callback sent a falling crate upward");
     }
 
+    /// An entity carrying a script and a Turret to write the answers into.
+    [[nodiscard]] entt::entity with_script_and_turret(Fixture& fixture, engine::Guid guid) {
+        const entt::entity entity = fixture.world.create();
+        fixture.world.registry().emplace<Turret>(entity, Turret{});
+        fixture.world.registry().emplace<sp::ScriptComponent>(entity,
+                                                              sp::ScriptComponent{ guid });
+        return entity;
+    }
+
+    void test_a_script_shows_and_hides_a_layout() {
+        section("A script shows a layout, hides it, and asks which is open");
+
+        FakeUi ui;
+        ui.add("ui/pause.mothui", { "resume" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            local shown = false
+            function on_update()
+                if not shown then
+                    shown = true
+                    ui.show("ui/pause.mothui")
+                    entity:set("Turret", { armed = ui.visible("ui/pause.mothui") })
+                else
+                    ui.hide("ui/pause.mothui")
+                end
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+
+        host.update(fixture.world, 0.0, services);
+        check(ui.visible("ui/pause.mothui"), "the layout is showing");
+        check(fixture.world.registry().get<Turret>(entity).armed,
+              "and the script can ask whether it is");
+
+        host.update(fixture.world, 1.0 / 60.0, services);
+        check(!ui.visible("ui/pause.mothui"), "hiding it takes it away");
+        check(host.stopped_count() == 0, "and no call raised an error");
+    }
+
+    void test_a_layout_or_node_that_is_not_there_answers_rather_than_fails() {
+        section("A layout or a node that is not there answers rather than fails");
+
+        FakeUi ui;
+        ui.add("ui/pause.mothui", { "resume" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update()
+                local answers = ""
+                answers = answers .. tostring(ui.show("ui/pause.mothui"))
+                answers = answers .. "," .. tostring(ui.show("ui/none.mothui"))
+                answers = answers .. "," .. tostring(ui.find("ui/pause.mothui", "resume") ~= nil)
+                answers = answers .. "," .. tostring(ui.find("ui/pause.mothui", "resme") ~= nil)
+                entity:set("Turret", { label = answers })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        check(host.stopped_count() == 0, "no call raised an error");
+        check(fixture.world.registry().get<Turret>(entity).label == "true,false,true,false",
+              "a real layout and node answer true, and a missing one answers false");
+    }
+
+    void test_a_handle_reads_and_writes_what_a_node_shows() {
+        section("A script finds a node by name and changes what it shows");
+
+        FakeUi ui;
+        ui.add("ui/hud.mothui", { "score", "portrait" });
+        check(ui.set_text("ui/hud.mothui", "score", "0"), "the fake starts at zero");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update()
+                local score = ui.find("ui/hud.mothui", "score")
+                entity:set("Turret", { label = score:text() .. "|" .. score.layout .. "|" .. score.node })
+                score:set_text("1200")
+                score:set_visible(false)
+                ui.find("ui/hud.mothui", "portrait"):set_image("ui/hero.png")
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        check(host.stopped_count() == 0, "no call raised an error");
+        check(fixture.world.registry().get<Turret>(entity).label == "0|ui/hud.mothui|score",
+              "the handle reads the text and names what it stands for");
+
+        const FakeUi::Node* score = ui.node_of("ui/hud.mothui", "score");
+        check(score != nullptr && score->text == "1200", "and it writes the new text");
+        check(score != nullptr && !score->visible, "and hides the node");
+
+        const FakeUi::Node* portrait = ui.node_of("ui/hud.mothui", "portrait");
+        check(portrait != nullptr && portrait->image == "ui/hero.png",
+              "and another handle sets an image");
+    }
+
+    void test_a_handle_survives_a_step_and_resolves_again() {
+        section("A handle kept across steps names the node rather than holding it");
+
+        // The reload trap, in the shape a script can reach. A handle holds two
+        // strings and looks the node up again on every call, so a surface that
+        // rebuilt everything between two steps leaves the handle correct.
+        FakeUi first;
+        first.add("ui/hud.mothui", { "score" });
+        FakeUi second;
+        second.add("ui/hud.mothui", { "score" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            local score = nil
+            function on_update()
+                score = score or ui.find("ui/hud.mothui", "score")
+                score:set_text("kept")
+            end
+        )"),
+              "the script compiles");
+        (void)with_script_and_turret(fixture, kFirst);
+
+        host.update(fixture.world, 0.0, sp::Services{ .ui = &first });
+        const FakeUi::Node* wrote_first = first.node_of("ui/hud.mothui", "score");
+        check(wrote_first != nullptr && wrote_first->text == "kept", "the first step wrote");
+
+        // A different surface entirely, which is what a reload amounts to.
+        host.update(fixture.world, 1.0 / 60.0, sp::Services{ .ui = &second });
+        const FakeUi::Node* wrote_second = second.node_of("ui/hud.mothui", "score");
+        check(wrote_second != nullptr && wrote_second->text == "kept",
+              "and the handle wrote into the surface of the second step");
+        check(host.stopped_count() == 0, "with no error on either");
+    }
+
+    void test_a_press_reaches_the_script() {
+        section("A press on a node calls into the script");
+
+        FakeUi ui;
+        ui.add("ui/pause.mothui", { "resume", "quit" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            local count = 0
+            function on_update() end
+            function on_ui_press(layout, node)
+                count = count + 1
+                entity:set("Turret", { label = layout .. "/" .. node, range = count })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        ui.press("ui/pause.mothui", "resume");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(fixture.world.registry().get<Turret>(entity).label == "ui/pause.mothui/resume",
+              "the callback names the layout and the node");
+        check(fixture.world.registry().get<Turret>(entity).range == 1.0F, "and it ran once");
+
+        // The surface gathers presses on the frame clock, so one left behind
+        // would be delivered again on every later step.
+        host.deliver_ui_events(fixture.world, services);
+        check(fixture.world.registry().get<Turret>(entity).range == 1.0F,
+              "and a press is delivered once");
+        check(ui.presses().empty(), "because the surface is drained");
+    }
+
+    void test_one_step_delivers_every_press() {
+        section("One step delivers every press the frames gathered");
+
+        // A frame often runs no step at all, so several presses can land
+        // between two steps. Reporting only the last one is the shape of bug
+        // issue #263 describes for physics events.
+        FakeUi ui;
+        ui.add("ui/pause.mothui", { "resume", "quit" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            local seen = ""
+            function on_update() end
+            function on_ui_press(layout, node)
+                seen = seen == "" and node or (seen .. "," .. node)
+                entity:set("Turret", { label = seen })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        ui.press("ui/pause.mothui", "resume");
+        ui.press("ui/pause.mothui", "quit");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(fixture.world.registry().get<Turret>(entity).label == "resume,quit",
+              "both presses arrive, in the order the frames reported them");
+    }
+
+    void test_a_press_reaches_every_listener() {
+        section("A press reaches every instance that declares the callback");
+
+        FakeUi ui;
+        ui.add("ui/pause.mothui", { "resume" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update() end
+            function on_ui_press(layout, node)
+                entity:set("Turret", { armed = true })
+            end
+        )"),
+              "the listening script compiles");
+        check(load(host, kSecond, "function on_update() end"),
+              "and so does one that does not listen");
+
+        const entt::entity first = with_script_and_turret(fixture, kFirst);
+        const entt::entity second = with_script_and_turret(fixture, kFirst);
+        const entt::entity quiet = with_script_and_turret(fixture, kSecond);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        ui.press("ui/pause.mothui", "resume");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(host.call_count(sp::Callback::Press) == 2, "both listeners were called");
+        check(fixture.world.registry().get<Turret>(first).armed, "the first one ran");
+        check(fixture.world.registry().get<Turret>(second).armed, "and so did the second");
+        check(!fixture.world.registry().get<Turret>(quiet).armed,
+              "and the script that declared none was left alone");
+    }
+
+    void test_a_press_with_no_listener_is_dropped() {
+        section("A press nobody listens for is dropped rather than kept");
+
+        FakeUi ui;
+        ui.add("ui/pause.mothui", { "resume" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, "function on_update() end"), "the script compiles");
+        (void)with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        ui.press("ui/pause.mothui", "resume");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(host.call_count(sp::Callback::Press) == 0, "nothing was called");
+        check(ui.presses().empty(), "and the press was still drained");
+    }
+
+    void test_a_script_with_no_ui_service_answers_false() {
+        section("A build with no game UI answers every call rather than failing");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update()
+                local answers = tostring(ui.show("ui/pause.mothui"))
+                answers = answers .. "," .. tostring(ui.visible("ui/pause.mothui"))
+                answers = answers .. "," .. tostring(ui.find("ui/pause.mothui", "resume") ~= nil)
+                entity:set("Turret", { label = answers })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        // No surface at all, which is what `with_ui=False` gives. Every call has
+        // to answer, the same way an action reads false when nobody bound an
+        // input module.
+        host.update(fixture.world, 0.0, sp::Services{});
+
+        check(host.stopped_count() == 0, "no call raised an error");
+        check(fixture.world.registry().get<Turret>(entity).label == "false,false,false",
+              "and every one answers false");
+    }
+
 } // namespace
 
 int main() {
@@ -1799,6 +2243,16 @@ int main() {
     test_one_step_reports_every_event();
     test_an_event_for_an_unscripted_entity_is_dropped();
     test_a_callback_reaches_the_services_of_its_step();
+
+    test_a_script_shows_and_hides_a_layout();
+    test_a_layout_or_node_that_is_not_there_answers_rather_than_fails();
+    test_a_handle_reads_and_writes_what_a_node_shows();
+    test_a_handle_survives_a_step_and_resolves_again();
+    test_a_press_reaches_the_script();
+    test_one_step_delivers_every_press();
+    test_a_press_reaches_every_listener();
+    test_a_press_with_no_listener_is_dropped();
+    test_a_script_with_no_ui_service_answers_false();
 
     // The pool has to stop before main returns. test_physics.cpp does the same,
     // and leaving the workers running at exit can hang the process or read as a

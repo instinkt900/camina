@@ -13,19 +13,21 @@
 
 #include <sol/sol.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace engine::script {
 
     namespace {
 
         /// How many values Callback names, so the counters are one array.
-        constexpr std::size_t kCallbackCount = 5;
+        constexpr std::size_t kCallbackCount = 6;
 
         [[nodiscard]] std::size_t index_of(Callback callback) {
             return static_cast<std::size_t>(callback);
@@ -44,6 +46,8 @@ namespace engine::script {
                 return "on_trigger";
             case Callback::Contact:
                 return "on_contact";
+            case Callback::Press:
+                return "on_ui_press";
             }
             return "";
         }
@@ -182,6 +186,20 @@ namespace engine::script {
             }
             return false;
         }
+
+        /**
+         * What `ui.find` gives a script back.
+         *
+         * Two strings and nothing else. It names a node rather than pointing at
+         * one, so a hot reload that frees the whole node tree leaves every
+         * handle a script is holding still correct. `DESIGN.md` section 8.4 has
+         * that trap three times over, and this is the shape that cannot repeat
+         * it.
+         */
+        struct UiNodeHandle {
+            std::string layout; ///< The source path of the layout.
+            std::string node;   ///< The id of the node inside it.
+        };
 
     } // namespace
 
@@ -477,6 +495,7 @@ namespace engine::script {
             sol::protected_function on_destroy;
             sol::protected_function on_trigger;
             sol::protected_function on_contact;
+            sol::protected_function on_ui_press;
             /// An error stopped this one. It is never called again.
             bool stopped = false;
         };
@@ -557,6 +576,24 @@ namespace engine::script {
                 fail(instance, entity, callback, result);
             }
         }
+
+        /**
+         * Runs `on_ui_press` on one instance.
+         *
+         * Two strings rather than a handle, because a press names a node and a
+         * node is not an entity. A script compares them against what it showed.
+         */
+        void call_press(Instance& instance, entt::entity entity, const UiPress& press) {
+            if (instance.stopped || !instance.on_ui_press.valid()) {
+                return;
+            }
+            const sol::protected_function_result result =
+                instance.on_ui_press(press.layout, press.node);
+            ++counts.at(index_of(Callback::Press));
+            if (!result.valid()) {
+                fail(instance, entity, Callback::Press, result);
+            }
+        }
     };
 
     Host::Host(const scene::ComponentRegistry& components)
@@ -597,6 +634,7 @@ namespace engine::script {
         bind_world();
         bind_input();
         bind_camera();
+        bind_ui();
     }
 
     /**
@@ -788,6 +826,84 @@ namespace engine::script {
                 return sol::nullopt;
             }
             return context->services.camera->forward;
+        });
+    }
+
+    /**
+     * Binds the `ui` table and the node handle it gives back.
+     *
+     * The whole surface goes through `script::UiSurface`, because `src/script/`
+     * is in `engine_core` and `DESIGN.md` section 8.5 keeps moth_ui out of it.
+     * A build with no game UI passes no surface, and then every call here
+     * answers false rather than failing.
+     *
+     * **A handle holds two strings and never a node.** `ui.find` reads better
+     * than four flat calls that each repeat the layout and the node, and it is
+     * sugar over exactly that: each method looks the node up again through the
+     * surface of the current step. A handle that cached a node would be holding
+     * freed memory the first time somebody saved the layout.
+     */
+    void Host::bind_ui() {
+        const ScriptContext* context = &impl_->context;
+
+        // Reads the surface of the current step rather than one kept from the
+        // step that made the handle. See Services.
+        const auto surface = [context]() -> UiSurface* { return context->services.ui; };
+
+        impl_->lua.new_usertype<UiNodeHandle>(
+            "ui_node", sol::no_constructor,
+
+            "layout", sol::readonly(&UiNodeHandle::layout),
+            "node", sol::readonly(&UiNodeHandle::node),
+
+            "text",
+            [surface](const UiNodeHandle& self) -> std::string {
+                UiSurface* ui = surface();
+                return ui == nullptr ? std::string{} : ui->text(self.layout, self.node);
+            },
+            "set_text",
+            [surface](const UiNodeHandle& self, const std::string& text) {
+                UiSurface* ui = surface();
+                return ui != nullptr && ui->set_text(self.layout, self.node, text);
+            },
+            "visible",
+            [surface](const UiNodeHandle& self) {
+                UiSurface* ui = surface();
+                return ui != nullptr && ui->node_visible(self.layout, self.node);
+            },
+            "set_visible",
+            [surface](const UiNodeHandle& self, bool visible) {
+                UiSurface* ui = surface();
+                return ui != nullptr && ui->set_node_visible(self.layout, self.node, visible);
+            },
+            "set_image", [surface](const UiNodeHandle& self, const std::string& image) {
+                UiSurface* ui = surface();
+                return ui != nullptr && ui->set_image(self.layout, self.node, image); });
+
+        sol::table ui = impl_->lua.create_named_table("ui");
+
+        ui.set_function("show", [surface](const std::string& layout) {
+            UiSurface* value = surface();
+            return value != nullptr && value->show(layout);
+        });
+        ui.set_function("hide", [surface](const std::string& layout) {
+            UiSurface* value = surface();
+            return value != nullptr && value->hide(layout);
+        });
+        ui.set_function("visible", [surface](const std::string& layout) {
+            UiSurface* value = surface();
+            return value != nullptr && value->visible(layout);
+        });
+
+        // nil rather than a handle that answers nothing, so a script can write
+        // `if node then` and a typo in a node id reports itself at the find
+        // rather than five calls later.
+        ui.set_function("find", [surface](const std::string& layout, const std::string& node) -> sol::optional<UiNodeHandle> {
+            UiSurface* value = surface();
+            if (value == nullptr || !value->has_node(layout, node)) {
+                return sol::nullopt;
+            }
+            return UiNodeHandle{ layout, node };
         });
     }
 
@@ -1014,6 +1130,7 @@ namespace engine::script {
             instance.on_destroy = instance.env[name_of(Callback::Destroy)];
             instance.on_trigger = instance.env[name_of(Callback::Trigger)];
             instance.on_contact = instance.env[name_of(Callback::Contact)];
+            instance.on_ui_press = instance.env[name_of(Callback::Press)];
 
             const sol::protected_function on_start = instance.env[name_of(Callback::Start)];
             impl_->call(instance, entity, Callback::Start, on_start);
@@ -1120,6 +1237,45 @@ namespace engine::script {
             deliver(touch.a, touch.b, Callback::Contact, touch.began);
             deliver(touch.b, touch.a, Callback::Contact, touch.began);
         }
+    }
+
+    void Host::deliver_ui_events(scene::World& world, const Services& services) {
+        // The world and the services of this call, for the reason
+        // deliver_physics_events gives.
+        impl_->context.world = &world;
+        impl_->context.services = services;
+
+        if (services.ui == nullptr || services.ui->presses().empty()) {
+            return;
+        }
+
+        // In entity order. The instances live in a hash map, whose walk order is
+        // neither creation order nor stable across an insert, and two scripts
+        // that both answer a press would then run in an order nothing promises.
+        // A reproducible run rests on there being none of that. The cost is paid
+        // only on a step that has a press, which is a step somebody clicked on.
+        std::vector<entt::entity> listeners;
+        listeners.reserve(impl_->instances.size());
+        for (const auto& [entity, instance] : impl_->instances) {
+            if (!instance.stopped && instance.on_ui_press.valid()) {
+                listeners.push_back(entity);
+            }
+        }
+        std::sort(listeners.begin(), listeners.end());
+
+        for (const UiPress& press : services.ui->presses()) {
+            for (const entt::entity entity : listeners) {
+                const auto found = impl_->instances.find(entity);
+                if (found == impl_->instances.end()) {
+                    continue;
+                }
+                impl_->call_press(found->second, entity, press);
+            }
+        }
+
+        // One press is delivered once. The surface gathers them on the frame
+        // clock, so leaving them would replay every press on every later step.
+        services.ui->clear_presses();
     }
 
     void Host::stop(scene::World& world, const Services& services) {
