@@ -646,62 +646,61 @@ namespace {
                     "a font this renderer did not make draws nothing");
     }
 
-    // M6.5. The path a layout gives, turned back into a manifest key.
+    // M10.1. The identity a layout stores, turned into a manifest key.
     //
-    // moth_ui resolves a layout image path against the layout's own directory
-    // and makes it absolute, so the engine gets an absolute path and the
-    // manifest is keyed on a source path. This is the pure half of that fix.
+    // moth_ui used to make a stored image path absolute against the layout's own
+    // directory, and the engine undid that. moth_ui carries an opaque identity
+    // now, so the identity arrives exactly as somebody authored it and this only
+    // has to validate and normalize it.
 
-    void a_layout_path_becomes_a_source_path() {
-        // A real absolute path rather than a written one. "/game/content" is
-        // absolute on Linux and not on Windows, where a path needs a drive, so
-        // a hardcoded POSIX path makes this test pass on one platform and fail
-        // on the other. current_path() is absolute on both.
-        const std::filesystem::path base = std::filesystem::current_path();
-        const std::filesystem::path root = base / "content";
+    void a_layout_identity_becomes_a_manifest_key() {
+        const auto key = [](const char* text) {
+            return engine::ui::manifest_key_for(moth_ui::AssetId{ text });
+        };
 
-        test::check(engine::ui::source_path_for(root / "ui" / "panel.png", root) ==
-                        "ui/panel.png",
-                    "an absolute path inside the cooked tree becomes a source path");
-        test::check(engine::ui::source_path_for("ui/panel.png", root) == "ui/panel.png",
-                    "a relative path passes through");
-        test::check(engine::ui::source_path_for(root / "panel.png", root) == "panel.png",
+        test::check(key("ui/panel.png") == "ui/panel.png",
+                    "a source path relative to the content root passes through");
+        test::check(key("panel.png") == "panel.png",
                     "a path at the root of the tree keeps its name");
-
-        // A path outside the tree is not a cooked asset. Returning it would
-        // send "../.." to the manifest as if it were a key.
-        test::check(engine::ui::source_path_for(base / "elsewhere" / "panel.png", root).empty(),
-                    "an absolute path outside the cooked tree is refused");
 
         // The separator is always a forward slash, whatever the platform uses.
         // The manifest is written with forward slashes, so a backslash here
         // would miss every key on Windows and nothing would draw.
-        const std::string nested =
-            engine::ui::source_path_for(root / "ui" / "fonts" / "body.ttf", root);
-        test::check(nested == "ui/fonts/body.ttf", "the answer uses forward slashes");
+        test::check(key("ui/fonts/body.ttf") == "ui/fonts/body.ttf",
+                    "the answer uses forward slashes");
 
-        // A relative path is normalized, because the manifest holds the path
-        // the cooker walked and that never carries a "." or a "..".
-        test::check(engine::ui::source_path_for("ui/../panel.png", root) == "panel.png",
-                    "a relative path is normalized before it becomes a key");
-        test::check(engine::ui::source_path_for(root / "ui" / ".." / "panel.png", root) ==
-                        "panel.png",
-                    "and so is an absolute one");
+        // The identity is normalized, because the manifest holds the path the
+        // cooker walked and that never carries a "." or a "..".
+        test::check(key("ui/../panel.png") == "panel.png",
+                    "an identity is normalized before it becomes a key");
+        test::check(key("./ui/panel.png") == "ui/panel.png",
+                    "a leading dot is normalized away");
 
-        // A relative path that climbs out of the tree is refused as well. The
-        // API takes a path relative to the content root, so "../" is not one.
-        test::check(engine::ui::source_path_for("../panel.png", root).empty(),
-                    "a relative path that climbs out of the tree is refused");
+        // An identity that climbs out of the tree is refused. The manifest is
+        // keyed on a path relative to the content root, so "../" is not one.
+        test::check(key("../panel.png").empty(),
+                    "an identity that climbs out of the tree is refused");
 
         // The refusal tests the first component and not the first two
         // characters, so a file that is really called "..panel.png" survives.
-        test::check(engine::ui::source_path_for("..panel.png", root) == "..panel.png",
+        test::check(key("..panel.png") == "..panel.png",
                     "a name that starts with two dots is not a climb out");
+
+        // An empty identity names nothing, which is what a layout holds when
+        // nobody has picked an image yet.
+        test::check(key("").empty(), "an empty identity is refused");
+
+        // An absolute identity is refused now rather than resolved. moth_ui
+        // used to produce one for every layout and the engine undid it. It no
+        // longer does, so an absolute identity means somebody authored one, and
+        // the manifest holds no absolute key to match it against.
+        const std::filesystem::path absolute = std::filesystem::current_path() / "panel.png";
+        test::check(engine::ui::manifest_key_for(moth_ui::AssetId{ absolute }).empty(),
+                    "an absolute identity is refused");
 
         // The manifest is keyed on the source, and the cooker renames a texture
         // output. So the answer is the source name and never the cooked one.
-        test::check(engine::ui::source_path_for(root / "ui" / "panel.png", root) !=
-                        "ui/panel.png.tex",
+        test::check(key("ui/panel.png") != "ui/panel.png.tex",
                     "the answer is the source name rather than the cooked one");
     }
 
@@ -740,6 +739,6 @@ int main() {
     alignment_moves_the_text_inside_the_rect();
     text_that_cannot_draw_records_nothing();
     text_of_another_backend_draws_nothing();
-    a_layout_path_becomes_a_source_path();
+    a_layout_identity_becomes_a_manifest_key();
     return test::report();
 }

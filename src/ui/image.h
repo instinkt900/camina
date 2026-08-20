@@ -9,6 +9,7 @@
 #include "gfx/device.h"
 #include "render/texture_cache.h"
 
+#include <moth_ui/asset_id.h>
 #include <moth_ui/graphics/iimage.h>
 #include <moth_ui/iimage_factory.h>
 
@@ -18,33 +19,24 @@
 namespace engine::ui {
 
     /**
-     * @brief Turns the path a layout gave into the source path the manifest holds.
+     * @brief Turns the identity a layout stored into the key the manifest holds.
      *
-     * **moth_ui hands a backend an absolute path.** `LayoutEntityImage`
-     * deserializes `imagePath` as
-     * `std::filesystem::absolute(layout directory / stored path)`, so a layout
-     * that stores `panel.png` produces an absolute path into the cooked tree.
-     * The engine names an asset by a source path, and the manifest is keyed on
-     * one, so an absolute path matches nothing.
+     * A layout names an image with a `moth_ui::AssetId`, and moth_ui never
+     * reads it. This engine reads it as a source path relative to the game
+     * content root, which is the string `assets::Content::find` takes.
      *
-     * This undoes that. The cooked tree mirrors the source tree, so a cooked
-     * path made relative to the cooked root is the source path again. That
-     * holds even when the cooker renames the output, because the manifest is
-     * keyed on the source and `ui/panel.png` cooks to `ui/panel.png.tex`.
+     * The identity arrives exactly as somebody authored it, because moth_ui no
+     * longer rewrites a stored path. So this normalizes the separators and
+     * refuses a path that climbs out of the content tree.
      *
-     * A path that is already relative passes through, which is what a caller
-     * outside a layout gives.
+     * `DESIGN.md` section 8.4 records why the identity is an `AssetId` rather
+     * than a path, and section 10 M10 records what it cost.
      *
-     * `DESIGN.md` section 8.4 records which side this belongs on and why the
-     * fix landed here rather than in moth_ui.
-     *
-     * @param path The path from the layout. Absolute or relative.
-     * @param cooked_root The directory `assets::Content` was opened on.
+     * @param id The identity a layout stored.
      * @return A path with forward slashes, relative to the content root. Empty
-     * when an absolute path falls outside the cooked tree.
+     * when the identity is empty or climbs out of the tree.
      */
-    [[nodiscard]] std::string source_path_for(const std::filesystem::path& path,
-                                              const std::filesystem::path& cooked_root);
+    [[nodiscard]] std::string manifest_key_for(const moth_ui::AssetId& id);
 
     /**
      * @brief One cooked texture, as moth_ui sees it.
@@ -93,17 +85,19 @@ namespace engine::ui {
     };
 
     /**
-     * @brief Turns a path in a moth_ui layout into a cooked engine texture.
+     * @brief Turns the identity in a moth_ui layout into a cooked engine texture.
      *
-     * **An image identity is a source path, and the engine resolves it.** A
-     * moth_ui layout names an image by `std::filesystem::path`, and the engine
-     * names every asset by GUID. This resolves the path against the cooked
-     * manifest, so moth_ui does not change. `DESIGN.md` section 8.4 records why
-     * that side was picked and what would change it.
+     * **A layout carries an identity, and this engine reads it as a source
+     * path.** `moth_ui::AssetId` holds whatever the consumer put in it and
+     * moth_ui never looks inside, so the meaning lives here. `DESIGN.md`
+     * section 8.4 records why moth_ui learned an identity type rather than
+     * keeping a path.
      *
-     * The path is a source path, relative to the game content root, with
-     * forward slashes. It is the same string `assets::Content::find` takes, so
-     * `ui/panel.png` names the file at `sandbox/content/ui/panel.png`.
+     * The identity a layout stores is a source path, relative to the game
+     * content root, with forward slashes. It is the same string
+     * `assets::Content::find` takes, so `ui/panel.png` names the file at
+     * `sandbox/content/ui/panel.png`. moth_ui carries that string and never
+     * reads it, so the meaning is this engine's alone.
      *
      * This owns a texture cache of its own rather than sharing the one inside
      * `render::MeshPass`. A UI image and a material texture then upload twice
@@ -113,7 +107,7 @@ namespace engine::ui {
      * @code
      * engine::ui::ImageFactory factory;
      * if (factory.create(device, &content)) {
-     *     std::unique_ptr<moth_ui::IImage> image = factory.GetImage("ui/panel.png");
+     *     auto image = factory.GetImage(moth_ui::AssetId{ "ui/panel.png" });
      * }
      * @endcode
      *
@@ -147,7 +141,7 @@ namespace engine::ui {
         /// @cond
         // This implements moth_ui::IImageFactory. See the note on Image above
         // for why the override carries no Doxygen block.
-        std::unique_ptr<moth_ui::IImage> GetImage(const std::filesystem::path& path) override;
+        std::unique_ptr<moth_ui::IImage> GetImage(const moth_ui::AssetId& id) override;
         /// @endcond
 
     private:
