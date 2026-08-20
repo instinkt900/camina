@@ -18,19 +18,30 @@ namespace engine::import {
         /// What a moth_ui image entity calls the image it draws.
         constexpr const char* kImagePathKey = "imagePath";
 
-        /// Reads a layout, or says why it could not.
+        /**
+         * Reads a layout, and says why it could not when @p report is true.
+         *
+         * The input scan runs before anything cooks and reads every layout to
+         * find the images it names. It stays quiet, because the rule reads the
+         * same file a moment later and reports there. Both reporting doubles
+         * every message a broken layout produces.
+         */
         [[nodiscard]] bool read_layout(const std::filesystem::path& source,
-                                       nlohmann::json& out) {
+                                       nlohmann::json& out, bool report) {
             std::ifstream file(source);
             if (!file) {
-                ENGINE_LOG_ERROR("{}: the layout could not be opened.", source.string());
+                if (report) {
+                    ENGINE_LOG_ERROR("{}: the layout could not be opened.", source.string());
+                }
                 return false;
             }
             try {
                 file >> out;
             } catch (const nlohmann::json::exception& error) {
-                ENGINE_LOG_ERROR("{}: the layout is not readable JSON. {}", source.string(),
-                                 error.what());
+                if (report) {
+                    ENGINE_LOG_ERROR("{}: the layout is not readable JSON. {}",
+                                     source.string(), error.what());
+                }
                 return false;
             }
             return true;
@@ -96,7 +107,7 @@ namespace engine::import {
                            const std::filesystem::path& relative,
                            std::vector<std::filesystem::path>& out) {
         nlohmann::json document;
-        if (!read_layout(source, document)) {
+        if (!read_layout(source, document, false)) {
             return;
         }
         for_each_image(document, [&](const nlohmann::json& value) {
@@ -113,7 +124,7 @@ namespace engine::import {
                      const std::filesystem::path& relative,
                      const std::filesystem::path& content_root) {
         nlohmann::json document;
-        if (!read_layout(source, document)) {
+        if (!read_layout(source, document, true)) {
             return false;
         }
 

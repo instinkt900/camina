@@ -38,6 +38,7 @@
 
 #if defined(ENGINE_WITH_UI)
 #include "ui/image.h"
+#include "ui/layout_loader.h"
 #include "ui/renderer.h"
 #include "ui/ui.h"
 #include "ui/font_factory.h"
@@ -722,8 +723,16 @@ namespace {
         const moth_ui::IImage* ui_image = nullptr;
         /// The font the probe draws text with, or null when none loaded.
         moth_ui::IFont* ui_font = nullptr;
-        /// The instantiated layout, or null when none loaded.
-        moth_ui::Node* ui_layout = nullptr;
+        /**
+         * Where the instantiated layout lives, or null when the runtime has none.
+         *
+         * This points at the owner rather than at the node, because a reload
+         * replaces the node and frees the old one. A raw pointer taken once at
+         * startup then dangles, and the first frame after a save segfaults
+         * inside `Node::Draw`. Reading through the owner each frame is what
+         * makes a reload safe here.
+         */
+        const std::shared_ptr<moth_ui::Node>* ui_layout = nullptr;
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
@@ -870,8 +879,12 @@ namespace {
             // info.extent, not the requested extent. The device can settle on a
             // different size, and the scissor and the vertex normalization both
             // have to agree with the image actually being drawn into.
+            // Read through the owner, so a layout swapped in by a reload draws
+            // and a layout that was freed is not drawn.
+            moth_ui::Node* const layout =
+                context.ui_layout != nullptr ? context.ui_layout->get() : nullptr;
             record_ui_probe(*context.ui_renderer, info.extent, context.ui_image,
-                            context.ui_font, context.ui_layout);
+                            context.ui_font, layout);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -933,6 +946,9 @@ namespace {
         /// The instantiated layout. Null when none loaded, and the probe then
         /// draws on its own.
         std::shared_ptr<moth_ui::Node> ui_layout;
+        /// M10.3. What the layout was cooked as, so a reload can spot it in a
+        /// change list that names every asset the save touched.
+        engine::Guid ui_layout_guid;
 #endif
         /// M7.5. Draws the physics wireframe. Costs nothing while it is off.
         engine::render::DebugLinePass debug_lines;
@@ -971,39 +987,132 @@ namespace {
      */
 #if defined(ENGINE_WITH_UI)
     /**
-     * Builds the moth_ui node tree for the sandbox layout.
+     * Builds a moth_ui node tree out of the bytes of a cooked layout.
      *
-     * The layout is a cooked asset, so it is read out of the cooked tree rather
-     * than out of `sandbox/content`. That matters for more than tidiness:
-     * `moth_ui::Layout::Load` resolves an image path against the directory the
-     * layout was read from, so a layout read from the source tree would name
-     * source images and none of them would be in the manifest.
+     * M10.3. The layout is an asset now, so it arrives as bytes from
+     * `assets::Content` rather than as a file the loader opens itself. That is
+     * what makes a reload possible: the same call serves the first load and
+     * every one after it.
+     *
+     * `engine::ui::read_layout` does the reading, and it opens no device, so a
+     * test drives it with no GPU. Turning the layout into live nodes is what
+     * needs the renderer and both factories, and that is what stays here.
+     *
+     * @return The node tree, or null when the bytes would not parse.
+     */
+    [[nodiscard]] std::shared_ptr<moth_ui::Node> build_ui_layout(Runtime& runtime,
+                                                                 engine::Guid guid) {
+        std::shared_ptr<moth_ui::Layout> layout;
+        const engine::ui::LayoutLoad read =
+            engine::ui::read_layout(runtime.game_content, guid, layout);
+        if (read != engine::ui::LayoutLoad::Ok) {
+            ENGINE_LOG_ERROR("The UI layout {} did not load: {}.", sandbox::kUiLayoutFile,
+                             engine::ui::describe(read));
+            return nullptr;
+        }
+
+        if (!runtime.ui_context) {
+            runtime.ui_context = std::make_unique<moth_ui::Context>(
+                &runtime.ui_images, &runtime.ui_fonts, &runtime.ui_renderer);
+        }
+
+        std::shared_ptr<moth_ui::Node> node = layout->Instantiate(*runtime.ui_context);
+        if (!node) {
+            ENGINE_LOG_ERROR("The UI layout {} loaded and would not instantiate.",
+                             sandbox::kUiLayoutFile);
+            return nullptr;
+        }
+        return node;
+    }
+
+    /**
+     * Loads the sandbox layout, by the identity the manifest gives its name.
      *
      * A failure here is not fatal. The layout is one part of the frame, and a
      * scene that draws without it is more useful than a runtime that refuses to
      * start.
      */
     void load_ui_layout(Runtime& runtime) {
-        const std::filesystem::path path = runtime.game_content.root() / "ui/main.mothui";
-
-        auto [layout, result] = moth_ui::Layout::Load(path);
-        if (result != moth_ui::Layout::LoadResult::Success || !layout) {
-            ENGINE_LOG_ERROR("The UI layout {} did not load, and nothing will draw from it.",
-                             path.generic_string());
+        const engine::assets::ManifestEntry* entry =
+            runtime.game_content.find(sandbox::kUiLayoutFile);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("The cooked content tree holds no UI layout at {}, so nothing "
+                             "will draw from one.",
+                             sandbox::kUiLayoutFile);
             return;
         }
 
-        runtime.ui_context = std::make_unique<moth_ui::Context>(
-            &runtime.ui_images, &runtime.ui_fonts, &runtime.ui_renderer);
+        // Kept so a reload can tell this layout from every other asset that
+        // changed in the same save.
+        runtime.ui_layout_guid = entry->guid;
 
-        runtime.ui_layout = layout->Instantiate(*runtime.ui_context);
+        runtime.ui_layout = build_ui_layout(runtime, entry->guid);
         if (!runtime.ui_layout) {
-            ENGINE_LOG_ERROR("The UI layout {} loaded and would not instantiate.",
-                             path.generic_string());
             runtime.ui_context.reset();
             return;
         }
-        ENGINE_LOG_INFO("The UI layout {} loaded.", path.filename().generic_string());
+        ENGINE_LOG_INFO("The UI layout {} loaded.", sandbox::kUiLayoutFile);
+    }
+
+    /**
+     * Swaps in a layout somebody just saved.
+     *
+     * **A layout that will not parse keeps the one already running**, which is
+     * what `MeshPass::reload_shaders` does with a pipeline that will not build.
+     * A person editing a layout passes through broken states on the way to a
+     * working one, and dropping the UI at each of them is worse than drawing
+     * the last good version.
+     *
+     * The identity is read again rather than reused. A cook that gives the
+     * layout a new sidecar gives it a new identity, and the old one then names
+     * nothing.
+     */
+    void reload_ui_layout(Runtime& runtime) {
+        const engine::assets::ManifestEntry* entry =
+            runtime.game_content.find(sandbox::kUiLayoutFile);
+        if (entry == nullptr) {
+            ENGINE_LOG_ERROR("The UI layout {} left the cooked tree. The one already drawing "
+                             "stays up.",
+                             sandbox::kUiLayoutFile);
+            return;
+        }
+
+        std::shared_ptr<moth_ui::Node> rebuilt = build_ui_layout(runtime, entry->guid);
+        if (!rebuilt) {
+            ENGINE_LOG_ERROR("The UI layout {} would not reload. The one already drawing "
+                             "stays up.",
+                             sandbox::kUiLayoutFile);
+            return;
+        }
+
+        runtime.ui_layout_guid = entry->guid;
+        runtime.ui_layout = std::move(rebuilt);
+        ENGINE_LOG_INFO("The UI layout {} reloaded.", sandbox::kUiLayoutFile);
+    }
+
+    /**
+     * Reloads the layout when the change list names it.
+     *
+     * Both identities are tested: the one the layout had, so a cook that
+     * rewrote its sidecar is seen, and the one it has now, so a layout that
+     * appeared is too.
+     *
+     * An image the layout names is not tested here. That swaps in behind the
+     * node the way a mesh does, and issue #210 is what makes it.
+     */
+    void reload_ui_layout_if_changed(Runtime& runtime,
+                                     const std::vector<engine::assets::AssetChange>& changed) {
+        const engine::assets::ManifestEntry* now =
+            runtime.game_content.find(sandbox::kUiLayoutFile);
+        const engine::Guid current = now != nullptr ? now->guid : engine::Guid{};
+
+        for (const engine::assets::AssetChange& change : changed) {
+            if ((runtime.ui_layout_guid.valid() && change.guid == runtime.ui_layout_guid) ||
+                (current.valid() && change.guid == current)) {
+                reload_ui_layout(runtime);
+                return;
+            }
+        }
     }
 #endif
 
@@ -1125,6 +1234,11 @@ namespace {
 
         runtime.scene.mesh().reload(identities_of(changed));
         session.reload_scripts(runtime.game_content, changed);
+
+#if defined(ENGINE_WITH_UI)
+        reload_ui_layout_if_changed(runtime, changed);
+#endif
+
         // A mesh or a texture swapped in behind the entities that name it, so
         // the world stands and whatever was selected is still that entity.
         if (!world_was_built_from(changed)) {
@@ -1880,7 +1994,7 @@ int main(int argc, char** argv) {
         .ui_renderer = &runtime.ui_renderer,
         .ui_image = runtime.ui_image.get(),
         .ui_font = runtime.ui_font.get(),
-        .ui_layout = runtime.ui_layout.get(),
+        .ui_layout = &runtime.ui_layout,
 #endif
         .overlay = runtime.overlay,
         .game_content = &runtime.game_content,
