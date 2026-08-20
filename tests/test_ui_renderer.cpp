@@ -655,7 +655,7 @@ namespace {
 
     void a_layout_identity_becomes_a_manifest_key() {
         const auto key = [](const char* text) {
-            return engine::ui::manifest_key_for(moth_ui::AssetId{ std::string{ text } });
+            return engine::ui::manifest_key_for(moth_ui::AssetId{ text });
         };
 
         test::check(key("ui/panel.png") == "ui/panel.png",

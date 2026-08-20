@@ -1805,8 +1805,7 @@ int main(int argc, char** argv) {
     if (!runtime.ui_images.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI image factory did not start. No layout image will draw.");
     } else {
-        runtime.ui_image =
-            runtime.ui_images.GetImage(moth_ui::AssetId{ std::string{ "ui/panel.png" } });
+        runtime.ui_image = runtime.ui_images.GetImage(moth_ui::AssetId{ "ui/panel.png" });
     }
 
     // The same resolution story as the image above, and the same restart rule.

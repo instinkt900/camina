@@ -107,7 +107,7 @@ namespace engine::ui {
      * @code
      * engine::ui::ImageFactory factory;
      * if (factory.create(device, &content)) {
-     *     auto image = factory.GetImage(moth_ui::AssetId{ std::string{ "ui/panel.png" } });
+     *     auto image = factory.GetImage(moth_ui::AssetId{ "ui/panel.png" });
      * }
      * @endcode
      *
