@@ -8,6 +8,7 @@ add_library(engine_ui STATIC
     font.cpp
     font_factory.cpp
     image.cpp
+    input_bridge.cpp
     layout_loader.cpp
     renderer.cpp
     stb_rect_pack_impl.cpp

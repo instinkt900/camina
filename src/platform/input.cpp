@@ -161,6 +161,16 @@ namespace engine::platform {
 
         if (!consumed.mouse) {
             frame.mouse_delta = Vec2{ mouse_x, mouse_y };
+
+            // The absolute position, which the relative state above does not
+            // carry. A UI hit test needs to know what is under the pointer, and
+            // a delta cannot say. SDL reports it in window pixels from the top
+            // left, which is the space a moth_ui screen rect is already in.
+            float position_x = 0.0F;
+            float position_y = 0.0F;
+            SDL_GetMouseState(&position_x, &position_y);
+            frame.mouse_position = Vec2{ position_x, position_y };
+
             for (std::size_t i = 0; i < kMouseButtonCount; ++i) {
                 const SDL_MouseButtonFlags mask = mask_of(static_cast<MouseButton>(i));
                 frame.mouse_buttons.at(i) = (buttons & mask) != 0;

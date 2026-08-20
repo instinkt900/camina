@@ -38,6 +38,7 @@
 
 #if defined(ENGINE_WITH_UI)
 #include "ui/image.h"
+#include "ui/input_bridge.h"
 #include "ui/layout_loader.h"
 #include "ui/renderer.h"
 #include "ui/ui.h"
@@ -958,6 +959,9 @@ namespace {
         /// M10.3. What the layout was cooked as, so a reload can spot it in a
         /// change list that names every asset the save touched.
         engine::Guid ui_layout_guid;
+        /// M10.5. Turns a frame of device state into moth_ui events, and takes
+        /// out of that frame whatever the layout consumed.
+        engine::ui::InputBridge ui_input;
 #endif
         /// M7.5. Draws the physics wireframe. Costs nothing while it is off.
         engine::render::DebugLinePass debug_lines;
@@ -1107,6 +1111,12 @@ namespace {
 
         runtime.ui_layout_guid = entry->guid;
         runtime.ui_layout = std::move(rebuilt);
+
+        // The new tree knows nothing about a key or a button the old one took.
+        // Keeping the claim would leave the game unable to read it until a
+        // person let go and pressed it again.
+        runtime.ui_input.forget();
+
         ENGINE_LOG_INFO("The UI layout {} reloaded.", sandbox::kUiLayoutFile);
     }
 
@@ -1691,9 +1701,18 @@ namespace {
      *
      * ImGui is asked first, because it owns the keyboard while a person types in
      * a panel. platform/ sits below gfx/, so the module cannot ask on its own.
+     *
+     * **The game UI comes next, and it can take input away.** M10.5 settled the
+     * order: an open layout sees the frame before the camera and before the
+     * game, so a pause menu swallows the key that would otherwise move the
+     * player. The layout runs on this clock rather than on the fixed step,
+     * because a frame often takes no step at all and a press and a release
+     * between two steps would be lost. That is the problem M8.6 already found
+     * once. See `DESIGN.md` section 8.4.
      */
     void update_input(Runtime& runtime, const FrameContext& context, const Options& options,
-                      engine::play::Session& session, std::uint64_t frame) {
+                      engine::play::Session& session, engine::gfx::Extent2D extent,
+                      std::uint64_t frame) {
         engine::platform::InputFrame state;
         if (options.offscreen) {
             // No devices offscreen, so every key starts up.
@@ -1715,11 +1734,36 @@ namespace {
             state.keys.at(static_cast<std::size_t>(sandbox::kThrowKey)) = true;
         }
 
+#if defined(ENGINE_WITH_UI)
+        // The layout lays its children out from the screen rectangle, and a hit
+        // test asks which child a point is in. So the rectangle has to be
+        // current before the events go in, not only before the draw. A layout
+        // that had never drawn would otherwise size every child at zero and
+        // answer no click at all on the first frame.
+        if (runtime.ui_layout) {
+            runtime.ui_layout->SetScreenRect(moth_ui::IntRect{
+                { 0, 0 },
+                { static_cast<int>(extent.width), static_cast<int>(extent.height) } });
+        }
+
+        // The listener is built here rather than kept, because it points at the
+        // owner of the layout. A reload replaces the node tree, and anything
+        // holding the old node by raw pointer dangles. That has cost this
+        // project a day twice already. See `DESIGN.md` section 8.4.
+        engine::ui::LayoutListener listener{ &runtime.ui_layout };
+        (void)runtime.ui_input.take(state, &listener);
+#else
+        (void)extent;
+#endif
+
         runtime.input.update(state);
 
         // And fold it into what the next step will read. A key down on any
         // frame since the last step is down for that step, so an edge cannot
         // fall between two of them and go unseen.
+        //
+        // This runs after the UI, so a key the layout consumed is already out of
+        // the frame and the game never sees it.
         session.feed_input(state);
     }
 
@@ -1805,7 +1849,7 @@ namespace {
             const float delta = frame_delta(options, last_frame, now);
             last_frame = now;
 
-            update_input(runtime, context, options, session, frame);
+            update_input(runtime, context, options, session, last_extent, frame);
             fly_camera(runtime, settings, camera, world, delta);
 
             // The game and the solver both run on the fixed step now, so this
