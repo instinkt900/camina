@@ -333,6 +333,15 @@ if(ENGINE_WITH_UI)
     engine_enable_clang_tidy(test_ui_layout)
     add_test(NAME ui_layout COMMAND test_ui_layout)
 
+    # M10.5. The SDL3 to moth_ui input bridge. It reads platform::InputFrame
+    # rather than a device, so every case drives it with a frame written by
+    # hand and no window is opened.
+    add_executable(test_ui_input test_ui_input.cpp)
+    target_link_libraries(test_ui_input PRIVATE engine::ui)
+    engine_set_warnings(test_ui_input)
+    engine_enable_clang_tidy(test_ui_input)
+    add_test(NAME ui_input COMMAND test_ui_input)
+
     # M6.4. The font rasterizes, packs, shapes, measures and wraps with no
     # device, which is why load() is separate from upload(). The path of the
     # sandbox font comes from CMake, so the test does not guess where anything

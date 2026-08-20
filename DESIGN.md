@@ -935,6 +935,62 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   no scene shares. See `src/ui/image.h`.
 - **Input bridge.** Translate SDL3 events into moth_ui events. Controller navigation will
   live at this seam.
+
+  **M10.5 built it, and the two questions it had to settle are answered below.**
+  `engine::ui::InputBridge` reads a `platform::InputFrame` rather than SDL. M8.0 put input in
+  `platform/` so the game and the game UI read one input layer, and going back to SDL here
+  would have given the UI a second one. The frame carries no device type, so `src/ui/` names
+  none either, and `tests/test_ui_input.cpp` drives the whole bridge with frames written by
+  hand and no window.
+
+  **The UI sees a frame before the game, and it can take input away.** An open layout gets
+  each event first. When it consumes one, `InputBridge::take` clears that key or button out of
+  the frame, so no reader below the UI sees it: not the camera, and not the game. That is what
+  lets a pause menu swallow the key that would otherwise move the player. Game first was
+  rejected, because the game would then need to know which menus are open, which puts UI state
+  into game code.
+
+  **A press the UI takes owns its release.** The claim lasts until the key or the button comes
+  up, rather than ending with the frame that consumed the edge. Without it the game reads the
+  button as held from the second frame of a drag that began on a menu. The release itself still
+  reaches the UI, because that release is what activates a `moth_ui::UIButton`.
+
+  **A move is never taken.** moth_ui declines one, because a hover changes what a widget looks
+  like and belongs to nobody.
+
+  **A UI event runs on the frame clock, and the fold into the step happens after it.** The UI
+  reads every device frame, so a click answers at the frame rate. The runtime already folds
+  each device frame into what the next fixed step reads, and that fold now runs after the UI
+  has had the frame, so an event the UI took never reaches the game.
+
+  The fixed step alone was rejected. A frame often takes no step at all, and offscreen it
+  almost never does, so a press and a release between two steps would be an edge the UI never
+  sees. M8.6 found that problem once already, on the game side.
+
+  **The bridge keeps the frame the devices reported, never the frame it left behind.** A key
+  the UI owns reads as up in the frame the caller keeps. Comparing the next frame against that
+  would report a press on every frame the person holds the key. Two mutations of this fail four
+  and five checks.
+
+  **A reload drops what the UI owns.** The new node tree knows nothing about a key the old one
+  took, and holding the claim would leave the game unable to read it until a person let go and
+  pressed it again. `reload_ui_layout` calls `InputBridge::forget` for that.
+
+  **`LayoutListener` points at the owner of the root, not at the root.** It is the third thing
+  in this section to say so. A capture holder answers before the depth-first broadcast, which is
+  what `moth_ui::flow::TransitioningLayer` does: a runtime holding a bare root has to repeat it
+  or a widget in an exclusive input mode loses to its siblings. Deleting that path fails two
+  checks, and only because the test adds the capture holder as the first child. Added last it
+  wins the broadcast anyway and proves nothing.
+
+  **The screen rectangle is set before the events, as well as before the draw.** A layout lays
+  its children out from that rectangle and a hit test asks which child a point is in. A layout
+  that had never drawn would size every child at zero and answer no click at all.
+
+  **What is not answered is a key that was already down when the menu opened.** An event is an
+  edge, so the UI never sees that key and never claims it. Opening a menu is the game's own
+  decision, and the game stops reading movement when it makes one. A modal gate that takes the
+  whole keyboard belongs with the menu that needs it, which is M10.7.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
   driven by script, which is the right way to author UI behavior.
 

@@ -154,6 +154,19 @@ namespace engine::platform {
         std::array<bool, kMouseButtonCount> mouse_buttons{};
         /// @brief How far the mouse moved since the last sample, in pixels.
         Vec2 mouse_delta{ 0.0F, 0.0F };
+        /**
+         * @brief Where the pointer is, in pixels from the top left of the window.
+         *
+         * A delta cannot answer "what is under the pointer", and a UI hit test
+         * asks exactly that. So the position rides beside the delta rather than
+         * replacing it. See M10.5.
+         *
+         * A frame nobody sampled reads (0, 0), which is a real corner of the
+         * window. So a reader works from the change between two frames rather
+         * than from the value alone, and an offscreen run reports no movement
+         * at all.
+         */
+        Vec2 mouse_position{ 0.0F, 0.0F };
         /// @brief Whether the window held the keyboard focus when this was sampled.
         bool focused = false;
     };
@@ -259,6 +272,10 @@ namespace engine::platform {
         /// @brief How far the mouse moved on this frame, in pixels.
         /// @return The movement since the frame before.
         [[nodiscard]] Vec2 mouse_delta() const { return current_.mouse_delta; }
+
+        /// @brief Where the pointer was on this frame, in window pixels.
+        /// @return The position from the top left of the window.
+        [[nodiscard]] Vec2 mouse_position() const { return current_.mouse_position; }
 
         /// @brief Whether the window held the keyboard focus on this frame.
         /// @return True while the window has focus.
