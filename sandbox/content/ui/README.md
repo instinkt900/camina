@@ -54,10 +54,10 @@ Inside the button the label anchors to the whole face, 0,0 to 1,1 with no offset
 whatever rectangle the menu gives the reference. It comes after the face, because a group draws
 its children in order. A text node consumes no mouse event, so it cannot steal the press.
 
-**A save while the game runs reloads the layout and loses every line the script wrote.** Each
-label goes back to `Button` and the two HUD lines go stale, because a reload builds the node
-tree again and nothing tells a script it happened. Issue #410 holds it. The text the file itself
-carries is right, so an edit to a layout is still visible at once.
+**A save while the game runs reloads the layout and the script writes its lines again.** A reload
+builds the node tree again, so every label goes back to `Button` and the two HUD lines go stale.
+`on_ui_reload` in `scripts/puzzle.lua` is what puts them right, and it arrives while the game is
+paused as well, which is when a menu is usually edited. See `DESIGN.md` section 8.4.
 
 The runtime loads these from the **cooked** tree rather than from here, and a script asks for
 one by its source path. The cooker rewrites both an image reference and a sub-layout reference

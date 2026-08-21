@@ -402,6 +402,11 @@ namespace engine::ui {
             wire_tree(held->root, held->source, {});
             held->root->SetScreenRect(screen_);
             any = true;
+
+            // The new nodes carry the text the file carries, so everything a
+            // script wrote into this layout is gone. Reporting it is what lets
+            // the script write it again.
+            reloads_.push_back(held->source);
             ENGINE_LOG_INFO("The UI layout {} reloaded.", held->source);
         }
 
@@ -419,8 +424,17 @@ namespace engine::ui {
             // wired into the old ones are gone with them.
             wire_tree(held->root, held->source, {});
             held->root->SetScreenRect(screen_);
+
+            // And so is every text a script wrote, for the same reason. An
+            // image reload is a rebuild like any other, so it is reported like
+            // any other.
+            reloads_.push_back(held->source);
         }
     }
+
+    std::span<const std::string> ScriptSurface::reloads() const { return reloads_; }
+
+    void ScriptSurface::clear_reloads() { reloads_.clear(); }
 
     std::size_t ScriptSurface::loaded_count() const {
         return layouts_.size();

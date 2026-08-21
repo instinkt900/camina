@@ -109,6 +109,9 @@ namespace {
             presses_.push_back(sp::UiPress{ std::move(layout), std::move(node) });
         }
 
+        /// Records a rebuild, the way a hot reload does.
+        void reloaded(std::string layout) { reloads_.push_back(std::move(layout)); }
+
         /// Reads one node back, for a check that Lua wrote what it meant to.
         [[nodiscard]] const Node* node_of(const std::string& layout,
                                           const std::string& node) const {
@@ -176,6 +179,11 @@ namespace {
         }
         void clear_presses() override { presses_.clear(); }
 
+        [[nodiscard]] std::span<const std::string> reloads() const override {
+            return reloads_;
+        }
+        void clear_reloads() override { reloads_.clear(); }
+
     private:
         struct Layout {
             bool shown = false;
@@ -213,6 +221,7 @@ namespace {
 
         std::map<std::string, Layout> layouts_;
         std::vector<sp::UiPress> presses_;
+        std::vector<std::string> reloads_;
     };
 
     /// An entity carrying a script, at the world origin.
@@ -2242,6 +2251,108 @@ namespace {
         check(host.stopped_count() == 0, "and none of them raised an error");
     }
 
+    void test_a_reload_reaches_the_script_that_wrote_the_layout() {
+        section("A layout reload reaches every script that declares the callback");
+
+        FakeUi ui;
+        ui.add("ui/hud.mothui", { "score" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update() end
+            function on_ui_reload(layout)
+                ui.find(layout, "score"):set_text("written again")
+            end
+        )"),
+              "the listening script compiles");
+        check(load(host, kSecond, "function on_update() end"),
+              "and so does one that does not listen");
+
+        (void)with_script_and_turret(fixture, kFirst);
+        (void)with_script_and_turret(fixture, kSecond);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        // What a rebuild does: the node goes back to what the file carries.
+        const FakeUi::Node* score = ui.node_of("ui/hud.mothui", "score");
+        check(score != nullptr && score->text.empty(), "the node starts with no text");
+
+        ui.reloaded("ui/hud.mothui");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(host.call_count(sp::Callback::Reload) == 1, "the one listener was called");
+        score = ui.node_of("ui/hud.mothui", "score");
+        check(score != nullptr && score->text == "written again",
+              "and it wrote the layout again");
+        check(ui.reloads().empty(), "and the delivery drained it");
+    }
+
+    void test_a_reload_is_delivered_before_a_press() {
+        section("A reload is delivered before a press of the same batch");
+
+        FakeUi ui;
+        ui.add("ui/hud.mothui", { "score" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+
+        // The script records the order it was called in. A press that ran first
+        // would act on a menu still reading whatever its file says, which is the
+        // whole reason the order is fixed rather than incidental.
+        check(load(host, kFirst, R"(
+            order = ""
+            function on_update() end
+            function on_ui_reload(layout)
+                order = order .. "r"
+            end
+            function on_ui_press(layout, node)
+                order = order .. "p"
+                entity:set("Turret", { label = order })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        // The press is recorded first, so a delivery that walked them in the
+        // order they arrived would give the other answer.
+        ui.press("ui/hud.mothui", "score");
+        ui.reloaded("ui/hud.mothui");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(fixture.world.registry().get<Turret>(entity).label == "rp",
+              "the reload ran before the press");
+    }
+
+    void test_a_script_with_no_reload_callback_is_left_alone() {
+        section("A reload nobody listens for is dropped rather than kept");
+
+        FakeUi ui;
+        ui.add("ui/hud.mothui", { "score" });
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, "function on_update() end"), "the script compiles");
+        (void)with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.ui = &ui;
+        host.update(fixture.world, 0.0, services);
+
+        ui.reloaded("ui/hud.mothui");
+        host.deliver_ui_events(fixture.world, services);
+
+        check(host.call_count(sp::Callback::Reload) == 0, "nothing was called");
+        check(ui.reloads().empty(), "and the reload was drained rather than kept");
+        check(host.stopped_count() == 0, "and no instance was stopped");
+    }
+
     void test_a_script_with_no_ui_service_answers_false() {
         section("A build with no game UI answers every call rather than failing");
 
@@ -2331,6 +2442,9 @@ int main() {
     test_a_press_reaches_every_listener();
     test_a_press_with_no_listener_is_dropped();
     test_a_script_with_no_ui_service_answers_false();
+    test_a_reload_reaches_the_script_that_wrote_the_layout();
+    test_a_reload_is_delivered_before_a_press();
+    test_a_script_with_no_reload_callback_is_left_alone();
 
     test_a_script_pauses_and_resumes_the_game();
     test_a_script_with_no_clock_answers_false();

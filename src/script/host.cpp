@@ -27,7 +27,10 @@ namespace engine::script {
     namespace {
 
         /// How many values Callback names, so the counters are one array.
-        constexpr std::size_t kCallbackCount = 6;
+        ///
+        /// `counts` is indexed with `.at`, so a value added to the enum without
+        /// this number moving throws rather than writing past the array.
+        constexpr std::size_t kCallbackCount = 7;
 
         [[nodiscard]] std::size_t index_of(Callback callback) {
             return static_cast<std::size_t>(callback);
@@ -48,6 +51,8 @@ namespace engine::script {
                 return "on_contact";
             case Callback::Press:
                 return "on_ui_press";
+            case Callback::Reload:
+                return "on_ui_reload";
             }
             return "";
         }
@@ -496,6 +501,7 @@ namespace engine::script {
             sol::protected_function on_trigger;
             sol::protected_function on_contact;
             sol::protected_function on_ui_press;
+            sol::protected_function on_ui_reload;
             /// An error stopped this one. It is never called again.
             bool stopped = false;
         };
@@ -592,6 +598,48 @@ namespace engine::script {
             ++counts.at(index_of(Callback::Press));
             if (!result.valid()) {
                 fail(instance, entity, Callback::Press, result);
+            }
+        }
+
+        /**
+         * The instances that declare one callback, in entity order.
+         *
+         * The instances live in a hash map, whose walk order is neither creation
+         * order nor stable across an insert. Two scripts that both answer one
+         * event would then run in an order nothing promises, and a reproducible
+         * run rests on there being none of that. See `DESIGN.md` section 9.
+         *
+         * @param hook Which callback to gather the listeners of.
+         * @return The entities, sorted.
+         */
+        [[nodiscard]] std::vector<entt::entity>
+        listeners(sol::protected_function Instance::* hook) const {
+            std::vector<entt::entity> found;
+            found.reserve(instances.size());
+            for (const auto& [entity, instance] : instances) {
+                if (!instance.stopped && (instance.*hook).valid()) {
+                    found.push_back(entity);
+                }
+            }
+            std::sort(found.begin(), found.end());
+            return found;
+        }
+
+        /**
+         * Runs `on_ui_reload` on one instance.
+         *
+         * One string, because a rebuilt layout is named the way everything else
+         * in the `ui` table names one. What the script does with it is write its
+         * own values back, and it already knows which those are.
+         */
+        void call_reload(Instance& instance, entt::entity entity, const std::string& layout) {
+            if (instance.stopped || !instance.on_ui_reload.valid()) {
+                return;
+            }
+            const sol::protected_function_result result = instance.on_ui_reload(layout);
+            ++counts.at(index_of(Callback::Reload));
+            if (!result.valid()) {
+                fail(instance, entity, Callback::Reload, result);
             }
         }
     };
@@ -1177,6 +1225,7 @@ namespace engine::script {
             instance.on_trigger = instance.env[name_of(Callback::Trigger)];
             instance.on_contact = instance.env[name_of(Callback::Contact)];
             instance.on_ui_press = instance.env[name_of(Callback::Press)];
+            instance.on_ui_reload = instance.env[name_of(Callback::Reload)];
 
             const sol::protected_function on_start = instance.env[name_of(Callback::Start)];
             impl_->call(instance, entity, Callback::Start, on_start);
@@ -1291,36 +1340,51 @@ namespace engine::script {
         impl_->context.world = &world;
         impl_->context.services = services;
 
-        if (services.ui == nullptr || services.ui->presses().empty()) {
+        if (services.ui == nullptr) {
             return;
         }
 
-        // In entity order. The instances live in a hash map, whose walk order is
-        // neither creation order nor stable across an insert, and two scripts
-        // that both answer a press would then run in an order nothing promises.
-        // A reproducible run rests on there being none of that. The cost is paid
-        // only on a step that has a press, which is a step somebody clicked on.
-        std::vector<entt::entity> listeners;
-        listeners.reserve(impl_->instances.size());
-        for (const auto& [entity, instance] : impl_->instances) {
-            if (!instance.stopped && instance.on_ui_press.valid()) {
-                listeners.push_back(entity);
-            }
+        const std::span<const std::string> reloads = services.ui->reloads();
+        const std::span<const UiPress> presses = services.ui->presses();
+        if (reloads.empty() && presses.empty()) {
+            return;
         }
-        std::sort(listeners.begin(), listeners.end());
 
-        for (const UiPress& press : services.ui->presses()) {
-            for (const entt::entity entity : listeners) {
+        // The reloads first. A rebuilt layout carries the text its file carries,
+        // so a script writes its own values back before it acts on a press of
+        // the same batch. The other order would let a press act on a menu that
+        // still reads whatever the file says.
+        // Gathered once each rather than for every event, because the set
+        // cannot change while these loops run: a callback may not build or drop
+        // an instance.
+        const std::vector<entt::entity> on_reload =
+            reloads.empty() ? std::vector<entt::entity>{}
+                            : impl_->listeners(&Impl::Instance::on_ui_reload);
+        const std::vector<entt::entity> on_press =
+            presses.empty() ? std::vector<entt::entity>{}
+                            : impl_->listeners(&Impl::Instance::on_ui_press);
+
+        for (const std::string& layout : reloads) {
+            for (const entt::entity entity : on_reload) {
                 const auto found = impl_->instances.find(entity);
-                if (found == impl_->instances.end()) {
-                    continue;
+                if (found != impl_->instances.end()) {
+                    impl_->call_reload(found->second, entity, layout);
                 }
-                impl_->call_press(found->second, entity, press);
             }
         }
 
-        // One press is delivered once. The surface gathers them on the frame
-        // clock, so leaving them would replay every press on every later step.
+        for (const UiPress& press : presses) {
+            for (const entt::entity entity : on_press) {
+                const auto found = impl_->instances.find(entity);
+                if (found != impl_->instances.end()) {
+                    impl_->call_press(found->second, entity, press);
+                }
+            }
+        }
+
+        // One event is delivered once. The surface gathers them on the frame
+        // clock, so leaving them would replay every one on every later step.
+        services.ui->clear_reloads();
         services.ui->clear_presses();
     }
 
