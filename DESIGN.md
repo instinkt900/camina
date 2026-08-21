@@ -991,6 +991,23 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   edge, so the UI never sees that key and never claims it. Opening a menu is the game's own
   decision, and the game stops reading movement when it makes one. A modal gate that takes the
   whole keyboard belongs with the menu that needs it, which is M10.7.
+
+  **`--click-at-frame` and `--click-at` replay a click, which closed #396.** Every test of the
+  bridge drives it with frames written by hand, so `platform::sample` and the order of the three
+  calls in `update_input` were verified by reading alone. A wrong order still compiles, passes
+  every test, and lets the player walk while the menu is open.
+
+  It is the shape `--throw-at-frame` uses. The flag writes a pointer position and a button into
+  `platform::InputFrame` rather than calling into moth_ui, so the click travels the whole path a
+  hand drives and a wiring mistake fails the capture rather than passing it.
+
+  **The button comes up on the frame after, at the same point.** A press is the whole gesture and
+  a release somewhere else cancels it, so the position is written on both frames. Writing it on
+  the first alone puts the release at 0,0 and the capture goes back to the frame with no click in
+  it, which is the mutation that proves both frames matter.
+
+  Three runs of one click give one image. A click on the sandbox throw button knocks the stack
+  over, and a click that misses it gives the capture with no click in it byte for byte.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
   driven by script, which is the right way to author UI behavior.
 
