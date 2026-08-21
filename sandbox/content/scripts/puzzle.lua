@@ -262,6 +262,17 @@ function resume_game()
     game.resume()
 end
 
+-- The one callback a paused game runs. It reads the key that resumes and
+-- nothing else, because a paused game moves nothing.
+--
+-- **Only the pause menu answers the key.** The main menu is a paused screen
+-- too, and P there would start the game with the title still on the screen.
+function on_paused_update()
+    if ui.visible(pause_menu) and input.pressed("pause") then
+        resume_game()
+    end
+end
+
 -- This sits below the functions it calls. A Lua local is in scope only under
 -- the line that declares it, so the screens have to come first.
 function on_start()
@@ -322,10 +333,8 @@ function on_update(seconds)
         reset()
     end
 
-    -- **The pause key opens the menu and only a button closes it.** A paused
-    -- session runs no on_update, so this line never reads while the menu is up.
-    -- The Resume button is what resumes, because a press reaches a script on
-    -- the frame clock and a key does not. See issue #408.
+    -- The pause key. `on_paused_update` reads the same key to resume, because
+    -- this line never runs while the menu is up.
     if input.pressed("pause") then
         pause_game()
     end

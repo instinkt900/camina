@@ -117,10 +117,13 @@ namespace engine::play {
             // frame blended them, so the world stands still.
             (void)delta_seconds;
 
-            // The fold restarts from what the devices last read. It is an OR
-            // across every frame since the last step, and a pause runs none, so
-            // without this the first step after a resume would hand the game
-            // every key anybody pressed while the menu was up, all at once.
+            // The actions move on the frame clock while the game is paused,
+            // because there is no step to move them on. So `on_paused_update`
+            // reads an edge at the frame rate, and every edge raised during a
+            // pause is consumed there. That is what keeps the first step after a
+            // resume from taking every key anybody pressed while the menu was
+            // up, which the fold would otherwise hand it all at once.
+            step_input_.update(pending_);
             pending_ = latest_;
 
 #if defined(ENGINE_WITH_LUA)
@@ -128,6 +131,11 @@ namespace engine::play {
             // on the step. It is the clock they were gathered on, and a menu
             // that could not be answered could never resume the game it paused.
             scripts_.deliver_ui_events(world, step_services(view));
+
+            // And the one callback a paused game runs. Not `on_update`: a paused
+            // game moves nothing, and M10.7a rests on that. This reads the key
+            // that resumes and nothing else. See issue #408.
+            scripts_.update_paused(world, step_services(view));
 #else
             (void)world;
             (void)view;

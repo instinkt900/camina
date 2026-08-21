@@ -164,8 +164,8 @@ namespace engine::play {
          *
          * **A paused session runs no step**, and it advances no clock either, so
          * a pause of any length costs the step after it nothing. It still
-         * delivers the UI presses, because a menu is what resumes it. See
-         * set_paused().
+         * delivers the UI presses and runs `on_paused_update`, because a menu is
+         * what resumes it. See set_paused().
          *
          * @param world The scene to run and to write the drawn pose into.
          * @param view Where the camera stands, which a script may read.
@@ -180,12 +180,16 @@ namespace engine::play {
          * through the `game` table. A paused session runs no `on_update`, no
          * solver and no physics events, and the poses a frame draws stand still.
          *
-         * @warning **A paused session still delivers UI presses**, once for each
-         * advance() rather than once for each step. A press is what resumes the
-         * game, and a session that delivered nothing while paused could never be
-         * resumed by the menu it put up. The presses were gathered on the frame
-         * clock in the first place, so this delivers them on the clock they came
-         * in on. See `DESIGN.md` §8.4.
+         * @warning **A paused session still delivers UI presses and still runs
+         * `on_paused_update`**, once for each advance() rather than once for
+         * each step. A press is what resumes the game, and a session that
+         * delivered nothing while paused could never be resumed by the menu it
+         * put up. The presses were gathered on the frame clock in the first
+         * place, so this delivers them on the clock they came in on.
+         *
+         * The actions move on that clock too while paused, so a script can read
+         * the key that resumes. `on_update` is still not called, because a
+         * paused game moves nothing. See `DESIGN.md` §8.4 and issue #408.
          *
          * @param paused True to hold the steps.
          */

@@ -14,7 +14,7 @@ M10.7 gave the game three screens, and `scripts/puzzle.lua` moves between them.
 |---|---|---|
 | `main_menu.mothui` | The title screen, with the game held | The first start, and the pause menu's Main menu button |
 | `hud.mothui` | The lines the running game writes, and its three buttons | The Play button |
-| `pause.mothui` | Resume and Main menu, over the HUD | P, and the Pause button |
+| `pause.mothui` | Resume and Main menu, over the HUD | P, and the Pause button. P closes it again |
 | `button.mothui` | One button, referred to by all three | Nothing. It is never shown on its own |
 
 Each is a moth_ui layout in the JSON format moth_ui reads. Every keyframe track carries one

@@ -30,7 +30,7 @@ namespace engine::script {
         ///
         /// `counts` is indexed with `.at`, so a value added to the enum without
         /// this number moving throws rather than writing past the array.
-        constexpr std::size_t kCallbackCount = 7;
+        constexpr std::size_t kCallbackCount = 8;
 
         [[nodiscard]] std::size_t index_of(Callback callback) {
             return static_cast<std::size_t>(callback);
@@ -53,6 +53,8 @@ namespace engine::script {
                 return "on_ui_press";
             case Callback::Reload:
                 return "on_ui_reload";
+            case Callback::PausedUpdate:
+                return "on_paused_update";
             }
             return "";
         }
@@ -502,6 +504,7 @@ namespace engine::script {
             sol::protected_function on_contact;
             sol::protected_function on_ui_press;
             sol::protected_function on_ui_reload;
+            sol::protected_function on_paused_update;
             /// An error stopped this one. It is never called again.
             bool stopped = false;
         };
@@ -598,6 +601,169 @@ namespace engine::script {
             ++counts.at(index_of(Callback::Press));
             if (!result.valid()) {
                 fail(instance, entity, Callback::Press, result);
+            }
+        }
+
+        /**
+         * Starts what is new and drops what is gone or was reloaded.
+         *
+         * update() and update_paused() both run this, so a paused game and a
+         * running one agree about which instances exist. It is split out of
+         * update() rather than copied, because two copies of this would drift
+         * and the drift would be a script that restarts on one path only.
+         *
+         * @param world The world to read the components from.
+         * @param services What a callback may reach on this call.
+         */
+        void sync(scene::World& world, const Services& services) {
+            // Everything that can change between steps arrives here rather than
+            // being captured when an instance was made. See issue #273.
+            context.services = services;
+
+            // The world arrives on each call, so every handle reads it from here
+            // rather than from whatever world made the instance. A scene reload
+            // that builds a new world would otherwise leave every running
+            // instance pointing at the old one.
+            context.world = &world;
+
+            entt::registry& registry = world.registry();
+
+            // A reload builds a new world and EnTT hands the same entity numbers
+            // out again, so a number left here would silence the warning for
+            // whoever holds that number next.
+            std::erase_if(context.warned_solver_owns,
+                          [&registry](entt::entity entity) { return !registry.valid(entity); });
+
+            // Start what is new. An entity that names a script nobody loaded gets
+            // one message and no instance, so the next step does not repeat it.
+            for (const auto [entity, component] : registry.view<const ScriptComponent>().each()) {
+                if (instances.contains(entity)) {
+                    continue;
+                }
+
+                const auto script = scripts.find(component.script);
+                if (script == scripts.end()) {
+                    ENGINE_LOG_ERROR("Entity {} names script {}, which is not loaded. "
+                                     "It gets no instance.",
+                                     static_cast<std::uint32_t>(entt::to_integral(entity)),
+                                     component.script.to_text());
+                    // A stopped instance with no callbacks, so this reports once
+                    // rather than on every step.
+                    Impl::Instance dead;
+                    dead.script = component.script;
+                    dead.stopped = true;
+                    instances.emplace(entity, std::move(dead));
+                    ++stopped;
+                    continue;
+                }
+
+                // A fresh table for each entity, falling back to the globals. Two
+                // crates running one script keep separate state this way.
+                Impl::Instance instance;
+                instance.script = component.script;
+                instance.generation = script->second.generation;
+                instance.env = sol::environment(lua, sol::create, lua.globals());
+
+                // The entity the script runs on. It goes in the environment rather
+                // than the globals, because each instance names a different one.
+                instance.env["entity"] = EntityHandle{ entity, &context };
+
+                // Loaded again for this instance, so the chunk carries an `_ENV`
+                // upvalue of its own. Reusing one chunk would point every closure
+                // already built from it at whichever environment was set last. See
+                // Impl::Script. load() already proved the text compiles.
+                sol::load_result loaded = lua.load(script->second.text, script->second.name);
+                sol::protected_function body = loaded;
+                sol::set_environment(instance.env, body);
+
+                const sol::protected_function_result ran = body();
+                if (!ran.valid()) {
+                    fail(instance, entity, Callback::Start, ran);
+                    instances.emplace(entity, std::move(instance));
+                    continue;
+                }
+
+                // Looked up once, so a script with no on_update costs nothing on a
+                // step rather than a table lookup that misses.
+                instance.on_update = instance.env[name_of(Callback::Update)];
+                instance.on_destroy = instance.env[name_of(Callback::Destroy)];
+                instance.on_trigger = instance.env[name_of(Callback::Trigger)];
+                instance.on_contact = instance.env[name_of(Callback::Contact)];
+                instance.on_ui_press = instance.env[name_of(Callback::Press)];
+                instance.on_ui_reload = instance.env[name_of(Callback::Reload)];
+                instance.on_paused_update = instance.env[name_of(Callback::PausedUpdate)];
+
+                const sol::protected_function on_start = instance.env[name_of(Callback::Start)];
+                call(instance, entity, Callback::Start, on_start);
+
+                instances.emplace(entity, std::move(instance));
+            }
+
+            // Drop what is gone. A reload recycles entity numbers, so an instance
+            // that kept its number would attach to whatever took it.
+            for (auto it = instances.begin(); it != instances.end();) {
+                const entt::entity entity = it->first;
+                const auto* component =
+                    registry.valid(entity) ? registry.try_get<const ScriptComponent>(entity) : nullptr;
+
+                // An entity that named a different script is not the same instance
+                // any more. Keeping the old one would leave the entity running a
+                // script it no longer names, and nothing would say so. The start
+                // pass above gives it a new instance on the next step.
+                //
+                // A reload counts as a different script for the same reason. The
+                // instance is running text the host no longer holds, so it is torn
+                // down and built again, which is what makes a reload a restart. Both
+                // arrive here, so there is one path that runs on_destroy and one
+                // that runs on_start, rather than a second copy for reloading.
+                const auto held = component == nullptr ? scripts.end()
+                                                       : scripts.find(component->script);
+                const bool named_the_same =
+                    component != nullptr && component->script == it->second.script;
+                // A script the host does not hold counts as current, and that is
+                // load-bearing. An entity naming a script nobody loaded is given a
+                // stopped instance with no callbacks, so that the error is reported
+                // once rather than on every step. Treating an absent script as stale
+                // would drop that marker and build it again each step, and the one
+                // message would become sixty each second.
+                const bool current = held == scripts.end() ||
+                                     held->second.generation == it->second.generation;
+
+                if (named_the_same && current) {
+                    ++it;
+                    continue;
+                }
+
+                // A restart is the entity keeping the script it named and losing the
+                // instance anyway, which only a reload does. An entity that changed
+                // script or went away is not one.
+                if (named_the_same) {
+                    ++restarted;
+                }
+                if (registry.valid(entity)) {
+                    call(it->second, entity, Callback::Destroy, it->second.on_destroy);
+                }
+                if (it->second.stopped) {
+                    --stopped;
+                }
+                it = instances.erase(it);
+            }
+        }
+
+        /**
+         * Runs `on_paused_update` on one instance.
+         *
+         * No argument at all. A paused game runs no simulated time, and handing
+         * a script the wall clock is what issue #245 took away.
+         */
+        void call_paused_update(Instance& instance, entt::entity entity) {
+            if (instance.stopped || !instance.on_paused_update.valid()) {
+                return;
+            }
+            const sol::protected_function_result result = instance.on_paused_update();
+            ++counts.at(index_of(Callback::PausedUpdate));
+            if (!result.valid()) {
+                fail(instance, entity, Callback::PausedUpdate, result);
             }
         }
 
@@ -1151,140 +1317,21 @@ namespace engine::script {
     }
 
     void Host::update(scene::World& world, double seconds, const Services& services) {
-        // Everything that can change between steps arrives here rather than
-        // being captured when an instance was made. See issue #273.
-        impl_->context.services = services;
-
-        // The world arrives on each call, so every handle reads it from here
-        // rather than from whatever world made the instance. A scene reload
-        // that builds a new world would otherwise leave every running instance
-        // pointing at the old one.
-        impl_->context.world = &world;
-
-        entt::registry& registry = world.registry();
-
-        // A reload builds a new world and EnTT hands the same entity numbers
-        // out again, so a number left here would silence the warning for
-        // whoever holds that number next.
-        std::erase_if(impl_->context.warned_solver_owns,
-                      [&registry](entt::entity entity) { return !registry.valid(entity); });
-
-        // Start what is new. An entity that names a script nobody loaded gets
-        // one message and no instance, so the next step does not repeat it.
-        for (const auto [entity, component] : registry.view<const ScriptComponent>().each()) {
-            if (impl_->instances.contains(entity)) {
-                continue;
-            }
-
-            const auto script = impl_->scripts.find(component.script);
-            if (script == impl_->scripts.end()) {
-                ENGINE_LOG_ERROR("Entity {} names script {}, which is not loaded. "
-                                 "It gets no instance.",
-                                 static_cast<std::uint32_t>(entt::to_integral(entity)),
-                                 component.script.to_text());
-                // A stopped instance with no callbacks, so this reports once
-                // rather than on every step.
-                Impl::Instance dead;
-                dead.script = component.script;
-                dead.stopped = true;
-                impl_->instances.emplace(entity, std::move(dead));
-                ++impl_->stopped;
-                continue;
-            }
-
-            // A fresh table for each entity, falling back to the globals. Two
-            // crates running one script keep separate state this way.
-            Impl::Instance instance;
-            instance.script = component.script;
-            instance.generation = script->second.generation;
-            instance.env = sol::environment(impl_->lua, sol::create, impl_->lua.globals());
-
-            // The entity the script runs on. It goes in the environment rather
-            // than the globals, because each instance names a different one.
-            instance.env["entity"] = EntityHandle{ entity, &impl_->context };
-
-            // Loaded again for this instance, so the chunk carries an `_ENV`
-            // upvalue of its own. Reusing one chunk would point every closure
-            // already built from it at whichever environment was set last. See
-            // Impl::Script. load() already proved the text compiles.
-            sol::load_result loaded = impl_->lua.load(script->second.text, script->second.name);
-            sol::protected_function body = loaded;
-            sol::set_environment(instance.env, body);
-
-            const sol::protected_function_result ran = body();
-            if (!ran.valid()) {
-                impl_->fail(instance, entity, Callback::Start, ran);
-                impl_->instances.emplace(entity, std::move(instance));
-                continue;
-            }
-
-            // Looked up once, so a script with no on_update costs nothing on a
-            // step rather than a table lookup that misses.
-            instance.on_update = instance.env[name_of(Callback::Update)];
-            instance.on_destroy = instance.env[name_of(Callback::Destroy)];
-            instance.on_trigger = instance.env[name_of(Callback::Trigger)];
-            instance.on_contact = instance.env[name_of(Callback::Contact)];
-            instance.on_ui_press = instance.env[name_of(Callback::Press)];
-            instance.on_ui_reload = instance.env[name_of(Callback::Reload)];
-
-            const sol::protected_function on_start = instance.env[name_of(Callback::Start)];
-            impl_->call(instance, entity, Callback::Start, on_start);
-
-            impl_->instances.emplace(entity, std::move(instance));
-        }
-
-        // Drop what is gone. A reload recycles entity numbers, so an instance
-        // that kept its number would attach to whatever took it.
-        for (auto it = impl_->instances.begin(); it != impl_->instances.end();) {
-            const entt::entity entity = it->first;
-            const auto* component =
-                registry.valid(entity) ? registry.try_get<const ScriptComponent>(entity) : nullptr;
-
-            // An entity that named a different script is not the same instance
-            // any more. Keeping the old one would leave the entity running a
-            // script it no longer names, and nothing would say so. The start
-            // pass above gives it a new instance on the next step.
-            //
-            // A reload counts as a different script for the same reason. The
-            // instance is running text the host no longer holds, so it is torn
-            // down and built again, which is what makes a reload a restart. Both
-            // arrive here, so there is one path that runs on_destroy and one
-            // that runs on_start, rather than a second copy for reloading.
-            const auto held = component == nullptr ? impl_->scripts.end()
-                                                   : impl_->scripts.find(component->script);
-            const bool named_the_same =
-                component != nullptr && component->script == it->second.script;
-            // A script the host does not hold counts as current, and that is
-            // load-bearing. An entity naming a script nobody loaded is given a
-            // stopped instance with no callbacks, so that the error is reported
-            // once rather than on every step. Treating an absent script as stale
-            // would drop that marker and build it again each step, and the one
-            // message would become sixty each second.
-            const bool current = held == impl_->scripts.end() ||
-                                 held->second.generation == it->second.generation;
-
-            if (named_the_same && current) {
-                ++it;
-                continue;
-            }
-
-            // A restart is the entity keeping the script it named and losing the
-            // instance anyway, which only a reload does. An entity that changed
-            // script or went away is not one.
-            if (named_the_same) {
-                ++impl_->restarted;
-            }
-            if (registry.valid(entity)) {
-                impl_->call(it->second, entity, Callback::Destroy, it->second.on_destroy);
-            }
-            if (it->second.stopped) {
-                --impl_->stopped;
-            }
-            it = impl_->instances.erase(it);
-        }
+        impl_->sync(world, services);
 
         for (auto& [entity, instance] : impl_->instances) {
             impl_->call_update(instance, entity, seconds);
+        }
+    }
+
+    void Host::update_paused(scene::World& world, const Services& services) {
+        // The same sync as a step. A script edited while the game is paused
+        // restarts here rather than waiting for a resume, and editing a menu
+        // while it is on the screen is exactly when that matters.
+        impl_->sync(world, services);
+
+        for (auto& [entity, instance] : impl_->instances) {
+            impl_->call_paused_update(instance, entity);
         }
     }
 
