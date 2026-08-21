@@ -26,6 +26,7 @@
  */
 
 #include "core/guid.h"
+#include "script/ui_surface.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -64,6 +65,7 @@ namespace engine::script {
         Destroy, ///< `on_destroy()`, once, when the entity loses its instance.
         Trigger, ///< `on_trigger(other, began)`, on the entity that is the trigger.
         Contact, ///< `on_contact(other, began)`, on each of the two bodies.
+        Press,   ///< `on_ui_press(layout, node)`, on every instance that declares it.
     };
 
     /**
@@ -103,6 +105,8 @@ namespace engine::script {
         const scene::PrefabLibrary* prefabs = nullptr;
         /// @brief The view pose. Null makes every camera read nil.
         const CameraView* camera = nullptr;
+        /// @brief The game UI. Null makes every call in the `ui` table answer false.
+        UiSurface* ui = nullptr;
 
         /**
          * @brief Where a transform a script writes is recorded for blending.
@@ -270,6 +274,36 @@ namespace engine::script {
                                     const Services& services = {});
 
         /**
+         * @brief Hands the scripts every UI press gathered since the last step.
+         *
+         * @warning **Call this inside the fixed step, beside
+         * `deliver_physics_events`, and never once for each frame.** M10.5
+         * settled that a UI event is a frame event, so a press is recorded on
+         * the frame clock. A frame often runs no step at all, so the presses
+         * gather between two steps and this drains them. Draining them on the
+         * frame clock instead would run game logic off the fixed step, which is
+         * what issue #245 closed.
+         *
+         * **A press goes to every instance that declares `on_ui_press`.** A
+         * press names a node and not an entity, so there is no one entity it
+         * belongs to. A menu is normally one script, and that script asks which
+         * node it was.
+         *
+         * **The instances are called in entity order.** The host keeps them in a
+         * hash map, and the walk order of one is neither creation order nor
+         * stable. Two scripts that both answer a press would otherwise run in an
+         * order nothing promises, and a reproducible run rests on there being
+         * none of that. See `DESIGN.md` section 9.
+         *
+         * The surface is drained at the end, so one press is delivered once.
+         *
+         * @param world The world the instances belong to.
+         * @param services What a callback may reach. **The surface comes from
+         * here**, so a call with no `ui` service delivers nothing.
+         */
+        void deliver_ui_events(scene::World& world, const Services& services = {});
+
+        /**
          * @brief Runs `on_destroy` on every instance and drops them all.
          *
          * Call this before the world goes away, so a script sees its own
@@ -321,6 +355,9 @@ namespace engine::script {
 
         /// Binds the `camera` table: where the view is and which way it looks.
         void bind_camera();
+
+        /// Binds the `ui` table and the node handle `ui.find` gives back.
+        void bind_ui();
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

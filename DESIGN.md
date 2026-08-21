@@ -994,6 +994,57 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
 - **Lua bindings.** Bind moth_ui nodes through the reflection system. This gives you menus
   driven by script, which is the right way to author UI behavior.
 
+  **M10.6 built the binding half, and the surface is below.** It is chosen one call at a
+  time, the way the M8.3 surface was, and rule 4.6 keeps it to what a menu needs.
+
+  ```
+  ui.show(layout)              -- loads it if it is not loaded, and shows it
+  ui.hide(layout)              -- hides it, and it stays loaded
+  ui.visible(layout)           -- whether it is loaded and drawing
+  ui.find(layout, node)        -- a handle, or nil when there is no such node
+
+  node.layout, node.node       -- what the handle stands for
+  node:text()                  -- what a text node shows
+  node:set_text(text)
+  node:visible()
+  node:set_visible(shown)
+  node:set_image(image)        -- an image by its source path
+
+  function on_ui_press(layout, node) end   -- the sixth callback
+  ```
+
+  **A layout is named by its source path and a node by its id.** Nothing hands a script a
+  pointer to a node. `ui.find` gives back a handle holding those two strings, and every
+  method on it looks the node up again through the surface of the current step. So a hot
+  reload that frees the whole node tree leaves every handle a script is holding still
+  correct. A handle that cached a node would be holding freed memory on the next frame,
+  which this section has already recorded three times under a different name.
+
+  The handle is sugar over four flat calls that would each repeat the layout and the node.
+  It is worth having for that reason alone, and it is worth having only in this shape.
+
+  **`script::UiSurface` is the seam, and it exists because `engine_core` may not name a
+  moth_ui type.** §8.5 keeps game UI optional, so `src/script/` calls an abstract interface
+  and `engine::ui::ScriptSurface` is the one implementation. A build with `with_ui=False`
+  passes no surface, and then every call answers false rather than failing. That is the same
+  rule an unbound input action follows.
+
+  **A press is recorded on the frame clock and delivered on the fixed step.** M10.5 settled
+  that a UI event is a frame event, and #245 settled that game logic runs on the step. So the
+  presses gather between two steps and `Host::deliver_ui_events` drains them, exactly the way
+  `deliver_physics_events` drains the touches of one step. Draining on the frame clock would
+  put game logic back on the wall clock.
+
+  **One step delivers every press the frames gathered**, for the reason #263 gives for
+  physics events: a frame that ran no step is common, so reporting only the last press would
+  lose the rest and nobody would reproduce it.
+
+  **A press goes to every instance that declares `on_ui_press`, in entity order.** A press
+  names a node and not an entity, so there is no one entity it belongs to. The instances live
+  in a hash map whose walk order is neither creation order nor stable, so the listeners are
+  sorted by entity before any of them is called. A reproducible run rests on there being no
+  order that nothing promises. See §9.
+
 ### 8.5 Boundaries
 
 - Keep it an optional dependency behind the `with_ui` Conan option. `engine_core` must not
