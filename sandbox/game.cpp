@@ -121,6 +121,7 @@ namespace sandbox {
     void bind_actions(engine::platform::Input& input) {
         input.bind(kThrowAction, kThrowKey);
         input.bind(kResetAction, kResetKey);
+        input.bind(kPauseAction, kPauseKey);
     }
 
     void register_components(engine::scene::ComponentRegistry& registry) {

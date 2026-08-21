@@ -60,6 +60,9 @@ namespace sandbox {
     /// @brief The action a script reads to put the puzzle back as it was.
     inline constexpr const char* kResetAction = "reset";
 
+    /// @brief The action a script reads to put the pause menu up.
+    inline constexpr const char* kPauseAction = "pause";
+
     /**
      * @brief The key the throw is bound to.
      *
@@ -71,6 +74,16 @@ namespace sandbox {
 
     /// @brief The key the reset is bound to.
     inline constexpr engine::platform::Key kResetKey = engine::platform::Key::R;
+
+    /**
+     * @brief The key the pause menu is bound to.
+     *
+     * P rather than Escape, which is what a player would reach for. The runtime
+     * quits on Escape through `platform::WindowDesc::quit_on_escape`, and taking
+     * that away needs another way out of the application first. Issue #407 holds
+     * it.
+     */
+    inline constexpr engine::platform::Key kPauseKey = engine::platform::Key::P;
 
     /**
      * @brief Binds the keys the game's own actions read.

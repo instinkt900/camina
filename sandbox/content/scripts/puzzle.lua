@@ -20,24 +20,32 @@ local homes = {}
 -- The crates the throw has made. The reset takes them away again.
 local thrown = {}
 
--- The layout this reports through, by its source path. The surface loads it on
--- the first show, so nothing else has to know it exists. A path rather than an
--- identity, because a cooked identity is derived and nobody can type one.
-local layout = "ui/main.mothui"
+-- The three layouts this game puts on the screen, by source path. The surface
+-- loads one on the first show, so nothing else has to know they exist. A path
+-- rather than an identity, because a cooked identity is derived and nobody can
+-- type one.
+local main_menu = "ui/main_menu.mothui"
+local hud = "ui/hud.mothui"
+local pause_menu = "ui/pause.mothui"
 
--- What the caption says while the puzzle is unsolved.
+-- What the status line says while the puzzle is unsolved.
 local instructions = "Throw with F. Reset with R."
 
--- Writes one line into the layout. A node the layout does not hold is a layout
--- somebody edited, not a fault worth stopping the game for, so this reports it
--- once and carries on.
-local function say(text)
-    local caption = ui.find(layout, "caption")
-    if caption == nil then
-        log.warn(string.format("%s holds no caption node, so nothing is reported.", layout))
+-- Writes one line into a node of a layout. A node the layout does not hold is a
+-- layout somebody edited, not a fault worth stopping the game for, so this
+-- reports it once and carries on.
+local function write_line(layout, node, text)
+    local found = ui.find(layout, node)
+    if found == nil then
+        log.warn(string.format("%s holds no node called %s.", layout, node))
         return
     end
-    caption:set_text(text)
+    found:set_text(text)
+end
+
+-- Writes the status line of the HUD.
+local function say(text)
+    write_line(hud, "status", text)
 end
 
 -- Which stack crates are inside the goal now, keyed by entity id.
@@ -104,42 +112,127 @@ local function reset()
     log.info("The room is back.")
 end
 
--- What each button in the layout does, and what each one says. A press names a
--- node, so this is keyed by node path rather than by anything the layout knows
--- about the game.
+-- The three screens this game moves between, declared before the button table
+-- names them. A Lua local is in scope only under the line that declares it, and
+-- these four call each other and are called from that table.
+local show_menu
+local start_game
+local pause_game
+local resume_game
+
+-- What each button does, and what each one says. A press names a layout and a
+-- node, so this is keyed by both: three layouts each hold buttons, and a node
+-- id is only unique inside the layout that declares it.
 --
 -- ipairs and a list rather than a string-keyed table, because Lua 5.4 seeds its
 -- string hash from the clock and a keyed walk is not reproducible. See
 -- DESIGN.md section 9.
 local buttons = {
-    { node = "throw button", label = "Throw", press = function() throw() end },
-    { node = "reset button", label = "Reset", press = function() reset() end },
+    { layout = hud, node = "throw button", label = "Throw",
+      press = function() throw() end },
+    { layout = hud, node = "reset button", label = "Reset",
+      press = function() reset() end },
+    { layout = hud, node = "pause button", label = "Pause",
+      press = function() pause_game() end },
+    { layout = main_menu, node = "play button", label = "Play",
+      press = function() start_game() end },
+    { layout = pause_menu, node = "resume button", label = "Resume",
+      press = function() resume_game() end },
+    -- Leaving for the menu puts the room back, because Play starts a run and a
+    -- half-finished one behind the title screen is not a run anybody asked for.
+    { layout = pause_menu, node = "menu button", label = "Main menu",
+      press = function() reset() show_menu() end },
 }
 
--- Writes the label of each button.
+-- Writes the label of every button of one layout.
 --
 -- The label is a node inside button.mothui, so it is named through the
--- reference that stands that button up. Both references hold a child called
+-- reference that stands that button up. Every reference holds a child called
 -- `label`, and a node id is unique only inside the layout that declares it, so
 -- the bare name would answer with whichever reference comes first. See
 -- DESIGN.md section 8.4.
 --
--- A reload builds the nodes again from the layout file, so both labels go back
--- to the authored text. on_start runs again on a reload and calls this.
-local function label_buttons()
+-- A reload builds the nodes again from the layout file, so every label goes
+-- back to the authored text. Each show calls this for the layout it put up.
+local function label_buttons(layout)
     for _, button in ipairs(buttons) do
-        local path = button.node .. "/label"
-        local label = ui.find(layout, path)
-        if label == nil then
-            log.warn(string.format("%s holds no node called %s.", layout, path))
-        else
-            label:set_text(button.label)
+        if button.layout == layout then
+            write_line(layout, button.node .. "/label", button.label)
         end
     end
 end
 
+-- Shows one layout and writes its labels, or reports that this build has no UI.
+local function put_up(layout)
+    if not ui.show(layout) then
+        return false
+    end
+    label_buttons(layout)
+    return true
+end
+
+-- Writes the line of the HUD that the running game changes.
+--
+-- It answers nothing when the HUD is not up. The step that puts the main menu
+-- up runs on_update once more before the pause takes effect, and the HUD is not
+-- even loaded then.
+local function refresh()
+    if not ui.visible(hud) then
+        return
+    end
+    local goal = entity:get("Goal")
+    local needed = goal ~= nil and goal.needed or 0
+    write_line(hud, "score", string.format("In the goal: %d of %d", count(inside), needed))
+end
+
+-- The main menu, with the game held. This is where a run starts.
+--
+-- **A build with no game UI plays instead.** ui.show answers false when nobody
+-- bound a surface, which is what with_ui=False gives and what the editor gives
+-- today. Pausing with no menu on the screen would be a game nobody can start,
+-- because only a button can resume one. See DESIGN.md section 10 M10.
+function show_menu()
+    if not put_up(main_menu) then
+        log.warn("There is no game UI in this build, so the game starts without a menu.")
+        start_game()
+        return
+    end
+
+    ui.hide(hud)
+    ui.hide(pause_menu)
+    game.pause()
+end
+
+-- The game itself, with the HUD over it.
+function start_game()
+    ui.hide(main_menu)
+    ui.hide(pause_menu)
+    if put_up(hud) then
+        say(instructions)
+        refresh()
+    end
+    game.resume()
+end
+
+-- The pause menu, over the HUD rather than instead of it. Showing a layout
+-- raises it, so the pause menu draws last and answers a click first.
+function pause_game()
+    if game.paused() then
+        return
+    end
+    if not put_up(pause_menu) then
+        return
+    end
+    game.pause()
+end
+
+function resume_game()
+    ui.hide(pause_menu)
+    game.resume()
+end
+
 -- This sits below the functions it calls. A Lua local is in scope only under
--- the line that declares it, so `label_buttons` has to come first.
+-- the line that declares it, so the screens have to come first.
 function on_start()
     -- An array rather than a table keyed by name, so ipairs walks it in a fixed
     -- order. A string-keyed table walks in an order Lua seeds from the clock,
@@ -158,34 +251,33 @@ function on_start()
     -- saved, which is the opposite of what putting the win on a component
     -- bought. The scene ships it false and the reset is what clears it. See
     -- DESIGN.md section 10 M8.
-    -- The game shows its own UI. Before M10.6 the runtime loaded one layout at
-    -- start and the game could not reach it, so a caption was a log line.
-    if not ui.show(layout) then
-        log.warn(string.format("%s would not show, so the puzzle reports through the log "
-                               .. "alone.", layout))
-    end
 
-    label_buttons()
-
-    -- A reload restarts this script and the layout keeps whatever the last run
-    -- left in it, so the caption is written rather than assumed.
-    local goal = entity:get("Goal")
-    if goal ~= nil and goal.won then
-        say("Solved. Reset with R.")
+    -- **Which screen is up is the UI's own state, not a component.** A reload
+    -- keeps every layout showing and keeps the game paused, so a save while the
+    -- pause menu is open leaves it open. So this puts the main menu up only
+    -- when nothing is up yet, which is the first start of a run.
+    if ui.visible(main_menu) or ui.visible(hud) or ui.visible(pause_menu) then
+        -- A reload built the nodes again, so every label is back to the text
+        -- the file carries and every line the game wrote is gone.
+        for _, layout in ipairs({ main_menu, hud, pause_menu }) do
+            if ui.visible(layout) then
+                label_buttons(layout)
+            end
+        end
+        local goal = entity:get("Goal")
+        say(goal ~= nil and goal.won and "Solved. Reset with R." or instructions)
+        refresh()
     else
-        say(instructions)
+        show_menu()
     end
 
-    log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R. "
-                           .. "Both are buttons in the layout as well.", #homes))
+    log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R, "
+                           .. "pause with P. Each is a button as well.", #homes))
 end
 
 function on_ui_press(pressed_layout, node)
-    if pressed_layout ~= layout then
-        return
-    end
     for _, button in ipairs(buttons) do
-        if button.node == node then
+        if button.layout == pressed_layout and button.node == node then
             button.press()
             return
         end
@@ -201,6 +293,18 @@ function on_update(seconds)
     if input.pressed("reset") then
         reset()
     end
+
+    -- **The pause key opens the menu and only a button closes it.** A paused
+    -- session runs no on_update, so this line never reads while the menu is up.
+    -- The Resume button is what resumes, because a press reaches a script on
+    -- the frame clock and a key does not. See issue #408.
+    if input.pressed("pause") then
+        pause_game()
+    end
+
+    -- The HUD carries a count the running game changes, so it is written on
+    -- every step rather than only when something happens.
+    refresh()
 
     local goal = entity:get("Goal")
     if goal == nil or goal.won or count(inside) == 0 then
