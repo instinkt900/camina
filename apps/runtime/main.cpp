@@ -1383,7 +1383,11 @@ namespace {
         // No window at all when drawing offscreen. Opening one and hiding it
         // would still need a desktop, which is half of what this avoids.
         if (!options.offscreen) {
-            engine::platform::WindowDesc window_desc{ .title = "Camina Engine (M4 sandbox)" };
+            // Escape belongs to the game, which binds it to its pause menu. The
+            // way out of the runtime is the game's own Quit button, which asks
+            // through `game.quit()`. See DESIGN.md section 9 and issue #407.
+            engine::platform::WindowDesc window_desc{ .title = "Camina Engine (M4 sandbox)",
+                                                      .quit_on_escape = false };
             if (options.resolution.width != 0) {
                 window_desc.width = static_cast<int>(options.resolution.width);
                 window_desc.height = static_cast<int>(options.resolution.height);
@@ -1820,6 +1824,30 @@ namespace {
     }
 
     /**
+     * Whether the frame loop should run another frame.
+     *
+     * Two reasons to stop, and they are not the same kind of thing. A game that
+     * asked to quit ends either kind of run, and that is the only way out of a
+     * windowed one now that Escape belongs to the game rather than to the
+     * application. See `DESIGN.md` section 9.
+     *
+     * With no window there is nothing to poll and no way to quit by hand, so an
+     * offscreen run ends on the frame limit alone.
+     *
+     * @param options What the command line asked for.
+     * @param runtime The window to poll, when there is one.
+     * @param session The game, which may have asked to stop.
+     * @return True to run another frame.
+     */
+    [[nodiscard]] bool keep_running(const Options& options, Runtime& runtime,
+                                    const engine::play::Session& session) {
+        if (session.quit_requested()) {
+            return false;
+        }
+        return options.offscreen || runtime.window.poll();
+    }
+
+    /**
      * Flies the scene camera for one frame.
      *
      * The panel tunes how fast a person flies, and the camera itself is an
@@ -1878,9 +1906,7 @@ namespace {
         bool have_drawn = false;
         double period_ms = 0.0;
 
-        // With no window there is nothing to poll and no way to quit by hand, so
-        // an offscreen run ends on the frame limit alone.
-        while (options.offscreen ? true : runtime.window.poll()) {
+        while (keep_running(options, runtime, session)) {
             ENGINE_PROFILE_ZONE_N("frame");
             frame_arena.reset();
 

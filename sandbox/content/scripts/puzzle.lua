@@ -136,6 +136,11 @@ local buttons = {
       press = function() pause_game() end },
     { layout = main_menu, node = "play button", label = "Play",
       press = function() start_game() end },
+    -- The way out of the runtime. The application no longer quits on Escape,
+    -- because that key is the pause menu's now, so this is it. In the editor it
+    -- stops play rather than closing anything. See DESIGN.md section 9.
+    { layout = main_menu, node = "quit button", label = "Quit",
+      press = function() game.quit() end },
     { layout = pause_menu, node = "resume button", label = "Resume",
       press = function() resume_game() end },
     -- Leaving for the menu puts the room back, because Play starts a run and a

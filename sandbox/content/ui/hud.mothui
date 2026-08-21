@@ -685,7 +685,7 @@
       ],
       "fontName": "body",
       "fontSize": 20,
-      "text": "Pause and resume with P.",
+      "text": "Pause and resume with Escape.",
       "horizontalAlignment": "Left",
       "verticalAlignment": "Middle",
       "dropShadow": false,

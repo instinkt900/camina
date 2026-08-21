@@ -79,6 +79,15 @@ namespace engine::editor {
             return;
         }
         session_->advance(world, view, delta_seconds);
+
+        // A game that asked to quit stops the session rather than the editor.
+        // The runtime leaves its frame loop on the same request, and a game
+        // that could end this process would take a person's unsaved work with
+        // it. See `script::GameExit`.
+        if (session_->quit_requested()) {
+            ENGINE_LOG_INFO("The game asked to quit, so play stopped.");
+            stop(world);
+        }
     }
 
     void PlayMode::feed_input(const platform::InputFrame& frame) {

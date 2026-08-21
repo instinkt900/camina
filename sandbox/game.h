@@ -72,16 +72,16 @@ namespace sandbox {
     /**
      * @brief The key the pause menu is bound to.
      *
-     * P rather than Escape, which is what a player would reach for. The runtime
-     * quits on Escape through `platform::WindowDesc::quit_on_escape`, and taking
-     * that away needs another way out of the application first. Issue #407 holds
-     * it.
+     * Escape, which is what a player reaches for. It was P until M10.7f, because
+     * the runtime quit on Escape through `platform::WindowDesc::quit_on_escape`
+     * and there was no other way out. The way out is this game's own Quit
+     * button now, so the key is the game's to bind. See `DESIGN.md` section 9.
      *
      * **Nothing outside this file names any of these keys.** `runtime --key`
      * replays a press by action name and asks the input what that action was
      * bound to, so an application never has to know.
      */
-    inline constexpr engine::platform::Key kPauseKey = engine::platform::Key::P;
+    inline constexpr engine::platform::Key kPauseKey = engine::platform::Key::Escape;
 
     /**
      * @brief Binds the keys the game's own actions read.
