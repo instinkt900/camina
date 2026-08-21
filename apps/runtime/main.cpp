@@ -166,6 +166,20 @@ namespace {
          */
         std::uint64_t throw_at_frame = 0;
         /**
+         * Click the left mouse button on this frame, or 0 to click on none.
+         *
+         * An offscreen run has no mouse, so nothing could drive a menu without
+         * this. It writes a pointer position and a button into the input frame
+         * rather than calling into moth_ui, so it drives the same path a hand
+         * drives: a wiring mistake fails the capture instead of passing it.
+         *
+         * The button comes up on the frame after. A press is the whole gesture,
+         * and `moth_ui::UIButton` activates on the release.
+         */
+        std::uint64_t click_at_frame = 0;
+        /// Where the pointer sits for that click, in pixels from the top left.
+        engine::Vec2 click_at{ 0.0F, 0.0F };
+        /**
          * The most lights one cluster cell may hold. Zero takes the default.
          *
          * There to force a cell to overflow. The grid grows to hold every
@@ -282,6 +296,44 @@ namespace {
     }
 
     /**
+     * Reads an `<x>,<y>` pixel position.
+     *
+     * Both halves have to parse, for the reason parse_resolution() gives: a
+     * value that silently used one axis would click somewhere nobody asked for,
+     * and a capture of that looks like a menu that does not answer.
+     *
+     * A whole number of pixels, because that is what a pointer reports. Zero is
+     * a real corner of the window, so it is allowed here and it is not in
+     * --resolution.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the point. Untouched unless the whole pair parsed.
+     */
+    void parse_point(std::string_view text, engine::Vec2& out) {
+        const auto read = [](std::string_view part, std::uint32_t& value) {
+            if (part.empty()) {
+                return false;
+            }
+            const char* last = part.data() + part.size();
+            const std::from_chars_result parsed = std::from_chars(part.data(), last, value);
+            return parsed.ec == std::errc{} && parsed.ptr == last;
+        };
+
+        const std::size_t comma = text.find(',');
+        std::uint32_t x = 0;
+        std::uint32_t y = 0;
+        const bool parsed = comma != std::string_view::npos &&
+                            read(text.substr(0, comma), x) && read(text.substr(comma + 1), y);
+        if (!parsed) {
+            ENGINE_LOG_WARN("--click-at wants <x>,<y> in whole pixels, so {} was ignored.",
+                            text);
+            return;
+        }
+
+        out = engine::Vec2{ static_cast<float>(x), static_cast<float>(y) };
+    }
+
+    /**
      * Reads the per-cell light ceiling.
      *
      * `std::from_chars` on the unsigned type, for the reason parse_resolution()
@@ -319,8 +371,7 @@ namespace {
      *
      * These are split out because the chain in parse_options that reads them
      * all had grown past the branch count clang-tidy accepts in one function.
-     * The ones that take a value have to stay together, because each of them
-     * moves the loop index and the loop moves it again.
+     * `parse_valued` reads the rest, for the same reason and later.
      *
      * @param arg One argument from the command line.
      * @param options The options to fill.
@@ -346,51 +397,63 @@ namespace {
     }
 
     /**
+     * Reads an option that carries a value.
+     *
+     * The caller moves the loop index, once, for every option this took. That
+     * is what the split is for as much as the branch count: an option that
+     * moved the index itself and got it wrong would swallow whatever followed
+     * its value, and a swallowed option simply does nothing.
+     *
+     * @param arg One argument from the command line.
+     * @param value The argument after it, which the caller has checked is there.
+     * @param options The options to fill.
+     * @return True when this took the argument and its value.
+     */
+    bool parse_valued(std::string_view arg, const char* value, Options& options) {
+        if (arg == "--frames") {
+            parse_count("--frames", value, options.max_frames);
+        } else if (arg == "--content") {
+            options.content = value;
+        } else if (arg == "--screenshot") {
+            options.screenshot = value;
+        } else if (arg == "--watch") {
+            options.watch = value;
+        } else if (arg == "--throw-at-frame") {
+            parse_count("--throw-at-frame", value, options.throw_at_frame);
+        } else if (arg == "--click-at-frame") {
+            parse_count("--click-at-frame", value, options.click_at_frame);
+        } else if (arg == "--click-at") {
+            parse_point(value, options.click_at);
+        } else if (arg == "--resolution") {
+            parse_resolution(value, options.resolution);
+        } else if (arg == "--exposure") {
+            parse_positive_float("--exposure", value, options.exposure);
+        } else if (arg == "--physics-hz") {
+            parse_positive_float("--physics-hz", value, options.physics_hz);
+        } else if (arg == "--cluster-cell-lights") {
+            parse_cell_lights(value, options.cluster_cell_lights);
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Reads the command line.
      *
-     * Every option that takes a value moves the index once, and the loop moves
-     * it again. An option that moves it twice swallows whatever follows the
-     * value, which is a hard failure to see because the swallowed option simply
-     * does nothing.
+     * The value-less options are read first, so the chain that follows holds
+     * only the ones with a value to move the index past.
      */
     Options parse_options(int argc, char** argv) {
         Options options;
         for (int i = 1; i < argc; ++i) {
             const std::string_view arg{ argv[i] };
-            const bool has_value = i + 1 < argc;
 
-            // The value-less ones first, so the chain below holds only the
-            // options that have an index to move.
             if (parse_flag(arg, options)) {
                 continue;
             }
 
-            if (arg == "--frames" && has_value) {
-                parse_count("--frames", argv[i + 1], options.max_frames);
-                ++i;
-            } else if (arg == "--content" && has_value) {
-                options.content = argv[i + 1];
-                ++i;
-            } else if (arg == "--screenshot" && has_value) {
-                options.screenshot = argv[i + 1];
-                ++i;
-            } else if (arg == "--watch" && has_value) {
-                options.watch = argv[i + 1];
-                ++i;
-            } else if (arg == "--throw-at-frame" && has_value) {
-                parse_count("--throw-at-frame", argv[i + 1], options.throw_at_frame);
-                ++i;
-            } else if (arg == "--resolution" && has_value) {
-                parse_resolution(argv[i + 1], options.resolution);
-                ++i;
-            } else if (arg == "--exposure" && has_value) {
-                parse_positive_float("--exposure", argv[i + 1], options.exposure);
-                ++i;
-            } else if (arg == "--physics-hz" && has_value) {
-                parse_positive_float("--physics-hz", argv[i + 1], options.physics_hz);
-                ++i;
-            } else if (arg == "--cluster-cell-lights" && has_value) {
-                parse_cell_lights(argv[i + 1], options.cluster_cell_lights);
+            if (i + 1 < argc && parse_valued(arg, argv[i + 1], options)) {
                 ++i;
             }
         }
@@ -1630,6 +1693,21 @@ namespace {
         // frame out and feed it back. See DESIGN.md section 9.
         if (options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame) {
             state.keys.at(static_cast<std::size_t>(sandbox::kThrowKey)) = true;
+        }
+
+        // --click-at-frame is the same replay shape for the pointer. It writes
+        // a position and a button into the frame, so the click travels the
+        // whole path a hand drives: the bridge turns it into moth_ui events and
+        // whatever the UI does not take reaches the game.
+        //
+        // The button comes up on the next frame, at the same point. A press is
+        // the whole gesture and a release somewhere else cancels it, so the
+        // position is written on both frames rather than on the first alone.
+        if (options.click_at_frame != 0 &&
+            (frame + 1 == options.click_at_frame || frame == options.click_at_frame)) {
+            state.mouse_position = options.click_at;
+            state.mouse_buttons.at(static_cast<std::size_t>(
+                engine::platform::MouseButton::Left)) = frame + 1 == options.click_at_frame;
         }
 
 #if defined(ENGINE_WITH_UI)
