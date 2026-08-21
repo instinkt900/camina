@@ -1020,6 +1020,10 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   ui.visible(layout)           -- whether it is loaded and drawing
   ui.find(layout, node)        -- a handle, or nil when there is no such node
 
+  game.pause()                 -- holds the fixed step. M10.7a
+  game.resume()                -- lets it run again
+  game.paused()                -- whether the steps are held
+
   node.layout, node.node       -- what the handle stands for
   node:text()                  -- what a text node shows
   node:set_text(text)
@@ -1155,6 +1159,29 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   through the reference that stands it up. The picture does not move by one byte, because the
   labels land in the rectangles the menu used to place them at. That is the check: writing them
   through a bare name puts both texts into the first reference, and the capture moves.
+
+  **M10.7a lets a script pause the game, and `script::GameClock` is the seam.** A pause menu has
+  to stop the fixed step, and `play::Session` owns it. `src/script/` sits below `src/play/` and
+  may not name it, so the interface goes in `src/script/` and the session implements it. That is
+  exactly the shape `script::UiSurface` already has, and a build that passes no clock leaves the
+  `game` table answering false.
+
+  **A paused session runs no step at all**: no `on_update`, no solver, and no physics events. It
+  advances no clock either, so a pause of any length costs the step after it nothing. Letting the
+  clock accumulate instead would pay every second of the pause back at once, hit the ceiling in
+  `FixedTimestep`, and report a run that fell behind.
+
+  **A paused session still delivers UI presses, and it has to.** `Host::deliver_ui_events` runs
+  inside the step loop, so a pause that ran no step would deliver nothing, and the menu it put on
+  the screen could never resume the game. So while paused the presses are delivered once for each
+  `advance` rather than once for each step. That is the clock they were gathered on in the first
+  place, which is the M10.5 rule rather than an exception to it.
+
+  **A pause restarts the input fold.** `pending_` is an OR across every device frame since the
+  last step, and a pause runs none. Without a reset the first step after a resume would hand the
+  game every key anybody pressed while the menu was up, all down at once. That mutation passed
+  every test the first time it was tried, which is why `tests/test_session.cpp` now presses a key
+  during a pause and checks that the game never sees it.
 
 ### 8.5 Boundaries
 

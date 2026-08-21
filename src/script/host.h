@@ -26,6 +26,7 @@
  */
 
 #include "core/guid.h"
+#include "script/game_clock.h"
 #include "script/ui_surface.h"
 
 #include <cstddef>
@@ -107,6 +108,8 @@ namespace engine::script {
         const CameraView* camera = nullptr;
         /// @brief The game UI. Null makes every call in the `ui` table answer false.
         UiSurface* ui = nullptr;
+        /// @brief The fixed step. Null makes every call in the `game` table answer false.
+        GameClock* clock = nullptr;
 
         /**
          * @brief Where a transform a script writes is recorded for blending.
@@ -358,6 +361,9 @@ namespace engine::script {
 
         /// Binds the `ui` table and the node handle `ui.find` gives back.
         void bind_ui();
+
+        /// Binds the `game` table, which holds and releases the fixed step.
+        void bind_game();
 
         struct Impl;
         std::unique_ptr<Impl> impl_;

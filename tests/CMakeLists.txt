@@ -188,6 +188,15 @@ if(ENGINE_WITH_LUA)
     engine_enable_clang_tidy(test_script)
 
     add_test(NAME script COMMAND test_script)
+
+    # M10.7a. The fixed step, and what a pause does to it. It drives a real
+    # session with a faked UI surface, so it needs no window and no layout file.
+    add_executable(test_session test_session.cpp)
+    target_link_libraries(test_session PRIVATE engine::core)
+    engine_set_warnings(test_session)
+    engine_enable_clang_tidy(test_session)
+
+    add_test(NAME session COMMAND test_session)
 endif()
 
 # The game module. This test reads the content the sandbox actually ships, so a

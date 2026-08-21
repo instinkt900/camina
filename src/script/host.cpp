@@ -635,6 +635,7 @@ namespace engine::script {
         bind_input();
         bind_camera();
         bind_ui();
+        bind_game();
     }
 
     /**
@@ -1036,6 +1037,43 @@ namespace engine::script {
                 return sol::nullopt;
             }
             return EntityHandle{ entity, context };
+        });
+    }
+
+    /**
+     * Binds the `game` table, which is the fixed step a script may hold.
+     *
+     * `pause` and `resume` rather than one call taking a boolean, because a
+     * menu reads better for it and neither has anything to get the wrong way
+     * round. `paused` is what a script asks before it decides which menu to
+     * put up.
+     *
+     * A step with no clock answers false and pauses nothing, the same way an
+     * action with no input module reads false.
+     */
+    void Host::bind_game() {
+        const ScriptContext* context = &impl_->context;
+
+        sol::table game = impl_->lua.create_named_table("game");
+
+        // Each returns whether it reached a clock, so a script can report a
+        // build that has none rather than pausing silently into nothing.
+        game.set_function("pause", [context] {
+            if (context->services.clock == nullptr) {
+                return false;
+            }
+            context->services.clock->set_paused(true);
+            return true;
+        });
+        game.set_function("resume", [context] {
+            if (context->services.clock == nullptr) {
+                return false;
+            }
+            context->services.clock->set_paused(false);
+            return true;
+        });
+        game.set_function("paused", [context] {
+            return context->services.clock != nullptr && context->services.clock->paused();
         });
     }
 
