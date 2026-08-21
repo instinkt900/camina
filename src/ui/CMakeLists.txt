@@ -11,6 +11,7 @@ add_library(engine_ui STATIC
     input_bridge.cpp
     layout_loader.cpp
     renderer.cpp
+    script_surface.cpp
     stb_rect_pack_impl.cpp
     ui_pass.cpp
 )

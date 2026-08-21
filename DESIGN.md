@@ -1045,6 +1045,52 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   sorted by entity before any of them is called. A reproducible run rests on there being no
   order that nothing promises. See §9.
 
+  **`engine::ui::ScriptSurface` is the implementation, and it owns every layout.** The runtime
+  used to hold one layout, loaded at start, and no script could reach it. A script names a
+  layout by its source path and the surface loads it on demand, because M10.7 wants a main
+  menu, a pause menu and a HUD as three layouts rather than one with three subtrees.
+
+  **Showing a layout raises it.** The most recently shown one draws last and answers a click
+  first, so a pause menu over a HUD takes the input and the HUD never sees it. One rule covers
+  both orders, and a script that shows the same layouts in the same order every step gets the
+  same order back.
+
+  **The surface is the `moth_ui::IEventListener` the bridge sends a frame to.** So nothing in
+  the runtime holds a layout root any more, and the raw pointer that M10.3 and M10.4 each lost
+  a day to has nowhere left to hide. It builds a `LayoutListener` for each layout as it walks
+  them, because that class is what repeats moth_ui's own routing: a captured node answers
+  before the depth-first broadcast.
+
+  **A layout is built through `moth_ui::NodeFactory`, never through `Layout::Instantiate`.**
+  Instantiate builds a plain group and never asks what class the layout named, so a layout
+  whose root is a widget came back drawing correctly and answering nothing. A probe measured
+  both: through Instantiate a root-class button reads back as not clickable, and through the
+  factory it reads back as clickable. Nothing reported it, which is the shape this section
+  keeps meeting.
+
+  **`moth_ui::EnsureWidgetsRegistered` has to be called, and its absence looks like an
+  authoring mistake.** moth_ui registers a widget from a static initializer in the translation
+  unit that defines it. It is a static library and no engine code names `UIButton`, so the
+  linker drops that object file and the registration never runs. A layout naming the class then
+  builds a plain group. The surface calls it once when it is built.
+
+  **A layout hot reload throws away what a script wrote.** The nodes are built again from the
+  layout file, so a changed text goes back to the authored one. Whether a layout is showing,
+  and where it sits in the order, both survive. This is the same rule M8.5 settled for the
+  script table: a node is scratch and a component is storage.
+
+  **`Node::ReloadEntity` destroys and builds every child node again**, so every click action
+  wired into the old nodes goes with them. `reload_images` wires them again. Without that a
+  button answers once and is silent after the first image reload, and nothing reports it.
+
+  **A press cannot be proved against a cooked layout yet, and that is a format limit.** moth_ui
+  reads a widget class only for a group entity. The only group a `.mothui` can hold as a child
+  is a reference to another layout, which loads from disk by path rather than through
+  `assets::Content`, and `Layout::Deserialize` never reads an id for the root. So the only
+  button a layout can carry is its own root, and that root has no name a press could be
+  reported under. `presses()` is written and wired and nothing can fire it. Issue #399 holds
+  it, and #389 needs the answer before a menu can have buttons.
+
 ### 8.5 Boundaries
 
 - Keep it an optional dependency behind the `with_ui` Conan option. `engine_core` must not

@@ -21,6 +21,7 @@
 #include "physics/simulation.h"
 #include "platform/input.h"
 #include "scene/step_motion.h"
+#include "script/ui_surface.h"
 
 #if defined(ENGINE_WITH_LUA)
 #include "script/host.h"
@@ -166,6 +167,19 @@ namespace engine::play {
          */
         void advance(scene::World& world, const View& view, float delta_seconds);
 
+        /**
+         * @brief Points the scripts at the game UI, or at nothing.
+         *
+         * M10.6. A session names no moth_ui type, so the application builds the
+         * surface and hands it over. A build with no game UI passes nothing and
+         * every call in the `ui` table answers false. Without Lua this records
+         * the surface and nothing reads it.
+         *
+         * @param ui The surface a script drives, or null for none. Held, not
+         *           owned, and it must outlive this session.
+         */
+        void set_ui(script::UiSurface* ui) { ui_ = ui; }
+
         /// @brief The actions the game reads, on the step clock. Bind on this.
         /// @return The input the scripts see.
         [[nodiscard]] platform::Input& input() { return step_input_; }
@@ -252,6 +266,10 @@ namespace engine::play {
         /// because a script holds the services only for the call they arrive on.
         script::CameraView camera_;
 #endif
+
+        /// The game UI a script drives, or null when this build has none. It
+        /// sits outside the Lua block so that set_ui compiles either way.
+        script::UiSurface* ui_ = nullptr;
 
         /**
          * What a script may reach on this step.

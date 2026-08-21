@@ -24,6 +24,7 @@ namespace engine::play {
             .input = &step_input_,
             .prefabs = &scene::prefabs(),
             .camera = &camera_,
+            .ui = ui_,
             .motion = &motion_,
         };
     }
@@ -133,6 +134,11 @@ namespace engine::play {
             // Passed on each step rather than held, so a reload that builds a
             // new simulation cannot leave a script driving the old one. See
             // issue #273.
+            // The presses first, so a script that opens a menu on a click has
+            // done it before on_update reads the state that click changed.
+            // They were gathered on the frame clock, and one step delivers
+            // every press the frames since the last step gathered.
+            scripts_.deliver_ui_events(world, step_services(view));
             scripts_.update(world, seconds_, step_services(view));
 #else
             (void)view;
