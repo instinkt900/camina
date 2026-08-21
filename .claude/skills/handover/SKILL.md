@@ -21,6 +21,30 @@ and should be put there rather than here.
 Do not restate the project, the hard rules, the build commands, or the flow. A
 handover that repeats `CLAUDE.md` buries the part that matters.
 
+## Write it from what you already know
+
+**This is a context dump, not an investigation.** Write down what this session
+holds, so the next one starts where this one stopped. It is the last thing a
+session does, and it has to be quick.
+
+**Do not analyze the state of the repository. Do not run extra work to fill it
+in.** No test run, no build, no offscreen capture, no tracker queries for work
+this session never touched, no reading files to check a claim. If the session
+did not already establish something, the handover does not need it.
+
+Two cheap commands are allowed, because a wrong sha or a forgotten uncommitted
+file sends the next session the wrong way:
+
+```bash
+git log --oneline -5
+git status --short
+```
+
+Everything else comes from the session. When you are unsure of an issue number,
+a pull request number, or whether a check went green, **say so in the file**
+rather than going to look. "PR #412 was green when last seen" is useful. A
+number nobody checked, written as fact, is worse than a gap.
+
 ## Write about the project, not about the session
 
 A session holds more than project work. It may include questions about the
@@ -37,32 +61,6 @@ belongs here too, so it is not put to them a second time.
 **Out:** how the session was run, questions about the assistant or its features,
 changes under `.claude/`, and approaches considered without being taken. A
 handover is a note about the project, not a log of the conversation.
-
-## Gather the state first, do not write it from memory
-
-Run these and write from what they return. A handover with a wrong issue number
-or a stale branch is worse than none, because the next session trusts it.
-
-```bash
-git log --oneline -8
-git status --short
-gh pr list --state open --json number,title,headRefName --jq '.[]|"#\(.number) \(.title) [\(.headRefName)]"'
-gh api "repos/instinkt900/camina/milestones?state=all" \
-  --jq '.[]|select(.state=="open" or .open_issues>0)|"\(.title): \(.state) open=\(.open_issues)"'
-gh issue list --state open --limit 40 --json number,title,labels,milestone \
-  --jq '.[]|"#\(.number) [\(.milestone.title // "none")] \(.title)"'
-```
-
-For any pull request left open, say whether its checks were green and whether a
-review had arrived. Query it rather than recalling it.
-
-If the build state is claimed, check it:
-
-```bash
-ctest --preset conan-relwithdebinfo 2>&1 | tail -3
-./build/RelWithDebInfo/bin/runtime --offscreen --resolution 1280x720 --frames 120 \
-    --no-watch --screenshot /tmp/handover-check.png
-```
 
 ## What the document holds
 
@@ -83,7 +81,8 @@ rather than writing "none".
    drifted before.
 
 4. **What is in flight.** Any open pull request, its number, its branch, whether
-   it is green, and what it still needs. Anything left uncommitted on a branch.
+   it was green when last seen, and what it still needs. Anything left
+   uncommitted.
 
 5. **What the next work is.** The next milestone or issue, its issues if they
    exist, and anything already settled about how to approach it. Say which
@@ -93,14 +92,15 @@ rather than writing "none".
    with one line each on why they can wait. Say plainly that none of them block,
    when that is true.
 
-7. **Things that cost time, and would again.** The traps. Each one costs an hour
-   and looks like nothing in a diff, which is why they earn space here. Only put
-   something here if it is **not** already in `CLAUDE.md`; if it is durable, put
-   it in `CLAUDE.md` and leave it out of this file.
+7. **Things that cost time, and would again.** The traps this session hit. Each
+   one costs an hour and looks like nothing in a diff, which is why they earn
+   space here. Only put something here if it is **not** already in `CLAUDE.md`;
+   if it is durable, put it in `CLAUDE.md` and leave it out of this file.
 
-8. **The state of the build.** Test count, lint, format, docs, containment, and
-   whether the offscreen capture moved. Give the capture command. Say what is
-   fetched locally and not in git, such as Sponza.
+8. **The state of the build.** What this session last saw: the test result, the
+   lint, the format check, and whether the offscreen capture moved. Report the
+   last observation and when it was taken. Do not run any of it again to fill
+   this in, and say plainly when the session never checked.
 
 9. **What is verified by reading rather than by running.** Anything believed
    correct that no test covers, so the next session does not mistake it for
@@ -108,7 +108,8 @@ rather than writing "none".
 
 ## Rules that keep it honest
 
-- **Never quote an issue or pull request number a command has not returned.**
+- **Never state an issue or pull request number as fact when this session did not
+  see it.** Mark it as unverified, or leave it out.
 - **Say what was measured and what was assumed.** A number with no command behind
   it is a guess, and the next session cannot tell the difference.
 - **An empty finding is a finding.** If an exercise was run and turned up nothing,
