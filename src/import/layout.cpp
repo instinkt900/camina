@@ -18,6 +18,9 @@ namespace engine::import {
         /// What a moth_ui image entity calls the image it draws.
         constexpr const char* kImagePathKey = "imagePath";
 
+        /// What a moth_ui reference entity calls the layout it stands for.
+        constexpr const char* kLayoutPathKey = "layoutPath";
+
         /**
          * Reads a layout, and says why it could not when @p report is true.
          *
@@ -71,32 +74,33 @@ namespace engine::import {
         }
 
         /**
-         * Calls @p visit for every image entity in the tree.
+         * Calls @p visit for every string field named @p key in the tree.
          *
          * A layout nests: a group holds children and so does the layout itself.
          * So this walks everything rather than the top level, and it keys on
          * the field rather than on the entity type. A field named `imagePath`
          * is an image path whatever entity carries it, and a moth_ui release
-         * that adds an entity kind with one keeps working.
+         * that adds an entity kind with one keeps working. The same holds for
+         * `layoutPath` and a reference.
          */
         template <typename Visit>
-        void for_each_image(nlohmann::json& node, const Visit& visit) {
+        void for_each_reference(nlohmann::json& node, const char* key, const Visit& visit) {
             if (node.is_array()) {
                 for (nlohmann::json& child : node) {
-                    for_each_image(child, visit);
+                    for_each_reference(child, key, visit);
                 }
                 return;
             }
             if (!node.is_object()) {
                 return;
             }
-            if (const auto found = node.find(kImagePathKey);
+            if (const auto found = node.find(key);
                 found != node.end() && found->is_string()) {
                 visit(*found);
             }
-            for (const auto& [key, child] : node.items()) {
-                if (key != kImagePathKey) {
-                    for_each_image(child, visit);
+            for (const auto& [name, child] : node.items()) {
+                if (name != key) {
+                    for_each_reference(child, key, visit);
                 }
             }
         }
@@ -110,13 +114,17 @@ namespace engine::import {
         if (!read_layout(source, document, false)) {
             return;
         }
-        for_each_image(document, [&](const nlohmann::json& value) {
+        // A referenced layout is an input as much as an image is, so editing a
+        // button re-cooks every menu that stands one up.
+        const auto collect = [&](const nlohmann::json& value) {
             const std::filesystem::path named =
                 source_of(relative, value.get<std::string>());
             if (!named.empty()) {
                 out.push_back(named);
             }
-        });
+        };
+        for_each_reference(document, kImagePathKey, collect);
+        for_each_reference(document, kLayoutPathKey, collect);
     }
 
     bool cook_layout(const std::filesystem::path& source, Writer& writer,
@@ -129,30 +137,38 @@ namespace engine::import {
         }
 
         bool sound = true;
-        for_each_image(document, [&](nlohmann::json& value) {
+
+        /**
+         * Turns one stored reference into the identity of what it names.
+         *
+         * The same job for an image and for a sub-layout, because moth_ui stores
+         * both the same way: a path relative to the directory the layout sits in.
+         * `kind` is only there so a message names what was being looked for.
+         */
+        const auto resolve = [&](nlohmann::json& value, const char* kind) {
             const std::string stored = value.get<std::string>();
 
-            // An image entity nobody has assigned yet holds nothing. That is a
-            // layout part way through being authored rather than a fault, and
-            // moth_ui already draws no image for it.
+            // An entity nobody has assigned yet holds nothing. That is a layout
+            // part way through being authored rather than a fault, and moth_ui
+            // draws nothing for it either way.
             if (stored.empty()) {
                 return;
             }
 
             const std::filesystem::path named = source_of(relative, stored);
             if (named.empty()) {
-                ENGINE_LOG_ERROR("{}: it names the image '{}', which is outside the content "
-                                 "tree. A layout names an image relative to its own "
-                                 "directory.",
-                                 source.string(), stored);
+                ENGINE_LOG_ERROR("{}: it names the {} '{}', which is outside the content "
+                                 "tree. A layout names one relative to its own directory.",
+                                 source.string(), kind, stored);
                 sound = false;
                 return;
             }
 
             // The sidecar is what holds the identity, and meta_for writes one
             // when the file has none. It has to: the sources cook in name
-            // order, so a layout can reach an image before the texture rule
-            // has run, and both have to come out with the same answer.
+            // order, so a layout can reach an image or another layout before
+            // the rule for it has run, and both have to come out with the same
+            // answer.
             as::AssetMeta meta;
             if (!as::meta_for(content_root / named, meta)) {
                 // meta_for has already said what is wrong with the file it was
@@ -165,7 +181,12 @@ namespace engine::import {
                 return;
             }
             value = meta.guid.to_text();
-        });
+        };
+
+        for_each_reference(document, kImagePathKey,
+                           [&](nlohmann::json& value) { resolve(value, "image"); });
+        for_each_reference(document, kLayoutPathKey,
+                           [&](nlohmann::json& value) { resolve(value, "layout"); });
 
         if (!sound) {
             return false;

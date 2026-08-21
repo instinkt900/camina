@@ -513,6 +513,614 @@
           ]
         }
       ]
+    },
+    {
+      "type": "Ref",
+      "id": "throw button",
+      "class": "",
+      "blend": "Alpha",
+      "visible": true,
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "layoutPath": "button.mothui",
+      "propertyOverrides": [],
+      "tracks": [
+        {
+          "target": "TopOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 304.0
+            }
+          ]
+        },
+        {
+          "target": "BottomOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 368.0
+            }
+          ]
+        },
+        {
+          "target": "LeftOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 688.0
+            }
+          ]
+        },
+        {
+          "target": "RightOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 968.0
+            }
+          ]
+        },
+        {
+          "target": "TopAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "BottomAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "LeftAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "RightAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "ColorRed",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorGreen",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorBlue",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorAlpha",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "Rotation",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Ref",
+      "id": "reset button",
+      "class": "",
+      "blend": "Alpha",
+      "visible": true,
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "layoutPath": "button.mothui",
+      "propertyOverrides": [],
+      "tracks": [
+        {
+          "target": "TopOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 304.0
+            }
+          ]
+        },
+        {
+          "target": "BottomOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 368.0
+            }
+          ]
+        },
+        {
+          "target": "LeftOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 984.0
+            }
+          ]
+        },
+        {
+          "target": "RightOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1264.0
+            }
+          ]
+        },
+        {
+          "target": "TopAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "BottomAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "LeftAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "RightAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "ColorRed",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorGreen",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorBlue",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorAlpha",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "Rotation",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Text",
+      "id": "throw label",
+      "class": "",
+      "blend": "Alpha",
+      "visible": true,
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "fontName": "body",
+      "fontSize": 24,
+      "text": "Throw",
+      "horizontalAlignment": "Center",
+      "verticalAlignment": "Middle",
+      "dropShadow": false,
+      "dropShadowOffset": [
+        2,
+        2
+      ],
+      "dropShadowColor": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "tracks": [
+        {
+          "target": "TopOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 304.0
+            }
+          ]
+        },
+        {
+          "target": "BottomOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 368.0
+            }
+          ]
+        },
+        {
+          "target": "LeftOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 688.0
+            }
+          ]
+        },
+        {
+          "target": "RightOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 968.0
+            }
+          ]
+        },
+        {
+          "target": "TopAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "BottomAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "LeftAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "RightAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "ColorRed",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorGreen",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorBlue",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorAlpha",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "Rotation",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Text",
+      "id": "reset label",
+      "class": "",
+      "blend": "Alpha",
+      "visible": true,
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "fontName": "body",
+      "fontSize": 24,
+      "text": "Reset",
+      "horizontalAlignment": "Center",
+      "verticalAlignment": "Middle",
+      "dropShadow": false,
+      "dropShadowOffset": [
+        2,
+        2
+      ],
+      "dropShadowColor": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "tracks": [
+        {
+          "target": "TopOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 304.0
+            }
+          ]
+        },
+        {
+          "target": "BottomOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 368.0
+            }
+          ]
+        },
+        {
+          "target": "LeftOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 984.0
+            }
+          ]
+        },
+        {
+          "target": "RightOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1264.0
+            }
+          ]
+        },
+        {
+          "target": "TopAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "BottomAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "LeftAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "RightAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "ColorRed",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorGreen",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorBlue",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorAlpha",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "Rotation",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        }
+      ]
     }
   ]
 }

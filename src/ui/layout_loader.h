@@ -15,6 +15,12 @@
  * This half opens no device. Turning the layout into live nodes needs a
  * `moth_ui::Context`, which needs a renderer and both factories, and that is the
  * caller's job. The split is what lets a test drive the reading with no GPU.
+ *
+ * **A sub-layout is read the same way, through a `moth_ui::ILayoutProvider`.**
+ * moth_ui reads a reference off the filesystem without one, against the
+ * directory the referencing layout came from, and there is no directory here.
+ * The provider is built inside `read_layout` and lives only for that call, so a
+ * caller has nothing to hold.
  */
 
 #include "assets/content.h"
@@ -32,15 +38,16 @@ namespace engine::ui {
         NotInTree,  ///< The content tree holds no asset with that identity.
         NotJson,    ///< The bytes are not JSON.
         NotALayout, ///< It parsed, and it is not a moth_ui layout.
+        Cycle,      ///< It refers to itself, through however many layouts.
     };
 
     /**
-     * @brief Reads the layout an identity names.
+     * @brief Reads the layout an identity names, and every layout it refers to.
      *
-     * @warning A sub-layout is not resolved. `moth_ui::LayoutEntityRef` reads a
-     * path against the directory the layout came from, and there is no
-     * directory here. Issue #211 covers turning that reference into an identity
-     * the way an image reference became one.
+     * @warning A reference that names an identity the tree does not hold drops
+     * that child rather than failing the layout, which is what moth_ui does with
+     * any child it cannot read. So a layout can come back Ok with a button
+     * missing. The log says which one.
      *
      * @param content The cooked or imported assets to read from.
      * @param guid The identity of the layout.

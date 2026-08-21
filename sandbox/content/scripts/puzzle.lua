@@ -92,7 +92,8 @@ function on_start()
         say(instructions)
     end
 
-    log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R.", #homes))
+    log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R. "
+                           .. "Both are buttons in the layout as well.", #homes))
 end
 
 local function throw()
@@ -139,6 +140,29 @@ local function reset()
     entity:set("Goal", { won = false })
     say(instructions)
     log.info("The room is back.")
+end
+
+-- What each button in the layout does. A press names a node, so this is keyed
+-- by node id rather than by anything the layout knows about the game.
+--
+-- ipairs and a list rather than a string-keyed table, because Lua 5.4 seeds its
+-- string hash from the clock and a keyed walk is not reproducible. See
+-- DESIGN.md section 9.
+local buttons = {
+    { node = "throw button", press = function() throw() end },
+    { node = "reset button", press = function() reset() end },
+}
+
+function on_ui_press(pressed_layout, node)
+    if pressed_layout ~= layout then
+        return
+    end
+    for _, button in ipairs(buttons) do
+        if button.node == node then
+            button.press()
+            return
+        end
+    end
 end
 
 function on_update(seconds)

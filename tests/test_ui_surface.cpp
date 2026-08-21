@@ -12,13 +12,11 @@
 // its own. That is not a shortcut around the real one, which tests/test_ui_*.cpp
 // cover elsewhere: what matters here is which identity the surface asked for.
 //
-// **Nothing here presses a button, and no layout below carries one.** A cooked
-// .mothui cannot express a button that a press could name. moth_ui reads a
-// widget class only for a group entity, the only group a file can hold as a
-// child is a reference to another layout, and Layout::Deserialize never reads an
-// id for the root. So the only button a layout can carry is its root, and that
-// root has no name to report a press under. The surface records a press and
-// wires every clickable node it finds. Nothing can build one for it yet.
+// **A button here is a reference to another layout**, because that is the only
+// group a .mothui can hold as a child and moth_ui reads a widget class only for
+// a group. The id belongs to the reference, so two menus can stand up the same
+// button file under different names. Reading a reference out of the content tree
+// rather than off disk is what moth_ui 1.9.0 added and what read_layout uses.
 
 #include "assets/content.h"
 #include "assets/manifest.h"
@@ -28,6 +26,13 @@
 #include "ui/input_bridge.h"
 #include "ui/renderer.h"
 #include "ui/script_surface.h"
+
+#if defined(ENGINE_WITH_LUA)
+#include "scene/components.h"
+#include "scene/world.h"
+#include "script/components.h"
+#include "script/host.h"
+#endif
 
 #include <moth_ui/context.h>
 #include <moth_ui/events/event_mouse.h>
@@ -83,7 +88,15 @@ namespace {
         0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
     };
 
-    /// The four offset tracks that give a node a rectangle at frame zero.
+    /**
+     * The tracks that give a node a rectangle in pixels at frame zero.
+     *
+     * The four anchors are written as well as the four offsets, and they have to
+     * be. A moth_ui node anchors to its whole parent by default, so offsets alone
+     * would be added to the parent rectangle rather than measured from its corner,
+     * and a 100 by 50 button would come out the size of the screen and then some.
+     * The sandbox layouts anchor at zero for the same reason.
+     */
     std::string rect_tracks(int left, int top, int right, int bottom) {
         const auto track = [](const char* target, int value) {
             return std::string{ R"({"target":")" } + target +
@@ -91,7 +104,24 @@ namespace {
                    std::to_string(value) + "}]}";
         };
         return R"("tracks":[)" + track("LeftOffset", left) + "," + track("TopOffset", top) +
-               "," + track("RightOffset", right) + "," + track("BottomOffset", bottom) + "]";
+               "," + track("RightOffset", right) + "," + track("BottomOffset", bottom) + "," +
+               track("LeftAnchor", 0) + "," + track("TopAnchor", 0) + "," +
+               track("RightAnchor", 0) + "," + track("BottomAnchor", 0) + "]";
+    }
+
+    /**
+     * A reference to another layout, which is how a layout carries a widget.
+     *
+     * moth_ui reads a widget class only for a group entity, and the only group a
+     * file can name as a child is a reference. So a button in a menu is a
+     * reference to a layout whose root carries the class, and the id belongs to
+     * the reference rather than to the file it names.
+     */
+    std::string ref_node(std::string_view id, std::string_view layout, int left, int top,
+                         int right, int bottom) {
+        return std::string{ R"({"type":"Ref","id":")" } + std::string{ id } +
+               R"(","class":"","visible":true,"layoutPath":")" + std::string{ layout } +
+               R"(","propertyOverrides":[],)" + rect_tracks(left, top, right, bottom) + "}";
     }
 
     std::string text_node(std::string_view id, std::string_view text) {
@@ -108,9 +138,9 @@ namespace {
                R"("imageScale":1.0,)" + rect_tracks(0, 40, 64, 104) + "}";
     }
 
-    std::string layout_of(std::string_view children) {
-        return std::string{ R"({"type":"Layout","mothui_version":1,"class":"","children":[)" } +
-               std::string{ children } + "]}";
+    std::string layout_of(std::string_view children, std::string_view widget_class = "") {
+        return std::string{ R"({"type":"Layout","mothui_version":1,"class":")" } +
+               std::string{ widget_class } + R"(","children":[)" + std::string{ children } + "]}";
     }
 
     /// An image the surface hands back, so set_image needs no device.
@@ -159,20 +189,31 @@ namespace {
     };
 
     /**
-     * Cooks a tree holding two layouts, an image and a document that is not a
+     * Cooks a tree holding three layouts, an image and a document that is not a
      * layout.
      *
-     * Two layouts on purpose. One layout can never show that a node of one is
-     * not reachable through the other, and it cannot show that a reload touches
-     * the layout it names and no other.
+     * Two menus on purpose. One layout can never show that a node of one is not
+     * reachable through the other, that the topmost answers a click first, or
+     * that a reload touches the layout it names and no other. The third layout
+     * is the button both menus refer to.
      */
     void with_a_cooked_tree(const std::function<void(const as::Content&)>& run) {
         const std::filesystem::path source = scratch("src");
         const std::filesystem::path out = scratch("out");
 
+        // The layout every button in this test refers to. Its root carries the
+        // class, and it holds nothing else: what a button looks like is not what
+        // these cases are about.
+        write_file(source / "ui" / "button.mothui", layout_of("", "button"));
+
+        // Both menus put a button over the same rectangle, which is what the
+        // topmost-answers-first case needs.
         write_file(source / "ui" / "menu.mothui",
-                   layout_of(text_node("title", "Camina") + "," + image_node("logo")));
-        write_file(source / "ui" / "hud.mothui", layout_of(text_node("score", "0")));
+                   layout_of(text_node("title", "Camina") + "," + image_node("logo") + "," +
+                             ref_node("play", "button.mothui", 0, 0, 100, 50)));
+        write_file(source / "ui" / "hud.mothui",
+                   layout_of(text_node("score", "0") + "," +
+                             ref_node("quit", "button.mothui", 0, 0, 100, 50)));
 
         // Readable JSON whose root is not a Layout. A reference left pointing at
         // the wrong asset looks exactly like this.
@@ -189,6 +230,17 @@ namespace {
         run(content);
 
         test::remove_tree(source.parent_path());
+    }
+
+    /// The pointer position both mouse events carry. moth_ui::IntVec2 is not a
+    /// literal type, so these cannot be constexpr. The button is 0,0 to 100,50.
+    const moth_ui::IntVec2 kOnTheButton{ 20, 20 };
+    const moth_ui::IntVec2 kOffTheButton{ 400, 400 };
+
+    /// Sends a press and a release at one point, which is what activates a button.
+    void click(ScriptSurface& surface, moth_ui::IntVec2 at) {
+        (void)surface.OnEvent(moth_ui::EventMouseDown{ moth_ui::MouseButton::Left, at });
+        (void)surface.OnEvent(moth_ui::EventMouseUp{ moth_ui::MouseButton::Left, at });
     }
 
     void a_script_shows_a_layout_and_it_loads_on_demand() {
@@ -423,6 +475,241 @@ namespace {
         });
     }
 
+    void a_reference_resolves_through_the_content_tree() {
+        test::section("a reference resolves through the content tree");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            // The cooker rewrote the stored path into an identity, and nothing
+            // here has a directory to resolve a path against. So this failing
+            // means the provider never ran.
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            test::check(fixture.surface->has_node("ui/menu.mothui", "play"),
+                        "the referenced button is in the tree, under the id the ref gave it");
+            test::check(!fixture.surface->has_node("ui/menu.mothui", "quit"),
+                        "and the other menu's button is not");
+        });
+    }
+
+    void a_press_on_a_button_reaches_the_surface() {
+        test::section("a press on a button reaches the surface");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+            test::check(fixture.surface->presses().empty(), "and nothing has been pressed");
+
+            click(*fixture.surface, kOnTheButton);
+
+            test::check(fixture.surface->presses().size() == 1, "a click records one press");
+            if (fixture.surface->presses().size() == 1) {
+                const engine::script::UiPress& press = fixture.surface->presses().front();
+                test::check(press.layout == "ui/menu.mothui", "and it names the layout");
+                test::check(press.node == "play", "and it names the node");
+            }
+
+            fixture.surface->clear_presses();
+            test::check(fixture.surface->presses().empty(), "and a drain empties them");
+        });
+    }
+
+    void a_click_that_misses_the_button_records_nothing() {
+        test::section("a click that misses the button records nothing");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            click(*fixture.surface, kOffTheButton);
+            test::check(fixture.surface->presses().empty(),
+                        "a click away from the button records nothing");
+
+            // A drag off a button cancels it. That is what moth_ui calls an
+            // activation, and it is the only reading under which a press is the
+            // whole gesture rather than the first half of one.
+            (void)fixture.surface->OnEvent(
+                moth_ui::EventMouseDown{ moth_ui::MouseButton::Left, kOnTheButton });
+            (void)fixture.surface->OnEvent(
+                moth_ui::EventMouseUp{ moth_ui::MouseButton::Left, kOffTheButton });
+            test::check(fixture.surface->presses().empty(),
+                        "and a press that came up elsewhere records nothing either");
+        });
+    }
+
+    void a_hidden_layout_answers_no_click() {
+        test::section("a hidden layout answers no click");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+            test::check(fixture.surface->hide("ui/menu.mothui"), "and then it hides");
+
+            click(*fixture.surface, kOnTheButton);
+            test::check(fixture.surface->presses().empty(),
+                        "a button of a hidden layout cannot be pressed");
+        });
+    }
+
+    void the_topmost_layout_answers_first() {
+        test::section("the topmost layout answers first");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            // Both buttons cover the same rectangle. This is a pause menu over a
+            // HUD, and only the menu may hear the click.
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/hud.mothui"), "the HUD shows");
+            test::check(fixture.surface->show("ui/menu.mothui"), "and the menu shows over it");
+
+            click(*fixture.surface, kOnTheButton);
+
+            test::check(fixture.surface->presses().size() == 1, "one press is recorded");
+            if (fixture.surface->presses().size() == 1) {
+                test::check(fixture.surface->presses().front().node == "play",
+                            "and it came from the layout on top");
+            }
+
+            // Showing the HUD again raises it, so now it is the one that hears.
+            fixture.surface->clear_presses();
+            test::check(fixture.surface->show("ui/hud.mothui"), "showing the HUD raises it");
+            click(*fixture.surface, kOnTheButton);
+
+            test::check(fixture.surface->presses().size() == 1, "one press is recorded");
+            if (fixture.surface->presses().size() == 1) {
+                test::check(fixture.surface->presses().front().node == "quit",
+                            "and now it is the HUD that hears it");
+            }
+        });
+    }
+
+    void a_reload_still_hears_a_press() {
+        test::section("a reload still hears a press");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            const as::ManifestEntry* entry = content.find("ui/menu.mothui");
+            test::check(entry != nullptr, "the layout is in the manifest");
+            const std::array<engine::Guid, 1> changed{ entry->guid };
+            test::check(fixture.surface->reload_layouts(changed), "the layout reloads");
+
+            // The nodes are new, so every click action wired into the old ones is
+            // gone with them. Wiring them again is what this proves.
+            click(*fixture.surface, kOnTheButton);
+            test::check(fixture.surface->presses().size() == 1,
+                        "and the button still reaches the surface");
+        });
+    }
+
+    void an_image_reload_rewires_the_buttons() {
+        test::section("an image reload rewires the buttons");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            // Node::ReloadEntity destroys and builds every child node again, so
+            // every click action goes with them. Nothing reports that: the layout
+            // draws correctly and the button is silent from then on.
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            fixture.surface->reload_images();
+
+            click(*fixture.surface, kOnTheButton);
+            test::check(fixture.surface->presses().size() == 1,
+                        "the button still reaches the surface after an image reload");
+        });
+    }
+
+    void the_screen_rectangle_reaches_a_layout_shown_later() {
+        test::section("the screen rectangle reaches a layout shown later");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            // A layout that has never been given a rectangle sizes every child at
+            // zero, and a hit test then answers no click at all. So a layout
+            // loaded after the rectangle was set has to be given it too.
+            Fixture fixture;
+            fixture.content = &content;
+            fixture.surface = std::make_unique<ScriptSurface>(content, fixture.context);
+            fixture.surface->set_screen_rect(moth_ui::IntRect{ { 0, 0 }, { 800, 600 } });
+
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+            click(*fixture.surface, kOnTheButton);
+            test::check(fixture.surface->presses().size() == 1,
+                        "and its button answers a click");
+        });
+    }
+
+#if defined(ENGINE_WITH_LUA)
+    /**
+     * The whole path, with nothing faked on either side of it.
+     *
+     * tests/test_script.cpp drives `on_ui_press` against a surface with no
+     * moth_ui under it, and everything above drives a real surface with no script
+     * over it. This is the one case where the two meet: a real moth_ui button
+     * reports a press, the host delivers it to real Lua, and the script acts on
+     * the same surface it was told about.
+     *
+     * The script hides the layout rather than writing a component, so the check
+     * needs no described type of its own and the round trip closes where it
+     * started.
+     */
+    void a_press_reaches_a_script_and_the_script_answers() {
+        test::section("a press reaches a script and the script answers");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            engine::scene::ComponentRegistry components;
+            components.add<engine::Transform>();
+            engine::scene::World world;
+            engine::script::Host host{ components };
+
+            const std::string_view source = R"(
+                function on_ui_press(pressed_layout, node)
+                    if node == "play" then
+                        ui.hide(pressed_layout)
+                    end
+                end
+            )";
+            const auto bytes = std::as_bytes(std::span{ source.data(), source.size() });
+            const engine::Guid script = engine::Guid::generate();
+            test::check(host.load(script, "press.lua", bytes), "the script compiles");
+
+            const entt::entity entity = world.create();
+            world.registry().emplace<engine::script::ScriptComponent>(
+                entity, engine::script::ScriptComponent{ script });
+
+            engine::script::Services services;
+            services.ui = fixture.surface.get();
+
+            // on_start runs here, which is what builds the instance. Without it
+            // the press below reaches no listener at all.
+            host.update(world, 0.0, services);
+
+            click(*fixture.surface, kOnTheButton);
+            test::check(fixture.surface->presses().size() == 1,
+                        "the button reported one press");
+
+            host.deliver_ui_events(world, services);
+
+            test::check(!fixture.surface->visible("ui/menu.mothui"),
+                        "and the script hid the layout it was told about");
+            test::check(fixture.surface->presses().empty(),
+                        "and the delivery drained the press");
+            test::check(host.stopped_count() == 0, "and no call raised an error");
+        });
+    }
+#endif
+
 } // namespace
 
 int main() {
@@ -437,5 +724,16 @@ int main() {
     an_image_that_will_not_load_is_reported();
     a_reload_keeps_the_layout_showing();
     a_reload_of_another_asset_changes_nothing();
+    a_reference_resolves_through_the_content_tree();
+    a_press_on_a_button_reaches_the_surface();
+    a_click_that_misses_the_button_records_nothing();
+    a_hidden_layout_answers_no_click();
+    the_topmost_layout_answers_first();
+    a_reload_still_hears_a_press();
+    an_image_reload_rewires_the_buttons();
+    the_screen_rectangle_reaches_a_layout_shown_later();
+#if defined(ENGINE_WITH_LUA)
+    a_press_reaches_a_script_and_the_script_answers();
+#endif
     return test::report();
 }
