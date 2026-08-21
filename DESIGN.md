@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M12 and M13 complete. M10 next
-Last updated: 2026-08-19
+Status: M9, M10, M12 and M13 complete. M11 next
+Last updated: 2026-08-21
 
 ---
 
@@ -2774,6 +2774,64 @@ stops calling `std::filesystem::absolute` on what it read, which closes #218 and
 **The engine pins moth_ui, so this milestone releases moth_ui and moves the pin.** §8.5 says a
 Conan editable is for development and not for a build somebody else runs. Develop the two
 repositories together against the editable, then release and pin.
+
+**M10.7 closed the milestone, and the authoring pass is recorded below.** The sandbox game has a
+main menu, a pause menu and a HUD. `scripts/puzzle.lua` moves between the three, and no C++
+knows any of them exists.
+
+It came in three parts. M10.7a gave a script the fixed step through `script::GameClock`, because
+a pause menu that cannot stop the world is a picture rather than a menu. #402 gave a script a
+node inside one particular reference, because three menus of buttons is exactly the shape a bare
+node id cannot name. #396 gave the runtime a click it can replay, because a menu that answers a
+click cannot be proved in a capture without one.
+
+**A run starts at the main menu with the game held**, so the capture with no arguments is the
+title screen over a world that has not moved. `--click 5:640,382` presses Play. `--click` is
+repeatable and it replaced the single `--click-at-frame` and `--click-at` pair from #396: one
+click can never walk a game through its own screens, and the pause menu takes two.
+
+**The pause takes the key away from the game, and that is measured rather than argued.** A run
+that starts the game, pauses it, and then holds the throw key down on frame 80 is byte for byte
+the run that never pressed it. The same key on a running game gives a different picture, so the
+gate is a gate rather than an input path that stopped answering.
+
+**Which screen is up is the UI's own state, and no component records it.** A reload keeps every
+layout showing and keeps the session paused, so `on_start` puts the main menu up only when
+nothing is up yet. That falls out of two rules M10.6 and M10.7a already settled, and it is worth
+naming because the obvious answer is a reflected component that would then disagree with the
+surface.
+
+**A build with no game UI plays without a menu.** Only the runtime binds a surface, so a game
+played in the editor viewport has none, and neither has a `with_ui=False` build. A game that
+paused itself with no menu on the screen could never be started, because only a button can
+resume one. `tests/test_editor.cpp` is what holds this: it drives the shipped scene with no
+surface, and it fails if the world stands still.
+
+### What the M10.7 authoring pass found
+
+Four gaps, all filed, none of them fixed on that branch. M9.8 found nothing and said so, and this
+pass is the other outcome: authoring the thing is what finds what building the parts cannot.
+
+- **#410, a script is not told when a layout reloaded.** The most valuable of the four. A reload
+  builds the node tree again, so every label a script wrote goes back to the text the file
+  carries, and `on_start` runs again only when the **script** reloads. So the first save while
+  authoring a menu makes every button in it read `Button`. `ScriptSurface::reload_layouts`
+  already knows which layouts it rebuilt and throws the signal away.
+- **#408, a paused game reads no key.** A script reads an action inside `on_update`, and a paused
+  session runs none. So P puts the pause menu up and only the Resume button takes it down. Every
+  game resumes on the key that paused it, and this one cannot.
+- **#409, a paused game that moves something does not redraw it.** The Main menu button puts the
+  room back, and the crates stay drawn where they fell until something resumes. Both interpolate
+  calls sit at the end of the step loop, which a paused session returns before.
+- **#407, Escape quits the runtime.** So the pause menu is bound to P, which is not the key a
+  player reaches for. Freeing Escape needs another way out of the runtime first, and the likely
+  answer is a Quit button in the game's own main menu, which needs a `game.quit()` that no seam
+  offers.
+
+**Three of the four are consequences of the pause, and none of them showed up while it was
+built.** M10.7a has four cases and three mutations behind it, and every one of them is about a
+session in isolation. What they cannot ask is what a game does with a paused session, and that
+is the question the pass answered.
 
 ### M11 — Audio
 miniaudio behind `IAudioDevice`. Positional 3D and buses.

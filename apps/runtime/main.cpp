@@ -111,6 +111,17 @@ namespace {
     /// The scene itself lives in the sandbox content directory, not here.
     constexpr const char* kViewPath = engine::editor::kViewSettingsFile;
 
+    /**
+     * One click to replay: where the pointer goes, and on which frame.
+     *
+     * The button comes up on the frame after, at the same point. A press is the
+     * whole gesture and a release somewhere else cancels it.
+     */
+    struct Click {
+        std::uint64_t frame = 0;       ///< The frame the button goes down on.
+        engine::Vec2 at{ 0.0F, 0.0F }; ///< Where the pointer sits, in pixels.
+    };
+
     struct Options {
         std::uint64_t max_frames = 0; ///< 0 means run until the user quits.
         /// Where to write a PNG of the last frame. Empty writes nothing.
@@ -166,19 +177,18 @@ namespace {
          */
         std::uint64_t throw_at_frame = 0;
         /**
-         * Click the left mouse button on this frame, or 0 to click on none.
+         * Every click to replay, in the order they were given.
          *
          * An offscreen run has no mouse, so nothing could drive a menu without
          * this. It writes a pointer position and a button into the input frame
          * rather than calling into moth_ui, so it drives the same path a hand
          * drives: a wiring mistake fails the capture instead of passing it.
          *
-         * The button comes up on the frame after. A press is the whole gesture,
-         * and `moth_ui::UIButton` activates on the release.
+         * **A list rather than one click.** M10.7 needs a capture that reaches
+         * a pause menu, which takes a click to start the game and another to
+         * pause it. One click could never walk a game through its own screens.
          */
-        std::uint64_t click_at_frame = 0;
-        /// Where the pointer sits for that click, in pixels from the top left.
-        engine::Vec2 click_at{ 0.0F, 0.0F };
+        std::vector<Click> clicks;
         /**
          * The most lights one cluster cell may hold. Zero takes the default.
          *
@@ -309,8 +319,8 @@ namespace {
      * @param text The value given on the command line.
      * @param out Receives the point. Untouched unless the whole pair parsed.
      */
-    void parse_point(std::string_view text, engine::Vec2& out) {
-        const auto read = [](std::string_view part, std::uint32_t& value) {
+    void parse_click(std::string_view text, std::vector<Click>& out) {
+        const auto read = [](std::string_view part, std::uint64_t& value) {
             if (part.empty()) {
                 return false;
             }
@@ -319,18 +329,27 @@ namespace {
             return parsed.ec == std::errc{} && parsed.ptr == last;
         };
 
-        const std::size_t comma = text.find(',');
-        std::uint32_t x = 0;
-        std::uint32_t y = 0;
-        const bool parsed = comma != std::string_view::npos &&
-                            read(text.substr(0, comma), x) && read(text.substr(comma + 1), y);
+        const std::size_t colon = text.find(':');
+        const std::size_t comma = text.find(',', colon == std::string_view::npos ? 0 : colon);
+
+        std::uint64_t frame = 0;
+        std::uint64_t x = 0;
+        std::uint64_t y = 0;
+        const bool parsed = colon != std::string_view::npos &&
+                            comma != std::string_view::npos &&
+                            read(text.substr(0, colon), frame) &&
+                            read(text.substr(colon + 1, comma - colon - 1), x) &&
+                            read(text.substr(comma + 1), y) && frame != 0;
         if (!parsed) {
-            ENGINE_LOG_WARN("--click-at wants <x>,<y> in whole pixels, so {} was ignored.",
+            ENGINE_LOG_WARN("--click wants <frame>:<x>,<y>, with the frame above zero, so {} "
+                            "was ignored.",
                             text);
             return;
         }
 
-        out = engine::Vec2{ static_cast<float>(x), static_cast<float>(y) };
+        out.push_back(Click{ .frame = frame,
+                             .at = engine::Vec2{ static_cast<float>(x),
+                                                 static_cast<float>(y) } });
     }
 
     /**
@@ -420,10 +439,8 @@ namespace {
             options.watch = value;
         } else if (arg == "--throw-at-frame") {
             parse_count("--throw-at-frame", value, options.throw_at_frame);
-        } else if (arg == "--click-at-frame") {
-            parse_count("--click-at-frame", value, options.click_at_frame);
-        } else if (arg == "--click-at") {
-            parse_point(value, options.click_at);
+        } else if (arg == "--click") {
+            parse_click(value, options.clicks);
         } else if (arg == "--resolution") {
             parse_resolution(value, options.resolution);
         } else if (arg == "--exposure") {
@@ -1695,19 +1712,20 @@ namespace {
             state.keys.at(static_cast<std::size_t>(sandbox::kThrowKey)) = true;
         }
 
-        // --click-at-frame is the same replay shape for the pointer. It writes
-        // a position and a button into the frame, so the click travels the
-        // whole path a hand drives: the bridge turns it into moth_ui events and
+        // --click is the same replay shape for the pointer. It writes a
+        // position and a button into the frame, so the click travels the whole
+        // path a hand drives: the bridge turns it into moth_ui events and
         // whatever the UI does not take reaches the game.
         //
         // The button comes up on the next frame, at the same point. A press is
         // the whole gesture and a release somewhere else cancels it, so the
         // position is written on both frames rather than on the first alone.
-        if (options.click_at_frame != 0 &&
-            (frame + 1 == options.click_at_frame || frame == options.click_at_frame)) {
-            state.mouse_position = options.click_at;
-            state.mouse_buttons.at(static_cast<std::size_t>(
-                engine::platform::MouseButton::Left)) = frame + 1 == options.click_at_frame;
+        for (const Click& click : options.clicks) {
+            if (frame + 1 == click.frame || frame == click.frame) {
+                state.mouse_position = click.at;
+                state.mouse_buttons.at(static_cast<std::size_t>(
+                    engine::platform::MouseButton::Left)) = frame + 1 == click.frame;
+            }
         }
 
 #if defined(ENGINE_WITH_UI)
