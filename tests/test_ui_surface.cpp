@@ -466,6 +466,68 @@ namespace {
         });
     }
 
+    void a_reload_reports_the_layout_it_rebuilt() {
+        test::section("a reload reports the layout it rebuilt");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/hud.mothui"), "the HUD shows");
+            test::check(fixture.surface->show("ui/menu.mothui"), "and the menu shows over it");
+            test::check(fixture.surface->reloads().empty(), "nothing has been rebuilt");
+
+            const as::ManifestEntry* entry = content.find("ui/menu.mothui");
+            test::check(entry != nullptr, "the layout is in the manifest");
+            const std::array<engine::Guid, 1> changed{ entry->guid };
+            test::check(fixture.surface->reload_layouts(changed), "the layout reloads");
+
+            // The report is what lets a script write its values back. Without
+            // it the reload above is silent, and every text the script wrote is
+            // gone with nothing to say so.
+            test::check(fixture.surface->reloads().size() == 1, "one layout is reported");
+            if (fixture.surface->reloads().size() == 1) {
+                test::check(fixture.surface->reloads().front() == "ui/menu.mothui",
+                            "and it is the one that was rebuilt");
+            }
+
+            fixture.surface->clear_reloads();
+            test::check(fixture.surface->reloads().empty(), "and a drain empties them");
+
+            // A layout nobody rebuilt is never reported, so a script is not
+            // asked to write back a layout that still holds what it wrote.
+            const as::ManifestEntry* other = content.find("ui/panel.png");
+            test::check(other != nullptr, "the image is in the manifest");
+            const std::array<engine::Guid, 1> unrelated{ other->guid };
+            test::check(!fixture.surface->reload_layouts(unrelated),
+                        "an asset that is not a layout rebuilds nothing");
+            test::check(fixture.surface->reloads().empty(), "and reports nothing");
+        });
+    }
+
+    void an_image_reload_reports_every_layout() {
+        test::section("an image reload reports every layout");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/hud.mothui"), "the HUD shows");
+            test::check(fixture.surface->show("ui/menu.mothui"), "and the menu shows over it");
+            fixture.surface->clear_reloads();
+
+            // `Node::ReloadEntity` builds every child again, so an image reload
+            // throws away what a script wrote exactly as a layout reload does.
+            // It was silent before M10.7c and the loss looked like a bug in the
+            // game.
+            test::check(fixture.surface->set_text("ui/menu.mothui", "title", "Paused"),
+                        "a script wrote into a layout");
+            fixture.surface->reload_images();
+            test::check(fixture.surface->text("ui/menu.mothui", "title") == "Camina",
+                        "an image reload put the authored text back");
+            test::check(fixture.surface->reloads().size() == 2,
+                        "and both loaded layouts are reported");
+        });
+    }
+
     void a_reload_of_another_asset_changes_nothing() {
         test::section("a reload of another asset changes nothing");
 
@@ -830,6 +892,8 @@ int main() {
     an_image_the_tree_does_not_hold_leaves_the_node_alone();
     an_image_that_will_not_load_is_reported();
     a_reload_keeps_the_layout_showing();
+    a_reload_reports_the_layout_it_rebuilt();
+    an_image_reload_reports_every_layout();
     a_reload_of_another_asset_changes_nothing();
     a_reference_resolves_through_the_content_tree();
     two_references_to_one_layout_answer_separately();

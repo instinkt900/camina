@@ -95,6 +95,8 @@ namespace engine::ui {
                        std::string_view image) override;
         [[nodiscard]] std::span<const script::UiPress> presses() const override;
         void clear_presses() override;
+        [[nodiscard]] std::span<const std::string> reloads() const override;
+        void clear_reloads() override;
         /// @endcond
 
         /**
@@ -149,6 +151,9 @@ namespace engine::ui {
          * authored one.
          *
          * @param changed The identities that were cooked again.
+         * Every layout this rebuilds is reported through `reloads()`, so a
+         * script can write its own values back.
+         *
          * @return True when at least one layout was built again. The caller
          *         must then call `InputBridge::forget`, because the new nodes
          *         know nothing about a button the old ones took.
@@ -165,6 +170,10 @@ namespace engine::ui {
          * node again, so every click action wired into the old nodes goes with
          * them. This wires them again. Without that a button answers once and
          * is silent after the first image reload, which nothing would report.
+         *
+         * It builds the children again, so it throws away what a script wrote
+         * exactly as a layout reload does. Every layout it touches is therefore
+         * reported through `reloads()` too.
          */
         void reload_images();
 
@@ -227,6 +236,15 @@ namespace engine::ui {
 
         /// The presses the frames gathered since the last drain.
         std::vector<script::UiPress> presses_;
+
+        /**
+         * The layouts rebuilt since the last drain, by source path.
+         *
+         * A rebuild throws away every text a script wrote, so a script has to
+         * be told. Nothing else can put those values back: the engine never
+         * knew which of them a script chose rather than the file.
+         */
+        std::vector<std::string> reloads_;
     };
 
 } // namespace engine::ui

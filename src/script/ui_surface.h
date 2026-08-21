@@ -24,6 +24,11 @@
  * in one menu, and every copy carries the same child ids. So a name may hold
  * `kNodePathSeparator` and each segment is resolved inside what the segment
  * before it found. `DESIGN.md` §8.4 records the choice.
+ *
+ * **Two things are reported back rather than asked for**: the presses, and the
+ * layouts that were rebuilt. Both gather on the frame clock and drain on the
+ * step, because M10.5 settled that a UI event is a frame event and #245 settled
+ * that game logic runs on the step.
  */
 
 #include <cstddef>
@@ -167,6 +172,21 @@ namespace engine::script {
 
         /// @brief Forgets every press. `Host::deliver_ui_events` calls this.
         virtual void clear_presses() = 0;
+
+        /**
+         * @brief The layouts rebuilt since the last drain, by source path.
+         *
+         * A rebuild throws away everything a script wrote into that layout, so
+         * this is what lets a script write it again. `DESIGN.md` §8.4 records
+         * why the engine cannot put the values back itself: it never knew which
+         * of them a script chose.
+         *
+         * @return Every rebuilt layout, in the order they were rebuilt.
+         */
+        [[nodiscard]] virtual std::span<const std::string> reloads() const = 0;
+
+        /// @brief Forgets every reload. `Host::deliver_ui_events` calls this.
+        virtual void clear_reloads() = 0;
     };
 
 } // namespace engine::script

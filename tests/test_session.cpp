@@ -64,6 +64,14 @@ namespace {
         }
         void clear_presses() override { presses_.clear(); }
 
+        /// Records a rebuild, the way a hot reload does.
+        void reloaded(std::string layout) { reloads_.push_back(std::move(layout)); }
+
+        [[nodiscard]] std::span<const std::string> reloads() const override {
+            return reloads_;
+        }
+        void clear_reloads() override { reloads_.clear(); }
+
         bool show(std::string_view layout) override {
             (void)layout;
             return true;
@@ -118,6 +126,7 @@ namespace {
 
     private:
         std::vector<sp::UiPress> presses_;
+        std::vector<std::string> reloads_;
     };
 
     /// A component the script writes, so a check reads state and not a log.
@@ -125,6 +134,7 @@ namespace {
         int updates = 0; ///< How many times on_update ran.
         int presses = 0; ///< How many presses reached the script.
         int fired = 0;   ///< How many press edges the fire action raised.
+        int reloads = 0; ///< How many layout reloads reached the script.
     };
 
 } // namespace
@@ -136,12 +146,13 @@ namespace {
 template <>
 struct engine::reflect::Describe<Counter> {
     static constexpr const char* name = "Counter"; ///< The name the script uses.
-    /// @brief The three counts.
+    /// @brief The four counts.
     /// @return A tuple of field descriptors.
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(Counter, updates),
                                ENGINE_FIELD(Counter, presses),
-                               ENGINE_FIELD(Counter, fired));
+                               ENGINE_FIELD(Counter, fired),
+                               ENGINE_FIELD(Counter, reloads));
     }
 };
 
@@ -178,14 +189,24 @@ namespace {
                     end
                     entity:set("Counter", { updates = counter.updates + 1,
                                             presses = counter.presses,
-                                            fired = fired })
+                                            fired = fired,
+                                            reloads = counter.reloads })
                 end
 
                 function on_ui_press(layout, node)
                     local counter = entity:get("Counter")
                     entity:set("Counter", { updates = counter.updates,
                                             presses = counter.presses + 1,
-                                            fired = counter.fired })
+                                            fired = counter.fired,
+                                            reloads = counter.reloads })
+                end
+
+                function on_ui_reload(layout)
+                    local counter = entity:get("Counter")
+                    entity:set("Counter", { updates = counter.updates,
+                                            presses = counter.presses,
+                                            fired = counter.fired,
+                                            reloads = counter.reloads + 1 })
                 end
             )";
             check(session.scripts().load(kScript, "counter.lua", bytes_of(source)),
@@ -358,6 +379,28 @@ namespace {
         check(fixture.counter().fired == 1, "and a key pressed after the resume still reads");
     }
 
+    void a_paused_session_still_delivers_a_reload() {
+        section("a paused session still delivers a reload");
+
+        Fixture fixture;
+        fixture.open();
+        fixture.run(1);
+
+        // A menu is edited while the game is paused, which is the whole reason
+        // this has to reach a script on the frame clock. A reload delivered only
+        // on a step would leave every label wrong for as long as the menu is up,
+        // which is exactly when a person is looking at it.
+        fixture.session.set_paused(true);
+        const int before = fixture.counter().reloads;
+
+        fixture.ui.reloaded("ui/pause.mothui");
+        fixture.run(1);
+
+        check(fixture.counter().reloads == before + 1,
+              "the reload reached the script while the game was paused");
+        check(fixture.ui.reloads().empty(), "and the delivery drained it");
+    }
+
 } // namespace
 
 int main() {
@@ -371,6 +414,7 @@ int main() {
     a_paused_session_still_delivers_a_press();
     a_paused_session_holds_the_bodies_still();
     a_pause_does_not_hand_the_game_the_keys_pressed_during_it();
+    a_paused_session_still_delivers_a_reload();
 
     engine::jobs::shutdown();
     return test::report();

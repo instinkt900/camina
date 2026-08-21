@@ -162,13 +162,13 @@ local function label_buttons(layout)
     end
 end
 
--- Shows one layout and writes its labels, or reports that this build has no UI.
-local function put_up(layout)
-    if not ui.show(layout) then
-        return false
+-- What the status line says now.
+local function status_text()
+    local goal = entity:get("Goal")
+    if goal ~= nil and goal.won then
+        return "Solved. Reset with R."
     end
-    label_buttons(layout)
-    return true
+    return instructions
 end
 
 -- Writes the line of the HUD that the running game changes.
@@ -183,6 +183,40 @@ local function refresh()
     local goal = entity:get("Goal")
     local needed = goal ~= nil and goal.needed or 0
     write_line(hud, "score", string.format("In the goal: %d of %d", count(inside), needed))
+end
+
+-- Writes everything this game owns in one layout.
+--
+-- Every one of these is a value the file does not carry: a label lives inside
+-- `button.mothui` and is the same word for every reference, and the two HUD
+-- lines are the game's own state. So a rebuild loses all of them, and this is
+-- what puts them back.
+local function write_own(layout)
+    label_buttons(layout)
+    if layout == hud then
+        say(status_text())
+        refresh()
+    end
+end
+
+-- Shows one layout and writes what it owns, or reports that this build has no UI.
+local function put_up(layout)
+    if not ui.show(layout) then
+        return false
+    end
+    write_own(layout)
+    return true
+end
+
+-- **A rebuilt layout carries the text its file carries.** A hot reload builds
+-- the node tree again, and so does an image reload, so everything written above
+-- is gone. The engine cannot put it back, because it never knew which values a
+-- script chose. It reports the layout instead and this writes them again.
+--
+-- It arrives on the frame clock while the game is paused, which is when a
+-- person edits a menu. See DESIGN.md section 8.4.
+function on_ui_reload(layout)
+    write_own(layout)
 end
 
 -- The main menu, with the game held. This is where a run starts.
@@ -207,10 +241,7 @@ end
 function start_game()
     ui.hide(main_menu)
     ui.hide(pause_menu)
-    if put_up(hud) then
-        say(instructions)
-        refresh()
-    end
+    put_up(hud)
     game.resume()
 end
 
@@ -261,12 +292,9 @@ function on_start()
         -- the file carries and every line the game wrote is gone.
         for _, layout in ipairs({ main_menu, hud, pause_menu }) do
             if ui.visible(layout) then
-                label_buttons(layout)
+                write_own(layout)
             end
         end
-        local goal = entity:get("Goal")
-        say(goal ~= nil and goal.won and "Solved. Reset with R." or instructions)
-        refresh()
     else
         show_menu()
     end

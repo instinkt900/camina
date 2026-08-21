@@ -54,7 +54,7 @@ namespace engine::platform {
 namespace engine::script {
 
     /**
-     * @brief The five calls a script may declare.
+     * @brief The seven calls a script may declare.
      *
      * A script declares what it needs and leaves out the rest. A script with no
      * `on_update` costs nothing each step, because the host looks the function
@@ -67,6 +67,7 @@ namespace engine::script {
         Trigger, ///< `on_trigger(other, began)`, on the entity that is the trigger.
         Contact, ///< `on_contact(other, began)`, on each of the two bodies.
         Press,   ///< `on_ui_press(layout, node)`, on every instance that declares it.
+        Reload,  ///< `on_ui_reload(layout)`, after a layout was built again.
     };
 
     /**
@@ -277,7 +278,11 @@ namespace engine::script {
                                     const Services& services = {});
 
         /**
-         * @brief Hands the scripts every UI press gathered since the last step.
+         * @brief Hands the scripts every UI event gathered since the last step.
+         *
+         * Two kinds, and the reloads go first. A rebuilt layout has thrown away
+         * every text a script wrote into it, so the script writes them again on
+         * `on_ui_reload` before it acts on any press of the same batch.
          *
          * @warning **Call this inside the fixed step, beside
          * `deliver_physics_events`, and never once for each frame.** M10.5
@@ -298,7 +303,11 @@ namespace engine::script {
          * order nothing promises, and a reproducible run rests on there being
          * none of that. See `DESIGN.md` section 9.
          *
-         * The surface is drained at the end, so one press is delivered once.
+         * **A reload goes to every instance that declares `on_ui_reload`**, under
+         * the same rule and in the same order. A layout belongs to no one entity
+         * either.
+         *
+         * The surface is drained at the end, so one event is delivered once.
          *
          * @param world The world the instances belong to.
          * @param services What a callback may reach. **The surface comes from

@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7c to M10.7f
+Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7d to M10.7f
 Last updated: 2026-08-21
 
 ---
@@ -1032,6 +1032,7 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   node:set_image(image)        -- an image by its source path
 
   function on_ui_press(layout, node) end   -- the sixth callback
+  function on_ui_reload(layout) end        -- the seventh. M10.7c
   ```
 
   **A layout is named by its source path and a node by its id.** Nothing hands a script a
@@ -1099,6 +1100,32 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   layout file, so a changed text goes back to the authored one. Whether a layout is showing,
   and where it sits in the order, both survive. This is the same rule M8.5 settled for the
   script table: a node is scratch and a component is storage.
+
+  **M10.7c tells the script, which is what makes that rule liveable.** `on_ui_reload(layout)` is
+  the seventh callback, and it goes to every instance that declares it, in entity order, under
+  the same rule a press follows. `ScriptSurface` reports each layout it rebuilt and
+  `Host::deliver_ui_events` drains the reports beside the presses.
+
+  **The engine cannot put those values back itself**, which is why this is a signal rather than a
+  fix. It never knew which text came from a script and which from the file, and a surface that
+  kept every write would be a second copy of the layout that no reload could ever correct.
+
+  **A reload is delivered before a press of the same batch.** A press acting first would act on a
+  menu still reading whatever its file says. One test drives both in one drain and checks the
+  order, because the other order is what falls out of writing the loops the obvious way round.
+
+  **An image reload reports too.** `Node::ReloadEntity` builds every child again, so it loses a
+  script's text exactly as a layout reload does. That was silent, and the loss looked like a
+  fault in the game rather than in the reload.
+
+  **It arrives on the frame clock while the game is paused**, because `Session::advance` drains
+  the UI events on its paused branch. A menu is edited while the game is paused, so a reload that
+  only ever reached a step would leave every label wrong for exactly as long as somebody was
+  looking at it.
+
+  This is what #410 asked for, and it is the gap the M10.7 authoring pass rated first. Before it,
+  the first save while authoring a menu made every button in that menu read `Button`, because a
+  referenced button cannot carry a per-instance label in the file. See #402 and §10 M10.
 
   **`Node::ReloadEntity` destroys and builds every child node again**, so every click action
   wired into the old nodes goes with them. `reload_images` wires them again. Without that a
@@ -2782,7 +2809,7 @@ C++ knows any of them exists.
 **The milestone is not closed by it.** The pass found four gaps and every one of them is in the
 milestone, as M10.7c through M10.7f. None of them blocks the test above, and each is a thing a
 person meets while authoring a menu rather than a thing they read about. M10 closes when all
-four are answered.
+four are answered. M10.7c is answered and the other three are open.
 
 It came in three parts. M10.7a gave a script the fixed step through `script::GameClock`, because
 a pause menu that cannot stop the world is a picture rather than a menu. #402 gave a script a
@@ -2817,12 +2844,12 @@ surface, and it fails if the world stands still.
 Four gaps, all filed, none of them fixed on that branch. M9.8 found nothing and said so, and this
 pass is the other outcome: authoring the thing is what finds what building the parts cannot.
 
-- **#410, M10.7c, a script is not told when a layout reloaded.** The most valuable of the four,
-  and the first to answer. A reload builds the node tree again, so every label a script wrote
-  goes back to the text the file carries, and `on_start` runs again only when the **script**
-  reloads. So the first save while authoring a menu makes every button in it read `Button`.
-  `ScriptSurface::reload_layouts` already knows which layouts it rebuilt and throws the signal
-  away.
+- **#410, M10.7c, a script is not told when a layout reloaded. Answered.** A reload builds the
+  node tree again, so every label a script wrote went back to the text the file carries, and
+  `on_start` runs again only when the **script** reloads. So the first save while authoring a
+  menu made every button in it read `Button`. `on_ui_reload(layout)` is the answer and §8.4 holds
+  it. The mutation is the whole of the proof: take the callback out of `scripts/puzzle.lua`,
+  edit the three layouts mid-run, and every label reads `Button` again.
 - **#408, M10.7d, a paused game reads no key.** A script reads an action inside `on_update`, and
   a paused session runs none. So P puts the pause menu up and only the Resume button takes it
   down. Every game resumes on the key that paused it, and this one cannot.
