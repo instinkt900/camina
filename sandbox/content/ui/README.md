@@ -20,11 +20,17 @@ only for a group entity, and the only group a `.mothui` can name as a child is a
 id belongs to the reference, so the same button file stands up as `throw button` and as
 `reset button`, and `on_ui_press` in `scripts/puzzle.lua` tells them apart by that name.
 
-**A label sits in the menu, not in the button.** A node id is unique only within the layout
-that declares it, so two references to one button file would each hold a child called the same
-thing and `FindChild` would answer with the first. The two `Text` nodes come after the two
-references, because a group draws its children in order and a label has to sit over the face it
-names. A text node consumes no mouse event, so it cannot steal the press.
+**A button carries its own label**, and the menu names it through the reference. A node id is
+unique only within the layout that declares it, so both references hold a child called `label`
+and a bare name answers with the first of them. A script says `throw button/label` instead, and
+each segment is searched inside what the one before it found. `scripts/puzzle.lua` writes both.
+
+The label is authored as `Button` and the game replaces it. A reload builds the nodes again from
+the file, so both go back to `Button` and `on_start` writes them again.
+
+Inside the button the label anchors to the whole face, 0,0 to 1,1 with no offsets, so it follows
+whatever rectangle the menu gives the reference. It comes after the face, because a group draws
+its children in order. A text node consumes no mouse event, so it cannot steal the press.
 
 The runtime loads these from the **cooked** tree rather than from here, and a script asks for
 one by its source path. The cooker rewrites both an image reference and a sub-layout reference

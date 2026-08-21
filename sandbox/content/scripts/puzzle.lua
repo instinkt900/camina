@@ -58,44 +58,6 @@ local function count(set)
     return n
 end
 
-function on_start()
-    -- An array rather than a table keyed by name, so ipairs walks it in a fixed
-    -- order. A string-keyed table walks in an order Lua seeds from the clock,
-    -- and a run that depended on it would not reproduce. See script/bindings.h.
-    for _, name in ipairs(stack_names) do
-        local crate = world.find(name)
-        if crate == nil then
-            log.warn(string.format("puzzle.lua found no crate named %s.", name))
-        else
-            homes[#homes + 1] = { entity = crate, position = crate:world_position() }
-        end
-    end
-
-    -- The win is deliberately not cleared here. on_start runs again on every
-    -- reload, so clearing it would wipe a solved puzzle each time the file is
-    -- saved, which is the opposite of what putting the win on a component
-    -- bought. The scene ships it false and the reset is what clears it. See
-    -- DESIGN.md section 10 M8.
-    -- The game shows its own UI. Before M10.6 the runtime loaded one layout at
-    -- start and the game could not reach it, so a caption was a log line.
-    if not ui.show(layout) then
-        log.warn(string.format("%s would not show, so the puzzle reports through the log "
-                               .. "alone.", layout))
-    end
-
-    -- A reload restarts this script and the layout keeps whatever the last run
-    -- left in it, so the caption is written rather than assumed.
-    local goal = entity:get("Goal")
-    if goal ~= nil and goal.won then
-        say("Solved. Reset with R.")
-    else
-        say(instructions)
-    end
-
-    log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R. "
-                           .. "Both are buttons in the layout as well.", #homes))
-end
-
 local function throw()
     local from = camera.position()
     local forward = camera.forward()
@@ -142,16 +104,81 @@ local function reset()
     log.info("The room is back.")
 end
 
--- What each button in the layout does. A press names a node, so this is keyed
--- by node id rather than by anything the layout knows about the game.
+-- What each button in the layout does, and what each one says. A press names a
+-- node, so this is keyed by node path rather than by anything the layout knows
+-- about the game.
 --
 -- ipairs and a list rather than a string-keyed table, because Lua 5.4 seeds its
 -- string hash from the clock and a keyed walk is not reproducible. See
 -- DESIGN.md section 9.
 local buttons = {
-    { node = "throw button", press = function() throw() end },
-    { node = "reset button", press = function() reset() end },
+    { node = "throw button", label = "Throw", press = function() throw() end },
+    { node = "reset button", label = "Reset", press = function() reset() end },
 }
+
+-- Writes the label of each button.
+--
+-- The label is a node inside button.mothui, so it is named through the
+-- reference that stands that button up. Both references hold a child called
+-- `label`, and a node id is unique only inside the layout that declares it, so
+-- the bare name would answer with whichever reference comes first. See
+-- DESIGN.md section 8.4.
+--
+-- A reload builds the nodes again from the layout file, so both labels go back
+-- to the authored text. on_start runs again on a reload and calls this.
+local function label_buttons()
+    for _, button in ipairs(buttons) do
+        local path = button.node .. "/label"
+        local label = ui.find(layout, path)
+        if label == nil then
+            log.warn(string.format("%s holds no node called %s.", layout, path))
+        else
+            label:set_text(button.label)
+        end
+    end
+end
+
+-- This sits below the functions it calls. A Lua local is in scope only under
+-- the line that declares it, so `label_buttons` has to come first.
+function on_start()
+    -- An array rather than a table keyed by name, so ipairs walks it in a fixed
+    -- order. A string-keyed table walks in an order Lua seeds from the clock,
+    -- and a run that depended on it would not reproduce. See script/bindings.h.
+    for _, name in ipairs(stack_names) do
+        local crate = world.find(name)
+        if crate == nil then
+            log.warn(string.format("puzzle.lua found no crate named %s.", name))
+        else
+            homes[#homes + 1] = { entity = crate, position = crate:world_position() }
+        end
+    end
+
+    -- The win is deliberately not cleared here. on_start runs again on every
+    -- reload, so clearing it would wipe a solved puzzle each time the file is
+    -- saved, which is the opposite of what putting the win on a component
+    -- bought. The scene ships it false and the reset is what clears it. See
+    -- DESIGN.md section 10 M8.
+    -- The game shows its own UI. Before M10.6 the runtime loaded one layout at
+    -- start and the game could not reach it, so a caption was a log line.
+    if not ui.show(layout) then
+        log.warn(string.format("%s would not show, so the puzzle reports through the log "
+                               .. "alone.", layout))
+    end
+
+    label_buttons()
+
+    -- A reload restarts this script and the layout keeps whatever the last run
+    -- left in it, so the caption is written rather than assumed.
+    local goal = entity:get("Goal")
+    if goal ~= nil and goal.won then
+        say("Solved. Reset with R.")
+    else
+        say(instructions)
+    end
+
+    log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R. "
+                           .. "Both are buttons in the layout as well.", #homes))
+end
 
 function on_ui_press(pressed_layout, node)
     if pressed_layout ~= layout then

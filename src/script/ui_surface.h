@@ -19,6 +19,11 @@
  * a node, because a hot reload frees the node tree and a script that held one
  * would be holding freed memory on the next frame. `DESIGN.md` §8.4 has that
  * trap three times over.
+ *
+ * **A node name is a path.** M10.7 needs one button file stood up several times
+ * in one menu, and every copy carries the same child ids. So a name may hold
+ * `kNodePathSeparator` and each segment is resolved inside what the segment
+ * before it found. `DESIGN.md` §8.4 records the choice.
  */
 
 #include <cstddef>
@@ -29,6 +34,18 @@
 namespace engine::script {
 
     /**
+     * @brief What separates one segment of a node name from the next.
+     *
+     * A name with no separator in it names a node anywhere in the layout, which
+     * is what almost every call passes. A name with one narrows the search:
+     * `"play button/label"` is the `label` of that one reference, and no other.
+     *
+     * @warning A node id must not hold this character, because a script could
+     * then never name that node. The surface reports one that does.
+     */
+    inline constexpr char kNodePathSeparator = '/';
+
+    /**
      * @brief One press a layout reported, named the way a script names things.
      *
      * A press is the whole gesture: the pointer went down on a node and came up
@@ -37,7 +54,16 @@ namespace engine::script {
      */
     struct UiPress {
         std::string layout; ///< The source path of the layout that reported it.
-        std::string node;   ///< The id of the node inside that layout.
+
+        /**
+         * The path of the node inside that layout, from the root.
+         *
+         * It is the same string `has_node` and the rest take, so a script can
+         * hand a press straight back to `find`. A button a menu declares itself
+         * is one segment, and a button inside a referenced layout carries the
+         * reference in front of it.
+         */
+        std::string node;
     };
 
     /**
@@ -78,9 +104,9 @@ namespace engine::script {
         /// @return True while it draws.
         [[nodiscard]] virtual bool visible(std::string_view layout) const = 0;
 
-        /// @brief Whether a layout holds a node with that id.
+        /// @brief Whether a layout holds a node with that path.
         /// @param layout The source path.
-        /// @param node The node id.
+        /// @param node The node path, one or more ids separated by `/`.
         /// @return True when both are there.
         [[nodiscard]] virtual bool has_node(std::string_view layout,
                                             std::string_view node) const = 0;
@@ -88,7 +114,7 @@ namespace engine::script {
         /**
          * @brief What a text node shows.
          * @param layout The source path.
-         * @param node The node id.
+         * @param node The node path, one or more ids separated by `/`.
          * @return The text, or an empty string when the node is missing or shows none.
          */
         [[nodiscard]] virtual std::string text(std::string_view layout,
@@ -97,7 +123,7 @@ namespace engine::script {
         /**
          * @brief Changes what a text node shows.
          * @param layout The source path.
-         * @param node The node id.
+         * @param node The node path, one or more ids separated by `/`.
          * @param text The new text.
          * @return False when the node is missing or is not a text node.
          */
@@ -106,7 +132,7 @@ namespace engine::script {
 
         /// @brief Whether a node is shown.
         /// @param layout The source path.
-        /// @param node The node id.
+        /// @param node The node path, one or more ids separated by `/`.
         /// @return True while the node draws.
         [[nodiscard]] virtual bool node_visible(std::string_view layout,
                                                 std::string_view node) const = 0;
@@ -114,7 +140,7 @@ namespace engine::script {
         /**
          * @brief Shows or hides one node.
          * @param layout The source path.
-         * @param node The node id.
+         * @param node The node path, one or more ids separated by `/`.
          * @param visible True to show it.
          * @return False when the node is missing.
          */
@@ -125,7 +151,7 @@ namespace engine::script {
          * @brief Changes the image an image node draws.
          *
          * @param layout The source path.
-         * @param node The node id.
+         * @param node The node path, one or more ids separated by `/`.
          * @param image The source path of the image, the way a layout names one.
          * @return False when the node is missing, is not an image node, or the
          *         image is not in the content tree.
