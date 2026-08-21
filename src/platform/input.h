@@ -37,6 +37,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -231,6 +232,20 @@ namespace engine::platform {
 
         /// @brief Forgets every binding. The frame state is left alone.
         void clear_bindings();
+
+        /**
+         * @brief Every key bound to one action.
+         *
+         * This is the reverse of bind(), and it exists so that a replay can hold
+         * down whatever a game bound rather than naming a key of its own.
+         * `runtime --key` uses it, which is what keeps the runtime from naming a
+         * key that belongs to the game. See `DESIGN.md` section 9.
+         *
+         * @param action The name bind() was given.
+         * @return The keys, or an empty span when nothing bound that name. The
+         *         span is valid until the next bind() or clear_bindings().
+         */
+        [[nodiscard]] std::span<const Key> keys_of(std::string_view action) const;
 
         /**
          * @brief Takes the frame and works out the edges.

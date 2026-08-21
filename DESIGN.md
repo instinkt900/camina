@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7d to M10.7f
+Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7e and M10.7f
 Last updated: 2026-08-21
 
 ---
@@ -997,7 +997,7 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   calls in `update_input` were verified by reading alone. A wrong order still compiles, passes
   every test, and lets the player walk while the menu is open.
 
-  It is the shape `--throw-at-frame` uses. The flag writes a pointer position and a button into
+  It is the shape the key replay uses. The flag writes a pointer position and a button into
   `platform::InputFrame` rather than calling into moth_ui, so the click travels the whole path a
   hand drives and a wiring mistake fails the capture rather than passing it.
 
@@ -1033,6 +1033,7 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
 
   function on_ui_press(layout, node) end   -- the sixth callback
   function on_ui_reload(layout) end        -- the seventh. M10.7c
+  function on_paused_update() end          -- the eighth. M10.7d
   ```
 
   **A layout is named by its source path and a node by its id.** Nothing hands a script a
@@ -1126,6 +1127,36 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   This is what #410 asked for, and it is the gap the M10.7 authoring pass rated first. Before it,
   the first save while authoring a menu made every button in that menu read `Button`, because a
   referenced button cannot carry a per-instance label in the file. See #402 and §10 M10.
+
+  **M10.7d gave a paused game one callback of its own, which closed #408.** A script reads an
+  action inside `on_update`, and a paused session runs none, so the key that would resume a game
+  could never be seen. `on_paused_update()` runs once for each frame while the game is paused,
+  and the actions move on that clock so an edge reaches it.
+
+  **A separate callback rather than running `on_update` with a zero delta.** The cheap answer
+  makes "a paused game runs no `on_update`" untrue, and that rule is what keeps a pause from
+  moving anything. Every game would then have to test `game.paused()` at the top of `on_update`
+  or quietly keep running. A callback that exists only while paused cannot be got wrong that way.
+
+  **It takes no seconds.** A paused game runs no simulated time, and the wall clock is what #245
+  took out of a script. What it is for is the key that resumes, and nothing that moves the world.
+
+  **It syncs the instances the way a step does**, so a script edited while the game is paused
+  restarts there and then. Editing a menu while it is on the screen is exactly when that matters,
+  and the sync is shared rather than copied so the two paths cannot disagree about which
+  instances exist.
+
+  **A pause still takes the key away from the game.** The edges are consumed on the paused frames,
+  so the first step after a resume does not take every key pressed while the menu was up. That
+  guarantee came with M10.7a and it is now measured through the general flag: a throw replayed
+  during a pause gives the paused capture byte for byte.
+
+  **`runtime --key <frame>:<action>` replays a press by action name**, which replaced
+  `--throw-at-frame`. The old flag named `sandbox::kThrowKey` from inside the runtime, so the
+  application knew a key that belonged to the game. `platform::Input::keys_of` answers what an
+  action was bound to, so the flag now names none and a game that rebinds one needs no change.
+  One hook covers every action a game has, which is what a pause menu needed and what the throw
+  hook could never have given.
 
   **`Node::ReloadEntity` destroys and builds every child node again**, so every click action
   wired into the old nodes goes with them. `reload_images` wires them again. Without that a
@@ -2458,7 +2489,7 @@ interpolation.
 **Done when:** you hit a stack of boxes and it falls.
 
 **M7 is complete.** A stack of three crates stands in the sandbox room, and a crate thrown
-from the camera knocks it over. `--throw-at-frame` fires the same throw on a fixed frame, so
+from the camera knocks it over. `--key <frame>:throw` fires the same throw on a fixed frame, so
 the picture that proves it is one a person can produce again.
 
 It arrived in six parts. M7.1 vendored Box3D and confirmed it agrees about which way is up.
@@ -2809,7 +2840,7 @@ C++ knows any of them exists.
 **The milestone is not closed by it.** The pass found four gaps and every one of them is in the
 milestone, as M10.7c through M10.7f. None of them blocks the test above, and each is a thing a
 person meets while authoring a menu rather than a thing they read about. M10 closes when all
-four are answered. M10.7c is answered and the other three are open.
+four are answered. M10.7c and M10.7d are answered, and M10.7e and M10.7f are open.
 
 It came in three parts. M10.7a gave a script the fixed step through `script::GameClock`, because
 a pause menu that cannot stop the world is a picture rather than a menu. #402 gave a script a
@@ -2850,9 +2881,10 @@ pass is the other outcome: authoring the thing is what finds what building the p
   menu made every button in it read `Button`. `on_ui_reload(layout)` is the answer and §8.4 holds
   it. The mutation is the whole of the proof: take the callback out of `scripts/puzzle.lua`,
   edit the three layouts mid-run, and every label reads `Button` again.
-- **#408, M10.7d, a paused game reads no key.** A script reads an action inside `on_update`, and
-  a paused session runs none. So P puts the pause menu up and only the Resume button takes it
-  down. Every game resumes on the key that paused it, and this one cannot.
+- **#408, M10.7d, a paused game reads no key. Answered.** A script reads an action inside
+  `on_update`, and a paused session runs none, so P put the pause menu up and only the Resume
+  button took it down. `on_paused_update()` is the answer and §8.4 holds it. P resumes now, and
+  the capture proves it through `--key 90:pause`.
 - **#409, M10.7e, a paused game that moves something does not redraw it.** The Main menu button
   puts the room back, and the crates stay drawn where they fell until something resumes. Both
   interpolate calls sit at the end of the step loop, which a paused session returns before.

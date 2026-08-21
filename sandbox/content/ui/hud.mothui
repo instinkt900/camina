@@ -685,7 +685,7 @@
       ],
       "fontName": "body",
       "fontSize": 20,
-      "text": "Pause with P or the button.",
+      "text": "Pause and resume with P.",
       "horizontalAlignment": "Left",
       "verticalAlignment": "Middle",
       "dropShadow": false,

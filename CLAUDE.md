@@ -437,7 +437,7 @@ frame rate, and `Simulation::interpolate` blends the last two steps into the pos
 it, behind `--physics-debug` and a reflected `ViewSettings` field.
 
 The milestone test passes: a stack of three crates stands in the sandbox room and a crate thrown
-from the camera knocks it over. `--throw-at-frame <n>` fires the same throw on a fixed frame, so
+from the camera knocks it over. `--key <frame>:throw` fires the same throw on a fixed frame, so
 an offscreen capture of it is reproducible.
 
 **The game logic runs on the fixed step**, which closed #245. `sandbox::update` takes simulated

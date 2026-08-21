@@ -225,6 +225,11 @@ namespace engine::platform {
 
     void Input::clear_bindings() { actions_.clear(); }
 
+    std::span<const Key> Input::keys_of(std::string_view action) const {
+        const Action* found = find(action);
+        return found == nullptr ? std::span<const Key>{} : std::span<const Key>{ found->keys };
+    }
+
     void Input::update(const InputFrame& frame) {
         previous_ = current_;
         current_ = frame;

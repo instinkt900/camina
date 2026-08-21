@@ -54,7 +54,7 @@ namespace engine::platform {
 namespace engine::script {
 
     /**
-     * @brief The seven calls a script may declare.
+     * @brief The eight calls a script may declare.
      *
      * A script declares what it needs and leaves out the rest. A script with no
      * `on_update` costs nothing each step, because the host looks the function
@@ -68,6 +68,14 @@ namespace engine::script {
         Contact, ///< `on_contact(other, began)`, on each of the two bodies.
         Press,   ///< `on_ui_press(layout, node)`, on every instance that declares it.
         Reload,  ///< `on_ui_reload(layout)`, after a layout was built again.
+        /**
+         * `on_paused_update()`, once for each frame while the game is paused.
+         *
+         * It takes no seconds, because a paused game runs no simulated time and
+         * the wall clock is what issue #245 took out of a script. It is for
+         * reading the key that resumes, and for nothing that moves the world.
+         */
+        PausedUpdate,
     };
 
     /**
@@ -314,6 +322,31 @@ namespace engine::script {
          * here**, so a call with no `ui` service delivers nothing.
          */
         void deliver_ui_events(scene::World& world, const Services& services = {});
+
+        /**
+         * @brief Runs `on_paused_update` on every instance that declares it.
+         *
+         * **Call this once for each frame while the game is paused, in place of
+         * update().** A paused session runs no fixed step, so a script reading
+         * an action inside `on_update` can never see the key that would resume
+         * it. That is issue #408, and this is the answer to it.
+         *
+         * It takes no seconds. A paused game runs no simulated time, and the
+         * wall clock is what #245 took out of a script.
+         *
+         * **It syncs the instances the way update() does**, so a script edited
+         * while the game is paused restarts there and then rather than waiting
+         * for a resume. Editing a menu while it is on the screen is exactly when
+         * that matters.
+         *
+         * @warning **Nothing here may move the world.** A paused session writes
+         * no drawn pose, so anything moved from this call is not seen until
+         * something resumes. See issue #409.
+         *
+         * @param world The world the instances belong to.
+         * @param services What a callback may reach, the same as update().
+         */
+        void update_paused(scene::World& world, const Services& services = {});
 
         /**
          * @brief Runs `on_destroy` on every instance and drops them all.

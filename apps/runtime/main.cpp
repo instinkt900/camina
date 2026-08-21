@@ -60,6 +60,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -122,6 +123,20 @@ namespace {
         engine::Vec2 at{ 0.0F, 0.0F }; ///< Where the pointer sits, in pixels.
     };
 
+    /**
+     * One key press to replay, named by the action a game bound it to.
+     *
+     * **By action rather than by key.** The runtime then names no key of the
+     * game's, and a game that rebinds one needs no change here. It holds every
+     * key bound to that action down for one frame, which is the replay shape:
+     * write a frame out and feed it back, so the press travels the path a hand
+     * drives rather than going around it.
+     */
+    struct KeyPress {
+        std::uint64_t frame = 0; ///< The frame the keys go down on.
+        std::string action;      ///< The action name the game bound.
+    };
+
     struct Options {
         std::uint64_t max_frames = 0; ///< 0 means run until the user quits.
         /// Where to write a PNG of the last frame. Empty writes nothing.
@@ -168,14 +183,14 @@ namespace {
         /// Whether to turn the physics wireframe on. Off unless asked for.
         bool physics_debug = false;
         /**
-         * Throw a crate on this frame, or 0 to throw none.
+         * Every key press to replay, in the order they were given.
          *
-         * An offscreen capture has no keyboard, so the milestone test cannot be
-         * captured without this. The camera is where the settings put it and
-         * the frame number is fixed, so the throw is the same every run and the
+         * An offscreen run has no keyboard, so a milestone test cannot be
+         * captured without this. The camera is where the settings put it and the
+         * frame numbers are fixed, so a run is the same every time and the
          * picture is reproducible.
          */
-        std::uint64_t throw_at_frame = 0;
+        std::vector<KeyPress> keys;
         /**
          * Every click to replay, in the order they were given.
          *
@@ -353,6 +368,35 @@ namespace {
     }
 
     /**
+     * Reads a `<frame>:<action>` key press.
+     *
+     * The action is a name a game bound, not a key. So this parses no key table
+     * and the runtime names no key the game owns.
+     *
+     * @param text The value given on the command line.
+     * @param out Receives the press. Untouched unless the whole value parsed.
+     */
+    void parse_key(std::string_view text, std::vector<KeyPress>& out) {
+        const std::size_t colon = text.find(':');
+        std::uint64_t frame = 0;
+        bool parsed = false;
+        if (colon != std::string_view::npos && colon + 1 < text.size()) {
+            const std::string_view head = text.substr(0, colon);
+            const char* last = head.data() + head.size();
+            const std::from_chars_result read = std::from_chars(head.data(), last, frame);
+            parsed = read.ec == std::errc{} && read.ptr == last && frame != 0;
+        }
+        if (!parsed) {
+            ENGINE_LOG_WARN("--key wants <frame>:<action>, with the frame above zero, so {} "
+                            "was ignored.",
+                            text);
+            return;
+        }
+
+        out.push_back(KeyPress{ .frame = frame, .action = std::string{ text.substr(colon + 1) } });
+    }
+
+    /**
      * Reads the per-cell light ceiling.
      *
      * `std::from_chars` on the unsigned type, for the reason parse_resolution()
@@ -437,8 +481,8 @@ namespace {
             options.screenshot = value;
         } else if (arg == "--watch") {
             options.watch = value;
-        } else if (arg == "--throw-at-frame") {
-            parse_count("--throw-at-frame", value, options.throw_at_frame);
+        } else if (arg == "--key") {
+            parse_key(value, options.keys);
         } else if (arg == "--click") {
             parse_click(value, options.clicks);
         } else if (arg == "--resolution") {
@@ -1703,13 +1747,29 @@ namespace {
             state = engine::platform::sample(runtime.window, consumed);
         }
 
-        // --throw-at-frame holds the throw key down for one frame rather than
-        // calling the throw itself. The throw is a script now and it reads the
-        // action, so a hook that went around the input module would drive a path
-        // the game never takes. input.h calls this the replay shape: write a
-        // frame out and feed it back. See DESIGN.md section 9.
-        if (options.throw_at_frame != 0 && frame + 1 == options.throw_at_frame) {
-            state.keys.at(static_cast<std::size_t>(sandbox::kThrowKey)) = true;
+        // --key holds down every key the game bound to an action, for one
+        // frame, rather than calling whatever the action does. The game is a
+        // script and it reads the action, so a hook that went around the input
+        // module would drive a path the game never takes. input.h calls this the
+        // replay shape: write a frame out and feed it back. See DESIGN.md
+        // section 9.
+        //
+        // The bindings come from the session, which is the input the game reads.
+        // So this names no key of the game's, and a game that rebinds one needs
+        // nothing here.
+        for (const KeyPress& press : options.keys) {
+            if (frame + 1 != press.frame) {
+                continue;
+            }
+            const std::span<const engine::platform::Key> keys =
+                session.input().keys_of(press.action);
+            if (keys.empty()) {
+                ENGINE_LOG_WARN("--key names the action {}, which the game bound to no key.",
+                                press.action);
+            }
+            for (const engine::platform::Key key : keys) {
+                state.keys.at(static_cast<std::size_t>(key)) = true;
+            }
         }
 
         // --click is the same replay shape for the pointer. It writes a

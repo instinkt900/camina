@@ -63,13 +63,7 @@ namespace sandbox {
     /// @brief The action a script reads to put the pause menu up.
     inline constexpr const char* kPauseAction = "pause";
 
-    /**
-     * @brief The key the throw is bound to.
-     *
-     * Named because `runtime --throw-at-frame` holds down the same key the
-     * binding reads, rather than calling the throw. A hook that went around the
-     * input module would drive a path the game never takes.
-     */
+    /// @brief The key the throw is bound to.
     inline constexpr engine::platform::Key kThrowKey = engine::platform::Key::F;
 
     /// @brief The key the reset is bound to.
@@ -82,6 +76,10 @@ namespace sandbox {
      * quits on Escape through `platform::WindowDesc::quit_on_escape`, and taking
      * that away needs another way out of the application first. Issue #407 holds
      * it.
+     *
+     * **Nothing outside this file names any of these keys.** `runtime --key`
+     * replays a press by action name and asks the input what that action was
+     * bound to, so an application never has to know.
      */
     inline constexpr engine::platform::Key kPauseKey = engine::platform::Key::P;
 

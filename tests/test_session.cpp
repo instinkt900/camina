@@ -135,6 +135,8 @@ namespace {
         int presses = 0; ///< How many presses reached the script.
         int fired = 0;   ///< How many press edges the fire action raised.
         int reloads = 0; ///< How many layout reloads reached the script.
+        int held = 0;    ///< How many press edges on_paused_update saw.
+        int paused = 0;  ///< How many times on_paused_update ran.
     };
 
 } // namespace
@@ -146,13 +148,14 @@ namespace {
 template <>
 struct engine::reflect::Describe<Counter> {
     static constexpr const char* name = "Counter"; ///< The name the script uses.
-    /// @brief The four counts.
+    /// @brief The six counts.
     /// @return A tuple of field descriptors.
     static constexpr auto fields() {
         return std::make_tuple(ENGINE_FIELD(Counter, updates),
                                ENGINE_FIELD(Counter, presses),
                                ENGINE_FIELD(Counter, fired),
-                               ENGINE_FIELD(Counter, reloads));
+                               ENGINE_FIELD(Counter, reloads), ENGINE_FIELD(Counter, held),
+                               ENGINE_FIELD(Counter, paused));
     }
 };
 
@@ -190,7 +193,9 @@ namespace {
                     entity:set("Counter", { updates = counter.updates + 1,
                                             presses = counter.presses,
                                             fired = fired,
-                                            reloads = counter.reloads })
+                                            reloads = counter.reloads,
+                                            held = counter.held,
+                                            paused = counter.paused })
                 end
 
                 function on_ui_press(layout, node)
@@ -198,7 +203,9 @@ namespace {
                     entity:set("Counter", { updates = counter.updates,
                                             presses = counter.presses + 1,
                                             fired = counter.fired,
-                                            reloads = counter.reloads })
+                                            reloads = counter.reloads,
+                                            held = counter.held,
+                                            paused = counter.paused })
                 end
 
                 function on_ui_reload(layout)
@@ -206,7 +213,23 @@ namespace {
                     entity:set("Counter", { updates = counter.updates,
                                             presses = counter.presses,
                                             fired = counter.fired,
-                                            reloads = counter.reloads + 1 })
+                                            reloads = counter.reloads + 1,
+                                            held = counter.held,
+                                            paused = counter.paused })
+                end
+
+                function on_paused_update()
+                    local counter = entity:get("Counter")
+                    local seen = counter.held
+                    if input.pressed("fire") then
+                        seen = seen + 1
+                    end
+                    entity:set("Counter", { updates = counter.updates,
+                                            presses = counter.presses,
+                                            fired = counter.fired,
+                                            reloads = counter.reloads,
+                                            held = seen,
+                                            paused = counter.paused + 1 })
                 end
             )";
             check(session.scripts().load(kScript, "counter.lua", bytes_of(source)),
@@ -401,6 +424,65 @@ namespace {
         check(fixture.ui.reloads().empty(), "and the delivery drained it");
     }
 
+    void a_paused_game_reads_the_key_that_resumes_it() {
+        section("a paused game reads the key that resumes it");
+
+        Fixture fixture;
+        fixture.open();
+        fixture.feed(false);
+        fixture.run(1);
+        check(fixture.counter().paused == 0, "a running session runs no paused update");
+
+        fixture.session.set_paused(true);
+        fixture.session.advance(fixture.world, engine::play::View{}, kStepSeconds);
+        check(fixture.counter().paused == 1, "a paused one runs it once for each frame");
+        check(fixture.counter().held == 0, "and nothing was pressed yet");
+
+        // The whole point. A script reads an action inside on_update, and a
+        // paused session runs none, so the key that would resume the game could
+        // never be seen.
+        fixture.feed(true);
+        fixture.session.advance(fixture.world, engine::play::View{}, kStepSeconds);
+        check(fixture.counter().held == 1, "the key reached the paused game");
+
+        // An edge and not the key being down, the same as on a step. Holding it
+        // would otherwise resume and pause again on every frame.
+        fixture.session.advance(fixture.world, engine::play::View{}, kStepSeconds);
+        check(fixture.counter().held == 1, "and holding it raises no second edge");
+
+        const int ran = fixture.counter().updates;
+        check(ran > 0, "the running steps before the pause updated the script");
+        fixture.session.advance(fixture.world, engine::play::View{}, kStepSeconds);
+        check(fixture.counter().updates == ran,
+              "and on_update still never runs while the game is paused");
+    }
+
+    void a_script_edited_while_paused_restarts_there_and_then() {
+        section("a script edited while paused restarts there and then");
+
+        Fixture fixture;
+        fixture.open();
+        fixture.run(1);
+
+        fixture.session.set_paused(true);
+        fixture.session.advance(fixture.world, engine::play::View{}, kStepSeconds);
+        const std::size_t before = fixture.session.scripts().restart_count();
+
+        // Editing a menu while it is on the screen is exactly when this
+        // matters, and the game is paused for the whole of it. A restart that
+        // waited for a resume would leave the old text running under a layout
+        // somebody is looking at.
+        const std::string_view edited = R"(
+            function on_paused_update() end
+        )";
+        check(fixture.session.scripts().reload(kScript, "counter.lua", bytes_of(edited)),
+              "the edited script compiles");
+
+        fixture.session.advance(fixture.world, engine::play::View{}, kStepSeconds);
+        check(fixture.session.scripts().restart_count() == before + 1,
+              "and the instance restarted while the game was still paused");
+    }
+
 } // namespace
 
 int main() {
@@ -415,6 +497,8 @@ int main() {
     a_paused_session_holds_the_bodies_still();
     a_pause_does_not_hand_the_game_the_keys_pressed_during_it();
     a_paused_session_still_delivers_a_reload();
+    a_paused_game_reads_the_key_that_resumes_it();
+    a_script_edited_while_paused_restarts_there_and_then();
 
     engine::jobs::shutdown();
     return test::report();
