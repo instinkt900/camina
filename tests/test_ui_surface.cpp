@@ -202,18 +202,30 @@ namespace {
         const std::filesystem::path out = scratch("out");
 
         // The layout every button in this test refers to. Its root carries the
-        // class, and it holds nothing else: what a button looks like is not what
-        // these cases are about.
-        write_file(source / "ui" / "button.mothui", layout_of("", "button"));
+        // class, and it holds a label, because a node inside a referenced layout
+        // is what a bare name cannot tell apart.
+        write_file(source / "ui" / "button.mothui",
+                   layout_of(text_node("label", "Button"), "button"));
 
         // Both menus put a button over the same rectangle, which is what the
-        // topmost-answers-first case needs.
+        // topmost-answers-first case needs. The menu stands the same button file
+        // up twice, so both copies carry a child called `label`.
         write_file(source / "ui" / "menu.mothui",
                    layout_of(text_node("title", "Camina") + "," + image_node("logo") + "," +
-                             ref_node("play", "button.mothui", 0, 0, 100, 50)));
+                             ref_node("play", "button.mothui", 0, 0, 100, 50) + "," +
+                             ref_node("options", "button.mothui", 200, 0, 300, 50)));
+        // A layout that holds nothing but a button, so the hud below stands a
+        // button up two references deep. That is the shape where a press has to
+        // carry the outer reference in front of it: the inner id is declared
+        // once and both copies of it read the same.
+        write_file(source / "ui" / "row.mothui",
+                   layout_of(ref_node("press", "button.mothui", 0, 0, 100, 50)));
+
         write_file(source / "ui" / "hud.mothui",
                    layout_of(text_node("score", "0") + "," +
-                             ref_node("quit", "button.mothui", 0, 0, 100, 50)));
+                             ref_node("quit", "button.mothui", 0, 0, 100, 50) + "," +
+                             ref_node("row one", "row.mothui", 200, 0, 300, 50) + "," +
+                             ref_node("row two", "row.mothui", 200, 60, 300, 110)));
 
         // Readable JSON whose root is not a Layout. A reference left pointing at
         // the wrong asset looks exactly like this.
@@ -493,6 +505,69 @@ namespace {
         });
     }
 
+    void two_references_to_one_layout_answer_separately() {
+        test::section("two references to one layout answer separately");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            // The menu stands one button file up twice, so the tree holds two
+            // nodes called `label`. A name with a separator in it says which.
+            test::check(fixture.surface->has_node("ui/menu.mothui", "play/label"),
+                        "the label of one reference is found");
+            test::check(fixture.surface->has_node("ui/menu.mothui", "options/label"),
+                        "and so is the label of the other");
+
+            test::check(fixture.surface->set_text("ui/menu.mothui", "play/label", "Play"),
+                        "one of them takes a text");
+            test::check(
+                fixture.surface->set_text("ui/menu.mothui", "options/label", "Options"),
+                "and so does the other");
+
+            // The whole point. Writing one label used to write whichever
+            // reference came first, and the second was unreachable.
+            test::check(fixture.surface->text("ui/menu.mothui", "play/label") == "Play",
+                        "and each keeps what it was given");
+            test::check(
+                fixture.surface->text("ui/menu.mothui", "options/label") == "Options",
+                "rather than the two of them being one node");
+        });
+    }
+
+    void a_path_searches_inside_what_the_segment_before_it_found() {
+        test::section("a path searches inside what the segment before it found");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/menu.mothui"), "the layout shows");
+
+            // `title` is a sibling of the reference and not a child of it. A
+            // path that found it would be searching the whole layout again for
+            // every segment, which is the scoping this case exists to hold.
+            test::check(!fixture.surface->has_node("ui/menu.mothui", "play/title"),
+                        "a node beside the reference is not inside it");
+            test::check(!fixture.surface->has_node("ui/menu.mothui", "play/nope"),
+                        "and a segment that names nothing answers nothing");
+            test::check(!fixture.surface->has_node("ui/menu.mothui", "nope/label"),
+                        "and so does a first segment that names nothing");
+
+            // A name with no separator reaches a node at any depth, which is
+            // what almost every call passes and what M10.6 shipped.
+            test::check(fixture.surface->has_node("ui/menu.mothui", "label"),
+                        "a bare name still reaches a node at any depth");
+            test::check(fixture.surface->has_node("ui/menu.mothui", "title"),
+                        "and one at the top of the layout");
+
+            test::check(!fixture.surface->has_node("ui/menu.mothui", "play/"),
+                        "a separator with no id after it answers nothing");
+            test::check(!fixture.surface->has_node("ui/menu.mothui", ""),
+                        "and so does an empty name");
+        });
+    }
+
     void a_press_on_a_button_reaches_the_surface() {
         test::section("a press on a button reaches the surface");
 
@@ -513,6 +588,38 @@ namespace {
 
             fixture.surface->clear_presses();
             test::check(fixture.surface->presses().empty(), "and a drain empties them");
+        });
+    }
+
+    void a_press_names_the_reference_the_button_came_from() {
+        test::section("a press names the reference the button came from");
+
+        with_a_cooked_tree([](const as::Content& content) {
+            Fixture fixture;
+            fixture.open(content);
+            test::check(fixture.surface->show("ui/hud.mothui"), "the layout shows");
+
+            // Both rows are the same file, so both buttons inside them carry
+            // the id `press`. A press that reported that id alone would name
+            // the two of them identically, and a script could not tell which
+            // was clicked.
+            click(*fixture.surface, moth_ui::IntVec2{ 220, 20 });
+            click(*fixture.surface, moth_ui::IntVec2{ 220, 80 });
+
+            const std::span<const engine::script::UiPress> presses =
+                fixture.surface->presses();
+            test::check(presses.size() == 2, "two clicks record two presses");
+            if (presses.size() == 2) {
+                test::check(presses[0].node == "row one/press",
+                            "and the first names the reference it came from");
+                test::check(presses[1].node == "row two/press",
+                            "and the second names the other one");
+
+                // A press is handed straight back to the surface, which is the
+                // whole reason the two vocabularies are one.
+                test::check(fixture.surface->has_node(presses[0].layout, presses[0].node),
+                            "and a press can be looked up by what it reported");
+            }
         });
     }
 
@@ -725,7 +832,10 @@ int main() {
     a_reload_keeps_the_layout_showing();
     a_reload_of_another_asset_changes_nothing();
     a_reference_resolves_through_the_content_tree();
+    two_references_to_one_layout_answer_separately();
+    a_path_searches_inside_what_the_segment_before_it_found();
     a_press_on_a_button_reaches_the_surface();
+    a_press_names_the_reference_the_button_came_from();
     a_click_that_misses_the_button_records_nothing();
     a_hidden_layout_answers_no_click();
     the_topmost_layout_answers_first();

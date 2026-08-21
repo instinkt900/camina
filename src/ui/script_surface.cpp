@@ -49,6 +49,24 @@ namespace engine::ui {
             (void)done;
         }
 
+        /**
+         * Joins the path of a node to the id of one of its children.
+         *
+         * A child with no id keeps its parent's path rather than growing an
+         * empty segment. Nothing can name such a node directly, and a name that
+         * reaches past it still works: the first segment of a path searches the
+         * whole subtree.
+         */
+        std::string child_path(const std::string& path, const std::string& id) {
+            if (id.empty()) {
+                return path;
+            }
+            if (path.empty()) {
+                return id;
+            }
+            return path + script::kNodePathSeparator + id;
+        }
+
     } // namespace
 
     ScriptSurface::ScriptSurface(const assets::Content& content, moth_ui::Context& context)
@@ -102,18 +120,25 @@ namespace engine::ui {
         return root;
     }
 
-    void ScriptSurface::wire_presses(const std::shared_ptr<moth_ui::Node>& root,
-                                     const std::string& source) {
+    void ScriptSurface::wire_tree(const std::shared_ptr<moth_ui::Node>& root,
+                                  const std::string& source, const std::string& path) {
         if (!root) {
             return;
+        }
+
+        // A path a script could not use is worth one line, because the node
+        // draws and reads correctly and only the naming of it is broken.
+        if (root->GetId().find(script::kNodePathSeparator) != std::string::npos) {
+            ENGINE_LOG_WARN("The UI layout {} holds a node called {}, and a node id may not "
+                            "hold a '{}'. No script can name that node.",
+                            source, root->GetId(), script::kNodePathSeparator);
         }
 
         // The action captures the two names rather than the node, because the
         // node is what a reload frees. It captures this, and this owns the node
         // it is wired into, so the action cannot outlive the surface.
         if (auto* clickable = dynamic_cast<moth_ui::IClickable*>(root.get())) {
-            const std::string& id = root->GetId();
-            if (id.empty()) {
+            if (root->GetId().empty()) {
                 // A press names a node, so one with no id has nothing to report
                 // under. This is a layout somebody has not finished, and it is
                 // worth saying so rather than dropping the press in silence.
@@ -121,15 +146,15 @@ namespace engine::ui {
                                 "it reaches no script.",
                                 source);
             } else {
-                clickable->SetClickAction([this, source, id] {
-                    presses_.push_back(script::UiPress{ source, id });
+                clickable->SetClickAction([this, source, path] {
+                    presses_.push_back(script::UiPress{ source, path });
                 });
             }
         }
 
         if (const auto group = std::dynamic_pointer_cast<moth_ui::Group>(root)) {
             for (const std::shared_ptr<moth_ui::Node>& child : group->GetChildren()) {
-                wire_presses(child, source);
+                wire_tree(child, source, child_path(path, child->GetId()));
             }
         }
     }
@@ -155,7 +180,7 @@ namespace engine::ui {
             record->source = std::string{ layout };
             record->guid = entry->guid;
             record->root = std::move(root);
-            wire_presses(record->root, record->source);
+            wire_tree(record->root, record->source, {});
             record->root->SetScreenRect(screen_);
             layouts_.push_back(std::move(record));
             layouts_.back()->showing = true;
@@ -192,10 +217,33 @@ namespace engine::ui {
     std::shared_ptr<moth_ui::Node> ScriptSurface::node_of(std::string_view layout,
                                                           std::string_view node) const {
         const Loaded* held = find(layout);
-        if (held == nullptr || !held->root) {
+        if (held == nullptr || !held->root || node.empty()) {
             return nullptr;
         }
-        return held->root->FindChild(node);
+
+        // One segment at a time, each searched inside what the one before it
+        // found. `FindChild` walks a whole subtree, so a name with no separator
+        // in it reaches a node at any depth, which is what almost every caller
+        // passes. A name with one narrows the search, and that is the whole
+        // point: two references to one button file each hold a child of the
+        // same id, and a search from the root answers with the first of them.
+        std::shared_ptr<moth_ui::Node> at = held->root;
+        std::string_view rest = node;
+        while (at) {
+            const std::size_t cut = rest.find(script::kNodePathSeparator);
+            const std::string_view name = rest.substr(0, cut);
+            if (name.empty()) {
+                // A separator with no id beside it. Answering with the node the
+                // segment before it found would make `"play/"` mean `"play"`.
+                return nullptr;
+            }
+            at = at->FindChild(name);
+            if (cut == std::string_view::npos) {
+                return at;
+            }
+            rest = rest.substr(cut + 1);
+        }
+        return nullptr;
     }
 
     bool ScriptSurface::has_node(std::string_view layout, std::string_view node) const {
@@ -351,7 +399,7 @@ namespace engine::ui {
 
             held->guid = current;
             held->root = std::move(rebuilt);
-            wire_presses(held->root, held->source);
+            wire_tree(held->root, held->source, {});
             held->root->SetScreenRect(screen_);
             any = true;
             ENGINE_LOG_INFO("The UI layout {} reloaded.", held->source);
@@ -369,7 +417,7 @@ namespace engine::ui {
 
             // ReloadEntity builds every child node again, so the click actions
             // wired into the old ones are gone with them.
-            wire_presses(held->root, held->source);
+            wire_tree(held->root, held->source, {});
             held->root->SetScreenRect(screen_);
         }
     }

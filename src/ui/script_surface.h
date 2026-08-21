@@ -195,9 +195,19 @@ namespace engine::ui {
         /// Reads and instantiates the layout an identity names, or null.
         [[nodiscard]] std::shared_ptr<moth_ui::Node> build(std::string_view source,
                                                            Guid guid) const;
-        /// Wires a click action into every node of a tree that can take one.
-        void wire_presses(const std::shared_ptr<moth_ui::Node>& root,
-                          const std::string& source);
+        /**
+         * Walks a tree once, from a node whose path is @p path.
+         *
+         * It wires a click action into every node that can take one, so a press
+         * reports the path a script would look the node up by. It also reports
+         * an id no script could name.
+         *
+         * @param root The node to walk. The layout root passes an empty path.
+         * @param source The source path of the layout, for a press and a report.
+         * @param path The path of @p root itself, from the layout root.
+         */
+        void wire_tree(const std::shared_ptr<moth_ui::Node>& root, const std::string& source,
+                       const std::string& path);
 
         const assets::Content& content_;
         moth_ui::Context& context_;

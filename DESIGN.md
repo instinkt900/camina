@@ -1114,9 +1114,30 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   input names and input bytes, and a rule that starts writing a new form moves none of them.
 
   **A node id is unique only within the layout that declares it.** Two references to one button
-  file each hold a child called the same thing, and `FindChild` answers with the first. So the
-  sandbox puts its labels in the menu beside the references rather than inside the button, and
-  a script names the reference rather than anything inside it.
+  file each hold a child called the same thing, and `FindChild` answers with the first. M10.6
+  worked around it by putting the labels in the menu beside the references, which works and does
+  not scale: a widget with any inner state a script must drive cannot be referenced twice.
+
+  **M10.7 settled it with a path, and moth_ui did not change.** A node name may carry
+  `script::kNodePathSeparator`, and `ScriptSurface::node_of` resolves one segment at a time
+  inside what the segment before it found. So `"play button/label"` is the label of that one
+  reference. `FindChild` already searches a whole subtree, so it gives the per-segment step and
+  a name with no separator in it still reaches a node at any depth. That is what keeps every
+  M10.6 call working unchanged.
+
+  **A press reports the same path.** It has to, because a script hands a press straight back to
+  `ui.find`, and two names for one node would be two vocabularies. A button a menu declares
+  itself reports one segment, exactly as before, and a button inside a referenced layout carries
+  the reference in front of it.
+
+  The two rejected answers were `moth_ui::LayoutEntityRef::propertyOverrides`, which writes
+  `visible` and `blend` and would have to learn a text, and making an id unique at copy time,
+  which changes what `moth_editor` shows a person. A lookup rule costs neither.
+
+  **The sandbox button carries its own label now**, and `scripts/puzzle.lua` writes each one
+  through the reference that stands it up. The picture does not move by one byte, because the
+  labels land in the rectangles the menu used to place them at. That is the check: writing them
+  through a bare name puts both texts into the first reference, and the capture moves.
 
 ### 8.5 Boundaries
 
