@@ -15,6 +15,7 @@
 #include "editor/history.h"
 #include "editor/interaction.h"
 #include "editor/play_mode.h"
+#include "play/session.h"
 #include "editor/panels.h"
 #include "editor/picking.h"
 #include "editor/placement.h"
@@ -1017,6 +1018,45 @@ void test_an_entry_naming_a_lost_entity_is_reported() {
     check(!history.can_undo(), "the stack moved past it");
 }
 
+#if defined(ENGINE_WITH_LUA)
+/**
+ * A game that asks to quit stops the session, and never the editor.
+ *
+ * The runtime leaves its frame loop on the same request. Here it has to mean
+ * something else, because a game that could end this process would take a
+ * person's unsaved work with it. So the world comes back exactly as a stop
+ * leaves it.
+ */
+void test_a_game_that_quits_stops_play() {
+    section("a game that quits stops play rather than the editor");
+
+    engine::assets::Content content;
+    engine::scene::World world;
+    check(load_shipped(world, content), "the shipped content loads");
+
+    const nlohmann::json authored = engine::scene::save_scene(world);
+
+    engine::editor::PlayMode play;
+    const engine::editor::PlayDesc desc{ .content = &content,
+                                         .bind_actions = &sandbox::bind_actions };
+    check(play.play(world, desc), "the session starts");
+
+    run(play, world, 2);
+    check(play.state() == engine::editor::PlayState::Playing, "and it is playing");
+
+    // Asked directly rather than through a button, because a click needs a
+    // pointer and this test has no window. What the button does is this call.
+    check(play.session() != nullptr, "the session is there to ask");
+    play.session()->request_quit();
+
+    run(play, world, 1);
+    check(play.state() == engine::editor::PlayState::Edit,
+          "the next frame stopped play");
+    check(engine::scene::save_scene(world) == authored,
+          "and the world came back as it was authored");
+}
+#endif
+
 int main() {
     register_everything();
 
@@ -1042,6 +1082,9 @@ int main() {
     test_a_second_session_starts_from_the_same_place();
     test_pause_holds_the_step();
     test_the_states_refuse_what_they_cannot_do();
+#if defined(ENGINE_WITH_LUA)
+    test_a_game_that_quits_stops_play();
+#endif
 
     test_an_edit_before_play_undoes_after_stop();
     test_a_delete_before_play_undoes_after_stop();

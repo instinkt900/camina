@@ -12,9 +12,9 @@ M10.7 gave the game three screens, and `scripts/puzzle.lua` moves between them.
 
 | File | What it is | What puts it up |
 |---|---|---|
-| `main_menu.mothui` | The title screen, with the game held | The first start, and the pause menu's Main menu button |
+| `main_menu.mothui` | The title screen, with the game held. Play and Quit | The first start, and the pause menu's Main menu button |
 | `hud.mothui` | The lines the running game writes, and its three buttons | The Play button |
-| `pause.mothui` | Resume and Main menu, over the HUD | P, and the Pause button. P closes it again |
+| `pause.mothui` | Resume and Main menu, over the HUD | Escape, and the Pause button. Escape closes it again |
 | `button.mothui` | One button, referred to by all three | Nothing. It is never shown on its own |
 
 Each is a moth_ui layout in the JSON format moth_ui reads. Every keyframe track carries one
@@ -23,6 +23,10 @@ frame, so nothing animates.
 **A run starts at the main menu with the game paused**, so an offscreen capture with no
 arguments is the title screen over a world that has not moved. `runtime --click 5:640,382`
 presses Play, and the game runs from there.
+
+**The Quit button is the way out of the runtime.** The application does not quit on Escape any
+more, because Escape is the pause menu's key. In the editor the same button stops play rather
+than closing anything.
 
 **Which screen is up is the UI's own state.** No component records it. A reload keeps every
 layout showing and keeps the game paused, so `on_start` puts the main menu up only when nothing

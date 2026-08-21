@@ -26,6 +26,7 @@ namespace engine::play {
             .camera = &camera_,
             .ui = ui_,
             .clock = this,
+            .exit = this,
             .motion = &motion_,
         };
     }

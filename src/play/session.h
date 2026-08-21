@@ -22,6 +22,7 @@
 #include "platform/input.h"
 #include "scene/step_motion.h"
 #include "script/game_clock.h"
+#include "script/game_exit.h"
 #include "script/ui_surface.h"
 
 #if defined(ENGINE_WITH_LUA)
@@ -75,7 +76,7 @@ namespace engine::play {
      * @warning **advance() writes the drawn pose into the world.** Compose the
      * matrices and draw after it, never before, or the frame is one behind.
      */
-    class Session : public script::GameClock {
+    class Session : public script::GameClock, public script::GameExit {
     public:
         Session() = default;
 
@@ -200,6 +201,21 @@ namespace engine::play {
         [[nodiscard]] bool paused() const override { return paused_; }
 
         /**
+         * @brief Records that the game asked to stop.
+         *
+         * This implements `script::GameExit`, so a script asks through the
+         * `game` table. **It stops nothing by itself.** Whoever drives the
+         * session reads quit_requested() and decides what stopping means: the
+         * runtime leaves its frame loop, and the editor stops play mode and
+         * gives the world back.
+         */
+        void request_quit() override { quit_requested_ = true; }
+
+        /// @brief Whether the game has asked to stop.
+        /// @return True once a script called `game.quit`.
+        [[nodiscard]] bool quit_requested() const override { return quit_requested_; }
+
+        /**
          * @brief Points the scripts at the game UI, or at nothing.
          *
          * M10.6. A session names no moth_ui type, so the application builds the
@@ -292,6 +308,9 @@ namespace engine::play {
 
         /// Whether the steps are held. See set_paused().
         bool paused_ = false;
+
+        /// Whether the game asked to stop. See request_quit().
+        bool quit_requested_ = false;
 
 #if defined(ENGINE_WITH_LUA)
         /// The interpreter, and one instance for each scripted entity.

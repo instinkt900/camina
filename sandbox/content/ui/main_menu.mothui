@@ -660,6 +660,151 @@
       ]
     },
     {
+      "type": "Ref",
+      "id": "quit button",
+      "class": "",
+      "blend": "Alpha",
+      "visible": true,
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "layoutPath": "button.mothui",
+      "propertyOverrides": [],
+      "tracks": [
+        {
+          "target": "TopOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 424.0
+            }
+          ]
+        },
+        {
+          "target": "BottomOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 488.0
+            }
+          ]
+        },
+        {
+          "target": "LeftOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 490.0
+            }
+          ]
+        },
+        {
+          "target": "RightOffset",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 790.0
+            }
+          ]
+        },
+        {
+          "target": "TopAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "BottomAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "LeftAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "RightAnchor",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "target": "ColorRed",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorGreen",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorBlue",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "ColorAlpha",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "target": "Rotation",
+          "keyframes": [
+            {
+              "frame": 0,
+              "interp": "Linear",
+              "value": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
       "type": "Text",
       "id": "version",
       "class": "",
@@ -692,7 +837,7 @@
             {
               "frame": 0,
               "interp": "Linear",
-              "value": 470.0
+              "value": 500.0
             }
           ]
         },
@@ -702,7 +847,7 @@
             {
               "frame": 0,
               "interp": "Linear",
-              "value": 510.0
+              "value": 535.0
             }
           ]
         },

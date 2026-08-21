@@ -527,6 +527,33 @@ namespace {
               "and it stays there while the pause lasts");
     }
 
+    void a_script_asks_the_session_to_quit() {
+        section("a script asks the session to quit");
+
+        Fixture fixture;
+        fixture.open();
+        fixture.run(1);
+        check(!fixture.session.quit_requested(), "nothing has asked to quit");
+
+        // The Quit button of a game's own main menu. The session records it and
+        // stops nothing: whoever drives it decides what stopping means, so a
+        // game played in an editor viewport cannot close the editor.
+        const std::string_view quitter = R"(
+            function on_update()
+                game.quit()
+            end
+        )";
+        check(fixture.session.scripts().reload(kScript, "counter.lua", bytes_of(quitter)),
+              "the script that quits compiles");
+
+        fixture.run(2);
+        check(fixture.session.quit_requested(), "the session was asked to quit");
+
+        // Sticky, because whoever reads it may be several frames later.
+        fixture.run(1);
+        check(fixture.session.quit_requested(), "and the request stands");
+    }
+
 } // namespace
 
 int main() {
@@ -544,6 +571,7 @@ int main() {
     a_paused_game_reads_the_key_that_resumes_it();
     a_script_edited_while_paused_restarts_there_and_then();
     a_pose_written_while_paused_is_the_pose_the_next_frame_draws();
+    a_script_asks_the_session_to_quit();
 
     engine::jobs::shutdown();
     return test::report();

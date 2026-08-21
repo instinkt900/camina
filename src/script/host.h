@@ -27,6 +27,7 @@
 
 #include "core/guid.h"
 #include "script/game_clock.h"
+#include "script/game_exit.h"
 #include "script/ui_surface.h"
 
 #include <cstddef>
@@ -119,6 +120,8 @@ namespace engine::script {
         UiSurface* ui = nullptr;
         /// @brief The fixed step. Null makes every call in the `game` table answer false.
         GameClock* clock = nullptr;
+        /// @brief How a game asks to stop. Null makes `game.quit` answer false.
+        GameExit* exit = nullptr;
 
         /**
          * @brief Where a transform a script writes is recorded for blending.

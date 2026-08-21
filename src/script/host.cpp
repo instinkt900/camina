@@ -1260,7 +1260,11 @@ namespace engine::script {
      * `pause` and `resume` rather than one call taking a boolean, because a
      * menu reads better for it and neither has anything to get the wrong way
      * round. `paused` is what a script asks before it decides which menu to
-     * put up.
+     * put up. `quit` is how a game's own main menu ends a run.
+     *
+     * Two seams behind one table, because the fixed step and the lifetime of a
+     * run are two different things to hold. Both are optional and both answer
+     * false when nobody passed one.
      *
      * A step with no clock answers false and pauses nothing, the same way an
      * action with no input module reads false.
@@ -1288,6 +1292,17 @@ namespace engine::script {
         });
         game.set_function("paused", [context] {
             return context->services.clock != nullptr && context->services.clock->paused();
+        });
+
+        // A request rather than an exit. Nothing here ends a process: the
+        // application reads it and decides what stopping means. A script that
+        // could call exit() would take the editor down with the game.
+        game.set_function("quit", [context] {
+            if (context->services.exit == nullptr) {
+                return false;
+            }
+            context->services.exit->request_quit();
+            return true;
         });
     }
 

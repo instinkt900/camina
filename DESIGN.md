@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7f
+Status: M9, M10, M12 and M13 complete. M11 next
 Last updated: 2026-08-22
 
 ---
@@ -1023,6 +1023,7 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   game.pause()                 -- holds the fixed step. M10.7a
   game.resume()                -- lets it run again
   game.paused()                -- whether the steps are held
+  game.quit()                  -- asks whoever drives the game to stop it. M10.7f
 
   node.layout, node.node       -- what the handle stands for
   node:text()                  -- what a text node shows
@@ -1414,6 +1415,24 @@ it is not load-bearing and the build takes 1.1.3 from the cache.
 rendering. Decide this now. Scripting, determinism, record and replay, and any later
 networking all depend on it. Box3D supports deterministic replay if the simulation stays
 deterministic.
+
+**Which keys an application keeps, and which a game may bind.** M10.7f settled it, because a
+pause menu wanted Escape and the runtime was quitting on it.
+
+- **A game binds whatever its own actions need**, through `sandbox::bind_actions` or its
+  equivalent. It names the key and the engine names none of it: `runtime --key` replays a press
+  by action name and asks the input what that action was bound to.
+- **An application keeps only the keys that drive the application.** The editor keeps Escape to
+  clear the selection and turns `platform::WindowDesc::quit_on_escape` off for it. The runtime
+  keeps the camera keys and now turns that flag off too.
+- **The way out of the runtime is the game's, not the application's.** `game.quit()` asks and
+  `script::GameExit` is the seam. That is what freed Escape: a key the application used for the
+  one thing a person cannot otherwise do is not a key a game can have.
+
+**A quit is a request rather than an exit**, which is what lets the two applications mean
+different things by it. The runtime leaves its frame loop. The editor stops play mode and gives
+the world back, because a game that could end that process would take a person's unsaved work
+with it. Nothing in `src/script/` may call `exit()`.
 
 **Memory.** Use a per-frame linear arena that resets each tick, plus pool allocators for hot
 component types. Do not write a full custom allocator stack. These two save more time than
@@ -2855,14 +2874,14 @@ stops calling `std::filesystem::absolute` on what it read, which closes #218 and
 Conan editable is for development and not for a build somebody else runs. Develop the two
 repositories together against the editable, then release and pin.
 
-**M10.7 built the milestone test, and the authoring pass is recorded below.** The sandbox game
-has a main menu, a pause menu and a HUD. `scripts/puzzle.lua` moves between the three, and no
-C++ knows any of them exists.
+**M10 is complete.** M10.7 built the milestone test, and the authoring pass is recorded below.
+The sandbox game has a main menu, a pause menu and a HUD. `scripts/puzzle.lua` moves between the
+three, and no C++ knows any of them exists.
 
-**The milestone is not closed by it.** The pass found four gaps and every one of them is in the
-milestone, as M10.7c through M10.7f. None of them blocks the test above, and each is a thing a
-person meets while authoring a menu rather than a thing they read about. M10 closes when all
-four are answered. M10.7c, M10.7d and M10.7e are answered, and M10.7f is open.
+**The milestone test alone did not close it.** The pass found four gaps, and every one of them
+went into the milestone as M10.7c through M10.7f rather than beside it. None blocked the test
+above, and each is a thing a person meets while authoring a menu rather than a thing they read
+about. All four are answered.
 
 It came in three parts. M10.7a gave a script the fixed step through `script::GameClock`, because
 a pause menu that cannot stop the world is a picture rather than a menu. #402 gave a script a
@@ -2910,10 +2929,11 @@ pass is the other outcome: authoring the thing is what finds what building the p
 - **#409, M10.7e, a paused game that moves something does not redraw it. Answered.** The Main
   menu button puts the room back, and the crates stayed drawn where they fell until something
   resumed. A paused advance interpolates now, and §8.4 holds the two halves it needed.
-- **#407, M10.7f, Escape quits the runtime**, so the pause menu is bound to P, which is not the
-  key a player reaches for. Freeing Escape needs another way out of the runtime first, and the
-  likely answer is a Quit button in the game's own main menu, which needs a `game.quit()` that no
-  seam offers. It is the last of the four for that reason.
+- **#407, M10.7f, Escape quits the runtime. Answered.** So the pause menu was bound to P, which
+  is not the key a player reaches for. Freeing Escape needed another way out of the runtime
+  first, and it is the Quit button of the game's own main menu, through `game.quit()` and
+  `script::GameExit`. §9 holds the rule about which keys belong to whom. It was the last of the
+  four for that reason: the other three had to settle before the key could move.
 
 **Three of the four are consequences of the pause, and none of them showed up while it was
 built.** M10.7a has four cases and three mutations behind it, and every one of them is about a

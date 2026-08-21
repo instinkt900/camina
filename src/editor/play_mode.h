@@ -139,6 +139,11 @@ namespace engine::editor {
          * accumulates no time at all, so a long pause cannot make the frame
          * after it run a burst of steps.
          *
+         * **A game that asked to quit stops the session here**, and never the
+         * editor. `script::GameExit` is a request rather than an exit for that
+         * reason: a game that could end this process would take a person's
+         * unsaved work with it.
+         *
          * @param world The world to run and to write the drawn pose into.
          * @param view Where the camera stands, which a script may read.
          * @param delta_seconds How much wall time this frame took.

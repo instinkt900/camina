@@ -79,6 +79,21 @@ namespace {
     };
 
     /**
+     * A quit request a test can read back.
+     *
+     * `play::Session` is the real one. What matters here is that `game.quit`
+     * reaches the interface, not what an application does when it is asked.
+     */
+    class FakeExit final : public sp::GameExit {
+    public:
+        void request_quit() override { ++asked; }
+        [[nodiscard]] bool quit_requested() const override { return asked > 0; }
+
+        /// How many times a script asked, so a test can tell one call from none.
+        int asked = 0;
+    };
+
+    /**
      * A UI surface a test drives, with no moth_ui under it.
      *
      * M10.6 puts `script::UiSurface` between the binding and the game UI, so
@@ -2227,6 +2242,31 @@ namespace {
         check(clock.writes == 2, "and each call reached the clock");
     }
 
+    void test_a_script_asks_the_game_to_quit() {
+        section("A script asks the game to quit");
+
+        FakeExit exit;
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update()
+                entity:set("Turret", { armed = game.quit() })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.exit = &exit;
+        host.update(fixture.world, 0.0, services);
+
+        check(exit.asked == 1, "the request reached the interface");
+        check(exit.quit_requested(), "and it reads as asked for");
+        check(fixture.world.registry().get<Turret>(entity).armed,
+              "and the call answered true");
+    }
+
     void test_a_script_with_no_clock_answers_false() {
         section("A script with no clock answers false rather than failing");
 
@@ -2235,7 +2275,7 @@ namespace {
         check(load(host, kFirst, R"(
             function on_update()
                 entity:set("Turret", { armed = game.pause() or game.resume()
-                                               or game.paused() })
+                                               or game.paused() or game.quit() })
             end
         )"),
               "the script compiles");
@@ -2247,7 +2287,7 @@ namespace {
         host.update(fixture.world, 0.0, services);
 
         check(!fixture.world.registry().get<Turret>(entity).armed,
-              "every call in the game table answered false");
+              "every call in the game table answered false, quit included");
         check(host.stopped_count() == 0, "and none of them raised an error");
     }
 
@@ -2447,6 +2487,7 @@ int main() {
     test_a_script_with_no_reload_callback_is_left_alone();
 
     test_a_script_pauses_and_resumes_the_game();
+    test_a_script_asks_the_game_to_quit();
     test_a_script_with_no_clock_answers_false();
 
     // The pool has to stop before main returns. test_physics.cpp does the same,
