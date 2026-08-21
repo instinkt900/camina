@@ -20,6 +20,26 @@ local homes = {}
 -- The crates the throw has made. The reset takes them away again.
 local thrown = {}
 
+-- The layout this reports through, by its source path. The surface loads it on
+-- the first show, so nothing else has to know it exists. A path rather than an
+-- identity, because a cooked identity is derived and nobody can type one.
+local layout = "ui/main.mothui"
+
+-- What the caption says while the puzzle is unsolved.
+local instructions = "Throw with F. Reset with R."
+
+-- Writes one line into the layout. A node the layout does not hold is a layout
+-- somebody edited, not a fault worth stopping the game for, so this reports it
+-- once and carries on.
+local function say(text)
+    local caption = ui.find(layout, "caption")
+    if caption == nil then
+        log.warn(string.format("%s holds no caption node, so nothing is reported.", layout))
+        return
+    end
+    caption:set_text(text)
+end
+
 -- Which stack crates are inside the goal now, keyed by entity id.
 local inside = {}
 
@@ -56,6 +76,22 @@ function on_start()
     -- saved, which is the opposite of what putting the win on a component
     -- bought. The scene ships it false and the reset is what clears it. See
     -- DESIGN.md section 10 M8.
+    -- The game shows its own UI. Before M10.6 the runtime loaded one layout at
+    -- start and the game could not reach it, so a caption was a log line.
+    if not ui.show(layout) then
+        log.warn(string.format("%s would not show, so the puzzle reports through the log "
+                               .. "alone.", layout))
+    end
+
+    -- A reload restarts this script and the layout keeps whatever the last run
+    -- left in it, so the caption is written rather than assumed.
+    local goal = entity:get("Goal")
+    if goal ~= nil and goal.won then
+        say("Solved. Reset with R.")
+    else
+        say(instructions)
+    end
+
     log.info(string.format("Puzzle ready. Throw with F at %d crates, reset with R.", #homes))
 end
 
@@ -101,6 +137,7 @@ local function reset()
 
     inside = {}
     entity:set("Goal", { won = false })
+    say(instructions)
     log.info("The room is back.")
 end
 
@@ -132,6 +169,7 @@ function on_update(seconds)
     -- component and not to this file.
     if settled >= goal.needed then
         entity:set("Goal", { won = true })
+        say(string.format("You win. %d crate(s) came to rest.", settled))
         log.info(string.format("You win. %d crate(s) came to rest in the goal.", settled))
     end
 end

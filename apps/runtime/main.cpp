@@ -39,8 +39,8 @@
 #if defined(ENGINE_WITH_UI)
 #include "ui/image.h"
 #include "ui/input_bridge.h"
-#include "ui/layout_loader.h"
 #include "ui/renderer.h"
+#include "ui/script_surface.h"
 #include "ui/ui.h"
 #include "ui/font_factory.h"
 #include "ui/ui_pass.h"
@@ -616,20 +616,21 @@ namespace {
 
     void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent,
                          const moth_ui::IImage* image, moth_ui::IFont* font,
-                         moth_ui::Node* layout) {
+                         engine::ui::ScriptSurface* surface) {
         renderer.begin(extent.width, extent.height);
 
-        // M6.5. The layout first, so the probe below draws over it and a
+        // M6.5. The layouts first, so the probe below draws over them and a
         // regression in either one stays readable against the other.
         //
         // The screen rectangle is set on every frame rather than once, because
         // the device can settle on a size the window never asked for and a
-        // resize has to reach the tree. moth_ui lays the children out from it.
-        if (layout != nullptr) {
-            layout->SetScreenRect(moth_ui::IntRect{
+        // resize has to reach every tree. moth_ui lays the children out from it.
+        // update_input sets it too, because a hit test needs it before the draw.
+        if (surface != nullptr) {
+            surface->set_screen_rect(moth_ui::IntRect{
                 { 0, 0 },
                 { static_cast<int>(extent.width), static_cast<int>(extent.height) } });
-            layout->Draw();
+            surface->draw();
         }
 
         // A solid bar across the top.
@@ -724,23 +725,22 @@ namespace {
          * M6.3. Where the image the probe draws lives, or null when the runtime
          * has none.
          *
-         * A pointer to the owner rather than to the image, for the reason
-         * @ref ui_layout gives: a reload frees the texture and hands back a new
-         * image, and a raw pointer taken once at start would name the old one.
+         * A pointer to the owner rather than to the image: a reload frees the
+         * texture and hands back a new image, and a raw pointer taken once at
+         * start would name the old one.
          */
         const std::unique_ptr<moth_ui::IImage>* ui_image = nullptr;
         /// The font the probe draws text with, or null when none loaded.
         moth_ui::IFont* ui_font = nullptr;
         /**
-         * Where the instantiated layout lives, or null when the runtime has none.
+         * M10.6. Every layout a script showed, or null when the build has none.
          *
-         * This points at the owner rather than at the node, because a reload
-         * replaces the node and frees the old one. A raw pointer taken once at
-         * startup then dangles, and the first frame after a save segfaults
-         * inside `Node::Draw`. Reading through the owner each frame is what
-         * makes a reload safe here.
+         * The runtime used to hold one layout and this used to point at the
+         * owner of its root, because a reload frees the node tree and a raw
+         * pointer taken once at start then dangles. The surface owns the roots
+         * now and hands none of them out, so the trap has nowhere left to bite.
          */
-        const std::shared_ptr<moth_ui::Node>* ui_layout = nullptr;
+        engine::ui::ScriptSurface* ui_surface = nullptr;
 #endif
         /// False when there is no window, so no ImGui and no input.
         bool overlay = false;
@@ -887,14 +887,10 @@ namespace {
             // info.extent, not the requested extent. The device can settle on a
             // different size, and the scissor and the vertex normalization both
             // have to agree with the image actually being drawn into.
-            // Read through the owner, so a layout swapped in by a reload draws
-            // and a layout that was freed is not drawn.
-            moth_ui::Node* const layout =
-                context.ui_layout != nullptr ? context.ui_layout->get() : nullptr;
             const moth_ui::IImage* const probe =
                 context.ui_image != nullptr ? context.ui_image->get() : nullptr;
             record_ui_probe(*context.ui_renderer, info.extent, probe, context.ui_font,
-                            layout);
+                            context.ui_surface);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -953,12 +949,10 @@ namespace {
         /// the renderer. Held by pointer because Context takes them by pointer
         /// and has no default constructor.
         std::unique_ptr<moth_ui::Context> ui_context;
-        /// The instantiated layout. Null when none loaded, and the probe then
-        /// draws on its own.
-        std::shared_ptr<moth_ui::Node> ui_layout;
-        /// M10.3. What the layout was cooked as, so a reload can spot it in a
-        /// change list that names every asset the save touched.
-        engine::Guid ui_layout_guid;
+        /// M10.6. Every layout a script showed, and what a script may do to
+        /// them. Held by pointer because it takes the content and the context
+        /// by reference and neither exists when the Runtime is built.
+        std::unique_ptr<engine::ui::ScriptSurface> ui_surface;
         /// M10.5. Turns a frame of device state into moth_ui events, and takes
         /// out of that frame whatever the layout consumed.
         engine::ui::InputBridge ui_input;
@@ -1011,113 +1005,20 @@ namespace {
 
 #if defined(ENGINE_WITH_UI)
     /**
-     * Builds a moth_ui node tree out of the bytes of a cooked layout.
+     * Opens the surface a script drives the UI through.
      *
-     * M10.3. The layout is an asset now, so it arrives as bytes from
-     * `assets::Content` rather than as a file the loader opens itself. That is
-     * what makes a reload possible: the same call serves the first load and
-     * every one after it.
+     * M10.6. The runtime used to load one layout at start and hold it. A script
+     * names any layout by its source path now and the surface loads it on
+     * demand, so nothing is loaded here.
      *
-     * `engine::ui::read_layout` does the reading, and it opens no device, so a
-     * test drives it with no GPU. Turning the layout into live nodes is what
-     * needs the renderer and both factories, and that is what stays here.
-     *
-     * @return The node tree, or null when the bytes would not parse.
+     * The context is built whether a layout ever loads or not, because the
+     * surface takes it by reference. It costs three pointers.
      */
-    [[nodiscard]] std::shared_ptr<moth_ui::Node> build_ui_layout(Runtime& runtime,
-                                                                 engine::Guid guid) {
-        std::shared_ptr<moth_ui::Layout> layout;
-        const engine::ui::LayoutLoad read =
-            engine::ui::read_layout(runtime.game_content, guid, layout);
-        if (read != engine::ui::LayoutLoad::Ok) {
-            ENGINE_LOG_ERROR("The UI layout {} did not load: {}.", sandbox::kUiLayoutFile,
-                             engine::ui::describe(read));
-            return nullptr;
-        }
-
-        if (!runtime.ui_context) {
-            runtime.ui_context = std::make_unique<moth_ui::Context>(
-                &runtime.ui_images, &runtime.ui_fonts, &runtime.ui_renderer);
-        }
-
-        std::shared_ptr<moth_ui::Node> node = layout->Instantiate(*runtime.ui_context);
-        if (!node) {
-            ENGINE_LOG_ERROR("The UI layout {} loaded and would not instantiate.",
-                             sandbox::kUiLayoutFile);
-            return nullptr;
-        }
-        return node;
-    }
-
-    /**
-     * Loads the sandbox layout, by the identity the manifest gives its name.
-     *
-     * A failure here is not fatal. The layout is one part of the frame, and a
-     * scene that draws without it is more useful than a runtime that refuses to
-     * start.
-     */
-    void load_ui_layout(Runtime& runtime) {
-        const engine::assets::ManifestEntry* entry =
-            runtime.game_content.find(sandbox::kUiLayoutFile);
-        if (entry == nullptr) {
-            ENGINE_LOG_ERROR("The cooked content tree holds no UI layout at {}, so nothing "
-                             "will draw from one.",
-                             sandbox::kUiLayoutFile);
-            return;
-        }
-
-        // Kept so a reload can tell this layout from every other asset that
-        // changed in the same save.
-        runtime.ui_layout_guid = entry->guid;
-
-        runtime.ui_layout = build_ui_layout(runtime, entry->guid);
-        if (!runtime.ui_layout) {
-            runtime.ui_context.reset();
-            return;
-        }
-        ENGINE_LOG_INFO("The UI layout {} loaded.", sandbox::kUiLayoutFile);
-    }
-
-    /**
-     * Swaps in a layout somebody just saved.
-     *
-     * **A layout that will not parse keeps the one already running**, which is
-     * what `MeshPass::reload_shaders` does with a pipeline that will not build.
-     * A person editing a layout passes through broken states on the way to a
-     * working one, and dropping the UI at each of them is worse than drawing
-     * the last good version.
-     *
-     * The identity is read again rather than reused. A cook that gives the
-     * layout a new sidecar gives it a new identity, and the old one then names
-     * nothing.
-     */
-    void reload_ui_layout(Runtime& runtime) {
-        const engine::assets::ManifestEntry* entry =
-            runtime.game_content.find(sandbox::kUiLayoutFile);
-        if (entry == nullptr) {
-            ENGINE_LOG_ERROR("The UI layout {} left the cooked tree. The one already drawing "
-                             "stays up.",
-                             sandbox::kUiLayoutFile);
-            return;
-        }
-
-        std::shared_ptr<moth_ui::Node> rebuilt = build_ui_layout(runtime, entry->guid);
-        if (!rebuilt) {
-            ENGINE_LOG_ERROR("The UI layout {} would not reload. The one already drawing "
-                             "stays up.",
-                             sandbox::kUiLayoutFile);
-            return;
-        }
-
-        runtime.ui_layout_guid = entry->guid;
-        runtime.ui_layout = std::move(rebuilt);
-
-        // The new tree knows nothing about a key or a button the old one took.
-        // Keeping the claim would leave the game unable to read it until a
-        // person let go and pressed it again.
-        runtime.ui_input.forget();
-
-        ENGINE_LOG_INFO("The UI layout {} reloaded.", sandbox::kUiLayoutFile);
+    void open_ui_surface(Runtime& runtime) {
+        runtime.ui_context = std::make_unique<moth_ui::Context>(
+            &runtime.ui_images, &runtime.ui_fonts, &runtime.ui_renderer);
+        runtime.ui_surface = std::make_unique<engine::ui::ScriptSurface>(runtime.game_content,
+                                                                         *runtime.ui_context);
     }
 
     /// The one image the M6 probe draws, beside whatever the layout draws.
@@ -1165,36 +1066,33 @@ namespace {
         }
 
         runtime.ui_pass.forget_sets();
-        if (runtime.ui_layout) {
-            runtime.ui_layout->ReloadEntity();
+        if (runtime.ui_surface) {
+            runtime.ui_surface->reload_images();
         }
         load_ui_probe_image(runtime);
-        ENGINE_LOG_INFO("A UI image changed, so the layout asked for its images again.");
+        ENGINE_LOG_INFO("A UI image changed, so the layouts asked for their images again.");
     }
 
     /**
-     * Reloads the layout when the change list names it.
+     * Reloads whichever layouts the change list names.
      *
-     * Both identities are tested: the one the layout had, so a cook that
-     * rewrote its sidecar is seen, and the one it has now, so a layout that
-     * appeared is too.
+     * The surface tests both identities of each layout it holds: the one it was
+     * read under, so a cook that rewrote a sidecar is seen, and the one the
+     * manifest gives that path now.
      *
-     * An image the layout names is not tested here. That swaps in behind the
-     * node the way a mesh does, and issue #210 is what makes it.
+     * An image a layout names is not tested here. That swaps in behind the node
+     * the way a mesh does, and `reload_ui_images` is what does it.
      */
-    void reload_ui_layout_if_changed(Runtime& runtime,
-                                     const std::vector<engine::assets::AssetChange>& changed) {
-        const engine::assets::ManifestEntry* now =
-            runtime.game_content.find(sandbox::kUiLayoutFile);
-        const engine::Guid current = now != nullptr ? now->guid : engine::Guid{};
-
-        for (const engine::assets::AssetChange& change : changed) {
-            if ((runtime.ui_layout_guid.valid() && change.guid == runtime.ui_layout_guid) ||
-                (current.valid() && change.guid == current)) {
-                reload_ui_layout(runtime);
-                return;
-            }
+    void reload_ui_layouts_if_changed(Runtime& runtime,
+                                      const std::vector<engine::assets::AssetChange>& changed) {
+        if (!runtime.ui_surface || !runtime.ui_surface->reload_layouts(identities_of(changed))) {
+            return;
         }
+
+        // The new trees know nothing about a key or a button the old ones took.
+        // Keeping the claim would leave the game unable to read it until a
+        // person let go and pressed it again.
+        runtime.ui_input.forget();
     }
 #endif
 
@@ -1311,7 +1209,7 @@ namespace {
         // image, so a texture freed after that would leave the fresh nodes
         // holding a dead handle.
         reload_ui_images(runtime, changed);
-        reload_ui_layout_if_changed(runtime, changed);
+        reload_ui_layouts_if_changed(runtime, changed);
 #endif
 
         // A mesh or a texture swapped in behind the entities that name it, so
@@ -1461,11 +1359,11 @@ namespace {
             engine::gfx::imgui_shutdown(runtime.device);
         }
 #if defined(ENGINE_WITH_UI)
-        // Outermost first. The node tree holds an IImage and an IFont, those
-        // hold texture handles, and the two factories own the textures. So the
-        // order is tree, then the things it points at, then the factories that
-        // own those.
-        runtime.ui_layout.reset();
+        // Outermost first. A node tree holds an IImage and an IFont, those hold
+        // texture handles, and the two factories own the textures. So the order
+        // is the trees, then the things they point at, then the factories that
+        // own those. The surface owns every tree, so dropping it is step one.
+        runtime.ui_surface.reset();
         runtime.ui_context.reset();
 
         runtime.ui_image.reset();
@@ -1735,23 +1633,21 @@ namespace {
         }
 
 #if defined(ENGINE_WITH_UI)
-        // The layout lays its children out from the screen rectangle, and a hit
+        // A layout lays its children out from the screen rectangle, and a hit
         // test asks which child a point is in. So the rectangle has to be
         // current before the events go in, not only before the draw. A layout
         // that had never drawn would otherwise size every child at zero and
         // answer no click at all on the first frame.
-        if (runtime.ui_layout) {
-            runtime.ui_layout->SetScreenRect(moth_ui::IntRect{
+        //
+        // The surface is what routes the events now. It hands out no node, so
+        // nothing here holds a pointer a reload could free. That trap has cost
+        // this project a day twice. See `DESIGN.md` section 8.4.
+        if (runtime.ui_surface) {
+            runtime.ui_surface->set_screen_rect(moth_ui::IntRect{
                 { 0, 0 },
                 { static_cast<int>(extent.width), static_cast<int>(extent.height) } });
         }
-
-        // The listener is built here rather than kept, because it points at the
-        // owner of the layout. A reload replaces the node tree, and anything
-        // holding the old node by raw pointer dangles. That has cost this
-        // project a day twice already. See `DESIGN.md` section 8.4.
-        engine::ui::LayoutListener listener{ &runtime.ui_layout };
-        (void)runtime.ui_input.take(state, &listener);
+        (void)runtime.ui_input.take(state, runtime.ui_surface.get());
 #else
         (void)extent;
 #endif
@@ -1850,6 +1746,17 @@ namespace {
             last_frame = now;
 
             update_input(runtime, context, options, session, last_extent, frame);
+
+#if defined(ENGINE_WITH_UI)
+            // On the frame clock, because a widget animates at the frame rate.
+            // It runs after the events, so a button that changed state on this
+            // frame starts its clip on this frame rather than on the next.
+            if (runtime.ui_surface) {
+                runtime.ui_surface->update(
+                    static_cast<std::uint32_t>(delta * 1000.0F));
+            }
+#endif
+
             fly_camera(runtime, settings, camera, world, delta);
 
             // The game and the solver both run on the fixed step now, so this
@@ -2049,7 +1956,7 @@ int main(int argc, char** argv) {
     // The tree is built once and never animated. Update() would advance the
     // keyframe tracks, and every track here holds one frame, so a static layout
     // needs no tick. Animation, input and widgets are all M10.
-    load_ui_layout(runtime);
+    open_ui_surface(runtime);
 #endif
 
     engine::scene::World world;
@@ -2084,6 +1991,13 @@ int main(int argc, char** argv) {
     // input instead, which start() bound. See play/session.h.
     sandbox::bind_actions(session.input());
 
+#if defined(ENGINE_WITH_UI)
+    // M10.6. Before the scripts load, so the first on_start can already show a
+    // layout. A build with no game UI passes nothing and every call in the `ui`
+    // table answers false.
+    session.set_ui(runtime.ui_surface.get());
+#endif
+
     // Before the first step, so an entity that names a script finds it loaded
     // rather than reporting it missing on the first frame.
     session.load_scripts(runtime.game_content);
@@ -2102,7 +2016,7 @@ int main(int argc, char** argv) {
         .ui_renderer = &runtime.ui_renderer,
         .ui_image = &runtime.ui_image,
         .ui_font = runtime.ui_font.get(),
-        .ui_layout = &runtime.ui_layout,
+        .ui_surface = runtime.ui_surface.get(),
 #endif
         .overlay = runtime.overlay,
         .game_content = &runtime.game_content,
