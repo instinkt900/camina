@@ -61,6 +61,8 @@ namespace engine::scene {
          * reads the blend the last frame drew, so the motion of a frame that
          * fell between two steps would be fed back in and compound.
          *
+         * It also marks the step as running, which is what record() reads.
+         *
          * @param world The scene to write.
          */
         void begin_step(World& world);
@@ -73,6 +75,17 @@ namespace engine::scene {
          * frame after it starts moving blends two copies rather than reading a
          * pose nobody set.
          *
+         * @warning **A record outside a step writes both halves**, so the pose
+         * is drawn rather than blended towards. A paused game runs no step, and
+         * a pose written there is authoritative rather than the newer half of a
+         * pair: blending it would draw the entity part way to where it was put,
+         * and it would stay there for as long as the pause lasts.
+         * `physics::Simulation::teleport` writes both halves for the same
+         * reason. See issue #409.
+         *
+         * begin_step() and interpolate() are what mark the two, so nothing has
+         * to tell this class whether the game is paused.
+         *
          * @param world The scene to read the local transform from.
          * @param entity The entity that moved.
          */
@@ -84,6 +97,8 @@ namespace engine::scene {
          * The blend of the last two steps, the same way
          * `physics::Simulation::interpolate` works. Call it once for each
          * frame, after the steps that frame ran.
+         *
+         * It also marks the step as finished, which is what record() reads.
          *
          * @param world The scene to write.
          * @param alpha How far the frame sits into the step that has not run,
@@ -124,6 +139,15 @@ namespace engine::scene {
         };
 
         std::unordered_map<entt::entity, Pose> m_poses;
+
+        /**
+         * Whether a step is running, which decides what record() writes.
+         *
+         * begin_step() opens one and interpolate() closes it. So a paused frame,
+         * which runs neither of them, leaves this false and a record there is
+         * taken as authoritative. See record().
+         */
+        bool m_in_step = false;
     };
 
 } // namespace engine::scene

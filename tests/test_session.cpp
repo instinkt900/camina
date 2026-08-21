@@ -483,6 +483,50 @@ namespace {
               "and the instance restarted while the game was still paused");
     }
 
+    void a_pose_written_while_paused_is_the_pose_the_next_frame_draws() {
+        section("a pose written while paused is the pose the next frame draws");
+
+        register_everything();
+
+        sc::World world;
+        engine::play::Session session;
+
+        const entt::entity crate = world.create();
+        world.registry().get<engine::Transform>(crate).position =
+            engine::Vec3{ 0.0F, 10.0F, 0.0F };
+        world.registry().emplace<engine::physics::RigidBody>(
+            crate, engine::physics::RigidBody{ .type = engine::physics::BodyType::Dynamic });
+        world.registry().emplace<engine::physics::BoxCollider>(crate);
+        world.update();
+        session.build(world);
+
+        for (int i = 0; i < 10; ++i) {
+            session.advance(world, engine::play::View{}, kStepSeconds);
+        }
+        const float fell_to = world.registry().get<engine::Transform>(crate).position.y;
+        check(fell_to < 10.0F, "the crate fell");
+
+        session.set_paused(true);
+        session.advance(world, engine::play::View{}, kStepSeconds);
+
+        // What a Main menu button does: it puts the room back while the game is
+        // held. Before this the pose stayed drawn where the crate fell, and the
+        // reset was invisible until something resumed.
+        const engine::Vec3 home{ 0.0F, 4.0F, 0.0F };
+        check(session.simulation().teleport(world, crate, home, engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
+              "the crate teleports home");
+
+        session.advance(world, engine::play::View{}, kStepSeconds);
+        check(world.registry().get<engine::Transform>(crate).position.y == home.y,
+              "and the next paused frame draws it there");
+
+        // And it stays. A paused frame draws every frame, so a pose that was not
+        // authoritative would be blended towards on the first one and held there.
+        session.advance(world, engine::play::View{}, kStepSeconds);
+        check(world.registry().get<engine::Transform>(crate).position.y == home.y,
+              "and it stays there while the pause lasts");
+    }
+
 } // namespace
 
 int main() {
@@ -499,6 +543,7 @@ int main() {
     a_paused_session_still_delivers_a_reload();
     a_paused_game_reads_the_key_that_resumes_it();
     a_script_edited_while_paused_restarts_there_and_then();
+    a_pose_written_while_paused_is_the_pose_the_next_frame_draws();
 
     engine::jobs::shutdown();
     return test::report();

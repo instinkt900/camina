@@ -1,7 +1,7 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7e and M10.7f
-Last updated: 2026-08-21
+Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7f
+Last updated: 2026-08-22
 
 ---
 
@@ -1150,6 +1150,28 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   so the first step after a resume does not take every key pressed while the menu was up. That
   guarantee came with M10.7a and it is now measured through the general flag: a throw replayed
   during a pause gives the paused capture byte for byte.
+
+  **M10.7e draws what a paused game moved, which closed #409.** Both interpolate calls sat at the
+  end of the step loop, so a paused advance wrote no drawn pose at all and anything moved while
+  paused kept its old one until something resumed. A paused advance runs them now, with the alpha
+  the clock already had. Nothing stepped, so every blend gives back what the last frame drew, and
+  only a pose something wrote while paused moves.
+
+  **`physics::Simulation::teleport` was already right.** It writes both halves of the pair it
+  blends, and has since M8, because setting the newer half alone draws a body sliding across
+  everything between where it was and where it was put. So the body half needed no change: it
+  needed the interpolation to run at all.
+
+  **`scene::StepMotion::record` was not.** It shifts the pair, which is right inside a step and
+  wrong outside one: a transform a script writes while paused would be blended towards and left
+  part way there for the whole pause. It writes both halves outside a step now.
+  **`begin_step` and `interpolate` are what mark the two**, so nothing has to tell that class
+  whether the game is paused, and no caller can forget to.
+
+  The sandbox meets this on the Main menu button, which puts the room back while the game is
+  held. The capture is a weak witness for it, because the title screen covers the crates the reset
+  moves and only their shadows show, so the check is `tests/test_session.cpp` reading the pose
+  back rather than a picture.
 
   **`runtime --key <frame>:<action>` replays a press by action name**, which replaced
   `--throw-at-frame`. The old flag named `sandbox::kThrowKey` from inside the runtime, so the
@@ -2840,7 +2862,7 @@ C++ knows any of them exists.
 **The milestone is not closed by it.** The pass found four gaps and every one of them is in the
 milestone, as M10.7c through M10.7f. None of them blocks the test above, and each is a thing a
 person meets while authoring a menu rather than a thing they read about. M10 closes when all
-four are answered. M10.7c and M10.7d are answered, and M10.7e and M10.7f are open.
+four are answered. M10.7c, M10.7d and M10.7e are answered, and M10.7f is open.
 
 It came in three parts. M10.7a gave a script the fixed step through `script::GameClock`, because
 a pause menu that cannot stop the world is a picture rather than a menu. #402 gave a script a
@@ -2885,9 +2907,9 @@ pass is the other outcome: authoring the thing is what finds what building the p
   `on_update`, and a paused session runs none, so P put the pause menu up and only the Resume
   button took it down. `on_paused_update()` is the answer and §8.4 holds it. P resumes now, and
   the capture proves it through `--key 90:pause`.
-- **#409, M10.7e, a paused game that moves something does not redraw it.** The Main menu button
-  puts the room back, and the crates stay drawn where they fell until something resumes. Both
-  interpolate calls sit at the end of the step loop, which a paused session returns before.
+- **#409, M10.7e, a paused game that moves something does not redraw it. Answered.** The Main
+  menu button puts the room back, and the crates stayed drawn where they fell until something
+  resumed. A paused advance interpolates now, and §8.4 holds the two halves it needed.
 - **#407, M10.7f, Escape quits the runtime**, so the pause menu is bound to P, which is not the
   key a player reaches for. Freeing Escape needs another way out of the runtime first, and the
   likely answer is a Quit button in the game's own main menu, which needs a `game.quit()` that no

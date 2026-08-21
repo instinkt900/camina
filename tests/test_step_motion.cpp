@@ -237,6 +237,51 @@ namespace {
         check(motion.tracked() == 0, "clear drops the rest");
     }
 
+    void a_record_outside_a_step_is_drawn_rather_than_blended() {
+        test::section("a record outside a step is drawn rather than blended");
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        sc::StepMotion motion;
+
+        // Two steps, so the pair holds two different poses and a blend between
+        // them is something a check can tell apart from either one.
+        motion.begin_step(world);
+        world.set_local(entity, Transform{ .position = Vec3{ 0.0F, 0.0F, 0.0F } });
+        motion.record(world, entity);
+        motion.interpolate(world, 0.5F);
+
+        motion.begin_step(world);
+        world.set_local(entity, Transform{ .position = Vec3{ 10.0F, 0.0F, 0.0F } });
+        motion.record(world, entity);
+        motion.interpolate(world, 0.5F);
+        test::check(std::abs(world.local(entity).position.x - 5.0F) < kBlendTolerance,
+                    "a frame between the two steps draws the blend");
+
+        // No begin_step, which is what a paused game runs. The pose written
+        // here is authoritative: blending towards it would draw the entity part
+        // way to where it was put, and leave it there for the whole pause.
+        world.set_local(entity, Transform{ .position = Vec3{ -4.0F, 0.0F, 0.0F } });
+        motion.record(world, entity);
+        motion.interpolate(world, 0.5F);
+        test::check(std::abs(world.local(entity).position.x + 4.0F) < kBlendTolerance,
+                    "and a record outside a step is drawn where it was put");
+
+        // Interpolating again changes nothing, because the pair holds one pose.
+        // A paused frame runs this every frame, so it has to settle.
+        motion.interpolate(world, 0.5F);
+        test::check(std::abs(world.local(entity).position.x + 4.0F) < kBlendTolerance,
+                    "and it stays there however many frames draw it");
+
+        // And the blending starts again on the next step, from where it was put.
+        motion.begin_step(world);
+        world.set_local(entity, Transform{ .position = Vec3{ 6.0F, 0.0F, 0.0F } });
+        motion.record(world, entity);
+        motion.interpolate(world, 0.5F);
+        test::check(std::abs(world.local(entity).position.x - 1.0F) < kBlendTolerance,
+                    "and the step after it blends from there");
+    }
+
 } // namespace
 
 int main() {
@@ -246,5 +291,6 @@ int main() {
     a_first_sighting_does_not_swing_in_from_the_origin();
     a_dead_entity_is_dropped();
     forgetting_and_clearing_work();
+    a_record_outside_a_step_is_drawn_rather_than_blended();
     return test::report();
 }
