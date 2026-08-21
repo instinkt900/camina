@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M10, M12 and M13 complete. M11 next
+Status: M9, M12 and M13 complete. M10 built its milestone test and closes on M10.7c to M10.7f
 Last updated: 2026-08-21
 
 ---
@@ -2775,9 +2775,14 @@ stops calling `std::filesystem::absolute` on what it read, which closes #218 and
 Conan editable is for development and not for a build somebody else runs. Develop the two
 repositories together against the editable, then release and pin.
 
-**M10.7 closed the milestone, and the authoring pass is recorded below.** The sandbox game has a
-main menu, a pause menu and a HUD. `scripts/puzzle.lua` moves between the three, and no C++
-knows any of them exists.
+**M10.7 built the milestone test, and the authoring pass is recorded below.** The sandbox game
+has a main menu, a pause menu and a HUD. `scripts/puzzle.lua` moves between the three, and no
+C++ knows any of them exists.
+
+**The milestone is not closed by it.** The pass found four gaps and every one of them is in the
+milestone, as M10.7c through M10.7f. None of them blocks the test above, and each is a thing a
+person meets while authoring a menu rather than a thing they read about. M10 closes when all
+four are answered.
 
 It came in three parts. M10.7a gave a script the fixed step through `script::GameClock`, because
 a pause menu that cannot stop the world is a picture rather than a menu. #402 gave a script a
@@ -2812,21 +2817,22 @@ surface, and it fails if the world stands still.
 Four gaps, all filed, none of them fixed on that branch. M9.8 found nothing and said so, and this
 pass is the other outcome: authoring the thing is what finds what building the parts cannot.
 
-- **#410, a script is not told when a layout reloaded.** The most valuable of the four. A reload
-  builds the node tree again, so every label a script wrote goes back to the text the file
-  carries, and `on_start` runs again only when the **script** reloads. So the first save while
-  authoring a menu makes every button in it read `Button`. `ScriptSurface::reload_layouts`
-  already knows which layouts it rebuilt and throws the signal away.
-- **#408, a paused game reads no key.** A script reads an action inside `on_update`, and a paused
-  session runs none. So P puts the pause menu up and only the Resume button takes it down. Every
-  game resumes on the key that paused it, and this one cannot.
-- **#409, a paused game that moves something does not redraw it.** The Main menu button puts the
-  room back, and the crates stay drawn where they fell until something resumes. Both interpolate
-  calls sit at the end of the step loop, which a paused session returns before.
-- **#407, Escape quits the runtime.** So the pause menu is bound to P, which is not the key a
-  player reaches for. Freeing Escape needs another way out of the runtime first, and the likely
-  answer is a Quit button in the game's own main menu, which needs a `game.quit()` that no seam
-  offers.
+- **#410, M10.7c, a script is not told when a layout reloaded.** The most valuable of the four,
+  and the first to answer. A reload builds the node tree again, so every label a script wrote
+  goes back to the text the file carries, and `on_start` runs again only when the **script**
+  reloads. So the first save while authoring a menu makes every button in it read `Button`.
+  `ScriptSurface::reload_layouts` already knows which layouts it rebuilt and throws the signal
+  away.
+- **#408, M10.7d, a paused game reads no key.** A script reads an action inside `on_update`, and
+  a paused session runs none. So P puts the pause menu up and only the Resume button takes it
+  down. Every game resumes on the key that paused it, and this one cannot.
+- **#409, M10.7e, a paused game that moves something does not redraw it.** The Main menu button
+  puts the room back, and the crates stay drawn where they fell until something resumes. Both
+  interpolate calls sit at the end of the step loop, which a paused session returns before.
+- **#407, M10.7f, Escape quits the runtime**, so the pause menu is bound to P, which is not the
+  key a player reaches for. Freeing Escape needs another way out of the runtime first, and the
+  likely answer is a Quit button in the game's own main menu, which needs a `game.quit()` that no
+  seam offers. It is the last of the four for that reason.
 
 **Three of the four are consequences of the pause, and none of them showed up while it was
 built.** M10.7a has four cases and three mutations behind it, and every one of them is about a
