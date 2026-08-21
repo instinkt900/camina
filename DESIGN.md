@@ -1083,13 +1083,40 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   wired into the old nodes goes with them. `reload_images` wires them again. Without that a
   button answers once and is silent after the first image reload, and nothing reports it.
 
-  **A press cannot be proved against a cooked layout yet, and that is a format limit.** moth_ui
-  reads a widget class only for a group entity. The only group a `.mothui` can hold as a child
-  is a reference to another layout, which loads from disk by path rather than through
-  `assets::Content`, and `Layout::Deserialize` never reads an id for the root. So the only
-  button a layout can carry is its own root, and that root has no name a press could be
-  reported under. `presses()` is written and wired and nothing can fire it. Issue #399 holds
-  it, and #389 needs the answer before a menu can have buttons.
+  **A button is a referenced layout, and the id belongs to the reference.** moth_ui reads a
+  widget class only for a group entity, and the only group a `.mothui` can name as a child is a
+  reference. So `button.mothui` carries `"class": "button"` on its root, a menu holds a
+  reference to it under whatever id that menu chooses, and `LayoutEntityRef::CopyLayout` brings
+  the class across. Two menus stand up the same button file under different names.
+
+  **A layout is not a tree of in-file groups, and adding one was the wrong fix.** A first
+  attempt at M10.6 put a `Group` entity into the format, because a probe showed a
+  `{"type":"Group"}` child being dropped. The facts were measured and the design intent was
+  not: the format nests through references on purpose. A probe against unmodified moth_ui 1.8.0
+  then showed a two-button menu of references already working. See moth_ui #154, closed.
+
+  **What was actually missing is that a reference read a file.**
+  `LayoutEntityRef::Deserialize` joined the stored path to the directory the referencing layout
+  came from and called `Layout::Load`. This engine hands moth_ui bytes out of
+  `assets::Content`, so there is no directory and every reference failed. moth_ui 1.9.0 adds
+  `ILayoutProvider`: with one set, a reference asks the consumer for its target by `AssetId`,
+  and without one the filesystem route runs unchanged.
+
+  `engine::ui::read_layout` supplies that provider and is therefore re-entrant, because moth_ui
+  asks for a sub-layout part way through reading the layout that names it. **It keeps the chain
+  being read**, so a layout that refers to itself is reported rather than followed until the
+  stack runs out. Deleting that guard segfaults `tests/test_ui_layout.cpp` rather than failing
+  a check, which is what makes it worth having.
+
+  **The cooker rewrites `layoutPath` the way it rewrites `imagePath`**, and a referenced layout
+  is an input of the layout that names it, so editing a button re-cooks every menu that stands
+  one up. `assets::kCookerVersion` is 10 for that: the freshness check compares identities,
+  input names and input bytes, and a rule that starts writing a new form moves none of them.
+
+  **A node id is unique only within the layout that declares it.** Two references to one button
+  file each hold a child called the same thing, and `FindChild` answers with the first. So the
+  sandbox puts its labels in the menu beside the references rather than inside the button, and
+  a script names the reference rather than anything inside it.
 
 ### 8.5 Boundaries
 

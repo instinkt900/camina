@@ -68,6 +68,14 @@ namespace {
         // pointing at the wrong asset.
         write_file(source / "ui" / "wrong.mothui", R"({"type":"Group","children":[]})");
 
+        // A layout that refers to itself. The cooker is happy with it, because a
+        // reference is resolved to an identity and nothing there follows one.
+        // Reading it is what would recurse until the stack ran out.
+        write_file(source / "ui" / "loop.mothui",
+                   R"({"type":"Layout","mothui_version":1,"children":[)"
+                   R"({"type":"Ref","id":"itself","layoutPath":"loop.mothui",)"
+                   R"("propertyOverrides":[]}]})");
+
         const engine::import::Options options{ .content = source, .out = out };
         engine::import::Result result;
         test::check(engine::import::cook_all(options, result), "the tree cooks");
@@ -88,6 +96,30 @@ namespace {
             test::check(engine::ui::read_layout(content, guid, layout) == LayoutLoad::Ok,
                         "and it reads by that identity");
             test::check(layout != nullptr, "and it comes back");
+        });
+    }
+
+    void a_layout_that_refers_to_itself_is_reported() {
+        with_a_cooked_tree([](const as::Content& content) {
+            // moth_ui asks for a sub-layout while it is reading the layout that
+            // names it, so the reader is re-entrant and a cycle would follow
+            // itself until the stack ran out. Nothing else stops that: the
+            // cooker resolves a reference to an identity and never follows one.
+            const engine::Guid guid = identity_of(content, "ui/loop.mothui");
+            test::check(guid.valid(), "the self-referring layout is in the manifest");
+
+            std::shared_ptr<moth_ui::Layout> layout;
+            const LayoutLoad result = engine::ui::read_layout(content, guid, layout);
+
+            // The outer read still succeeds. The reference is the child that
+            // will not resolve, and moth_ui drops a child it cannot read rather
+            // than failing the layout around it.
+            test::check(result == LayoutLoad::Ok, "the layout itself still reads");
+            test::check(layout != nullptr, "and it comes back");
+            if (layout != nullptr) {
+                test::check(layout->m_children.empty(),
+                            "with the reference that closed the loop dropped");
+            }
         });
     }
 
@@ -149,6 +181,7 @@ namespace {
 
 int main() {
     a_cooked_layout_reads_by_identity();
+    a_layout_that_refers_to_itself_is_reported();
     an_identity_nothing_holds_is_named_as_such();
     an_asset_that_is_not_json_is_named_as_such();
     a_document_that_is_not_a_layout_is_named_as_such();

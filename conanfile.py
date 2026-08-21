@@ -132,10 +132,13 @@ class CaminaConan(ConanFile):
             # build that needs an editable is a build nobody else can run. See
             # DESIGN.md section 8.5.
             # M10.1 needs moth_ui::AssetId, which 1.8.0 is the first release to
-            # carry. The ceiling stays below 2, because the 2.x line is a
-            # separate fork for a larger toolkit and not the next version of
-            # this one. See DESIGN.md section 8.5.
-            self.requires("moth_ui/[>=1.8 <2]")
+            # carry. M10.6 needs moth_ui::ILayoutProvider, which is 1.9.0: a
+            # sub-layout reference reads its target off the filesystem without
+            # one, and this engine hands moth_ui bytes rather than a directory.
+            # The ceiling stays below 2, because the 2.x line is a separate fork
+            # for a larger toolkit and not the next version of this one. See
+            # DESIGN.md section 8.5.
+            self.requires("moth_ui/[>=1.9 <2]")
 
             # M6.4. moth_ui::IFont declares no methods, so the backend owns
             # glyph rasterization, atlas packing, measurement, line breaking
