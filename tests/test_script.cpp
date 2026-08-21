@@ -55,6 +55,30 @@ namespace {
     }
 
     /**
+     * A clock a test can hold and read back.
+     *
+     * `play::Session` is the real one and it lives above `src/script/`, so this
+     * is what the binding is driven against. What matters here is that the
+     * `game` table reaches the interface, not what a session does when it is
+     * paused. tests/test_session.cpp covers that half.
+     */
+    class FakeClock final : public sp::GameClock {
+    public:
+        void set_paused(bool paused) override {
+            paused_ = paused;
+            ++writes;
+        }
+        [[nodiscard]] bool paused() const override { return paused_; }
+
+        /// How many times a script asked for a change, so a test can tell a
+        /// call that did nothing from one that was never made.
+        int writes = 0;
+
+    private:
+        bool paused_ = false;
+    };
+
+    /**
      * A UI surface a test drives, with no moth_ui under it.
      *
      * M10.6 puts `script::UiSurface` between the binding and the game UI, so
@@ -2164,6 +2188,60 @@ namespace {
         check(ui.presses().empty(), "and the press was still drained");
     }
 
+    void test_a_script_pauses_and_resumes_the_game() {
+        section("A script pauses and resumes the game");
+
+        FakeClock clock;
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update()
+                if game.paused() then
+                    game.resume()
+                else
+                    game.pause()
+                end
+            end
+        )"),
+              "the script compiles");
+        (void)with_script_and_turret(fixture, kFirst);
+
+        sp::Services services;
+        services.clock = &clock;
+
+        host.update(fixture.world, 0.0, services);
+        check(clock.paused(), "the first step paused the game");
+
+        host.update(fixture.world, 0.0, services);
+        check(!clock.paused(), "and the next one resumed it");
+        check(clock.writes == 2, "and each call reached the clock");
+    }
+
+    void test_a_script_with_no_clock_answers_false() {
+        section("A script with no clock answers false rather than failing");
+
+        Fixture fixture;
+        sp::Host host{ fixture.components };
+        check(load(host, kFirst, R"(
+            function on_update()
+                entity:set("Turret", { armed = game.pause() or game.resume()
+                                               or game.paused() })
+            end
+        )"),
+              "the script compiles");
+        const entt::entity entity = with_script_and_turret(fixture, kFirst);
+
+        // No clock in the services, which is what a build that binds none gives
+        // a script. Every call answers false and none of them raises an error.
+        sp::Services services;
+        host.update(fixture.world, 0.0, services);
+
+        check(!fixture.world.registry().get<Turret>(entity).armed,
+              "every call in the game table answered false");
+        check(host.stopped_count() == 0, "and none of them raised an error");
+    }
+
     void test_a_script_with_no_ui_service_answers_false() {
         section("A build with no game UI answers every call rather than failing");
 
@@ -2253,6 +2331,9 @@ int main() {
     test_a_press_reaches_every_listener();
     test_a_press_with_no_listener_is_dropped();
     test_a_script_with_no_ui_service_answers_false();
+
+    test_a_script_pauses_and_resumes_the_game();
+    test_a_script_with_no_clock_answers_false();
 
     // The pool has to stop before main returns. test_physics.cpp does the same,
     // and leaving the workers running at exit can hang the process or read as a

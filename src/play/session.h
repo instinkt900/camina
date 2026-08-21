@@ -21,6 +21,7 @@
 #include "physics/simulation.h"
 #include "platform/input.h"
 #include "scene/step_motion.h"
+#include "script/game_clock.h"
 #include "script/ui_surface.h"
 
 #if defined(ENGINE_WITH_LUA)
@@ -74,7 +75,7 @@ namespace engine::play {
      * @warning **advance() writes the drawn pose into the world.** Compose the
      * matrices and draw after it, never before, or the frame is one behind.
      */
-    class Session {
+    class Session : public script::GameClock {
     public:
         Session() = default;
 
@@ -83,7 +84,7 @@ namespace engine::play {
         Session(Session&&) = delete;
         Session& operator=(Session&&) = delete;
 
-        ~Session() = default;
+        ~Session() override = default;
 
         /**
          * @brief Builds a body for every entity that carries one.
@@ -161,11 +162,38 @@ namespace engine::play {
          * One alpha blends both, because they blend the same pair of steps. Two
          * would let the game and the physics draw different instants.
          *
+         * **A paused session runs no step**, and it advances no clock either, so
+         * a pause of any length costs the step after it nothing. It still
+         * delivers the UI presses, because a menu is what resumes it. See
+         * set_paused().
+         *
          * @param world The scene to run and to write the drawn pose into.
          * @param view Where the camera stands, which a script may read.
          * @param delta_seconds How much wall time this frame took.
          */
         void advance(scene::World& world, const View& view, float delta_seconds);
+
+        /**
+         * @brief Holds the steps, or lets them run again.
+         *
+         * This implements `script::GameClock`, so a script pauses the game
+         * through the `game` table. A paused session runs no `on_update`, no
+         * solver and no physics events, and the poses a frame draws stand still.
+         *
+         * @warning **A paused session still delivers UI presses**, once for each
+         * advance() rather than once for each step. A press is what resumes the
+         * game, and a session that delivered nothing while paused could never be
+         * resumed by the menu it put up. The presses were gathered on the frame
+         * clock in the first place, so this delivers them on the clock they came
+         * in on. See `DESIGN.md` §8.4.
+         *
+         * @param paused True to hold the steps.
+         */
+        void set_paused(bool paused) override { paused_ = paused; }
+
+        /// @brief Whether the steps are held.
+        /// @return True while this session is paused.
+        [[nodiscard]] bool paused() const override { return paused_; }
 
         /**
          * @brief Points the scripts at the game UI, or at nothing.
@@ -257,6 +285,9 @@ namespace engine::play {
 
         /// Simulated seconds since the session began.
         double seconds_ = 0.0;
+
+        /// Whether the steps are held. See set_paused().
+        bool paused_ = false;
 
 #if defined(ENGINE_WITH_LUA)
         /// The interpreter, and one instance for each scripted entity.

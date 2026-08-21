@@ -25,6 +25,7 @@ namespace engine::play {
             .prefabs = &scene::prefabs(),
             .camera = &camera_,
             .ui = ui_,
+            .clock = this,
             .motion = &motion_,
         };
     }
@@ -110,6 +111,30 @@ namespace engine::play {
     }
 
     void Session::advance(scene::World& world, const View& view, float delta_seconds) {
+        if (paused_) {
+            // The clock is not advanced at all, so a pause accumulates no time
+            // and the step after it owes none. The poses are left where the last
+            // frame blended them, so the world stands still.
+            (void)delta_seconds;
+
+            // The fold restarts from what the devices last read. It is an OR
+            // across every frame since the last step, and a pause runs none, so
+            // without this the first step after a resume would hand the game
+            // every key anybody pressed while the menu was up, all at once.
+            pending_ = latest_;
+
+#if defined(ENGINE_WITH_LUA)
+            // A press still reaches the scripts, on the frame clock rather than
+            // on the step. It is the clock they were gathered on, and a menu
+            // that could not be answered could never resume the game it paused.
+            scripts_.deliver_ui_events(world, step_services(view));
+#else
+            (void)world;
+            (void)view;
+#endif
+            return;
+        }
+
         for (std::uint32_t left = clock_.advance(delta_seconds); left > 0; --left) {
             ENGINE_PROFILE_ZONE_N("fixed step");
 
