@@ -333,6 +333,15 @@ if(ENGINE_WITH_UI)
     engine_enable_clang_tidy(test_ui_layout)
     add_test(NAME ui_layout COMMAND test_ui_layout)
 
+    # M10.6. The surface a script drives the UI through. It links the importer
+    # as well, because a layout has to be cooked before the surface can read it,
+    # and it drives a real moth_ui node tree with no device under it.
+    add_executable(test_ui_surface test_ui_surface.cpp)
+    target_link_libraries(test_ui_surface PRIVATE engine::ui engine::import)
+    engine_set_warnings(test_ui_surface)
+    engine_enable_clang_tidy(test_ui_surface)
+    add_test(NAME ui_surface COMMAND test_ui_surface)
+
     # M10.5. The SDL3 to moth_ui input bridge. It reads platform::InputFrame
     # rather than a device, so every case drives it with a frame written by
     # hand and no window is opened.
