@@ -140,6 +140,14 @@ namespace engine::play {
             (void)world;
             (void)view;
 #endif
+
+            // The pose a frame draws is written here as well, with the alpha the
+            // clock already had. Nothing stepped, so every blend gives back what
+            // the last frame drew, except for a pose something wrote while
+            // paused. That one is drawn rather than held back until a resume.
+            const float alpha = clock_.alpha();
+            simulation_.interpolate(world, alpha);
+            motion_.interpolate(world, alpha);
             return;
         }
 

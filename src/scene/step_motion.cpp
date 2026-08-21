@@ -10,6 +10,7 @@
 namespace engine::scene {
 
     void StepMotion::begin_step(World& world) {
+        m_in_step = true;
         drop_dead(world);
         for (const auto& [entity, pose] : m_poses) {
             world.set_local(entity, pose.current);
@@ -39,11 +40,22 @@ namespace engine::scene {
             return;
         }
 
+        if (!m_in_step) {
+            // Outside a step this is authoritative rather than the newer half of
+            // a pair. A paused game runs no step, and blending towards a pose
+            // written there would draw the entity part way to where it was put
+            // and leave it there for as long as the pause lasts. See #409.
+            found->second.previous = local;
+            found->second.current = local;
+            return;
+        }
+
         found->second.previous = found->second.current;
         found->second.current = local;
     }
 
     void StepMotion::interpolate(World& world, float alpha) {
+        m_in_step = false;
         drop_dead(world);
         const float weight = std::clamp(alpha, 0.0F, 1.0F);
 
