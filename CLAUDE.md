@@ -312,7 +312,21 @@ sandbox hid it for months, because the glass panes are double sided and they dra
 they turned culling off before the tonemap ran. Only a scene with no blended geometry showed
 it, and the large test scene of #130 was the first one pointed at the engine.
 
-The picture is the only thing that can catch this class of bug, and CI has no GPU. See #190.
+The picture is the only thing that can catch this class of bug, and CI has no GPU. **#190
+closed that gap.** `ctest -L gpu` opens a device, drives the editor and the runtime offscreen,
+and fails when a frame collapses to one colour. It skips itself where no device opens, so a
+plain `ctest` run includes it, and CI leaves it out with `-LE gpu`.
+
+**The editor capture is the sharp half**, because it carries no game UI and no ImGui overlay,
+so every pixel came from the scene. Reintroducing #188 takes that frame to one colour. The
+same mutation leaves the runtime capture at 4676 colours and passing, because the M6.2 UI probe
+draws over the tonemapped image. #200 takes that probe away and the runtime half sharpens with
+it.
+
+`tests/content/` is the scene, and each word of "opaque, single sided, no environment" is
+load-bearing. The sandbox cannot be it, for the reason above. An environment cannot be in it
+either: `SkyPass` would fill every uncovered pixel with a gradient and a frame would stay varied
+with nothing drawn at all.
 
 The sandbox is an interior now. `sandbox/content/models/room/` is five coloured walls, generated
 the way the spheres are, and everything else stands inside it. Open space could not test a

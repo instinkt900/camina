@@ -3505,8 +3505,12 @@ capture of the editor would hold the panel furniture rather than the scene, and 
 nothing offscreen at all. Comparing a windowed editor capture against an offscreen runtime one
 is refused by the rule in `CLAUDE.md`: a windowed capture is whatever size the window manager
 chose. Making the two comparable needs a render path in the editor that skips the panels and
-draws straight to the device target, which is #377. Issue #190 wants the same capability for a
-different reason.
+draws straight to the device target, which is #377.
+
+Issue #190 wanted a capture of the scene alone as well, and it got one first: `editor
+--offscreen` already draws through the scene camera with no panels, and `tests/test_gpu_frame.cpp`
+reads that capture. What #377 still wants is the comparison against a runtime frame, which needs
+the two to agree on more than "neither is blank".
 
 **Done when:** the editor opens the sandbox with no cooked **game** tree and draws it, a level
 built that way runs in the runtime after one cook, and the two pictures match or every
