@@ -198,10 +198,13 @@ int main(int argc, char** argv) {
     }
 
     section("The runtime draws the scene it ships");
-    // The weaker of the two, and worth having because it is the path that
-    // ships. It cannot be as sharp: the game UI probe draws over the tonemapped
-    // image, so this frame is varied whatever the scene did. Issue #200 takes
-    // that probe away, and this check gets sharper for free when it does.
+    // As sharp as the editor half since #439. The M6.2 probe used to draw over
+    // the tonemapped image, so this frame stayed varied whatever the scene did.
+    // It is gone, and tests/content names no layout, so nothing draws over the
+    // scene here and one flat colour means the same thing it does above.
+    //
+    // A game that does draw a UI would put this back where it was. That is why
+    // the editor half exists rather than this one standing alone.
     const fs::path runtime = program("runtime");
     check(fs::exists(runtime), "the runtime binary is there");
     if (fs::exists(runtime)) {
@@ -216,6 +219,7 @@ int main(int argc, char** argv) {
                         frame.pixels);
             std::fflush(stdout);
             check(frame.distinct > 1, "the runtime frame is not one flat colour");
+            check(frame.distinct >= kShadedFloor, "the runtime frame holds a shaded scene");
         }
     }
 

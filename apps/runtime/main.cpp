@@ -53,8 +53,6 @@
 #include "ui/ui_pass.h"
 
 #include <moth_ui/context.h>
-#include <moth_ui/layout/layout.h>
-#include <moth_ui/nodes/node.h>
 #endif
 
 #include <imgui.h>
@@ -712,47 +710,23 @@ namespace {
 
 #if defined(ENGINE_WITH_UI)
     /**
-     * Records a placeholder layout, so M6.2 has something to look at.
+     * Records the game UI for this frame.
      *
-     * moth_ui normally drives the recorder through its node tree. Nothing loads
-     * a layout yet, so this calls the same interface by hand and covers each
-     * recorder path: a solid rect, a gradient, a clip, a transform, and from
-     * M6.3 an image drawn both ways the backend serves.
+     * M6.2 put a placeholder here, drawing a rectangle, a gradient, a clip, a
+     * transform, images and text, because nothing loaded a layout yet and the
+     * recorder paths needed something to exercise them. Layouts load now, and
+     * `tests/test_ui_renderer.cpp` covers every one of those paths in 91 checks
+     * with no device. So the placeholder was drawing over the game for no
+     * remaining reason, and issue #439 took it away.
      *
-     * Issue #200 replaces this with a real layout, and this goes away with it.
+     * @param renderer The recorder to fill.
+     * @param extent The size actually being drawn into, not the size requested.
+     * @param surface The game's layout tree, or null when none opened.
      */
-    /// The size the probe rasterizes at. Large enough to read in a 1280 by 720
-    /// screenshot, which is the only way this gets checked.
-    constexpr int kUiProbeFontSize = 24;
-
-    /**
-     * Draws one string in a box, with the box outlined around it.
-     *
-     * The outline is what makes the alignment readable. Text alone shows where
-     * it landed and not what it was aligned against, so a wrong alignment and a
-     * wrong destination rectangle look the same.
-     */
-    void record_text_probe(engine::ui::Renderer& renderer, moth_ui::IFont& font,
-                           const moth_ui::IntRect& box, std::string_view text,
-                           moth_ui::TextHorizAlignment horizontal,
-                           moth_ui::TextVertAlignment vertical) {
-        renderer.PushColor(moth_ui::Color{ 0.35F, 0.35F, 0.40F, 1.0F });
-        renderer.RenderRect(box);
-        renderer.PopColor();
-
-        renderer.PushColor(moth_ui::Color{ 0.95F, 0.95F, 0.90F, 1.0F });
-        renderer.RenderText(text, font, horizontal, vertical, box);
-        renderer.PopColor();
-    }
-
-    void record_ui_probe(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent,
-                         const moth_ui::IImage* image, moth_ui::IFont* font,
-                         engine::ui::ScriptSurface* surface) {
+    void record_ui(engine::ui::Renderer& renderer, engine::gfx::Extent2D extent,
+                   engine::ui::ScriptSurface* surface) {
         renderer.begin(extent.width, extent.height);
 
-        // M6.5. The layouts first, so the probe below draws over them and a
-        // regression in either one stays readable against the other.
-        //
         // The screen rectangle is set on every frame rather than once, because
         // the device can settle on a size the window never asked for and a
         // resize has to reach every tree. moth_ui lays the children out from it.
@@ -762,79 +736,6 @@ namespace {
                 { 0, 0 },
                 { static_cast<int>(extent.width), static_cast<int>(extent.height) } });
             surface->draw();
-        }
-
-        // A solid bar across the top.
-        renderer.PushColor(moth_ui::Color{ 0.10F, 0.55F, 0.85F, 1.0F });
-        renderer.RenderFilledRect(moth_ui::IntRect{ { 16, 16 }, { 336, 56 } });
-        renderer.PopColor();
-
-        // A gradient below it, turned so the angle path is exercised.
-        moth_ui::LinearGradient gradient;
-        gradient.startColor = moth_ui::Color{ 0.9F, 0.2F, 0.1F, 1.0F };
-        gradient.endColor = moth_ui::Color{ 0.1F, 0.9F, 0.4F, 1.0F };
-        gradient.angle = 0.4F;
-        renderer.RenderGradientRect(moth_ui::IntRect{ { 16, 72 }, { 336, 152 } }, gradient);
-
-        // A clip that cuts the next rect in half, which is the scissor path.
-        renderer.PushClip(moth_ui::IntRect{ { 16, 168 }, { 176, 248 } });
-        renderer.PushColor(moth_ui::Color{ 0.95F, 0.85F, 0.2F, 1.0F });
-        renderer.RenderFilledRect(moth_ui::IntRect{ { 16, 168 }, { 336, 248 } });
-        renderer.PopColor();
-        renderer.PopClip();
-
-        // A transform on the last one, to show the matrix reaching the vertex.
-        renderer.PushTransform(moth_ui::FloatMat4x4::Translation({ 200.0F, 100.0F }));
-        renderer.PushColor(moth_ui::Color{ 0.8F, 0.8F, 0.9F, 1.0F });
-        renderer.RenderRect(moth_ui::IntRect{ { 16, 168 }, { 136, 248 } });
-        renderer.PopColor();
-        renderer.PopTransform();
-
-        if (image != nullptr) {
-            const moth_ui::IntRect source{ { 0, 0 }, image->GetDimensions() };
-
-            // Stretched to twice its size, so a wrong texture coordinate shows
-            // as a shifted corner mark rather than as one texel of colour.
-            renderer.PushTextureFilter(moth_ui::TextureFilter::Linear);
-            renderer.RenderImage(*image, source, moth_ui::IntRect{ { 368, 16 }, { 496, 144 } },
-                                 moth_ui::ImageScaleType::Stretch, 1.0F);
-            renderer.PopTextureFilter();
-
-            // Tiled at half size, which puts four tiles across and three down.
-            renderer.RenderImage(*image, source, moth_ui::IntRect{ { 368, 160 }, { 496, 256 } },
-                                 moth_ui::ImageScaleType::Tile, 0.5F);
-
-            // The same image under a tint and a transform. The tint reaches the
-            // image through the vertex colour, and the transform through the
-            // corner, so this covers both against one draw that shows neither.
-            renderer.PushTransform(moth_ui::FloatMat4x4::Translation({ 144.0F, 0.0F }));
-            renderer.PushColor(moth_ui::Color{ 0.4F, 0.7F, 1.0F, 1.0F });
-            renderer.RenderImage(*image, source, moth_ui::IntRect{ { 368, 16 }, { 432, 80 } },
-                                 moth_ui::ImageScaleType::Stretch, 1.0F);
-            renderer.PopColor();
-            renderer.PopTransform();
-        }
-
-        if (font != nullptr) {
-            // One box for each corner of the alignment pair, so a swapped
-            // horizontal and vertical shows as text in the wrong corner rather
-            // than as text that is merely a few pixels out.
-            record_text_probe(renderer, *font, moth_ui::IntRect{ { 16, 380 }, { 300, 460 } },
-                              "Left Top", moth_ui::TextHorizAlignment::Left,
-                              moth_ui::TextVertAlignment::Top);
-            record_text_probe(renderer, *font, moth_ui::IntRect{ { 316, 380 }, { 600, 460 } },
-                              "Center Middle", moth_ui::TextHorizAlignment::Center,
-                              moth_ui::TextVertAlignment::Middle);
-            record_text_probe(renderer, *font, moth_ui::IntRect{ { 16, 476 }, { 300, 556 } },
-                              "Right Bottom", moth_ui::TextHorizAlignment::Right,
-                              moth_ui::TextVertAlignment::Bottom);
-
-            // A paragraph that has to wrap, with a blank line in it. The blank
-            // line is the part that used to collapse, so it stays in the probe.
-            record_text_probe(renderer, *font, moth_ui::IntRect{ { 316, 476 }, { 600, 660 } },
-                              "The quick brown fox jumps over the lazy dog.\n\nAV kerns.",
-                              moth_ui::TextHorizAlignment::Left,
-                              moth_ui::TextVertAlignment::Top);
         }
 
         renderer.end();
@@ -852,17 +753,6 @@ namespace {
         /// The recording ui_pass draws. Recorded inside draw_frame, because
         /// only there is the settled swapchain size known.
         engine::ui::Renderer* ui_renderer = nullptr;
-        /**
-         * M6.3. Where the image the probe draws lives, or null when the runtime
-         * has none.
-         *
-         * A pointer to the owner rather than to the image: a reload frees the
-         * texture and hands back a new image, and a raw pointer taken once at
-         * start would name the old one.
-         */
-        const std::unique_ptr<moth_ui::IImage>* ui_image = nullptr;
-        /// The font the probe draws text with, or null when none loaded.
-        moth_ui::IFont* ui_font = nullptr;
         /**
          * M10.6. Every layout a script showed, or null when the build has none.
          *
@@ -1018,10 +908,7 @@ namespace {
             // info.extent, not the requested extent. The device can settle on a
             // different size, and the scissor and the vertex normalization both
             // have to agree with the image actually being drawn into.
-            const moth_ui::IImage* const probe =
-                context.ui_image != nullptr ? context.ui_image->get() : nullptr;
-            record_ui_probe(*context.ui_renderer, info.extent, probe, context.ui_font,
-                            context.ui_surface);
+            record_ui(*context.ui_renderer, info.extent, context.ui_surface);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
         }
 #endif
@@ -1070,12 +957,8 @@ namespace {
         engine::ui::UiPass ui_pass;
         /// M6.3. Turns a path in a layout into a cooked engine texture.
         engine::ui::ImageFactory ui_images;
-        /// The one image the probe draws. Issue #200 replaces it with a layout.
-        std::unique_ptr<moth_ui::IImage> ui_image;
         /// M6.4. Turns a font name in a layout into a rasterized atlas.
         engine::ui::FontFactory ui_fonts;
-        /// The one font the probe draws, and the one a layout names.
-        std::shared_ptr<moth_ui::IFont> ui_font;
         /// M6.5. What moth_ui needs to build a node tree: the two factories and
         /// the renderer. Held by pointer because Context takes them by pointer
         /// and has no default constructor.
@@ -1202,24 +1085,10 @@ namespace {
                                                                          *runtime.ui_context);
     }
 
-    /// The one image the M6 probe draws, beside whatever the layout draws.
-    constexpr const char* kUiProbeImage = "ui/panel.png";
-
-    /**
-     * Fetches the image the probe draws.
-     *
-     * Called at start and again after a reload, because a reload frees the
-     * texture and `moth_ui::IImage` keeps the handle inside it. The probe is
-     * not part of the layout, so nothing else would tell it.
-     */
-    void load_ui_probe_image(Runtime& runtime) {
-        runtime.ui_image = runtime.ui_images.GetImage(moth_ui::AssetId{ kUiProbeImage });
-    }
-
     /**
      * Shows the new pixels of a UI image somebody just saved.
      *
-     * M10.4. Four things hold on to a UI texture and all four have to let go,
+     * M10.4. Three things hold on to a UI texture and all three have to let go,
      * in this order:
      *
      * 1. `ImageFactory` frees the texture, so the next ask uploads it again.
@@ -1228,13 +1097,13 @@ namespace {
      * 3. The node tree asks the factory again. `moth_ui::NodeImage` keeps the
      *    image it was given, with the handle inside it, so a node nobody told
      *    would draw a texture that no longer exists.
-     * 4. The probe asks again, for the same reason. It is not part of the
-     *    layout, so step 3 does not reach it.
      *
-     * **The fourth one was found by comparing pictures rather than by a crash.**
-     * A run that swapped the image part way through drew a different frame from
-     * a run that started with it, and the difference was exactly the probe. It
-     * was binding a freed texture and getting away with it.
+     * **There was a fourth holder until #439**, the M6.2 probe, which kept an
+     * image of its own outside the layout. It was found by comparing pictures
+     * rather than by a crash: a run that swapped the image part way through
+     * drew a different frame from a run that started with it. It was binding a
+     * freed texture and getting away with it. The probe is gone and so is that
+     * step, and the lesson is why this list is written out.
      *
      * `ReloadEntity` rebuilds the nodes from the layout entities already in
      * memory rather than reading the layout again. Only the image changed, so
@@ -1250,7 +1119,6 @@ namespace {
         if (runtime.ui_surface) {
             runtime.ui_surface->reload_images();
         }
-        load_ui_probe_image(runtime);
         ENGINE_LOG_INFO("A UI image changed, so the layouts asked for their images again.");
     }
 
@@ -1581,9 +1449,7 @@ namespace {
         runtime.ui_surface.reset();
         runtime.ui_context.reset();
 
-        runtime.ui_image.reset();
         runtime.ui_images.destroy();
-        runtime.ui_font.reset();
         runtime.ui_fonts.destroy();
         runtime.ui_pass.destroy();
 #endif
@@ -2251,17 +2117,15 @@ int main(int argc, char** argv) {
 
 #if defined(ENGINE_WITH_UI)
     // M6.3. After the game content opens, because the factory resolves an
-    // identity against that manifest. A failure here is not fatal: the probe
-    // draws its shapes and no image, and the log says which one did not
+    // identity against that manifest. A failure here is not fatal: a layout
+    // then draws its shapes and no image, and the log says which one did not
     // resolve.
     //
-    // M10.4. A reload frees the texture and this holds the handle, so
-    // reload_ui_images() asks again. It used to resolve once for the whole run,
-    // which was safe only while nothing ever dropped from the factory's cache.
+    // M10.4. A reload frees the texture, so reload_ui_images() makes every
+    // holder ask again. The factory used to resolve once for the whole run,
+    // which was safe only while nothing ever dropped from its cache.
     if (!runtime.ui_images.create(runtime.device, &runtime.game_content)) {
         ENGINE_LOG_ERROR("The UI image factory did not start. No layout image will draw.");
-    } else {
-        load_ui_probe_image(runtime);
     }
 
     // The same resolution story as the image above, and the same restart rule.
@@ -2275,7 +2139,6 @@ int main(int argc, char** argv) {
         ENGINE_LOG_ERROR("The UI font factory did not start. No layout text will draw.");
     } else {
         runtime.ui_fonts.AddFont("body", "ui/fonts/LiberationSans-Regular.ttf");
-        runtime.ui_font = runtime.ui_fonts.GetDefaultFont(kUiProbeFontSize);
     }
 
     // M6.5. One layout, which is the done-when test for M6.
@@ -2353,8 +2216,6 @@ int main(int argc, char** argv) {
 #if defined(ENGINE_WITH_UI)
         .ui_pass = &runtime.ui_pass,
         .ui_renderer = &runtime.ui_renderer,
-        .ui_image = &runtime.ui_image,
-        .ui_font = runtime.ui_font.get(),
         .ui_surface = runtime.ui_surface.get(),
 #endif
         .overlay = runtime.overlay,
