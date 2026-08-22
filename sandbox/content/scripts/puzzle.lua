@@ -31,6 +31,28 @@ local pause_menu = "ui/pause.mothui"
 -- What the status line says while the puzzle is unsolved.
 local instructions = "Throw with F. Reset with R."
 
+-- The sounds this game plays, by source path. A path rather than an identity,
+-- because a cooked identity is derived and nobody can type one.
+--
+-- A menu click is on the master bus and everything the world makes is on
+-- effects, so pausing can quiet the room without silencing the menu that is
+-- doing the pausing.
+local click_sound = "sounds/click.wav"
+local throw_sound = "sounds/throw.wav"
+local reset_sound = "sounds/reset.wav"
+
+-- Quiets the room without silencing the menu.
+--
+-- The effects bus carries everything the world makes and the master carries the
+-- menu, so this is one call rather than a list of voices to remember. A paused
+-- game runs no steps and makes no new sound anyway. What this stops is the tail
+-- of whatever was sounding when the menu came up, which otherwise plays on over
+-- a still picture and reads as a game that did not really pause.
+local function quiet_the_room(quiet)
+    audio.set_bus_mute("effects", quiet)
+end
+
+
 -- Writes one line into a node of a layout. A node the layout does not hold is a
 -- layout somebody edited, not a fault worth stopping the game for, so this
 -- reports it once and carries on.
@@ -90,6 +112,12 @@ local function throw()
     crate:teleport(from + forward * throw_offset)
     crate:set_velocity(forward * throw_speed)
 
+    -- At the crate rather than flat, so a throw is heard leaving the player.
+    -- The listener is the camera, so this starts almost on top of them and the
+    -- attenuation does the rest.
+    local at = from + forward * throw_offset
+    audio.play(throw_sound, { bus = "effects", x = at.x, y = at.y, z = at.z })
+
     thrown[#thrown + 1] = crate
 end
 
@@ -109,6 +137,10 @@ local function reset()
     inside = {}
     entity:set("Goal", { won = false })
     say(instructions)
+
+    -- Flat rather than placed. A reset is the game answering the player, not a
+    -- thing that happened somewhere in the room.
+    audio.play(reset_sound)
     log.info("The room is back.")
 end
 
@@ -239,6 +271,7 @@ function show_menu()
 
     ui.hide(hud)
     ui.hide(pause_menu)
+    quiet_the_room(true)
     game.pause()
 end
 
@@ -247,6 +280,7 @@ function start_game()
     ui.hide(main_menu)
     ui.hide(pause_menu)
     put_up(hud)
+    quiet_the_room(false)
     game.resume()
 end
 
@@ -259,11 +293,13 @@ function pause_game()
     if not put_up(pause_menu) then
         return
     end
+    quiet_the_room(true)
     game.pause()
 end
 
 function resume_game()
     ui.hide(pause_menu)
+    quiet_the_room(false)
     game.resume()
 end
 
@@ -322,6 +358,10 @@ end
 function on_ui_press(pressed_layout, node)
     for _, button in ipairs(buttons) do
         if button.layout == pressed_layout and button.node == node then
+            -- Before the press, not after. A button that shows another screen
+            -- or quits the game would otherwise click after the thing it did,
+            -- and the Quit button would never click at all.
+            audio.play(click_sound)
             button.press()
             return
         end

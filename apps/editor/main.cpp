@@ -376,6 +376,9 @@ namespace {
         bool watching = false;
 
 #if defined(ENGINE_WITH_AUDIO)
+        /// What apply_mix() last pushed, so a bus the panel did not touch is
+        /// left where a running game put it.
+        engine::audio::MixSettings applied_mix;
         /// M11.7. The output device, or a silent one on a machine with no sound
         /// card. Held by pointer because create_device() decides which it is.
         std::unique_ptr<engine::audio::IAudioDevice> audio;
@@ -682,6 +685,32 @@ namespace {
             nullptr);
         return true;
     }
+
+#if defined(ENGINE_WITH_AUDIO)
+    /**
+     * Puts the volumes the panel holds on the mixer, when one has changed.
+     *
+     * The runtime's apply_mix says why this compares rather than pushing: a
+     * script that mutes a bus while the game is paused must not be overwritten
+     * on the next frame.
+     *
+     * @param editor The mixer to set, and the copy of what was last applied.
+     */
+    void apply_mix(Editor& editor) {
+        const auto push = [&editor](engine::audio::Bus bus,
+                                    const engine::audio::BusSettings& wanted,
+                                    engine::audio::BusSettings& applied) {
+            if (wanted.volume == applied.volume && wanted.mute == applied.mute) {
+                return;
+            }
+            applied = wanted;
+            editor.mixer.set_bus(bus, wanted);
+        };
+        push(engine::audio::Bus::Master, editor.view.mix.master, editor.applied_mix.master);
+        push(engine::audio::Bus::Music, editor.view.mix.music, editor.applied_mix.music);
+        push(engine::audio::Bus::Effects, editor.view.mix.effects, editor.applied_mix.effects);
+    }
+#endif
 
     /// Releases what start() built, in the opposite order. Safe after a partial start.
     void stop(Editor& editor) {
@@ -2033,12 +2062,12 @@ namespace {
             // a voice started before a Stop still has to be let go.
             editor.mixer.update();
 
-            // The volumes the panel edits. Every frame rather than on a change,
-            // for the reason the runtime gives: the panel writes into the
-            // struct and nothing reports that it did.
-            editor.mixer.set_bus(engine::audio::Bus::Master, editor.view.mix.master);
-            editor.mixer.set_bus(engine::audio::Bus::Music, editor.view.mix.music);
-            editor.mixer.set_bus(engine::audio::Bus::Effects, editor.view.mix.effects);
+            // The volumes the panel edits, and only what changed. The panel
+            // and a running game both write to a bus, so pushing the whole
+            // struct on every frame would make the panel the only writer that
+            // lasted: a game that muted the room while it paused would be
+            // unmuted on the next frame. See apply_mix in apps/runtime.
+            apply_mix(editor);
 #endif
 
             // After the step, because that is where a script can destroy an

@@ -3041,6 +3041,58 @@ The increments, in build order:
 | M11.6 | The Lua surface, and a reload that leaks no voices |
 | M11.7 | The milestone test. The sandbox game plays sound |
 
+**M11 is complete.** The sandbox game plays sound, and every sound it plays is authored in Lua
+or in a scene rather than in C++. A button clicks, a thrown crate is heard leaving the camera,
+a crate landing thuds where it landed, a reset answers the player, and a pause quiets the room
+without silencing the menu that is doing the pausing.
+
+**The counts are the evidence a run leaves behind.** `runtime --offscreen` reports what the
+audio did, and the report is what turns "I hear nothing" into an answer:
+
+| What the run did | Voices | Sounds loaded |
+|---|---|---|
+| Nothing. The title screen, paused | 0 | 0 |
+| Play clicked | 1 | 1 |
+| Play, then a throw | 7 | 3 |
+| Play, a throw, then a reset | 8 | 4 |
+
+A paused game plays nothing and loads nothing, which is the row that makes the rest of the
+table mean something. **Three runs of the same command give one image and the same voice
+count**, so the sound follows the simulation and nothing about it feeds back.
+
+**A crate landing needed a script of its own.** `puzzle.lua` runs on the goal volume, and a
+trigger never hears a contact: an overlap reaches the volume and a contact reaches the two
+bodies that touched. So `crate_sound.lua` runs on the crate prefab. That is the first time this
+game has had two scripts, and it is the right shape here for the reason M8 gave for one: the
+throw, the win and the reset share state, and a thud shares none.
+
+**A thud for every contact is a burst rather than an impact.** A crate that lands touches
+several times over as it settles, and a stack touches every neighbour. `crate_sound.lua` holds
+a cooldown in simulated seconds and reads the body's speed, so a crate the player threw is loud,
+a crate settling is quiet, and a crate creeping is silent.
+
+**The authoring pass found one real bug, and it was in the engine rather than in the game.**
+The runtime pushed the saved volumes onto the mixer on every frame, so the panel was the only
+writer that lasted. A script that muted the effects bus to quiet a paused room was overwritten
+on the next frame, and the pause did nothing at all. `apply_mix` compares against what it last
+applied now, in both applications, so a slider still reaches the mixer at once and a bus nobody
+touched is left where the game put it.
+
+That is the class of bug an authoring pass exists to find. Every part of it worked on its own:
+M11.5 set a bus and proved it, M11.6 let a script set one and proved that too. What neither
+could see is that two writers disagreed, because each test held only one of them.
+
+**The pause rule is checked by a run rather than by a test**, and that is a gap worth naming.
+`tests/test_sandbox.cpp` binds no UI surface, so `pause_game` in puzzle.lua returns before it
+pauses: a pause with no menu on the screen would be a game nobody could resume, which M10
+settled. So the test checks the half it can, that the world plays on the effects bus, and the
+runtime's audio report is where the mute is read.
+
+**Nobody heard any of it until the end.** Six increments were built and merged on the strength
+of sample values, channel comparisons and voice counts, all of them on a silent device. The
+first listen was a person pressing V on a real machine, and the click was there. The numbers
+were telling the truth, and they could not have said so.
+
 ### M12 — Editor undo
 Every edit the editor makes can be undone and redone. The editor changes a world in place
 and keeps no history today, so a gizmo drag, a component added or taken off, a deleted
