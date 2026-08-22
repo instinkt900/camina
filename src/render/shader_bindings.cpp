@@ -6,6 +6,22 @@
 
 namespace engine::render {
 
+    bool read_one_shader(const assets::AssetSource& content, std::string_view source,
+                         assets::Shader& out) {
+        // assets_for() says which source it could not find, so there is no
+        // message here.
+        std::vector<assets::AssetRecord> forms;
+        if (!content.assets_for(source, forms)) {
+            return false;
+        }
+        std::vector<std::byte> bytes;
+        if (!content.read(forms.front().guid, bytes)) {
+            ENGINE_LOG_ERROR("{} would not read.", source);
+            return false;
+        }
+        return assets::read_shader(bytes, out, forms.front().name);
+    }
+
     namespace {
 
         /// The gfx name for a kind the cooked shader reports.

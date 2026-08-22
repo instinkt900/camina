@@ -102,7 +102,8 @@ namespace engine::gfx {
             state.depth.depthTestEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
             state.depth.depthWriteEnable =
                 (desc.depth_test && desc.depth_write) ? VK_TRUE : VK_FALSE;
-            state.depth.depthCompareOp = VK_COMPARE_OP_GREATER;
+            state.depth.depthCompareOp =
+                desc.depth_equal ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_GREATER;
             state.depth.maxDepthBounds = 1.0F;
 
             state.blend_attachment.colorWriteMask =

@@ -474,6 +474,22 @@ namespace engine::render {
         [[nodiscard]] std::uint32_t cluster_cell_capacity() const { return cluster_capacity_; }
 
         /**
+         * @brief The environment cubemap the world named, for a pass that draws it.
+         *
+         * This pass resolves the cubemap once, when the scene names another
+         * one. SkyPass shows the same image, and reading it from here rather
+         * than resolving a second copy is what stops the two disagreeing about
+         * which environment the frame is lit by.
+         *
+         * @return The cubemap, or a null handle when the scene named no
+         * environment at all. A named cubemap that would not load comes back as
+         * the grey fallback, because the scene did ask for a sky.
+         */
+        [[nodiscard]] gfx::TextureHandle environment() const {
+            return environment_guid_.valid() ? environment_ : gfx::TextureHandle{};
+        }
+
+        /**
          * @brief Lowers the ceiling on how many lights one cell holds.
          *
          * There to force the overflow. A cell that holds every visible light

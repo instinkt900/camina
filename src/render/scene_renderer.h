@@ -24,6 +24,7 @@
 #include "render/mesh_pass.h"
 #include "render/render_graph.h"
 #include "render/shadow_pass.h"
+#include "render/sky_pass.h"
 #include "render/tonemap_pass.h"
 #include "scene/world.h"
 
@@ -43,6 +44,7 @@ namespace engine::render {
         Shadow = 0, ///< The cascaded depth render.
         Cull,       ///< The compute dispatch that fills the cluster grid.
         Mesh,       ///< The shading of every visible submesh.
+        Sky,        ///< The triangle that fills what the geometry left empty.
         Tonemap,    ///< The full-screen triangle that writes the frame out.
         Count,      ///< How many passes are timed. Not a pass.
     };
@@ -232,6 +234,18 @@ namespace engine::render {
          */
         [[nodiscard]] double gpu_pass_ns(ScenePass pass) const;
 
+        /**
+         * @brief How many frames drew the environment.
+         *
+         * Zero means the sky never drew, which a scene that names no
+         * environment is entitled to. It separates a scene with no sky from a
+         * sky that will not draw, and a picture cannot tell those apart when
+         * geometry covers every pixel.
+         *
+         * @return The count since create(). Nothing resets it.
+         */
+        [[nodiscard]] std::uint64_t sky_draw_count() const { return sky_.draw_count(); }
+
         /// @brief The mesh pass, for the counts it reports and the assets it caches.
         /// @return The pass. Owned here and borrowed by the caller.
         [[nodiscard]] MeshPass& mesh() { return mesh_; }
@@ -270,6 +284,8 @@ namespace engine::render {
         ShadowPass shadow_;
         /// Shades every visible submesh, and culls the lights into the grid.
         MeshPass mesh_;
+        /// Fills what the mesh pass left empty with the environment.
+        SkyPass sky_;
         /// Owns the half float image the scene renders into, and writes it out.
         TonemapPass tonemap_;
 
