@@ -1,6 +1,6 @@
 # Camina Engine — Design & Roadmap
 
-Status: M9, M10, M12 and M13 complete. M11 next
+Status: M0 through M13 complete. No milestone is open.
 Last updated: 2026-08-22
 
 ---
@@ -3087,6 +3087,11 @@ could see is that two writers disagreed, because each test held only one of them
 pauses: a pause with no menu on the screen would be a game nobody could resume, which M10
 settled. So the test checks the half it can, that the world plays on the effects bus, and the
 runtime's audio report is where the mute is read.
+
+**The pause rule and the four sounds are settled, on 2026-08-22.** Somebody listened to the
+set and accepted it. The rule stays as M11.7 built it: a pause mutes the effects bus and
+leaves the menu audible on the master. A retune is an edit to `scripts/make-sounds.py` and a
+re-run, and nothing about that choice needs asking again.
 
 **Nobody heard any of it until the end.** Six increments were built and merged on the strength
 of sample values, channel comparisons and voice counts, all of them on a silent device. The
