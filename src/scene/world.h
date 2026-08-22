@@ -16,6 +16,7 @@
 
 #include <entt/entity/registry.hpp>
 
+#include <cstdint>
 #include <cstddef>
 #include <unordered_map>
 #include <vector>
@@ -98,6 +99,31 @@ namespace engine::scene {
          * carries it, which is reported rather than left to be found later.
          */
         bool set_identity(entt::entity entity, Guid id);
+
+        /**
+         * @brief Where @p entity sits among the roots of the world.
+         *
+         * @param entity The entity to ask about.
+         * @return Its order, or zero when the entity holds no identity.
+         * @see Id::order
+         */
+        [[nodiscard]] std::uint64_t root_order(entt::entity entity) const;
+
+        /**
+         * @brief Puts a root back at the place it held before.
+         *
+         * Only an undo needs this. `create()` hands out the next number, which
+         * puts a new entity after every existing one, and that is what a new
+         * entity should get. A root that is being put back had a number of its
+         * own and the file listed it there.
+         *
+         * The counter still moves past @p order, so a later create cannot
+         * collide with a root that was restored above it.
+         *
+         * @param entity The entity to renumber.
+         * @param order The number it had.
+         */
+        void set_root_order(entt::entity entity, std::uint64_t order);
 
         /**
          * @brief Destroys an entity and every descendant it holds.
@@ -230,6 +256,15 @@ namespace engine::scene {
         /// A map rather than a search, because an undo step asks for an entity
         /// by identity and a scene holds thousands of them.
         std::unordered_map<Guid, entt::entity> by_id_;
+        /**
+         * The next value Id::order takes. It only ever goes up.
+         *
+         * A load numbers the roots in the order the file listed them, because
+         * it creates them in that order. A fragment carries the number its root
+         * had, so an undo puts a root back where it was rather than at the end.
+         * See #353.
+         */
+        std::uint64_t next_order_ = 1;
 
         /// @brief Reused by every walk, so a deep hierarchy allocates once.
         std::vector<entt::entity> stack_;

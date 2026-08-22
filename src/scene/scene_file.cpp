@@ -60,9 +60,21 @@ namespace engine::scene {
         /**
          * Lists every entity, parents before children, in a stable order.
          *
-         * The roots come out sorted by their raw entity value, and the children
-         * come out in child-list order. Both are stable across a save and a
-         * load, which is what makes the document reproducible.
+         * The roots come out sorted by identity, and the children come out in
+         * child-list order. Both survive a save and a load, which is what makes
+         * the document reproducible.
+         *
+         * **By Id::order and never by the entity value.** An entity value is a
+         * slot number that EnTT hands out again, so a root taken out and built
+         * again does not get the number it had. Sorting on it meant that
+         * deleting a root and undoing the delete gave back the same world and a
+         * different file: same entities, same identities, same children, listed
+         * in another order. That was issue #353.
+         *
+         * **The identity cannot serve here either**, which is the part that is
+         * easy to get wrong. No scene or prefab this project ships carries one,
+         * so a load generates them, and two loads of one file would then
+         * disagree about the order.
          */
         std::vector<entt::entity> walk_in_order(const World& world) {
             const entt::registry& registry = world.registry();
@@ -75,9 +87,10 @@ namespace engine::scene {
             }
             // A view does not promise an iteration order, and a scene file has
             // to be reproducible, so pin the order here.
-            std::sort(roots.begin(), roots.end(), [](entt::entity left, entt::entity right) {
-                return entt::to_integral(left) < entt::to_integral(right);
-            });
+            std::sort(roots.begin(), roots.end(),
+                      [&world](entt::entity left, entt::entity right) {
+                          return world.root_order(left) < world.root_order(right);
+                      });
 
             return walk_from(registry, roots);
         }
@@ -454,10 +467,10 @@ namespace engine::scene {
                 return false;
             }
             if (out.parent == entt::null && out.before != entt::null) {
-                // The roots of a world come out sorted by entity value, so a
-                // root has no position among its siblings to ask for. Refused
-                // rather than dropped, because dropping it says the fragment
-                // went back where it was when it did not.
+                // The roots of a world are not a sibling list, so a root has no
+                // place among siblings to ask for. It carries kOrderKey
+                // instead. Refused rather than dropped, because dropping it
+                // says the fragment went back where it was when it did not.
                 ENGINE_LOG_ERROR("A fragment names a {} and no {}. A root has no place among "
                                  "its siblings.",
                                  kBeforeKey, kUnderKey);
@@ -566,11 +579,14 @@ namespace engine::scene {
         out[kEntitiesKey] = write_records(world, written, index, collapsed, registry, library,
                                           MemberLinks::Write);
 
-        // Where it hung. Both keys are left out when there is nothing to say,
-        // so a fragment taken from a root of the world carries neither.
+        // Where it hung. The two identity keys are left out when there is
+        // nothing to say, so a fragment taken from a root of the world carries
+        // neither, and carries its place among the roots instead.
         const Hierarchy& node = entities.get<Hierarchy>(root);
         if (node.parent != entt::null) {
             out[kUnderKey] = to_text(world.identity(node.parent));
+        } else {
+            out[kOrderKey] = world.root_order(root);
         }
         if (node.next_sibling != entt::null) {
             out[kBeforeKey] = to_text(world.identity(node.next_sibling));
@@ -604,6 +620,15 @@ namespace engine::scene {
         // walk_from() puts the root of the subtree first, and choose_records()
         // keeps that order.
         const entt::entity root = created.front();
+        // A root goes back at the number it had, so the scene file lists it
+        // where it was rather than after every other root. See #353.
+        if (ok && anchor.parent == entt::null) {
+            const auto order = document.find(kOrderKey);
+            if (order != document.end() && order->is_number_unsigned()) {
+                world.set_root_order(root, order->get<std::uint64_t>());
+            }
+        }
+
         if (ok && anchor.parent != entt::null &&
             !world.set_parent(root, anchor.parent, anchor.before)) {
             ok = false;

@@ -17,6 +17,7 @@
 #include "reflect/attributes.h"
 #include "reflect/reflect.h"
 
+#include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <entt/entity/fwd.hpp>
 
@@ -240,6 +241,27 @@ namespace engine::scene {
     struct Id {
         /// @brief The identity. Generated, or read out of a scene file.
         Guid value;
+        /**
+         * @brief Where this entity sits among the roots, when it is one.
+         *
+         * A scene file lists the roots in some order, and until #353 that order
+         * was the raw entity value. An entity value is a slot number EnTT hands
+         * out again, so a root deleted and put back by an undo did not get the
+         * number it had, and the file listed it somewhere else. Same world,
+         * different bytes.
+         *
+         * The identity cannot serve here. No scene or prefab this project ships
+         * carries one, so a load generates them and two loads of one file would
+         * disagree about the order.
+         *
+         * `World::create` hands these out in order, so a load numbers the roots
+         * the way the file listed them. A fragment records the number of its
+         * root and `load_subtree` puts it back, which is what makes an undo
+         * give back the bytes it started from.
+         *
+         * It means nothing for a child. Child order is the sibling list.
+         */
+        std::uint64_t order = 0;
     };
 
     /// @brief The vertical field of view a new Camera opens with, in degrees.

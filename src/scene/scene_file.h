@@ -126,11 +126,11 @@ namespace engine::scene {
      * @return The document, or a null document when @p root is not a live
      * entity.
      *
-     * @warning **A subtree hanging at the root of the world keeps no place.**
-     * The roots of a scene come out sorted by entity value, which is a number
-     * EnTT hands out again, so a root taken and put back can land elsewhere in
-     * the entity list. Every entity, its identity and its data are the same.
-     * Only the order of the written records moves. See issue #353.
+     * A fragment keeps where its root sat. A child names the parent it hung
+     * under and the sibling it sat in front of, and a root of the world carries
+     * its place among the roots instead, because the roots are not a sibling
+     * list. So a subtree taken out and put back gives the same document, byte
+     * for byte. That was issue #353.
      */
     [[nodiscard]] nlohmann::json save_subtree(const World& world, entt::entity root,
                                               const ComponentRegistry& registry = components(),
