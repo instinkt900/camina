@@ -429,3 +429,22 @@ if(ENGINE_WITH_UI)
         )
     endif()
 endif()
+
+# Issue #190. The one check that renders a frame, and the only test here that
+# needs a GPU. It is not in CI: README.md gives the reason, and add_test marks
+# it with the "gpu" label so that `ctest -L gpu` runs it and a plain ctest run
+# does not.
+#
+# It links engine::import for the stb_image implementation, and stb::stb for the
+# header, because that dependency is PRIVATE to engine::import.
+add_executable(test_gpu_frame test_gpu_frame.cpp)
+target_link_libraries(test_gpu_frame PRIVATE engine::core engine::import stb::stb)
+engine_set_warnings(test_gpu_frame)
+engine_enable_clang_tidy(test_gpu_frame)
+
+add_test(NAME gpu_frame
+    COMMAND test_gpu_frame "${CMAKE_SOURCE_DIR}/tests/content")
+# 77 is what the program returns when no device opens. ctest then reports the
+# test as skipped rather than failed, which is the difference between "this
+# machine cannot run it" and "this branch broke it".
+set_tests_properties(gpu_frame PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)

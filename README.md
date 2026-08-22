@@ -183,6 +183,33 @@ This runs the unit tests and the rule 4.1 check, which proves that no file outsi
 Windows machine without Git Bash does not get it. The `containment` job in CI runs on
 Linux and covers every push, and it checks the Box3D headers the same way.
 
+### The check that renders a frame
+
+One test opens a device and reads the picture back:
+
+```bash
+ctest --preset conan-relwithdebinfo --output-on-failure -L gpu
+```
+
+**It skips itself where no device opens**, so the command above is safe on any machine and
+the plain `ctest` run above includes it. CI leaves it out by label, with `-LE gpu`.
+
+It exists because every other test here runs on the CPU, and that left the engine with no
+check at all on the one thing it is for. Issue #188 was a pure black frame: the validation
+layer was happy, synchronization validation was happy, and every test passed, because no
+test drew anything. It took a scene from outside the repository to show it.
+
+**CI still does not draw, and the reason above has not changed.** A runner has no GPU, and a
+software rasterizer produces pixels that are those of no real driver. So this is a check a
+person runs on real hardware, and `-LE gpu` keeps it out of CI even on a runner that grew
+one.
+
+It renders `tests/content`, which is one scene of opaque, single sided geometry with no
+environment. `tests/content/README.md` says why each of those three words matters, and why
+the sandbox cannot be that scene. It drives the shipping binaries rather than assembling a
+frame of its own, because #188 lived in the ground between the passes that such a frame
+would have rebuilt.
+
 ## Profile
 
 Start the Tracy server, then start the runtime. The runtime connects on its own. Every

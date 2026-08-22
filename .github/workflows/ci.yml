@@ -333,4 +333,8 @@ jobs:
         run: cmake --build --preset conan-relwithdebinfo
 
       - name: Test
-        run: ctest --preset conan-relwithdebinfo --output-on-failure
+        # -LE gpu leaves out the one check that needs a device. A runner has no
+        # GPU, so it would skip itself anyway, but a runner that grew a software
+        # rasterizer would start checking pixels that are those of no real
+        # driver. README.md gives the reason that stays true either way.
+        run: ctest --preset conan-relwithdebinfo --output-on-failure -LE gpu
