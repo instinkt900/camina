@@ -21,7 +21,18 @@
 #include "script/components.h"
 #include "script/ui_surface.h"
 
+#if defined(ENGINE_WITH_AUDIO)
+#include "assets/asset_source.h"
+#include "assets/sound.h"
+#include "audio/bus.h"
+#include "audio/device.h"
+#include "audio/mixer.h"
+#include "audio/script_audio.h"
+#endif
+
 #include <cstddef>
+#include <cstring>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -556,6 +567,272 @@ namespace {
 
 } // namespace
 
+#if defined(ENGINE_WITH_AUDIO)
+
+// -----------------------------------------------------------------------
+// M11.6. What a script may do to the sound.
+
+/// A cooked PCM sound, built by hand. No cooker and no WAV needed.
+std::vector<std::byte> cooked_tone() {
+    engine::assets::SoundHeader header;
+    header.storage = static_cast<std::uint32_t>(engine::assets::SoundStorage::Pcm);
+    header.channels = 2;
+    header.sample_rate = 48000;
+    header.frame_count = 48000;
+    const std::size_t samples = static_cast<std::size_t>(header.frame_count) *
+                                header.channels;
+    header.payload_size = static_cast<std::uint32_t>(samples * sizeof(float));
+
+    std::vector<std::byte> out(sizeof(header) + header.payload_size);
+    std::memcpy(out.data(), &header, sizeof(header));
+    const std::vector<float> values(samples, 0.25F);
+    std::memcpy(out.data() + sizeof(header), values.data(), header.payload_size);
+    return out;
+}
+
+/// A project holding one sound, named the way a content tree names it.
+class OneSoundProject final : public engine::assets::AssetSource {
+public:
+    [[nodiscard]] bool assets_for(std::string_view /*source*/,
+                                  std::vector<engine::assets::AssetRecord>& /*out*/) const override {
+        return false;
+    }
+
+    [[nodiscard]] bool assets_of_kind(
+        std::string_view /*suffix*/,
+        std::vector<engine::assets::AssetRecord>& out) const override {
+        out.clear();
+        out.push_back(engine::assets::AssetRecord{ .guid = kSound,
+                                                   .source = "sounds/click.wav",
+                                                   .name = "sounds/click.wav.snd" });
+        return true;
+    }
+
+    [[nodiscard]] bool read(engine::Guid guid, std::vector<std::byte>& out) const override {
+        if (guid != kSound) {
+            return false;
+        }
+        out = cooked_tone();
+        return true;
+    }
+
+    static constexpr engine::Guid kSound{ 11, 6 };
+};
+
+/**
+ * A session whose scripts can play sounds, through a real silent device.
+ *
+ * The device is the silent one, so this needs no sound card and hears
+ * nothing. What it proves is the whole chain: a Lua call, the surface, the
+ * mixer, and a device thread pulling frames from it.
+ */
+struct AudioFixture {
+    sc::World world;
+    engine::play::Session session;
+    std::unique_ptr<engine::audio::IAudioDevice> device;
+    engine::audio::Mixer mixer;
+    engine::audio::ScriptAudio audio;
+    OneSoundProject project;
+    entt::entity entity = entt::null;
+
+    bool open(std::string_view source) {
+        engine::audio::DeviceDesc desc;
+        desc.force_silent = true;
+        device = engine::audio::create_device(desc);
+        if (device == nullptr || !mixer.create(device->channels(), device->sample_rate())) {
+            return false;
+        }
+        device->set_source(&mixer);
+
+        audio.bind(mixer, project);
+        session.set_script_audio(&audio);
+
+        if (!session.scripts().load(kScript, "noisy.lua", bytes_of(source))) {
+            return false;
+        }
+        entity = world.create();
+        world.registry().emplace<sp::ScriptComponent>(entity,
+                                                      sp::ScriptComponent{ kScript });
+        session.build(world);
+        return true;
+    }
+
+    ~AudioFixture() {
+        // Off the device before either goes, the way the runtime does it.
+        if (device != nullptr) {
+            device->set_source(nullptr);
+        }
+        mixer.destroy();
+    }
+
+    AudioFixture() = default;
+    AudioFixture(const AudioFixture&) = delete;
+    AudioFixture& operator=(const AudioFixture&) = delete;
+    AudioFixture(AudioFixture&&) = delete;
+    AudioFixture& operator=(AudioFixture&&) = delete;
+
+    void step() { session.advance(world, engine::play::View{}, kStepSeconds); }
+};
+
+void test_a_script_plays_a_sound() {
+    section("a script plays a sound");
+
+    AudioFixture fixture;
+    check(fixture.open(R"(
+                started = 0
+                missed = 0
+                function on_start()
+                    started = audio.play("sounds/click.wav", { looping = true })
+                    missed = audio.play("sounds/nothing.wav")
+                end
+            )"),
+          "the fixture opens");
+
+    fixture.step();
+    check(fixture.audio.voices() == 1, "the script started one voice");
+    check(fixture.mixer.voices() == 1, "and the mixer holds it");
+    check(fixture.mixer.sounds() == 1, "and it loaded the one sound it named");
+
+    // A name the project does not hold gives no voice, and it is reported
+    // once rather than on every step.
+    check(fixture.audio.names() == 1, "the project offered one sound by name");
+}
+
+void test_a_script_stops_what_it_started() {
+    section("a script stops what it started");
+
+    AudioFixture fixture;
+    check(fixture.open(R"(
+                voice = 0
+                function on_start()
+                    voice = audio.play("sounds/click.wav", { looping = true })
+                end
+                function on_update(seconds)
+                    if voice ~= 0 then
+                        audio.stop(voice)
+                        voice = 0
+                    end
+                end
+            )"),
+          "the fixture opens");
+
+    fixture.step();
+    check(fixture.audio.voices() == 0, "the update stopped it");
+    check(fixture.mixer.voices() == 0, "and the mixer freed it");
+}
+
+void test_a_reload_stops_what_the_old_script_started() {
+    section("a reload stops what the old script started");
+
+    // The case this whole ownership idea exists for. A looping sound left
+    // running after a reload has nothing holding its number, so nothing can
+    // ever stop it and only restarting the game would quiet it.
+    AudioFixture fixture;
+    const std::string_view source = R"(
+                function on_start()
+                    audio.play("sounds/click.wav", { looping = true })
+                end
+            )";
+    check(fixture.open(source), "the fixture opens");
+
+    fixture.step();
+    check(fixture.audio.voices() == 1, "the script is playing one voice");
+
+    // A save with the same text is still a reload, which is what makes this
+    // a restart. See M8.5.
+    check(fixture.session.scripts().reload(kScript, "noisy.lua", bytes_of(source)),
+          "the script reloads");
+
+    // A restart takes two steps, because sync() starts what is new before
+    // it drops what is stale. The step after a reload therefore tears the
+    // old instance down, and the one after that builds the new one.
+    fixture.step();
+    check(fixture.audio.voices() == 0, "the step after the reload stopped the old voice");
+    check(fixture.mixer.voices() == 0, "and the mixer freed it");
+
+    fixture.step();
+    check(fixture.audio.voices() == 1,
+          "and the restarted script is playing one voice of its own");
+    check(fixture.mixer.voices() == 1, "with the old one long gone rather than beside it");
+}
+
+void test_a_destroyed_entity_takes_its_sounds() {
+    section("a destroyed entity takes its sounds with it");
+
+    AudioFixture fixture;
+    check(fixture.open(R"(
+                function on_start()
+                    audio.play("sounds/click.wav", { looping = true })
+                end
+            )"),
+          "the fixture opens");
+
+    fixture.step();
+    check(fixture.audio.voices() == 1, "it is playing");
+
+    fixture.world.destroy(fixture.entity);
+    fixture.step();
+    check(fixture.audio.voices() == 0, "and the voice went with the entity");
+    check(fixture.mixer.voices() == 0, "and the mixer freed it");
+}
+
+void test_a_script_sets_a_bus() {
+    section("a script sets a bus");
+
+    AudioFixture fixture;
+    check(fixture.open(R"(
+                set_music = false
+                set_nothing = true
+                function on_start()
+                    set_music = audio.set_bus_volume("music", 0.25)
+                    set_nothing = audio.set_bus_volume("nonsense", 0.5)
+                    audio.set_bus_mute("effects", true)
+                end
+            )"),
+          "the fixture opens");
+
+    fixture.step();
+
+    // The mixer holds what the script set, whether or not the bus has been
+    // built yet. A bus nothing plays on is not a node, and the setting
+    // still has to stick.
+    check(fixture.mixer.bus_settings(engine::audio::Bus::Music).volume > 0.24F &&
+              fixture.mixer.bus_settings(engine::audio::Bus::Music).volume < 0.26F,
+          "the music volume is what the script asked for");
+    check(fixture.mixer.bus_settings(engine::audio::Bus::Effects).mute,
+          "and the effects bus is muted");
+    check(fixture.mixer.buses() == 0, "and neither bus was built, because nothing plays");
+}
+
+void test_a_script_with_no_audio_gets_no_voice() {
+    section("a script with no audio behind it gets nothing, and carries on");
+
+    // A build with no audio passes no surface, and a game must still run.
+    // Every call answers zero or false rather than failing the script.
+    sc::World world;
+    engine::play::Session session;
+    check(session.scripts().load(kScript, "noisy.lua", bytes_of(R"(
+                ran = false
+                function on_start()
+                    local voice = audio.play("sounds/click.wav")
+                    ran = voice == 0 and not audio.set_bus_volume("music", 0.5)
+                end
+            )")),
+          "the script compiles");
+
+    const entt::entity entity = world.create();
+    world.registry().emplace<sp::ScriptComponent>(entity, sp::ScriptComponent{ kScript });
+    session.build(world);
+    session.advance(world, engine::play::View{}, kStepSeconds);
+
+    // The script did not fail, which is what the stopped count says. A
+    // script that threw would be stopped and would never run again.
+    check(session.scripts().instance_count() == 1, "the script has an instance");
+    check(session.scripts().stopped_count() == 0, "and it did not fail on the missing audio");
+}
+
+#endif
+
 int main() {
     // The solver runs on the scheduler, so it has to be up before a session
     // steps one. tests/test_physics.cpp does the same.
@@ -572,6 +849,16 @@ int main() {
     a_script_edited_while_paused_restarts_there_and_then();
     a_pose_written_while_paused_is_the_pose_the_next_frame_draws();
     a_script_asks_the_session_to_quit();
+
+    // These build a session too, so they run while the scheduler is still up.
+#if defined(ENGINE_WITH_AUDIO)
+    test_a_script_plays_a_sound();
+    test_a_script_stops_what_it_started();
+    test_a_reload_stops_what_the_old_script_started();
+    test_a_destroyed_entity_takes_its_sounds();
+    test_a_script_sets_a_bus();
+    test_a_script_with_no_audio_gets_no_voice();
+#endif
 
     engine::jobs::shutdown();
     return test::report();

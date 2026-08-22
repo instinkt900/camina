@@ -14,6 +14,7 @@
 #include "audio/bus.h"
 #include "audio/mixer.h"
 #include "audio/scene_audio.h"
+#include "audio/script_audio.h"
 #endif
 #include "editor/fly_camera.h"
 #include "editor/panels.h"
@@ -1113,6 +1114,8 @@ namespace {
         /// M11.4. Plays what the scene says to play, where the scene says it is.
         /// The session drives it on the fixed step.
         engine::audio::SceneAudio scene_audio;
+        /// M11.6. What a script's `audio` table talks to.
+        engine::audio::ScriptAudio script_audio;
 #endif
 
         bool overlay = false; ///< True once ImGui owns resources on the device.
@@ -2306,6 +2309,11 @@ int main(int argc, char** argv) {
     // content outlive the session, which is what bind() asks for.
     runtime.scene_audio.bind(runtime.mixer, runtime.game_content);
     session.set_audio(&runtime.scene_audio);
+
+    // M11.6. And what a script may do to the sound. It indexes the project by
+    // name here, so a script names a file rather than an identity.
+    runtime.script_audio.bind(runtime.mixer, runtime.game_content);
+    session.set_script_audio(&runtime.script_audio);
 #endif
 
 #if defined(ENGINE_WITH_UI)

@@ -223,10 +223,43 @@ namespace engine::script {
      * and a script that stored `entity` in a table would keep that stale
      * pointer for as long as it kept the table.
      */
+    /**
+     * Says whose callback is running, for as long as it runs.
+     *
+     * A scope rather than two assignments, because a callback that fails goes
+     * out through the protected call and the next one must not inherit a name
+     * that is no longer true.
+     */
+    struct Calling {
+        Calling(struct ScriptContext& context, entt::entity entity);
+        ~Calling();
+
+        Calling(const Calling&) = delete;
+        Calling& operator=(const Calling&) = delete;
+        Calling(Calling&&) = delete;
+        Calling& operator=(Calling&&) = delete;
+
+        struct ScriptContext& context;
+    };
+
     struct ScriptContext {
         scene::World* world = nullptr;
         const scene::ComponentRegistry* components = nullptr;
         Services services;
+
+        /**
+         * Whose callback is running right now.
+         *
+         * A binding usually needs no entity, because a script names what it
+         * means. The `audio` table needs one: a voice belongs to the script
+         * that started it, so that a reload can stop it. Reading it from the
+         * environment instead would mean a script could hand another entity's
+         * name in and orphan a voice on it.
+         *
+         * It is `entt::null` outside a callback, which is what a play from a
+         * chunk body looks like.
+         */
+        entt::entity calling = entt::null;
 
         /**
          * Entities already told that the solver owns their pose.
@@ -238,6 +271,13 @@ namespace engine::script {
          */
         mutable std::unordered_set<entt::entity> warned_solver_owns;
     };
+
+    Calling::Calling(ScriptContext& owner, entt::entity entity)
+        : context(owner) {
+        context.calling = entity;
+    }
+
+    Calling::~Calling() { context.calling = entt::null; }
 
     /**
      * What a script means by `entity`.
@@ -546,6 +586,7 @@ namespace engine::script {
             if (instance.stopped || !fn.valid()) {
                 return;
             }
+            const Calling scope{ context, entity };
             const sol::protected_function_result result = fn();
             ++counts.at(index_of(callback));
             if (!result.valid()) {
@@ -558,6 +599,7 @@ namespace engine::script {
             if (instance.stopped || !instance.on_update.valid()) {
                 return;
             }
+            const Calling scope{ context, entity };
             const sol::protected_function_result result = instance.on_update(seconds);
             ++counts.at(index_of(Callback::Update));
             if (!result.valid()) {
@@ -579,6 +621,7 @@ namespace engine::script {
             if (instance.stopped || !fn.valid()) {
                 return;
             }
+            const Calling scope{ context, entity };
             const sol::protected_function_result result = fn(other, began);
             ++counts.at(index_of(callback));
             if (!result.valid()) {
@@ -596,6 +639,7 @@ namespace engine::script {
             if (instance.stopped || !instance.on_ui_press.valid()) {
                 return;
             }
+            const Calling scope{ context, entity };
             const sol::protected_function_result result =
                 instance.on_ui_press(press.layout, press.node);
             ++counts.at(index_of(Callback::Press));
@@ -743,6 +787,17 @@ namespace engine::script {
                 if (registry.valid(entity)) {
                     call(it->second, entity, Callback::Destroy, it->second.on_destroy);
                 }
+
+                // Every voice this instance started goes with it. A voice is
+                // scratch, the way the script table is: M8.5 settled that a
+                // reload restarts a script, and a looping sound left behind
+                // would play on with nothing holding its number.
+                //
+                // After on_destroy, so a script that wanted to stop its own
+                // sounds has had its turn.
+                if (services.audio != nullptr) {
+                    services.audio->stop_owned_by(entity);
+                }
                 if (it->second.stopped) {
                     --stopped;
                 }
@@ -760,6 +815,7 @@ namespace engine::script {
             if (instance.stopped || !instance.on_paused_update.valid()) {
                 return;
             }
+            const Calling scope{ context, entity };
             const sol::protected_function_result result = instance.on_paused_update();
             ++counts.at(index_of(Callback::PausedUpdate));
             if (!result.valid()) {
@@ -802,6 +858,7 @@ namespace engine::script {
             if (instance.stopped || !instance.on_ui_reload.valid()) {
                 return;
             }
+            const Calling scope{ context, entity };
             const sol::protected_function_result result = instance.on_ui_reload(layout);
             ++counts.at(index_of(Callback::Reload));
             if (!result.valid()) {
@@ -1102,6 +1159,63 @@ namespace engine::script {
             "set_image", [surface](const UiNodeHandle& self, const std::string& image) {
                 UiSurface* ui = surface();
                 return ui != nullptr && ui->set_image(self.layout, self.node, image); });
+
+        // M11.6. The sound. A script names a file the way it names a prefab,
+        // and it gets back a number it can stop. Nothing here asks the mixer
+        // what it is doing: that answer comes from another thread against the
+        // real clock, and a game that reads it stops being reproducible.
+        const auto audio_of = [context]() -> AudioSurface* { return context->services.audio; };
+
+        sol::table audio = impl_->lua.create_named_table("audio");
+
+        // One entry point with a table of options, rather than six overloads. A
+        // script writes what it means and leaves the rest out.
+        audio.set_function(
+            "play", [context, audio_of](const std::string& name, sol::optional<sol::table> opts) {
+                AudioSurface* surface = audio_of();
+                if (surface == nullptr) {
+                    return ScriptVoice{ 0 };
+                }
+
+                ScriptSound sound;
+                sound.name = name;
+                if (opts) {
+                    const sol::table& given = *opts;
+                    sound.volume = given.get_or("volume", 1.0F);
+                    sound.pitch = given.get_or("pitch", 1.0F);
+                    sound.looping = given.get_or("looping", false);
+                    sound.bus = given.get_or<std::string>("bus", "");
+
+                    // A point is what makes a sound spatial. A script that
+                    // gives one means "over there", and one that gives none
+                    // means "in the player's ear".
+                    const sol::optional<float> x = given["x"];
+                    const sol::optional<float> y = given["y"];
+                    const sol::optional<float> z = given["z"];
+                    if (x || y || z) {
+                        sound.spatial = true;
+                        sound.x = x.value_or(0.0F);
+                        sound.y = y.value_or(0.0F);
+                        sound.z = z.value_or(0.0F);
+                    }
+                }
+                return surface->play(context->calling, sound);
+            });
+
+        audio.set_function("stop", [audio_of](ScriptVoice voice) {
+            AudioSurface* surface = audio_of();
+            return surface != nullptr && surface->stop(voice);
+        });
+
+        audio.set_function("set_bus_volume", [audio_of](const std::string& bus, float volume) {
+            AudioSurface* surface = audio_of();
+            return surface != nullptr && surface->set_bus_volume(bus, volume);
+        });
+
+        audio.set_function("set_bus_mute", [audio_of](const std::string& bus, bool mute) {
+            AudioSurface* surface = audio_of();
+            return surface != nullptr && surface->set_bus_mute(bus, mute);
+        });
 
         sol::table ui = impl_->lua.create_named_table("ui");
 
