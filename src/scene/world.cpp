@@ -3,6 +3,8 @@
 #include "core/assert.h"
 #include "core/log.h"
 
+#include <algorithm>
+
 namespace engine::scene {
 
     entt::entity World::create() {
@@ -15,7 +17,9 @@ namespace engine::scene {
         // remember to give it one. A scene file replaces it with the one the
         // entity was saved under.
         const Guid id = Guid::generate();
-        registry_.emplace<Id>(entity, Id{ .value = id });
+        // The order goes up on every create, so entities built by a load are
+        // numbered in the order the file listed them. See Id::order and #353.
+        registry_.emplace<Id>(entity, Id{ .value = id, .order = next_order_++ });
         by_id_.emplace(id, entity);
         return entity;
     }
@@ -34,6 +38,20 @@ namespace engine::scene {
         }
         const auto* held = registry_.try_get<const Id>(entity);
         return held != nullptr ? held->value : Guid{};
+    }
+
+    std::uint64_t World::root_order(entt::entity entity) const {
+        const auto* held = registry_.try_get<Id>(entity);
+        return held != nullptr ? held->order : 0;
+    }
+
+    void World::set_root_order(entt::entity entity, std::uint64_t order) {
+        auto* held = registry_.try_get<Id>(entity);
+        if (held == nullptr) {
+            return;
+        }
+        held->order = order;
+        next_order_ = std::max(next_order_, order + 1);
     }
 
     bool World::set_identity(entt::entity entity, Guid id) {

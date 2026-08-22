@@ -291,6 +291,60 @@ namespace {
     }
 
     /**
+     * Deleting a root and putting it back gives the same file, byte for byte.
+     *
+     * Issue #353. The roots of a world are not a sibling list, so the one thing
+     * that ordered them was the raw entity value, and EnTT hands a slot number
+     * out again. A root deleted and restored therefore came back with a
+     * different number and the scene file listed it somewhere else: same
+     * entities, same identities, same children, different bytes. That is diff
+     * noise on an action that changed nothing, and it makes a byte comparison
+     * useless as a check that an undo was clean.
+     *
+     * **Three roots, and the middle one goes.** With two, a wrong order is a
+     * swap and a comparison might still pass by luck of which slot was reused.
+     */
+    void test_a_deleted_root_comes_back_in_its_place() {
+        sc::ComponentRegistry types = make_registry();
+        sc::PrefabLibrary library;
+
+        sc::World world;
+        const entt::entity first = world.create();
+        world.registry().emplace<sc::Name>(first, sc::Name{ "first root" });
+        const entt::entity middle = world.create();
+        world.registry().emplace<sc::Name>(middle, sc::Name{ "middle root" });
+        const entt::entity last = world.create();
+        world.registry().emplace<sc::Name>(last, sc::Name{ "last root" });
+        check(first != middle && middle != last, "three separate roots");
+
+        // A child, so the delete takes a subtree and the restore has to put
+        // both the root and what hung under it back.
+        (void)named_child(world, middle, "under the middle root");
+
+        const nlohmann::json before = sc::save_scene(world, types, library);
+
+        ed::History history;
+        auto edit = ed::entity_deleted(world, middle, &types, &library);
+        check(edit != nullptr, "the delete records");
+
+        world.destroy(middle);
+        history.record(std::move(edit));
+        check(sc::save_scene(world, types, library) != before, "the delete changed the scene");
+
+        check(history.undo(world), "undo runs");
+        check(sc::save_scene(world, types, library) == before,
+              "and the root came back in its place, byte for byte");
+
+        // Again, because the second cycle is where a counter that only goes up
+        // would push the root to the end even though the first cycle looked
+        // right.
+        check(history.redo(world), "redo runs");
+        check(history.undo(world), "and undo runs a second time");
+        check(sc::save_scene(world, types, library) == before,
+              "and a second cycle still gives the same file");
+    }
+
+    /**
      * An edit still names its entity after that entity has come back.
      *
      * This is the box on the milestone. Undo builds the entity again with the
@@ -579,6 +633,7 @@ int main() {
     test_an_undone_transform_rebuilds_the_matrices();
     std::printf("entity edits\n");
     test_a_deleted_entity_comes_back();
+    test_a_deleted_root_comes_back_in_its_place();
     test_an_edit_outlives_a_delete_and_an_undo();
     test_a_created_entity_goes_away_and_comes_back();
     test_a_deleted_member_comes_back_a_member();

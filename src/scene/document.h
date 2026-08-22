@@ -120,6 +120,17 @@ namespace engine::scene {
     inline constexpr const char* kBeforeKey = "before";
 
     /**
+     * @brief The key on a fragment holding where its root sat among the roots.
+     *
+     * A whole number, and only on a fragment whose root was a root of the
+     * world. The roots of a world are not a sibling list, so ::kBeforeKey has
+     * nothing to name for one. Scene::Id::order is what orders them, and a root
+     * put back without its number would land after every other root and give a
+     * different scene file for the same world. See issue #353.
+     */
+    inline constexpr const char* kOrderKey = "order";
+
+    /**
      * @brief Reads the parent index off one entity record.
      *
      * A record with no parent key is a root.
