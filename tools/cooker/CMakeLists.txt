@@ -60,3 +60,8 @@ endfunction()
 # game tree holds the scene and the prefabs that sandbox/ reads.
 engine_cook_content(engine "${CMAKE_SOURCE_DIR}/src/render/content")
 engine_cook_content(game "${CMAKE_SOURCE_DIR}/sandbox/content")
+
+# The test tree holds one scene of opaque, single sided geometry, which the GPU
+# frame check renders. The sandbox cannot be that scene, because its glass panes
+# are blended and double sided. See tests/content/README.md and issue #190.
+engine_cook_content(test "${CMAKE_SOURCE_DIR}/tests/content")

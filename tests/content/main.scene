@@ -1,0 +1,83 @@
+{
+  "__version": 2,
+  "entities": [
+    {
+      "parent": -1,
+      "prefab": "models/shapes/shapes.gltf",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "shapes"
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "sun"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            8.0,
+            0.0
+          ],
+          "rotation": [
+            0.9174326330185848,
+            -0.31589738888134267,
+            0.22874164613368447,
+            0.07876206507316076
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.97,
+            0.92
+          ],
+          "intensity": 2.2
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "camera"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            3.4,
+            8.5
+          ],
+          "rotation": [
+            0.9953961983671789,
+            -0.09584575252022398,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Camera": {
+          "fov_degrees": 60.0,
+          "near_plane": 0.1,
+          "exposure": 1.0,
+          "primary": true
+        }
+      }
+    }
+  ]
+}
