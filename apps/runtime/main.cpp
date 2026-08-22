@@ -9,7 +9,6 @@
 #include "core/timestep.h"
 #include "core/version.h"
 #if defined(ENGINE_WITH_AUDIO)
-#include "assets/sound.h"
 #include "audio/device.h"
 #include "audio/bus.h"
 #include "audio/mixer.h"
@@ -1125,34 +1124,6 @@ namespace {
     };
 
 #if defined(ENGINE_WITH_AUDIO)
-    /// M11.3. The runtime's own key for checking that audio works.
-    constexpr const char* kAudioTestAction = "audio_test";
-
-    /**
-     * Binds the one audio key this application owns.
-     *
-     * It goes on the frame input beside the camera, not on the session input
-     * beside the game's actions. The game's bindings are in
-     * `sandbox::bind_actions`, and this is a debug key of the runtime's, the
-     * same way the fly camera keys are. M11.6 gives the game its own sounds
-     * through a script, and this key goes when it does.
-     *
-     * @param input The frame input to bind into.
-     */
-    void bind_audio_actions(engine::platform::Input& input) {
-        input.bind(kAudioTestAction, engine::platform::Key::V);
-    }
-
-    /**
-     * Plays the first sound the project holds, once for each press.
-     *
-     * It asks the project for a sound by kind rather than naming one, so it
-     * needs no identity written into C++ and it works in any content tree that
-     * holds a sound at all.
-     *
-     * @param runtime The mixer to play through.
-     * @param content The assets to read the sound from.
-     */
     /**
      * Puts the saved volumes on the mixer, when a person has changed one.
      *
@@ -1182,29 +1153,6 @@ namespace {
         push(engine::audio::Bus::Master, settings.mix.master, runtime.applied_mix.master);
         push(engine::audio::Bus::Music, settings.mix.music, runtime.applied_mix.music);
         push(engine::audio::Bus::Effects, settings.mix.effects, runtime.applied_mix.effects);
-    }
-
-    void update_audio(Runtime& runtime, const engine::assets::AssetSource& content) {
-        // A one-shot holds its cursor or its decoder until something frees it,
-        // and the device thread must not: freeing takes a lock and allocates.
-        runtime.mixer.update();
-
-        if (!runtime.input.pressed(kAudioTestAction)) {
-            return;
-        }
-
-        std::vector<engine::assets::AssetRecord> sounds;
-        if (!content.assets_of_kind(engine::assets::kSoundExtension, sounds) || sounds.empty()) {
-            ENGINE_LOG_WARN("Audio: this project holds no sound to play.");
-            return;
-        }
-
-        const engine::assets::AssetRecord& first = sounds.front();
-        if (runtime.mixer.play(content, first.guid) == 0) {
-            return;
-        }
-        ENGINE_LOG_INFO("Audio: playing {}. {} voices, {} started.", first.name,
-                        runtime.mixer.voices(), runtime.mixer.started());
     }
 #endif
 
@@ -1527,7 +1475,6 @@ namespace {
                 runtime.audio->set_source(&runtime.mixer);
             }
         }
-        bind_audio_actions(runtime.input);
 #endif
 
         const engine::gfx::DeviceDesc device_desc{
@@ -1995,10 +1942,10 @@ namespace {
         runtime.input.update(state);
 
 #if defined(ENGINE_WITH_AUDIO)
-        // After the input update, so a press this frame is a press it can read,
-        // and every frame whether or not a key was touched, because a voice
-        // that ended has to be freed either way.
-        update_audio(runtime, *context.game_content);
+        // A one-shot holds its cursor or its decoder until something frees it,
+        // and the device thread must not: freeing takes a lock and allocates.
+        // So this runs on every frame, whatever the game did.
+        runtime.mixer.update();
         apply_mix(runtime, *context.settings);
 #endif
 
