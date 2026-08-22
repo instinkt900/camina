@@ -73,10 +73,18 @@ add_library(engine_core STATIC
 # engine_core rather than becoming a target of their own, the way src/ui does,
 # because script/host.h names no sol2 type and so nothing leaks out. Lua and
 # sol2 stay PRIVATE below for the same reason.
+# script/components.cpp is not in the guard below. It registers a reflected
+# struct and names no Lua type, and a scene that carries a script reference has
+# to read and write in a build with no interpreter. Otherwise the option changes
+# which documents are valid rather than which of them run, and the cooker
+# refuses the shipped game content. See src/script/components.h.
+target_sources(engine_core PRIVATE
+    script/components.cpp
+)
+
 if(ENGINE_WITH_LUA)
     target_sources(engine_core PRIVATE
         script/bindings.cpp
-        script/components.cpp
         script/host.cpp
     )
 endif()

@@ -14,9 +14,7 @@
 #include "core/log.h"
 #include "physics/components.h"
 #include "scene/component_registry.h"
-#if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
-#endif
 #include "import/brdf.h"
 #include "import/document.h"
 #include "import/layout.h"
@@ -564,9 +562,7 @@ namespace engine::import {
         engine::scene::ComponentRegistry types;
         engine::scene::register_builtin_components(types);
         engine::physics::register_components(types);
-#if defined(ENGINE_WITH_LUA)
         engine::script::register_components(types);
-#endif
         return types;
     }
 

@@ -981,7 +981,9 @@ Two traps, both of which have produced a false green:
   jq -r '.[] | select(.conclusion != "SUCCESS" and .conclusion != "SKIPPED") | .name' <<<"$s"
   ``` The build matrix is two platforms times both options off and both on,
   and the job names carry which, for example
-  `build (linux-clang, ui=true, editor=true)`.
+  `build (linux-clang, ui=true, editor=true, lua=true)`. **`with_lua` rides the
+  Linux leg that already has the other two off**, rather than taking a job of
+  its own, so the count is still eight.
 
 Make the loop print the per-check result it decided on, so a wrong exit is visible in the
 event rather than hidden behind the word "success". After the monitor reports, **query the

@@ -178,7 +178,7 @@ jobs:
         run: .github/scripts/lint.sh build/RelWithDebInfo
 
   build:
-    name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }}, editor=${{ matrix.with_editor }})
+    name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }}, editor=${{ matrix.with_editor }}, lua=${{ matrix.with_lua }})
     runs-on: ${{ matrix.os }}
     # A healthy build is 14 to 19 minutes, so this fails a hung one without
     # cutting a slow one short. See .github/scripts/apt-install.sh.
@@ -187,10 +187,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # M8 shipped with_lua as an option and no job ever turned it off, so
+          # it stopped building and nobody heard for five milestones. #288.
+          # It rides this leg rather than a job of its own, the same way M9.1
+          # put the editor on the two legs below: the leg that already drops
+          # every optional part is the one that should drop this too.
           - os: ubuntu-24.04
             profile: linux-clang
             with_ui: false
             with_editor: false
+            with_lua: false
             # The xorg/system recipe needs about 35 X11 and XCB development
             # packages. Conan defaults tools.system.package_manager:mode to
             # "check", so it stops and asks the user to install them. On a
@@ -204,6 +210,7 @@ jobs:
             profile: windows-msvc
             with_ui: false
             with_editor: false
+            with_lua: true
             conan_conf: ""
           # Game UI on, so src/ui and moth_ui are compiled. Both platforms,
           # because each catches something the other cannot. Linux runs
@@ -221,6 +228,7 @@ jobs:
             profile: linux-clang
             with_ui: true
             with_editor: true
+            with_lua: true
             conan_conf: >-
               -c tools.system.package_manager:mode=install
               -c tools.system.package_manager:sudo=True
@@ -228,6 +236,7 @@ jobs:
             profile: windows-msvc
             with_ui: true
             with_editor: true
+            with_lua: true
             conan_conf: ""
 
     defaults:
@@ -320,6 +329,7 @@ jobs:
             -pr:b profiles/${{ matrix.profile }} -b missing \
             -o "&:with_ui=${{ matrix.with_ui && 'True' || 'False' }}" \
             -o "&:with_editor=${{ matrix.with_editor && 'True' || 'False' }}" \
+            -o "&:with_lua=${{ matrix.with_lua && 'True' || 'False' }}" \
             ${{ matrix.conan_conf }}
 
       # clang-tidy is off here and runs in the lint job instead. It used to run

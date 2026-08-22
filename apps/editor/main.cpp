@@ -56,9 +56,7 @@
 #include "scene/components.h"
 #include "scene/prefab.h"
 #include "scene/world.h"
-#if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
-#endif
 
 #include <imgui.h>
 // The dock builder is internal API. It is the only way to give a first run a
@@ -2210,9 +2208,7 @@ int main(int argc, char** argv) {
     // scene it saved.
     engine::scene::register_builtin_components();
     engine::physics::register_components();
-#if defined(ENGINE_WITH_LUA)
     engine::script::register_components();
-#endif
     sandbox::register_components();
 
     Editor editor;

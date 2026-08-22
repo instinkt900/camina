@@ -35,9 +35,7 @@
 #include "scene/scene_file.h"
 #include "scene/world.h"
 
-#if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
-#endif
 
 #include <nlohmann/json.hpp>
 
@@ -1177,8 +1175,19 @@ void test_a_stopped_session_is_silent() {
 
     run(play, world, 4);
     check(scene_audio.playing() == 1, "the scene is playing its sound");
-    check(script_audio.voices() == 1, "and the script is playing one of its own");
-    check(mixer.voices() == 2, "so the mixer holds two voices");
+
+    // The script half needs an interpreter. The entity carries its
+    // ScriptComponent in every build, because since #288 the component is
+    // registered whatever the option, but nothing runs it without Lua. So the
+    // component half of this case is checked above and below in every build,
+    // and only the sound a script starts is guarded.
+#if defined(ENGINE_WITH_LUA)
+    constexpr std::size_t kScriptVoices = 1;
+#else
+    constexpr std::size_t kScriptVoices = 0;
+#endif
+    check(script_audio.voices() == kScriptVoices, "the script plays what this build can run");
+    check(mixer.voices() == 1 + kScriptVoices, "so the mixer holds both of them");
 
     play.stop(world);
     check(scene_audio.playing() == 0, "stopping the session stopped the scene's voice");
