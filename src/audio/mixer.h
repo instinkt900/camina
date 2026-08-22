@@ -29,8 +29,10 @@
  */
 
 #include "assets/asset_source.h"
+#include "audio/attenuation.h"
 #include "audio/device.h"
 #include "core/guid.h"
+#include "math/conventions.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -61,6 +63,30 @@ namespace engine::audio {
          * Whoever started it has to stop it.
          */
         bool looping = false;
+
+        /**
+         * @brief Whether the voice has a place in the world.
+         *
+         * Off is the plain form: one volume, both ears, wherever the listener
+         * stands. On, the voice is placed at @ref position and the listener
+         * decides what it sounds like.
+         */
+        bool spatial = false;
+
+        /// @brief Where the voice is, in world space. Only read when @ref spatial.
+        Vec3 position{ 0.0F, 0.0F, 0.0F };
+
+        /// @brief The curve between @ref min_distance and @ref max_distance.
+        Attenuation attenuation = Attenuation::Inverse;
+
+        /// @brief Nearer than this the voice is at full volume, in meters.
+        float min_distance = 1.0F;
+
+        /// @brief Past this the voice stops getting quieter, in meters.
+        float max_distance = 50.0F;
+
+        /// @brief How sharply the curve falls between the two distances.
+        float rolloff = 1.0F;
     };
 
     /**
@@ -142,6 +168,32 @@ namespace engine::audio {
         void stop_all();
 
         /**
+         * @brief Moves a voice that was started with `PlayDesc::spatial`.
+         *
+         * A voice that is not spatial ignores this, and a voice that has ended
+         * is not an error.
+         *
+         * @param voice The voice to move.
+         * @param position Where it is now, in world space.
+         */
+        void set_voice_position(VoiceId voice, const Vec3& position);
+
+        /**
+         * @brief Says where the sound is heard from.
+         *
+         * **The axes are the engine's own**, and miniaudio agrees with them
+         * rather than needing a conversion: both are right handed, and forward
+         * is −Z in both. `DESIGN.md` §3 holds the engine's half. A mismatch
+         * here mirrors the sound left to right, which is a bug nothing but an
+         * ear or a channel comparison would find.
+         *
+         * @param position Where the ears are, in world space.
+         * @param forward Which way they face. It need not be normalized.
+         * @param up Which way is up for them. It need not be normalized.
+         */
+        void set_listener(const Vec3& position, const Vec3& forward, const Vec3& up);
+
+        /**
          * @brief Frees every voice that has reached its end.
          *
          * Call this once each frame. A one-shot holds a decoder or a cursor
@@ -151,6 +203,17 @@ namespace engine::audio {
          * A looping voice never ends, so this never frees one.
          */
         void update();
+
+        /**
+         * @brief Whether a voice is still playing.
+         *
+         * A one-shot that ended is freed by update(), so this reads false from
+         * then on. It also reads false for a voice that never existed.
+         *
+         * @param voice The voice to ask about.
+         * @return True while the voice is alive.
+         */
+        [[nodiscard]] bool playing(VoiceId voice) const;
 
         /// @return How many voices are playing right now.
         [[nodiscard]] std::size_t voices() const;

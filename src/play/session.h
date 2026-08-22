@@ -18,6 +18,9 @@
 
 #include "core/timestep.h"
 #include "math/conventions.h"
+#if defined(ENGINE_WITH_AUDIO)
+#include "audio/scene_audio.h"
+#endif
 #include "physics/simulation.h"
 #include "platform/input.h"
 #include "scene/step_motion.h"
@@ -228,6 +231,21 @@ namespace engine::play {
          */
         void set_ui(script::UiSurface* ui) { ui_ = ui; }
 
+#if defined(ENGINE_WITH_AUDIO)
+        /**
+         * @brief Says what plays the scene's sounds, or nothing.
+         *
+         * The session drives it on the step rather than the frame, so a voice
+         * reads the pose the last step left rather than the blend a frame drew.
+         * A blended pose moves with the frame rate, and a voice placed from one
+         * wobbles on a machine whose frame time is uneven.
+         *
+         * @param audio What to update, or null to play nothing. It must outlive
+         *        the session.
+         */
+        void set_audio(audio::SceneAudio* audio) { audio_ = audio; }
+#endif
+
         /// @brief The actions the game reads, on the step clock. Bind on this.
         /// @return The input the scripts see.
         [[nodiscard]] platform::Input& input() { return step_input_; }
@@ -282,6 +300,11 @@ namespace engine::play {
 
         /// The bodies of the scene, and the solver that steps them.
         physics::Simulation simulation_;
+
+#if defined(ENGINE_WITH_AUDIO)
+        /// M11.4. What places the scene's sounds. Null plays nothing.
+        audio::SceneAudio* audio_ = nullptr;
+#endif
 
         /// What the game moved, and where it was before the last step.
         scene::StepMotion motion_;

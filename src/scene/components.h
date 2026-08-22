@@ -9,6 +9,7 @@
  * flags stop agreeing with each other.
  */
 
+#include "audio/attenuation.h"
 #include "core/entt.h"
 #include "core/guid.h"
 #include "math/conventions.h"
@@ -90,6 +91,81 @@ namespace engine::scene {
     struct MeshRenderer {
         /// @brief The cooked mesh. A null GUID draws nothing.
         Guid mesh;
+    };
+
+    /**
+     * @brief A sound this entity plays, and where the sound is.
+     *
+     * The place is the entity's world transform, so a sound moves by moving the
+     * entity that carries it. Nothing here holds a position of its own.
+     *
+     * **This component exists in a build with no audio.** It is data, and a
+     * scene that carries one has to load in every build, or a level authored
+     * with sound in it would refuse to open in a build without it. What the
+     * option removes is `audio::SceneAudio`, which is the thing that plays it.
+     */
+    struct AudioSource {
+        /// @brief The cooked sound. A null GUID plays nothing.
+        Guid sound;
+
+        /// @brief A straight multiplier on the samples. One is as cooked.
+        float volume = 1.0F;
+
+        /// @brief Speed, and so pitch with it. One is as cooked.
+        float pitch = 1.0F;
+
+        /// @brief Start again at the end, forever.
+        bool looping = false;
+
+        /// @brief Start playing as soon as the entity has this component.
+        bool play_on_start = false;
+
+        /**
+         * @brief Whether the sound has a place in the world.
+         *
+         * Off is a sound with no direction and no distance, heard the same
+         * wherever the listener stands. Music and a menu click are that.
+         */
+        bool spatial = true;
+
+        /// @brief The curve between @ref min_distance and @ref max_distance.
+        audio::Attenuation attenuation = audio::Attenuation::Inverse;
+
+        /**
+         * @brief Nearer than this, the sound is at full volume, in meters.
+         *
+         * A source with a very small value gets loud very fast as a listener
+         * walks into it, because the curve is one over the distance.
+         */
+        float min_distance = 1.0F;
+
+        /// @brief Past this the sound stops getting quieter, in meters.
+        float max_distance = 50.0F;
+
+        /// @brief How sharply the curve falls between the two distances.
+        float rolloff = 1.0F;
+    };
+
+    /**
+     * @brief Where the sound is heard from.
+     *
+     * The pose is the entity's transform, the same way a camera's is. So the
+     * ears face the entity's forward, which is its local −Z in world space, and
+     * its up is the entity's +Y. See `DESIGN.md` §3.
+     *
+     * **A scene needs none of these.** With no listener the sound is heard from
+     * `scene::primary_camera`, which is what a game wants almost always. A
+     * listener entity is for the case where it is not: a camera that watches
+     * from far away while the player hears from where they stand.
+     */
+    struct AudioListener {
+        /**
+         * @brief Whether the sound is heard from this one.
+         *
+         * The rule is the camera's rule. The earliest entity that has this set
+         * wins, and a scene with several reports the choice.
+         */
+        bool primary = true;
     };
 
     /**
@@ -261,6 +337,57 @@ struct engine::reflect::Describe<engine::scene::Camera> {
     }
 };
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+/// @brief Field descriptors for a sound an entity plays.
+template <>
+struct engine::reflect::Describe<engine::scene::AudioSource> {
+    /// @brief The type name a scene file stores.
+    static constexpr const char* name = "AudioSource";
+
+    /// @brief Every field, in the order the inspector shows them.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        using engine::scene::AudioSource;
+        return std::make_tuple(
+            ENGINE_FIELD(AudioSource, sound, engine::reflect::AssetRef{},
+                         Tooltip{ "The cooked sound this entity plays." }),
+            ENGINE_FIELD(AudioSource, volume, Range{ 0.0, 4.0, 0.01 },
+                         Tooltip{ "Multiplies the samples. One is as cooked" }),
+            ENGINE_FIELD(AudioSource, pitch, Range{ 0.25, 4.0, 0.01 },
+                         Tooltip{ "Speed, and pitch with it. One is as cooked" }),
+            ENGINE_FIELD(AudioSource, looping, Tooltip{ "Start again at the end, forever" }),
+            ENGINE_FIELD(AudioSource, play_on_start,
+                         Tooltip{ "Start as soon as the entity carries this" }),
+            ENGINE_FIELD(AudioSource, spatial,
+                         Tooltip{ "Off is heard the same wherever the listener stands" }),
+            ENGINE_FIELD(AudioSource, attenuation,
+                         Tooltip{ "The curve between the two distances" }),
+            ENGINE_FIELD(AudioSource, min_distance, Range{ 0.01, 100.0, 0.05 },
+                         Tooltip{ "Meters. Nearer than this it is at full volume" }),
+            ENGINE_FIELD(AudioSource, max_distance, Range{ 0.1, 1000.0, 0.5 },
+                         Tooltip{ "Meters. Past this it stops getting quieter" }),
+            ENGINE_FIELD(AudioSource, rolloff, Range{ 0.1, 8.0, 0.05 },
+                         Tooltip{ "How sharply it falls between the two distances" }));
+    }
+};
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
+/// @brief Field descriptors for where the sound is heard from.
+template <>
+struct engine::reflect::Describe<engine::scene::AudioListener> {
+    /// @brief The type name a scene file stores.
+    static constexpr const char* name = "AudioListener";
+
+    /// @brief The one field. The pose comes from the transform.
+    /// @return A tuple of field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(
+            engine::scene::AudioListener, primary,
+            engine::reflect::Tooltip{ "Sound is heard from the first listener that has this. "
+                                      "With no listener at all it is heard from the camera" }));
+    }
+};
 
 /// @brief Describes Name for the inspector and for scene files.
 template <>

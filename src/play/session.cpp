@@ -194,6 +194,19 @@ namespace engine::play {
 #endif
         }
 
+#if defined(ENGINE_WITH_AUDIO)
+        // Before the blend, so a voice is placed at the pose the last step
+        // left. After it the world holds the pose a frame draws, which moves
+        // with the frame rate, and a voice placed from that wobbles.
+        //
+        // Once for each advance rather than once for each step. A frame often
+        // runs no step at all, and a voice started between two of them still
+        // has to be put where it belongs.
+        if (audio_ != nullptr) {
+            audio_->update(world);
+        }
+#endif
+
         // One alpha for both, because they blend the same pair of steps. Two
         // would let the game and the physics draw different instants.
         const float alpha = clock_.alpha();

@@ -11,12 +11,19 @@
 #include "assets/asset_source.h"
 #include "assets/sound.h"
 #include "audio/mixer.h"
+#include "audio/scene_audio.h"
+#include "math/conventions.h"
+#include "scene/components.h"
+#include "scene/world.h"
 #include "import/sound.h"
 #include "import/writer.h"
 
 #include "check.h"
 
 #include <cmath>
+
+#include <glm/gtc/constants.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -139,6 +146,24 @@ namespace {
     }
 
     bool near(float a, float b, float tolerance) { return std::fabs(a - b) < tolerance; }
+
+    /// How much sound came out of each ear over a pull.
+    struct Ears {
+        float left = 0.0F;
+        float right = 0.0F;
+    };
+
+    /// Pulls frames and sums the size of the samples in each channel.
+    Ears pump_ears(au::Mixer& mixer, std::uint32_t frames) {
+        std::vector<float> buffer(static_cast<std::size_t>(frames) * kMixerChannels, 0.0F);
+        mixer.mix(buffer.data(), frames);
+        Ears ears;
+        for (std::size_t i = 0; i + 1 < buffer.size(); i += 2) {
+            ears.left += std::fabs(buffer[i]);
+            ears.right += std::fabs(buffer[i + 1]);
+        }
+        return ears;
+    }
 
     void test_a_sound_reaches_the_output() {
         test::section("A sound played is a sound in the buffer");
@@ -326,6 +351,342 @@ namespace {
         test::check(mixer.voices() == 0, "stopping a voice that never existed does nothing");
     }
 
+    void test_a_placed_sound_is_heard_from_its_side() {
+        test::section("A sound to the right is heard on the right");
+
+        // This is the check that a wrong axis cannot survive. The engine is
+        // right handed, +Y up, −Z forward, and miniaudio is the same by
+        // default. If either half were mirrored, or if X and Z were swapped,
+        // the sound would come out of the wrong ear and nothing else in this
+        // suite would notice.
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 20, flat_wav(kMixerRate, 24000, 0.5F),
+                                            false);
+
+        const auto side_of = [&assets, guid](const engine::Vec3& at) {
+            au::Mixer mixer;
+            (void)mixer.create(kMixerChannels, kMixerRate);
+            // At the origin, facing −Z, with +Y up. The engine's own idea of a
+            // thing that has not been turned.
+            mixer.set_listener({ 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, -1.0F }, { 0.0F, 1.0F, 0.0F });
+            (void)mixer.play(assets, guid,
+                             { .spatial = true, .position = at, .min_distance = 1.0F, .max_distance = 100.0F });
+            // Long enough that the gain smoothing miniaudio applies at the
+            // start is a small part of what is measured.
+            return pump_ears(mixer, 9600);
+        };
+
+        const Ears right = side_of({ 10.0F, 0.0F, 0.0F });
+        test::check(right.right > right.left * 1.5F, "a sound at +X is louder in the right ear");
+
+        const Ears left = side_of({ -10.0F, 0.0F, 0.0F });
+        test::check(left.left > left.right * 1.5F, "a sound at -X is louder in the left ear");
+
+        // Straight ahead is −Z, and it has to be even. A build that had the
+        // forward axis backwards would still be even here, which is why the two
+        // cases above come first.
+        const Ears ahead = side_of({ 0.0F, 0.0F, -10.0F });
+        test::check(near(ahead.left, ahead.right, ahead.left * 0.2F + 0.001F),
+                    "a sound straight ahead is even in both ears");
+    }
+
+    void test_distance_makes_a_sound_quieter() {
+        test::section("Distance is what makes a placed sound quiet");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 21, flat_wav(kMixerRate, 24000, 0.5F),
+                                            false);
+
+        const auto loudness_at = [&assets, guid](float z, au::Attenuation curve) {
+            au::Mixer mixer;
+            (void)mixer.create(kMixerChannels, kMixerRate);
+            mixer.set_listener({ 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, -1.0F }, { 0.0F, 1.0F, 0.0F });
+            (void)mixer.play(assets, guid,
+                             { .spatial = true,
+                               .position = { 0.0F, 0.0F, z },
+                               .attenuation = curve,
+                               .min_distance = 1.0F,
+                               .max_distance = 100.0F });
+            const Ears ears = pump_ears(mixer, 9600);
+            return ears.left + ears.right;
+        };
+
+        const float near_by = loudness_at(-1.0F, au::Attenuation::Inverse);
+        const float far_off = loudness_at(-40.0F, au::Attenuation::Inverse);
+        test::check(near_by > far_off * 4.0F, "the far one is much quieter than the near one");
+
+        // The curve is a field rather than a constant, so turning it off has to
+        // change the answer. Without this the two cases above pass on a build
+        // that ignores the setting entirely.
+        const float flat_near = loudness_at(-1.0F, au::Attenuation::None);
+        const float flat_far = loudness_at(-40.0F, au::Attenuation::None);
+        test::check(near(flat_near, flat_far, flat_near * 0.05F),
+                    "and with no attenuation the distance changes nothing");
+    }
+
+    void test_a_flat_sound_ignores_the_listener() {
+        test::section("A sound with no place in the world is heard the same everywhere");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 22, flat_wav(kMixerRate, 24000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        mixer.set_listener({ 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, -1.0F }, { 0.0F, 1.0F, 0.0F });
+
+        // Not spatial, and far away on the right. Neither fact may change it.
+        const au::VoiceId voice = mixer.play(assets, guid,
+                                             { .spatial = false,
+                                               .position = { 500.0F, 0.0F, 0.0F } });
+        test::check(voice != 0, "it plays");
+
+        const Ears ears = pump_ears(mixer, 4800);
+        test::check(near(ears.left, ears.right, ears.left * 0.05F + 0.001F),
+                    "it is even in both ears");
+        test::check(ears.left > 100.0F, "and it is at full volume however far away it was put");
+
+        mixer.set_voice_position(voice, { -500.0F, 0.0F, 0.0F });
+        const Ears moved = pump_ears(mixer, 4800);
+        test::check(near(moved.left, moved.right, moved.left * 0.05F + 0.001F),
+                    "and moving it changes nothing");
+    }
+
+    // ---------------------------------------------------------------------
+    // M11.4. What a scene says to play, and where it says it is.
+
+    /// Puts an entity at a place, with no turn.
+    entt::entity add_at(engine::scene::World& world, const engine::Vec3& position) {
+        const entt::entity entity = world.create();
+        world.set_local(entity, engine::Transform{ .position = position });
+        return entity;
+    }
+
+    /// A source that starts playing by itself, placed in the world.
+    entt::entity add_source(engine::scene::World& world, const engine::Vec3& position,
+                            engine::Guid sound) {
+        const entt::entity entity = add_at(world, position);
+        world.registry().emplace<engine::scene::AudioSource>(
+            entity, engine::scene::AudioSource{ .sound = sound,
+                                                .play_on_start = true,
+                                                .spatial = true,
+                                                .min_distance = 1.0F,
+                                                .max_distance = 100.0F });
+        return entity;
+    }
+
+    void test_a_scene_plays_what_it_says_to_play() {
+        test::section("A source that asks to play gets a voice, and follows its entity");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 30, flat_wav(kMixerRate, 48000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        // The ears at the origin, facing −Z, and the sound on the right.
+        const entt::entity ears = add_at(world, { 0.0F, 0.0F, 0.0F });
+        world.registry().emplace<engine::scene::AudioListener>(ears);
+        const entt::entity source = add_source(world, { 10.0F, 0.0F, 0.0F }, guid);
+        world.update();
+
+        audio.update(world);
+        test::check(audio.playing() == 1, "the source started a voice");
+        test::check(mixer.voices() == 1, "and the mixer holds it");
+
+        const Ears right = pump_ears(mixer, 9600);
+        test::check(right.right > right.left * 1.5F, "and it is heard on the right");
+
+        // Move the entity, not the voice. A voice that did not follow its
+        // entity would stay on the right.
+        world.set_local(source, engine::Transform{ .position = { -10.0F, 0.0F, 0.0F } });
+        world.update();
+        audio.update(world);
+
+        const Ears left = pump_ears(mixer, 9600);
+        test::check(left.left > left.right * 1.5F, "moving the entity moved the sound");
+
+        // A sound that outlives the thing making it is heard as a fault.
+        world.destroy(source);
+        world.update();
+        audio.update(world);
+        test::check(audio.playing() == 0, "destroying the entity stopped the voice");
+        test::check(mixer.voices() == 0, "and the mixer freed it");
+        test::check(pump(mixer, 480) < 0.01F, "and the mixer went quiet");
+    }
+
+    void test_the_camera_is_the_fallback_listener() {
+        test::section("With no listener, the sound is heard from the camera");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 31, flat_wav(kMixerRate, 48000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        // A camera turned to face +Z, which is behind where it started. A sound
+        // at world +X is then on that camera's left rather than its right.
+        //
+        // So this fails if the fallback reads the origin instead of the camera,
+        // and it fails if it reads the position and forgets the turn.
+        const entt::entity camera = world.create();
+        world.set_local(camera,
+                        engine::Transform{ .position = { 0.0F, 0.0F, 0.0F },
+                                           .rotation = engine::Quat(
+                                               glm::angleAxis(glm::pi<float>(),
+                                                              engine::Vec3{ 0.0F, 1.0F, 0.0F })) });
+        world.registry().emplace<engine::scene::Camera>(camera,
+                                                        engine::scene::Camera{ .primary = true });
+        (void)add_source(world, { 10.0F, 0.0F, 0.0F }, guid);
+        world.update();
+
+        audio.update(world);
+        test::check(audio.playing() == 1, "the source plays");
+
+        const Ears ears = pump_ears(mixer, 9600);
+        test::check(ears.left > ears.right * 1.5F,
+                    "and it is heard on the turned camera's left, so the camera's pose is what "
+                    "was used");
+    }
+
+    void test_a_listener_beats_the_camera() {
+        test::section("A listener in the scene is used instead of the camera");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 32, flat_wav(kMixerRate, 48000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        // The camera is turned around and the listener is not. The sound at +X
+        // is on the camera's left and on the listener's right, so which one is
+        // used decides which ear hears it.
+        const entt::entity camera = world.create();
+        world.set_local(camera,
+                        engine::Transform{ .rotation = engine::Quat(
+                                               glm::angleAxis(glm::pi<float>(),
+                                                              engine::Vec3{ 0.0F, 1.0F, 0.0F })) });
+        world.registry().emplace<engine::scene::Camera>(camera,
+                                                        engine::scene::Camera{ .primary = true });
+
+        const entt::entity ears = add_at(world, { 0.0F, 0.0F, 0.0F });
+        world.registry().emplace<engine::scene::AudioListener>(ears);
+
+        (void)add_source(world, { 10.0F, 0.0F, 0.0F }, guid);
+        world.update();
+        audio.update(world);
+
+        const Ears heard = pump_ears(mixer, 9600);
+        test::check(heard.right > heard.left * 1.5F,
+                    "the listener was used rather than the camera");
+    }
+
+    void test_a_source_that_does_not_ask_stays_quiet() {
+        test::section("A source that did not ask to play does not play");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 33, flat_wav(kMixerRate, 4800, 0.5F), false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        const entt::entity entity = add_at(world, { 0.0F, 0.0F, 0.0F });
+        world.registry().emplace<engine::scene::AudioSource>(
+            entity, engine::scene::AudioSource{ .sound = guid, .play_on_start = false });
+        world.update();
+
+        audio.update(world);
+        test::check(audio.playing() == 0, "nothing started");
+        test::check(pump(mixer, 480) < 0.01F, "and the mixer is quiet");
+
+        // A source that names nothing is not an error either.
+        const entt::entity empty = add_at(world, { 0.0F, 0.0F, 0.0F });
+        world.registry().emplace<engine::scene::AudioSource>(
+            empty, engine::scene::AudioSource{ .sound = {}, .play_on_start = true });
+        world.update();
+        audio.update(world);
+        test::check(audio.playing() == 0, "and a source that names no sound plays nothing");
+    }
+
+    void test_a_one_shot_in_a_scene_is_let_go() {
+        test::section("A one-shot in a scene is let go when it ends");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 34, flat_wav(kMixerRate, 480, 0.5F), false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        (void)add_source(world, { 0.0F, 0.0F, -2.0F }, guid);
+        world.update();
+
+        audio.update(world);
+        test::check(audio.playing() == 1, "it started");
+
+        // Past the end of the sound, then the two updates that free it.
+        (void)pump(mixer, 4800);
+        mixer.update();
+        audio.update(world);
+        test::check(mixer.voices() == 0, "the mixer freed the voice");
+        test::check(audio.playing() == 0, "and the scene let go of it");
+
+        // It does not start again. A sound plays when something asks it to, and
+        // a source that already played is not asking. Getting this wrong makes
+        // every one-shot in a level a loop, which is the kind of thing that
+        // only an ear finds.
+        audio.update(world);
+        audio.update(world);
+        test::check(audio.playing() == 0, "and it did not start again on its own");
+    }
+
+    void test_a_changed_sound_starts_again() {
+        test::section("A source told to play another sound plays that one");
+
+        FakeAssets assets;
+        const engine::Guid first = add_sound(assets, 35, flat_wav(kMixerRate, 48000, 0.5F),
+                                             false);
+        const engine::Guid second = add_sound(assets, 36, flat_wav(kMixerRate, 48000, 0.5F),
+                                              false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        const entt::entity entity = add_source(world, { 0.0F, 0.0F, -2.0F }, first);
+        world.update();
+        audio.update(world);
+        test::check(audio.playing() == 1, "the first sound plays");
+        test::check(mixer.sounds() == 1, "and one sound is loaded");
+
+        // An edit in the editor, or a game writing the field. What is playing
+        // is the wrong sound now, so it has to be replaced rather than left.
+        world.registry().get<engine::scene::AudioSource>(entity).sound = second;
+        audio.update(world);
+        test::check(audio.playing() == 1, "the second sound plays");
+        test::check(mixer.sounds() == 2, "and both are loaded");
+        test::check(mixer.voices() == 1, "with one voice, not two");
+    }
+
 } // namespace
 
 int main() {
@@ -338,5 +699,14 @@ int main() {
     test_volume_and_pitch();
     test_a_missing_sound_is_refused();
     test_stop_all();
+    test_a_placed_sound_is_heard_from_its_side();
+    test_distance_makes_a_sound_quieter();
+    test_a_flat_sound_ignores_the_listener();
+    test_a_scene_plays_what_it_says_to_play();
+    test_the_camera_is_the_fallback_listener();
+    test_a_listener_beats_the_camera();
+    test_a_source_that_does_not_ask_stays_quiet();
+    test_a_one_shot_in_a_scene_is_let_go();
+    test_a_changed_sound_starts_again();
     return test::report();
 }
