@@ -386,7 +386,7 @@ namespace {
         // forward axis backwards would still be even here, which is why the two
         // cases above come first.
         const Ears ahead = side_of({ 0.0F, 0.0F, -10.0F });
-        test::check(near(ahead.left, ahead.right, ahead.left * 0.2F + 0.001F),
+        test::check(near(ahead.left, ahead.right, (ahead.left * 0.2F) + 0.001F),
                     "a sound straight ahead is even in both ears");
     }
 
@@ -442,13 +442,13 @@ namespace {
         test::check(voice != 0, "it plays");
 
         const Ears ears = pump_ears(mixer, 4800);
-        test::check(near(ears.left, ears.right, ears.left * 0.05F + 0.001F),
+        test::check(near(ears.left, ears.right, (ears.left * 0.05F) + 0.001F),
                     "it is even in both ears");
         test::check(ears.left > 100.0F, "and it is at full volume however far away it was put");
 
         mixer.set_voice_position(voice, { -500.0F, 0.0F, 0.0F });
         const Ears moved = pump_ears(mixer, 4800);
-        test::check(near(moved.left, moved.right, moved.left * 0.05F + 0.001F),
+        test::check(near(moved.left, moved.right, (moved.left * 0.05F) + 0.001F),
                     "and moving it changes nothing");
     }
 
