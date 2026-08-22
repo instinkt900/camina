@@ -381,11 +381,28 @@ The shadow pass costs more than the mesh pass, which the sandbox could never hav
 the world four times at 2048 square, and the cascade cull of #180 leaves 311 draws against the
 mesh pass's 292. Issue #194 holds it, with the numbers to beat.
 
-Two pieces of the M5 definition did not land. #122 is the aliasing half of the render graph, and
+One piece of the M5 definition did not land. #122 is the aliasing half of the render graph, and
 its trigger condition is still not met: the shadow map, the scene color and the cluster grid all
 overlap at the mesh pass, so no two have disjoint lifetimes and there is nothing to alias.
-Nothing draws the environment either, so open sky reads as the clear color, which is #193. The
-sandbox is a closed room and never showed it.
+
+**#193 landed after the milestone: `render::SkyPass` draws the environment.** It is one
+full-screen triangle at the far plane, after the geometry, and the depth test rejects every
+pixel something else covered. So it costs 0.001 ms and the four sandbox captures do not move,
+because a closed room covers every pixel. On Sponza it changes 5.932 percent of the frame, and
+every changed pixel held the clear color and nothing else. A scene that names no environment
+draws no sky, and `sky | <n> frames drew the environment` in the run report is how to tell
+"there is no sky here" from "the sky is broken".
+
+**It is a pass in the code and not in the render graph.** It draws in the scope `MeshPass`
+opened and touches the same attachments in the same states. A declaration of its own would
+derive a barrier, because `derive_barriers` orders every write against what came before it and
+not only a write in a new state, and a barrier inside a rendering scope is invalid.
+
+**The sky draws after the blended geometry**, so a blended surface over open sky blends against
+the clear color. That is #435, and no scene here has both halves yet.
+
+`gfx::GraphicsPipelineDesc::depth_equal` came from this. Reverse-Z tests greater-than
+everywhere else, which rejects a sky sitting at the cleared far plane.
 
 Sponza also carries its own lights, 24 of them under `KHR_lights_punctual`, and the cooker drops
 every one. The lamp positions in `scenes/sponza/main.scene` were read out of the glTF by a script

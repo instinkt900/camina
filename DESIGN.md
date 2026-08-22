@@ -2498,13 +2498,42 @@ light cull 0.025 ms, and the tonemap 0.162 ms. Synchronization validation report
 over 300 frames on that scene. Issue #194 holds the shadow cost, which the sandbox was far
 too small to show.
 
-Two pieces of the definition above did not land, and each has a reason rather than an
-excuse. **Transient resource aliasing** is issue #122, and its trigger condition is still
-not met: the shadow map, the scene colour and the cluster grid all overlap at the mesh
-pass, so no two of them have disjoint lifetimes and there is nothing to alias. Rule 4.6
-says to build it when something needs it. **Nothing draws the environment**, so open sky is
-the clear colour, which issue #193 holds. The milestone asked for IBL and got it. Drawing
-the sky is a separate pass that Sponza is simply the first scene to want.
+One piece of the definition above did not land, and it has a reason rather than an excuse.
+**Transient resource aliasing** is issue #122, and its trigger condition is still not met:
+the shadow map, the scene colour and the cluster grid all overlap at the mesh pass, so no
+two of them have disjoint lifetimes and there is nothing to alias. Rule 4.6 says to build
+it when something needs it.
+
+**Drawing the environment was the other one, and it landed after the milestone as #193.**
+The milestone asked for IBL and got it. Drawing the sky is a separate pass, and Sponza was
+simply the first scene to want it.
+
+`render::SkyPass` is one full-screen triangle at the far plane, drawn after the geometry.
+The depth test rejects every pixel something else covered, so it shades only what the frame
+would otherwise show as its clear. It costs 0.001 ms.
+
+**The proof is which pixels moved, not how many.** On Sponza with the camera pitched up at
+the colonnade, the sky changes 54,673 pixels of 921,600. Every one of them held exactly the
+clear colour in the capture without the sky, and no other colour appears under the changed
+set. Deleting the `Environment` component from that scene leaves exactly 54,673 pixels
+holding the clear colour. So the sky covers precisely the clear-colour set, no more and no
+less, and no shaded pixel moved.
+
+**It is a pass in the code and not in the graph.** It draws inside the rendering scope
+`MeshPass` opened and touches the same two attachments in the same two states
+`MeshPass::declare()` names. A declaration of its own would derive a barrier, because
+`derive_barriers` orders every write against what came before it rather than only a write
+in a new state, and issuing a barrier inside a rendering scope is invalid.
+
+**`gfx::GraphicsPipelineDesc::depth_equal` came from this.** The compare is greater-than,
+which is what reverse-Z wants everywhere else. A sky at the far plane has to pass against a
+depth image that still holds its clear of zero, and greater-than alone rejects it
+everywhere.
+
+**The sky draws after the blended geometry**, so a blended surface over open sky blends
+against the clear colour rather than against the sky. That is issue #435. Drawing at the
+opaque and blended seam fixes it and puts the sky draw inside `MeshPass`, and no scene here
+has both halves yet.
 
 ### M6 — moth_ui spike, 2 to 3 days, timeboxed
 Write a minimal `IRenderer`, `IImage`, and `IFont` against `gfx::`. Render one static layout
