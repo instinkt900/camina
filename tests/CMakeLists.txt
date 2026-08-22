@@ -448,3 +448,13 @@ add_test(NAME gpu_frame
 # test as skipped rather than failed, which is the difference between "this
 # machine cannot run it" and "this branch broke it".
 set_tests_properties(gpu_frame PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
+
+# Issue #268. The Key to scancode table, checked against the names SDL gives
+# those scancodes. It links engine::core for platform::scancode_name, which
+# reads a static SDL table and opens no window, so this runs in CI.
+add_executable(test_key_table test_key_table.cpp)
+target_link_libraries(test_key_table PRIVATE engine::core)
+engine_set_warnings(test_key_table)
+engine_enable_clang_tidy(test_key_table)
+
+add_test(NAME key_table COMMAND test_key_table)

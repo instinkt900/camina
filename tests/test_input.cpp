@@ -6,8 +6,10 @@
 //
 // So this file opens no window, starts no SDL subsystem, and names no scancode.
 // What it cannot cover is the mapping inside sample(), which is a table from
-// Key to SDL_Scancode. A wrong entry there is a wrong key, and only a person
-// pressing that key finds it.
+// Key to SDL_Scancode. A wrong entry there is a wrong key.
+//
+// tests/test_key_table.cpp covers that half since #268, by asking SDL what the
+// scancode it returned is called. It needs no window either.
 
 #include "check.h"
 #include "platform/input.h"

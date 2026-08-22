@@ -19,6 +19,12 @@ namespace engine::platform {
          * A switch rather than a table indexed by Key. A table has to hold the
          * same order as the enum, and nothing checks that. Here the compiler
          * reports a missing enumerator through -Wswitch.
+         *
+         * **What the compiler cannot report is an entry that names the wrong
+         * scancode.** `Key::Enter` is `SDL_SCANCODE_RETURN` and several others
+         * do not match their own name either, so a typo here is legal code that
+         * binds the wrong key. `tests/test_key_table.cpp` is what catches that,
+         * through platform::scancode_name. Issue #268.
          */
         [[nodiscard]] SDL_Scancode scancode_of(Key key) {
             switch (key) {
@@ -144,6 +150,21 @@ namespace engine::platform {
         }
 
     } // namespace
+
+    const char* scancode_name(Key key) {
+        if (static_cast<std::size_t>(key) >= kKeyCount) {
+            return "";
+        }
+        const SDL_Scancode code = scancode_of(key);
+        if (code == SDL_SCANCODE_UNKNOWN) {
+            return "";
+        }
+        // SDL_GetScancodeName reads a static table and opens nothing, so this
+        // needs no SDL_Init and works in a test with no video driver. It
+        // returns an empty string rather than null for a code it does not know.
+        const char* const name = SDL_GetScancodeName(code);
+        return name != nullptr ? name : "";
+    }
 
     InputFrame sample(const Window& window, InputConsumed consumed) {
         InputFrame frame;

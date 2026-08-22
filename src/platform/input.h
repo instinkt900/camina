@@ -121,6 +121,31 @@ namespace engine::platform {
 
     /// @brief How many keys Key names, as a size.
     inline constexpr std::size_t kKeyCount = static_cast<std::size_t>(Key::Count);
+
+    /**
+     * @brief What SDL calls the key @p key is mapped to.
+     *
+     * The mapping from `Key` to an SDL scancode is a switch of about fifty
+     * entries, and until #268 nothing checked one of them. A wrong entry
+     * compiled, linked, passed every test, and bound the wrong key. The failure
+     * a person met was "that key does nothing", with no message anywhere.
+     *
+     * This is what lets a test check the table without a window, a keyboard or
+     * a video driver. It asks SDL for the name of the scancode the switch
+     * returned, and the test compares that against a list of names written
+     * separately. Two statements of one intention have to agree, so a typo in
+     * either one is caught by the other.
+     *
+     * The letters and the digits are the regular part. The specials are where a
+     * typo hides, because `Key::Enter` maps to `SDL_SCANCODE_RETURN` and
+     * several others do not match their own name either.
+     *
+     * @param key The key to ask about. `Key::Count` and anything past it gives
+     * an empty string.
+     * @return The SDL name, or an empty string when the key maps to no
+     * scancode. Never null.
+     */
+    [[nodiscard]] const char* scancode_name(Key key);
     /// @brief How many buttons MouseButton names, as a size.
     inline constexpr std::size_t kMouseButtonCount =
         static_cast<std::size_t>(MouseButton::Count);
