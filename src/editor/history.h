@@ -71,6 +71,26 @@ namespace engine::editor {
          * component it changed has to build that text rather than quote it.
          */
         [[nodiscard]] virtual const char* name() const = 0;
+
+        /**
+         * @brief Whether this edit still fits the world in front of it.
+         *
+         * An edit names its entity by `engine::Guid`, and a rebuild of the
+         * world is what can take that entity away. A scene the editor saved
+         * carries every identity, so a reload gives the same entities back and
+         * every entry still reaches its own. A scene that carries none does
+         * not, and then each entry names something that is not there.
+         *
+         * **It is not only "the entity is present".** A delete expects its
+         * entity to be absent, and a create expects it to be present. An edit
+         * whose expectation the world no longer meets is stale whichever way it
+         * disagrees, so each implementation answers for its own shape.
+         *
+         * @param world The world after the rebuild.
+         * @return True when an undo and a redo of this edit would still reach
+         * what they name.
+         */
+        [[nodiscard]] virtual bool fits(const scene::World& world) const = 0;
     };
 
     /// @brief How many edits a history keeps before it drops the oldest.
@@ -127,6 +147,22 @@ namespace engine::editor {
         /// @brief Whether there is an edit to redo.
         /// @return True when redo() would do something.
         [[nodiscard]] bool can_redo() const { return next_ < edits_.size(); }
+
+        /**
+         * @brief Whether every edit still fits @p world.
+         *
+         * The editor asks this after a reload rebuilt the world. A stack whose
+         * entries name entities that are gone is worse than an empty one: each
+         * undo writes an error and nothing moves. See issue #371.
+         *
+         * Both directions are checked, because a redo is as much a promise as
+         * an undo.
+         *
+         * @param world The world after the rebuild.
+         * @return True when every entry still reaches what it names, and for an
+         * empty history.
+         */
+        [[nodiscard]] bool fits(const scene::World& world) const;
 
         /// @brief What undo would put back, or null when it would do nothing.
         /// @return The name of that edit.

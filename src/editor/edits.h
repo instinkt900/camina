@@ -86,6 +86,12 @@ namespace engine::editor {
         /// @return "add", "remove" or "change", and the component name.
         [[nodiscard]] const char* name() const override { return label_.c_str(); }
 
+        /// @brief Whether the entity this edit changes is still in @p world.
+        /// @param world The world after a rebuild.
+        /// @return True when the entity is there. Both directions of this edit
+        /// need it, because both write a component onto it.
+        [[nodiscard]] bool fits(const scene::World& world) const override;
+
     private:
         /// Puts the component into @p state, where a null state removes it.
         void put(scene::World& world, const nlohmann::json& state);
@@ -195,6 +201,19 @@ namespace engine::editor {
         /// @brief What the change was, for the menu.
         /// @return "delete" or "create", and what it names.
         [[nodiscard]] const char* name() const override { return label_.c_str(); }
+
+        /**
+         * @brief Whether @p world holds what this edit expects it to.
+         *
+         * A create expects its entity to be there and a delete expects it to be
+         * gone, so this asks for the state the edit last left behind rather
+         * than for the entity. A rebuild that disagrees either way has replaced
+         * the world this edit was recorded against.
+         *
+         * @param world The world after a rebuild.
+         * @return True when the world matches.
+         */
+        [[nodiscard]] bool fits(const scene::World& world) const override;
 
     private:
         /// Builds the subtree again, or destroys it.
