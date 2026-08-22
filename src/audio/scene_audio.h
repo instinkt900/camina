@@ -92,6 +92,15 @@ namespace engine::audio {
             Guid sound;        ///< What was started, so a changed sound starts again.
         };
 
+        /// Tells the mixer where the ears are. See update().
+        void place_listener(scene::World& world);
+
+        /// Stops and forgets every entry whose entity or component has gone.
+        void drop_gone(scene::World& world);
+
+        /// Moves a voice that is still playing, or lets go of one that ended.
+        void keep(Entry& entry, const Vec3& position);
+
         Mixer* mixer_ = nullptr;
         const assets::AssetSource* content_ = nullptr;
 
