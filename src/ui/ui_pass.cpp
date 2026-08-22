@@ -20,29 +20,6 @@ namespace engine::ui {
             float inv_logical_height = 0.0F;
         };
 
-        /**
-         * @brief Reads one cooked shader out of the engine content tree.
-         *
-         * The same helper TonemapPass keeps privately. It is duplicated rather
-         * than shared because src/ui is a separate target and the render one is
-         * not public. Issue #197 records it.
-         */
-        [[nodiscard]] bool read_one_shader(const assets::AssetSource& content,
-                                           std::string_view source, assets::Shader& out) {
-            // assets_for() says which source it could not find, so there is no
-            // message here.
-            std::vector<assets::AssetRecord> forms;
-            if (!content.assets_for(source, forms)) {
-                return false;
-            }
-            std::vector<std::byte> bytes;
-            if (!content.read(forms.front().guid, bytes)) {
-                ENGINE_LOG_ERROR("{} would not read.", source);
-                return false;
-            }
-            return assets::read_shader(bytes, out, forms.front().name);
-        }
-
         /// Whether a moth_ui blend mode needs the blending pipeline.
         [[nodiscard]] bool needs_blending(moth_ui::BlendMode mode) {
             // Replace takes the opaque pipeline and Alpha takes the blending
@@ -64,8 +41,8 @@ namespace engine::ui {
 
         assets::Shader vertex;
         assets::Shader fragment;
-        if (!read_one_shader(content, "ui.vert", vertex) ||
-            !read_one_shader(content, "ui.frag", fragment)) {
+        if (!render::read_one_shader(content, "ui.vert", vertex) ||
+            !render::read_one_shader(content, "ui.frag", fragment)) {
             device_ = nullptr;
             return false;
         }

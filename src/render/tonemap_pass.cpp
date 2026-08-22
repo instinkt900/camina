@@ -24,30 +24,6 @@ namespace engine::render {
             float exposure = 1.0F;
         };
 
-        /**
-         * Reads one cooked shader that has a single form and no variants.
-         *
-         * @param content The engine content tree.
-         * @param source The source path the manifest lists, such as "tonemap.vert".
-         * @param out Receives the module.
-         * @return False when the file is missing or will not read.
-         */
-        [[nodiscard]] bool read_one_shader(const assets::AssetSource& content,
-                                           std::string_view source, assets::Shader& out) {
-            // assets_for() says which source it could not find, so there is no
-            // message here.
-            std::vector<assets::AssetRecord> forms;
-            if (!content.assets_for(source, forms)) {
-                return false;
-            }
-            std::vector<std::byte> bytes;
-            if (!content.read(forms.front().guid, bytes)) {
-                ENGINE_LOG_ERROR("{} would not read.", source);
-                return false;
-            }
-            return assets::read_shader(bytes, out, forms.front().name);
-        }
-
     } // namespace
 
     PassDesc TonemapPass::declare(ResourceId target) {

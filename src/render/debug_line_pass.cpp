@@ -20,24 +20,6 @@ namespace engine::render {
             Mat4 clip_from_world{ 1.0F };
         };
 
-        /// Reads one cooked shader out of the engine content tree. The same
-        /// helper TonemapPass and UiPass each keep privately. Issue #197.
-        [[nodiscard]] bool read_one_shader(const assets::AssetSource& content, std::string_view source,
-                                           assets::Shader& out) {
-            // assets_for() says which source it could not find, so there is no
-            // message here.
-            std::vector<assets::AssetRecord> forms;
-            if (!content.assets_for(source, forms)) {
-                return false;
-            }
-            std::vector<std::byte> bytes;
-            if (!content.read(forms.front().guid, bytes)) {
-                ENGINE_LOG_ERROR("{} would not read.", source);
-                return false;
-            }
-            return assets::read_shader(bytes, out, forms.front().name);
-        }
-
     } // namespace
 
     bool DebugLinePass::create(gfx::Device* device, const assets::AssetSource& content) {
