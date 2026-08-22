@@ -2944,6 +2944,60 @@ is the question the pass answered.
 miniaudio behind `IAudioDevice`. Positional 3D and buses.
 **Done when:** the sandbox game plays sound.
 
+**The milestone starts from an option and nothing else.** `conanfile.py` already carries
+`with_audio` and asks for `miniaudio/0.11.22`, and Conan already writes `ENGINE_WITH_AUDIO`
+into the toolchain. No `CMakeLists.txt` reads that variable, and `src/audio/` does not exist.
+So every part above the option is M11 work. §6 already places the directory and §5 already
+records the package.
+
+**miniaudio is contained the way Vulkan and Box3D are.** Rule 1 keeps `vulkan.h` under
+`src/gfx/vulkan/`, and `scripts/check-box3d-containment.sh` keeps Box3D inside `src/physics/`.
+`miniaudio.h` gets the same treatment, checked by a script in the `containment` job. §5 rejects
+an audio plugin ABI, so `IAudioDevice` exists to hold the containment line rather than to carry
+a second backend.
+
+**A machine with no sound card must still run.** A CI runner has none, and an offscreen capture
+runs on machines that have none either. So a device that cannot open hardware opens silent and
+reports it, rather than failing the program. Every test runs on that path, which makes it the
+first thing to build.
+
+**Audio never reaches the fixed step.** The mixer runs on its own thread and a game reads
+nothing back from it that decides what to simulate. Three offscreen runs of one command already
+have to give one image, and M11 must not move that. A sound is an output of the simulation and
+never an input.
+
+**A sound is cooked two ways, and the sidecar picks.** A short effect cooks to raw PCM at one
+sample rate, so nothing decodes on the load path. A long track keeps its encoded bytes and
+streams. miniaudio decodes both, so the cost is one field in the `.meta` and two paths in the
+cache. Cooking everything to PCM was considered, and it makes a music track cost tens of
+megabytes in the cooked tree for no gain.
+
+**The rule writes through `import::Writer`.** M13 made that a requirement of every asset type:
+the editor imports a source file through the same rules the cooker runs, and the two must agree
+byte for byte. A new type that skips the import half works in the runtime and not in the editor.
+
+**The sandbox sounds are generated, not fetched.** A script synthesizes a click, a thud and a
+tone into WAV files, the way the room and the sphere models were generated. That leaves no
+license question to answer and keeps the files small. **The generator stays in `scripts/`**,
+unlike the model and layout generators, because nobody can author a WAV by hand and a sound
+that is wrong has to be made again.
+
+**The listener is a reflected component**, the way `scene::Camera` is, and it falls back to the
+primary camera when a scene names none. A scene says where the ears are, and the editor flying
+its own camera must not move them.
+
+The increments, in build order:
+
+| Increment | What it builds |
+|---|---|
+| M11.1 | The device. `src/audio/`, containment, `ENGINE_WITH_AUDIO`, and the silent device |
+| M11.2 | The sound asset. The cooked format, the cooker rule, and the import half |
+| M11.3 | Playing one. The cache, a one-shot, and a bus to play it on |
+| M11.4 | `scene::AudioSource` and `scene::AudioListener`, and positional 3D |
+| M11.5 | Buses and volumes, reflected and saved |
+| M11.6 | The Lua surface, and a reload that leaks no voices |
+| M11.7 | The milestone test. The sandbox game plays sound |
+
 ### M12 — Editor undo
 Every edit the editor makes can be undone and redone. The editor changes a world in place
 and keeps no history today, so a gizmo drag, a component added or taken off, a deleted
