@@ -23,6 +23,7 @@
 #include "import/environment.h"
 #include "import/mesh.h"
 #include "import/shader.h"
+#include "import/sound.h"
 #include "import/texture.h"
 
 #include <algorithm>
@@ -165,6 +166,10 @@ namespace engine::import {
                 });
             case Rule::Mesh:
                 return cook_gltf(source, writer, relative, meta.guid, outputs);
+            case Rule::Sound:
+                return single([&](const std::filesystem::path& to) {
+                    return cook_sound(source, writer, to, meta.sound);
+                });
             case Rule::Document:
                 return single([&](const std::filesystem::path& to) {
                     return cook_document(source, writer, to, options.content,
@@ -457,14 +462,12 @@ namespace engine::import {
             }
             const Rule rule = *found;
 
-            // An image goes through image_meta(), which fills in the color
-            // space guess for a sidecar it has to write. The glTF rule calls
-            // the same function, so whichever rule reaches an image first
-            // records the same guess.
+            // asset_meta() reads the sidecar and makes whatever guess the
+            // rule makes when it has to write one. The editor's index calls the
+            // same function, so a sidecar says the same thing whichever side
+            // created it.
             as::AssetMeta meta;
-            const bool read = rule == Rule::Texture ? image_meta(source, meta)
-                                                    : as::meta_for(source, meta);
-            if (!read) {
+            if (!asset_meta(source, meta)) {
                 return Outcome::Failed;
             }
 
@@ -505,13 +508,9 @@ namespace engine::import {
             return false;
         }
 
-        // The same split cook_source() makes. An image goes through
-        // image_meta(), which fills in the colour space guess for a sidecar it
-        // has to write.
+        // The same sidecar read cook_source() makes, guesses included.
         as::AssetMeta meta;
-        const bool read = *found == Rule::Texture ? image_meta(source, meta)
-                                                  : as::meta_for(source, meta);
-        if (!read) {
+        if (!asset_meta(source, meta)) {
             return false;
         }
 

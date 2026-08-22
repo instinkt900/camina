@@ -41,8 +41,12 @@ namespace engine::import {
         // The sidecar is where an identity comes from, and a file without one
         // gets one written. That is what the cooker does, so both sides give a
         // file the same identity.
+        // asset_meta() rather than meta_for(), so a sidecar this index has to
+        // write carries the same guess the cooker would have made. With
+        // meta_for() an image the editor reached first recorded sRGB whatever
+        // its name said, and a sidecar decides forever after it is written.
         as::AssetMeta meta;
-        if (!as::meta_for(source, meta)) {
+        if (!asset_meta(source, meta)) {
             ENGINE_LOG_ERROR("{}: it has no readable sidecar, so it has no identity and the "
                              "project cannot name it.",
                              source.string());
@@ -82,6 +86,7 @@ namespace engine::import {
         case Rule::Mesh:
             return gltf_parts(source, relative, meta.guid, records_);
         case Rule::Texture:
+        case Rule::Sound:
         case Rule::Brdf:
         case Rule::Document:
         case Rule::Script:

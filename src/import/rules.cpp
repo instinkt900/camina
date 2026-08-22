@@ -1,16 +1,19 @@
 #include "import/rules.h"
 
 #include "assets/manifest.h"
+#include "core/log.h"
 #include "assets/reference.h"
 #include "assets/material.h"
 #include "assets/mesh.h"
 #include "assets/script.h"
 #include "assets/shader.h"
+#include "assets/sound.h"
 #include "assets/texture.h"
 #include "import/brdf.h"
 #include "import/environment.h"
 #include "import/mesh.h"
 #include "import/shader.h"
+#include "import/sound.h"
 #include "import/texture.h"
 
 #include <string>
@@ -87,6 +90,9 @@ namespace engine::import {
         if (is_mesh_extension(extension)) {
             return Rule::Mesh;
         }
+        if (is_sound_extension(extension)) {
+            return Rule::Sound;
+        }
         if (is_document_extension(extension)) {
             return Rule::Document;
         }
@@ -121,6 +127,8 @@ namespace engine::import {
             return as::kTextureExtension;
         case Rule::Mesh:
             return as::kMeshExtension;
+        case Rule::Sound:
+            return as::kSoundExtension;
         case Rule::Document:
             // It keeps its own name. A scene is still a scene after its
             // references resolve, and the runtime opens it by that name.
@@ -154,6 +162,40 @@ namespace engine::import {
         return named;
     }
 
+
+    bool asset_meta(const std::filesystem::path& source, as::AssetMeta& out) {
+        const std::optional<Rule> rule = rule_for(source);
+
+        // The texture rule keeps its own entry point, because the glTF rule
+        // calls it for an image it found inside a model. That image may have no
+        // file of its own, so the guess cannot wait for a tree walk to reach
+        // it.
+        if (rule == Rule::Texture) {
+            return image_meta(source, out);
+        }
+
+        if (rule != Rule::Sound) {
+            return as::meta_for(source, out);
+        }
+
+        bool created = false;
+        if (!as::meta_for(source, out, &created)) {
+            return false;
+        }
+        if (!created) {
+            return true;
+        }
+
+        // A guess only ever reaches a sidecar this call had to write. After
+        // that the file decides, so an edit sticks.
+        out.sound.stream = guess_stream(source);
+        if (!as::save_meta(source, out)) {
+            return false;
+        }
+        ENGINE_LOG_INFO("{}: cooking it as {}. Edit the sidecar to change that.",
+                        source.string(), out.sound.stream ? "a streamed sound" : "PCM");
+        return true;
+    }
 
     assets::AssetRecord part_record(const std::filesystem::path& relative, Guid parent,
                                     std::string_view kind, std::string_view extension,

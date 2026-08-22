@@ -17,6 +17,7 @@ add_library(engine_import STATIC
     mesh.cpp
     prefab.cpp
     shader.cpp
+    sound.cpp
     texture.cpp
     stb_image_impl.cpp
     to_half.h

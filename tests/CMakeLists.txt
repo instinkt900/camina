@@ -316,6 +316,16 @@ else()
     message(STATUS "bash not found, skipping the containment tests")
 endif()
 
+# M11.2. The sound asset. Every case builds a WAV in memory and cooks through a
+# MemoryWriter, so this needs no cooked tree and no audio device. It links
+# engine::import, the way the cooker test does, rather than an executable.
+add_executable(test_sound test_sound.cpp)
+target_link_libraries(test_sound PRIVATE engine::import)
+engine_set_warnings(test_sound)
+engine_enable_clang_tidy(test_sound)
+
+add_test(NAME sound COMMAND test_sound)
+
 # M11.1. The audio device. Every case runs on the silent device, so this needs
 # no sound card and opens none. It only builds when the option is on, because
 # with it off engine_core holds no device at all.
