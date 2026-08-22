@@ -326,6 +326,18 @@ engine_enable_clang_tidy(test_sound)
 
 add_test(NAME sound COMMAND test_sound)
 
+# M11.3. The mixer. It pumps the mixer by hand rather than attaching a device,
+# so it needs no sound card and no wall clock. It links engine::import as well,
+# because each case cooks its sounds through the real rule.
+if(ENGINE_WITH_AUDIO)
+    add_executable(test_mixer test_mixer.cpp)
+    target_link_libraries(test_mixer PRIVATE engine::core engine::import)
+    engine_set_warnings(test_mixer)
+    engine_enable_clang_tidy(test_mixer)
+
+    add_test(NAME mixer COMMAND test_mixer)
+endif()
+
 # M11.1. The audio device. Every case runs on the silent device, so this needs
 # no sound card and opens none. It only builds when the option is on, because
 # with it off engine_core holds no device at all.

@@ -84,6 +84,7 @@ endif()
 if(ENGINE_WITH_AUDIO)
     target_sources(engine_core PRIVATE
         audio/device.cpp
+        audio/mixer.cpp
         audio/miniaudio_impl.cpp
     )
 

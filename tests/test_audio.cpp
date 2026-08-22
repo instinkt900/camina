@@ -6,13 +6,22 @@
 // is the path every machine without hardware takes, so it is the path that has
 // to be checked.
 
+#include "assets/asset_source.h"
+#include "assets/sound.h"
 #include "audio/device.h"
+#include "audio/mixer.h"
+#include "core/guid.h"
 
 #include "check.h"
 
 #include <chrono>
+#include <cstddef>
+#include <cstring>
 #include <memory>
+#include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -105,11 +114,98 @@ namespace {
         test::check(device->channels() == 1, "the silent device took the channel count");
     }
 
+    /// A cooked PCM sound, built by hand. This needs no cooker and no WAV: the
+    /// format is one header and the samples, and both sides read it from
+    /// assets/sound.h.
+    std::vector<std::byte> cooked_tone(std::uint32_t channels, std::uint32_t rate,
+                                       std::uint32_t frames) {
+        engine::assets::SoundHeader header;
+        header.storage = static_cast<std::uint32_t>(engine::assets::SoundStorage::Pcm);
+        header.channels = channels;
+        header.sample_rate = rate;
+        header.frame_count = frames;
+        const std::size_t samples = static_cast<std::size_t>(frames) * channels;
+        header.payload_size = static_cast<std::uint32_t>(samples * sizeof(float));
+
+        std::vector<std::byte> out(sizeof(header) + header.payload_size);
+        std::memcpy(out.data(), &header, sizeof(header));
+        const std::vector<float> values(samples, 0.5F);
+        std::memcpy(out.data() + sizeof(header), values.data(), header.payload_size);
+        return out;
+    }
+
+    /// One sound, handed out by identity. The mixer asks a project for bytes.
+    class OneSound final : public engine::assets::AssetSource {
+    public:
+        OneSound(engine::Guid guid, std::vector<std::byte> bytes)
+            : guid_(guid)
+            , bytes_(std::move(bytes)) {}
+
+        [[nodiscard]] bool assets_for(std::string_view /*source*/,
+                                      std::vector<engine::assets::AssetRecord>& /*out*/) const override {
+            return false;
+        }
+
+        [[nodiscard]] bool assets_of_kind(
+            std::string_view /*suffix*/,
+            std::vector<engine::assets::AssetRecord>& /*out*/) const override {
+            return true;
+        }
+
+        [[nodiscard]] bool read(engine::Guid guid, std::vector<std::byte>& out) const override {
+            if (guid != guid_) {
+                return false;
+            }
+            out = bytes_;
+            return true;
+        }
+
+    private:
+        engine::Guid guid_;
+        std::vector<std::byte> bytes_;
+    };
+
+    void test_the_device_pulls_from_the_mixer() {
+        test::section("A device attached to a mixer pulls its frames from it");
+
+        DeviceDesc desc;
+        desc.force_silent = true;
+        const auto device = create_device(desc);
+        if (device == nullptr) {
+            test::check(false, "create_device gives a device");
+            return;
+        }
+
+        engine::audio::Mixer mixer;
+        test::check(mixer.create(device->channels(), device->sample_rate()),
+                    "the mixer builds for the device's shape");
+
+        const engine::Guid guid{ .high = 1, .low = 2 };
+        const OneSound project(guid, cooked_tone(device->channels(), device->sample_rate(),
+                                                 device->sample_rate()));
+
+        // This is the one link the mixer's own test cannot cover. That test
+        // pumps mix() by hand, which is what makes it deterministic, and so it
+        // never asks whether a real device would call it at all.
+        device->set_source(&mixer);
+        test::check(device->is_running(), "the device is still running after it was attached");
+
+        test::check(mixer.play(project, guid) != 0, "a sound plays");
+        test::check(wait_for_frames(*device), "and the device thread is pulling frames");
+
+        // Off the device before either goes. set_source stops the device to
+        // change it, so nothing is inside the mixer after this line.
+        device->set_source(nullptr);
+        mixer.destroy();
+        test::check(device->is_running(), "and taking it off leaves the device running");
+    }
+
 } // namespace
 
 int main() {
     test_silent_device_opens();
     test_silent_device_mixes();
     test_rate_is_read_back();
+    test_the_device_pulls_from_the_mixer();
     return test::report();
 }

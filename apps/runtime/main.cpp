@@ -8,6 +8,11 @@
 #include "core/profile.h"
 #include "core/timestep.h"
 #include "core/version.h"
+#if defined(ENGINE_WITH_AUDIO)
+#include "assets/sound.h"
+#include "audio/device.h"
+#include "audio/mixer.h"
+#endif
 #include "editor/fly_camera.h"
 #include "editor/panels.h"
 #include "editor/view_settings.h"
@@ -1096,8 +1101,70 @@ namespace {
         /// step, which `play::Session` owns for the reason its header gives.
         engine::platform::Input input;
 
+#if defined(ENGINE_WITH_AUDIO)
+        /// M11.1. The output device, or a silent one on a machine with no sound
+        /// card. Held by pointer because create_device() decides which it is.
+        std::unique_ptr<engine::audio::IAudioDevice> audio;
+        /// M11.3. Every sound loaded and every voice playing. The device pulls
+        /// its frames from this.
+        engine::audio::Mixer mixer;
+#endif
+
         bool overlay = false; ///< True once ImGui owns resources on the device.
     };
+
+#if defined(ENGINE_WITH_AUDIO)
+    /// M11.3. The runtime's own key for checking that audio works.
+    constexpr const char* kAudioTestAction = "audio_test";
+
+    /**
+     * Binds the one audio key this application owns.
+     *
+     * It goes on the frame input beside the camera, not on the session input
+     * beside the game's actions. The game's bindings are in
+     * `sandbox::bind_actions`, and this is a debug key of the runtime's, the
+     * same way the fly camera keys are. M11.6 gives the game its own sounds
+     * through a script, and this key goes when it does.
+     *
+     * @param input The frame input to bind into.
+     */
+    void bind_audio_actions(engine::platform::Input& input) {
+        input.bind(kAudioTestAction, engine::platform::Key::V);
+    }
+
+    /**
+     * Plays the first sound the project holds, once for each press.
+     *
+     * It asks the project for a sound by kind rather than naming one, so it
+     * needs no identity written into C++ and it works in any content tree that
+     * holds a sound at all.
+     *
+     * @param runtime The mixer to play through.
+     * @param content The assets to read the sound from.
+     */
+    void update_audio(Runtime& runtime, const engine::assets::AssetSource& content) {
+        // A one-shot holds its cursor or its decoder until something frees it,
+        // and the device thread must not: freeing takes a lock and allocates.
+        runtime.mixer.update();
+
+        if (!runtime.input.pressed(kAudioTestAction)) {
+            return;
+        }
+
+        std::vector<engine::assets::AssetRecord> sounds;
+        if (!content.assets_of_kind(engine::assets::kSoundExtension, sounds) || sounds.empty()) {
+            ENGINE_LOG_WARN("Audio: this project holds no sound to play.");
+            return;
+        }
+
+        const engine::assets::AssetRecord& first = sounds.front();
+        if (runtime.mixer.play(content, first.guid) == 0) {
+            return;
+        }
+        ENGINE_LOG_INFO("Audio: playing {}. {} voices, {} started.", first.name,
+                        runtime.mixer.voices(), runtime.mixer.started());
+    }
+#endif
 
     /// The cooker that ships beside this executable.
     std::filesystem::path cooker_path() {
@@ -1402,6 +1469,25 @@ namespace {
         // same shape.
         engine::editor::bind_fly_actions(runtime.input);
 
+#if defined(ENGINE_WITH_AUDIO)
+        // M11.3. The device opens silent on a machine with no sound card, so
+        // this path is the same offscreen, in CI, and on a desktop. A failure
+        // to open even that is not a reason to refuse to run the game.
+        engine::audio::DeviceDesc audio_desc;
+        // An offscreen run has to be reproducible and nobody is listening to
+        // it, so it never opens the machine's hardware.
+        audio_desc.force_silent = options.offscreen;
+        runtime.audio = engine::audio::create_device(audio_desc);
+        if (runtime.audio != nullptr) {
+            // The numbers come back off the device rather than out of the
+            // request, because hardware answers with what it has.
+            if (runtime.mixer.create(runtime.audio->channels(), runtime.audio->sample_rate())) {
+                runtime.audio->set_source(&runtime.mixer);
+            }
+        }
+        bind_audio_actions(runtime.input);
+#endif
+
         const engine::gfx::DeviceDesc device_desc{
             .window = options.offscreen ? nullptr : runtime.window.native(),
             .app_name = "camina",
@@ -1478,6 +1564,16 @@ namespace {
 
     /// Releases what start() built, in the opposite order. Safe after a partial start.
     void stop(Runtime& runtime) {
+#if defined(ENGINE_WITH_AUDIO)
+        // The device thread pulls from the mixer, so it has to let go before
+        // the mixer does anything else. set_source stops the device to change
+        // it, which is what makes this safe rather than a race.
+        if (runtime.audio != nullptr) {
+            runtime.audio->set_source(nullptr);
+        }
+        runtime.mixer.destroy();
+        runtime.audio.reset();
+#endif
         if (runtime.device != nullptr) {
             // The resources must go after the device stops using them.
             engine::gfx::device_wait_idle(runtime.device);
@@ -1813,6 +1909,13 @@ namespace {
 #endif
 
         runtime.input.update(state);
+
+#if defined(ENGINE_WITH_AUDIO)
+        // After the input update, so a press this frame is a press it can read,
+        // and every frame whether or not a key was touched, because a voice
+        // that ended has to be freed either way.
+        update_audio(runtime, *context.game_content);
+#endif
 
         // And fold it into what the next step will read. A key down on any
         // frame since the last step is down for that step, so an edge cannot

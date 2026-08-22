@@ -125,23 +125,48 @@ namespace engine::audio {
                 }
             }
 
+            void set_source(IAudioSource* source) override {
+                // ma_device_stop blocks until the callback has returned, so
+                // after this line no thread is inside the old source. Swapping
+                // the pointer under a running callback would leave one there,
+                // and the source is usually being destroyed.
+                const bool was_running = is_running();
+                if (was_running) {
+                    ma_device_stop(&device_);
+                }
+                source_ = source;
+                if (was_running) {
+                    ma_device_start(&device_);
+                }
+            }
+
         private:
             /**
              * The mixer callback, on the device thread.
              *
-             * It writes silence, because M11.1 has nothing to play yet. What it
-             * does carry is the frame count, which is how a test says the thread
-             * is alive on a machine where nobody can hear it.
+             * With no source this writes silence, which is what a device does
+             * before anything asks to play. The frame count is what says the
+             * thread is alive on a machine where nobody can hear it, so it
+             * counts either way.
              */
-            static void mix(ma_device* device, void* output, const void* /*input*/, ma_uint32 frame_count) {
+            static void mix(ma_device* device, void* output, const void* /*input*/,
+                            ma_uint32 frame_count) {
                 auto* self = static_cast<MiniaudioDevice*>(device->pUserData);
-                ma_silence_pcm_frames(output, frame_count, device->playback.format, device->playback.channels);
+                if (self->source_ != nullptr) {
+                    self->source_->mix(static_cast<float*>(output), frame_count);
+                } else {
+                    ma_silence_pcm_frames(output, frame_count, device->playback.format,
+                                          device->playback.channels);
+                }
                 self->frames_mixed_.fetch_add(frame_count, std::memory_order_relaxed);
             }
 
             ma_context context_{};
             ma_device device_{};
             std::atomic<std::uint64_t> frames_mixed_{ 0 };
+            /// Read on the device thread. set_source() stops the device to
+            /// change it, so it needs no atomic of its own.
+            IAudioSource* source_ = nullptr;
             bool context_open_ = false;
             bool device_open_ = false;
             bool silent_ = false;
