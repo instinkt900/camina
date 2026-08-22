@@ -496,6 +496,23 @@ namespace engine::gfx {
          */
         bool depth_write = true;
         /**
+         * @brief Whether a fragment at the same depth as the attachment passes.
+         *
+         * The test is greater-than by default, which is what reverse-Z wants:
+         * a nearer fragment carries the greater value and replaces what is
+         * there. Equal fails, so a second draw at exactly one depth is hidden
+         * by the first.
+         *
+         * A pass that fills only what nothing else covered needs the other
+         * answer. The depth image clears to zero, which is the far plane, and a
+         * sky drawn at the far plane has to pass against that clear and fail
+         * against every piece of geometry. Greater-than alone would hide it
+         * everywhere.
+         *
+         * This does nothing while @c depth_test is false.
+         */
+        bool depth_equal = false;
+        /**
          * @brief Whether to blend the fragment over the attachment.
          *
          * False replaces the attachment, which is what an opaque surface wants.

@@ -94,6 +94,9 @@ namespace engine::render {
         if (!mesh_.create(device, content, shadow_.map())) {
             return false;
         }
+        if (!sky_.create(device, content)) {
+            return false;
+        }
         if (!tonemap_.create(device, content, extent)) {
             return false;
         }
@@ -103,6 +106,7 @@ namespace engine::render {
     void SceneRenderer::destroy() {
         mesh_.destroy();
         shadow_.destroy();
+        sky_.destroy();
         tonemap_.destroy();
         device_ = nullptr;
     }
@@ -124,6 +128,7 @@ namespace engine::render {
         // that pass rather than the program.
         bool ok = mesh_.reload_shaders(content);
         ok = shadow_.reload_shaders(content) && ok;
+        ok = sky_.reload_shaders(content) && ok;
         ok = tonemap_.reload_shaders(content) && ok;
         return ok;
     }
@@ -280,6 +285,22 @@ namespace engine::render {
             gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Mesh));
             mesh_.draw(commands, world, content, view.camera_position);
             gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Mesh) + 1);
+
+            // The sky fills what the geometry left. It is a pass of its own in
+            // the code and not in the graph: it draws in the scope the mesh
+            // pass opened, and it touches the same two attachments in the same
+            // two states MeshPass::declare() already named. A declaration of
+            // its own would derive a barrier, because derive_barriers() orders
+            // every write against what came before it, and issuing a barrier
+            // inside a rendering scope is invalid.
+            //
+            // After the mesh pass rather than before it, so the depth test
+            // rejects every pixel the geometry covered and the cubemap is
+            // sampled only where the frame would otherwise show its clear.
+            gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Sky));
+            sky_.draw(commands, mesh_.environment(), glm::inverse(view.clip_from_world),
+                      view.camera_position);
+            gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Sky) + 1);
 
             gfx::cmd_end_rendering(commands);
         }

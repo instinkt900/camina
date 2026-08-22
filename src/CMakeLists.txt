@@ -48,6 +48,7 @@ add_library(engine_core STATIC
     render/mesh_cache.cpp
     render/mesh_pass.cpp
     render/shadow_pass.cpp
+    render/sky_pass.cpp
     render/render_graph.cpp
     render/shader_bindings.cpp
     render/texture_cache.cpp

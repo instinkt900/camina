@@ -1723,15 +1723,22 @@ namespace {
         const double shadow_ns = scene.gpu_pass_ns(engine::render::ScenePass::Shadow);
         const double cull_ns = scene.gpu_pass_ns(engine::render::ScenePass::Cull);
         const double mesh_ns = scene.gpu_pass_ns(engine::render::ScenePass::Mesh);
+        const double sky_ns = scene.gpu_pass_ns(engine::render::ScenePass::Sky);
         const double tonemap_ns = scene.gpu_pass_ns(engine::render::ScenePass::Tonemap);
         if (shadow_ns > 0.0 || cull_ns > 0.0 || mesh_ns > 0.0 || tonemap_ns > 0.0) {
             // In the order they run. The cull is what says whether the cluster
             // grid pays for itself.
             ENGINE_LOG_INFO("gpu passes | shadow {:.3f} ms | cull {:.3f} ms | mesh {:.3f} ms | "
-                            "tonemap {:.3f} ms",
+                            "sky {:.3f} ms | tonemap {:.3f} ms",
                             shadow_ns * kToMilliseconds, cull_ns * kToMilliseconds,
-                            mesh_ns * kToMilliseconds, tonemap_ns * kToMilliseconds);
+                            mesh_ns * kToMilliseconds, sky_ns * kToMilliseconds,
+                            tonemap_ns * kToMilliseconds);
         }
+
+        // Whether the sky drew at all. A scene that names no environment draws
+        // none and says so, which is the difference between "there is no sky
+        // here" and "the sky is broken".
+        ENGINE_LOG_INFO("sky | {} frames drew the environment", scene.sky_draw_count());
 
         if (options.vsync) {
             ENGINE_LOG_INFO("Vsync is on, so that is the refresh rate. Use --no-vsync to measure "
