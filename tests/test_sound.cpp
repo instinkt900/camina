@@ -297,6 +297,9 @@ namespace {
         test::check(im::cook_sound_bytes(make_wav(spec), writer, "click.wav.snd", settings,
                                          "click.wav"),
                     "it cooked");
+        // A rule stages rather than publishes since #104, and a test that
+        // drives one directly is the caller that has to commit.
+        test::check(writer.commit(), "and the write was published");
 
         const auto found = writer.files().find("click.wav.snd");
         test::check(found != writer.files().end(), "it wrote the cooked name it was given");
@@ -332,6 +335,8 @@ namespace {
                                          "music.ogg"),
                     "it cooked");
 
+        test::check(writer.commit(), "and the write was published");
+
         const auto found = writer.files().find("music.ogg.snd");
         test::check(found != writer.files().end(), "it wrote the cooked file");
         if (found == writer.files().end()) {
@@ -358,6 +363,7 @@ namespace {
         const as::SoundImport settings{ .stream = false };
         test::check(im::cook_sound_bytes(make_wav(spec), writer, "a.wav.snd", settings, "a.wav"),
                     "a good one cooks");
+        test::check(writer.commit(), "and the write was published");
         const std::vector<std::byte> good = writer.files().at("a.wav.snd");
 
         as::SoundView view;

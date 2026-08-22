@@ -423,7 +423,10 @@ namespace {
                    const std::filesystem::path& relative,
                    std::vector<as::ManifestOutput>& outputs) {
         engine::import::FileWriter writer(out);
-        return engine::import::cook_gltf(source, writer, relative, kParent, outputs);
+        // A rule stages rather than publishes since #104, and every case below
+        // reads the cooked file off disk, so this commits before it returns.
+        return engine::import::cook_gltf(source, writer, relative, kParent, outputs) &&
+               writer.commit();
     }
 
     void test_glb_cooks() {
