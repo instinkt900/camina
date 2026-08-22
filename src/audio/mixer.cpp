@@ -41,7 +41,24 @@ namespace engine::audio {
             ma_decoder decoder{};      ///< The decoder over a streamed sound.
             bool decodes = false;      ///< Which of the two above is in use.
             bool looping = false;
+            bool spatial = false;
         };
+
+        /// The miniaudio curve for one of ours. One name for one thing lives in
+        /// audio/attenuation.h, and this is the only place that maps it.
+        [[nodiscard]] ma_attenuation_model attenuation_of(Attenuation value) {
+            switch (value) {
+            case Attenuation::Linear:
+                return ma_attenuation_model_linear;
+            case Attenuation::Exponential:
+                return ma_attenuation_model_exponential;
+            case Attenuation::None:
+                return ma_attenuation_model_none;
+            case Attenuation::Inverse:
+                break;
+            }
+            return ma_attenuation_model_inverse;
+        }
 
     } // namespace
 
@@ -212,10 +229,12 @@ namespace engine::audio {
 
         auto* source = voice->decodes ? static_cast<ma_data_source*>(&voice->decoder)
                                       : static_cast<ma_data_source*>(&voice->ref);
-        // No spatialization. M11.4 adds a source that has a place in the world,
-        // and until then a sound is heard the same wherever the listener is.
-        const ma_result result = ma_sound_init_from_data_source(
-            &state_->engine, source, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &voice->sound);
+        // A voice that has no place in the world says so at init. Turning
+        // spatialization off later still costs the work of it, and a sound that
+        // is meant to be heard flat has to stay flat whatever the listener does.
+        const ma_uint32 flags = desc.spatial ? 0U : MA_SOUND_FLAG_NO_SPATIALIZATION;
+        const ma_result result = ma_sound_init_from_data_source(&state_->engine, source, flags,
+                                                                nullptr, &voice->sound);
         if (result != MA_SUCCESS) {
             ENGINE_LOG_ERROR("Audio: a voice would not start ({}).",
                              ma_result_description(result));
@@ -231,6 +250,16 @@ namespace engine::audio {
         ma_sound_set_pitch(&voice->sound, desc.pitch);
         ma_sound_set_looping(&voice->sound, desc.looping ? MA_TRUE : MA_FALSE);
         voice->looping = desc.looping;
+        voice->spatial = desc.spatial;
+
+        if (desc.spatial) {
+            ma_sound_set_position(&voice->sound, desc.position.x, desc.position.y,
+                                  desc.position.z);
+            ma_sound_set_attenuation_model(&voice->sound, attenuation_of(desc.attenuation));
+            ma_sound_set_min_distance(&voice->sound, desc.min_distance);
+            ma_sound_set_max_distance(&voice->sound, desc.max_distance);
+            ma_sound_set_rolloff(&voice->sound, desc.rolloff);
+        }
 
         if (ma_sound_start(&voice->sound) != MA_SUCCESS) {
             close(*voice);
@@ -260,6 +289,26 @@ namespace engine::audio {
         state_->voices.clear();
     }
 
+    void Mixer::set_voice_position(VoiceId voice, const Vec3& position) {
+        const auto found = state_->voices.find(voice);
+        if (found == state_->voices.end() || !found->second->spatial) {
+            return;
+        }
+        ma_sound_set_position(&found->second->sound, position.x, position.y, position.z);
+    }
+
+    void Mixer::set_listener(const Vec3& position, const Vec3& forward, const Vec3& up) {
+        if (!state_->engine_open) {
+            return;
+        }
+        // No conversion. miniaudio is right handed with forward at −Z, which is
+        // what DESIGN.md section 3 says the engine is. A conversion here would
+        // be the mirror it is meant to prevent.
+        ma_engine_listener_set_position(&state_->engine, 0, position.x, position.y, position.z);
+        ma_engine_listener_set_direction(&state_->engine, 0, forward.x, forward.y, forward.z);
+        ma_engine_listener_set_world_up(&state_->engine, 0, up.x, up.y, up.z);
+    }
+
     void Mixer::update() {
         for (auto at = state_->voices.begin(); at != state_->voices.end();) {
             // A looping voice never reaches its end, so this never frees one.
@@ -271,6 +320,8 @@ namespace engine::audio {
             }
         }
     }
+
+    bool Mixer::playing(VoiceId voice) const { return state_->voices.contains(voice); }
 
     std::size_t Mixer::voices() const { return state_->voices.size(); }
 

@@ -104,10 +104,13 @@ namespace {
         // and so do physics and script. Seven built in, three physics, the
         // game's own Spin and Goal, and the one ScriptComponent when Lua is in.
         const sc::ComponentRegistry full = make_registry();
+        // The two audio components joined at M11.4. They are registered in
+        // every build, audio or not, because a scene that carries one has to
+        // open either way. See scene/components.h.
 #if defined(ENGINE_WITH_LUA)
-        constexpr std::size_t kExpected = 13;
+        constexpr std::size_t kExpected = 15;
 #else
-        constexpr std::size_t kExpected = 12;
+        constexpr std::size_t kExpected = 14;
 #endif
         check(full.size() == kExpected, "every subsystem and the game share one registry");
     }

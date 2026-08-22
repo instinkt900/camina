@@ -68,6 +68,10 @@ namespace engine::scene {
         registry.add<PointLight>();
         registry.add<Camera>();
         registry.add<Environment>();
+        // Both stay in a build with no audio. They are data, and a scene that
+        // carries one has to open in every build. See scene/components.h.
+        registry.add<AudioSource>();
+        registry.add<AudioListener>();
         // Hierarchy and WorldTransform stay out on purpose. A scene file stores
         // the parent link itself, and World rebuilds both from it.
     }

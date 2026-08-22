@@ -12,6 +12,7 @@
 #include "assets/sound.h"
 #include "audio/device.h"
 #include "audio/mixer.h"
+#include "audio/scene_audio.h"
 #endif
 #include "editor/fly_camera.h"
 #include "editor/panels.h"
@@ -1108,6 +1109,9 @@ namespace {
         /// M11.3. Every sound loaded and every voice playing. The device pulls
         /// its frames from this.
         engine::audio::Mixer mixer;
+        /// M11.4. Plays what the scene says to play, where the scene says it is.
+        /// The session drives it on the fixed step.
+        engine::audio::SceneAudio scene_audio;
 #endif
 
         bool overlay = false; ///< True once ImGui owns resources on the device.
@@ -1565,6 +1569,8 @@ namespace {
     /// Releases what start() built, in the opposite order. Safe after a partial start.
     void stop(Runtime& runtime) {
 #if defined(ENGINE_WITH_AUDIO)
+        // The voices go before the mixer that owns them.
+        runtime.scene_audio.stop_all();
         // The device thread pulls from the mixer, so it has to let go before
         // the mixer does anything else. set_source stops the device to change
         // it, which is what makes this safe rather than a race.
@@ -2275,6 +2281,13 @@ int main(int argc, char** argv) {
     // The game's own actions, on the step clock. The camera reads the frame
     // input instead, which start() bound. See play/session.h.
     sandbox::bind_actions(session.input());
+
+#if defined(ENGINE_WITH_AUDIO)
+    // M11.4. The scene's own sounds, placed on the step. The mixer and the
+    // content outlive the session, which is what bind() asks for.
+    runtime.scene_audio.bind(runtime.mixer, runtime.game_content);
+    session.set_audio(&runtime.scene_audio);
+#endif
 
 #if defined(ENGINE_WITH_UI)
     // M10.6. Before the scripts load, so the first on_start can already show a

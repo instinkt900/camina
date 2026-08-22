@@ -193,6 +193,17 @@ Box3D documentation says −9.8 while its code says −10, so read the code.
 
 ---
 
+**miniaudio agrees with these axes, and takes no conversion.** Its spatializer is right
+handed with forward at −Z and it takes a world up vector, which is what the table above says
+the engine is. So `audio::Mixer::set_listener` passes a pose straight through. A conversion
+there would be the mirror this section exists to prevent, and a mirrored sound is heard
+rather than seen: every picture stays correct while the left and the right ear swap.
+
+`tests/test_mixer.cpp` measures it rather than trusting it. A sound at +X has to be louder in
+the right channel, a sound at −X louder in the left, and a sound straight ahead even. Those
+three fail together if either half of the agreement changes.
+
+
 ## 4. Rules
 
 These rules hold for the life of the project. Each one keeps a later change cheap.

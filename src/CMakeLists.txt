@@ -15,6 +15,7 @@ add_library(engine_core STATIC
     assets/mesh.cpp
     assets/shader.cpp
     assets/sound.cpp
+    audio/attenuation.cpp
     assets/texture.cpp
     platform/window.cpp
     platform/input.cpp
@@ -85,6 +86,7 @@ if(ENGINE_WITH_AUDIO)
     target_sources(engine_core PRIVATE
         audio/device.cpp
         audio/mixer.cpp
+        audio/scene_audio.cpp
         audio/miniaudio_impl.cpp
     )
 
