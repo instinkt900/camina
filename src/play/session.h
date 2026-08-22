@@ -22,6 +22,7 @@
 #include "audio/scene_audio.h"
 #endif
 #include "physics/simulation.h"
+#include "script/audio_surface.h"
 #include "platform/input.h"
 #include "scene/step_motion.h"
 #include "script/game_clock.h"
@@ -231,6 +232,17 @@ namespace engine::play {
          */
         void set_ui(script::UiSurface* ui) { ui_ = ui; }
 
+        /**
+         * @brief Says what a script's `audio` table talks to, or nothing.
+         *
+         * It sits outside the audio block, the way set_ui does, so that this
+         * compiles in a build with no audio. A null surface makes every call in
+         * that table answer false or zero.
+         *
+         * @param audio The surface, or null. It must outlive the session.
+         */
+        void set_script_audio(script::AudioSurface* audio) { script_audio_ = audio; }
+
 #if defined(ENGINE_WITH_AUDIO)
         /**
          * @brief Says what plays the scene's sounds, or nothing.
@@ -347,6 +359,10 @@ namespace engine::play {
         /// The game UI a script drives, or null when this build has none. It
         /// sits outside the Lua block so that set_ui compiles either way.
         script::UiSurface* ui_ = nullptr;
+
+        /// M11.6. What the `audio` table talks to. Outside the audio block for
+        /// the same reason: set_script_audio has to compile either way.
+        script::AudioSurface* script_audio_ = nullptr;
 
         /**
          * What a script may reach on this step.

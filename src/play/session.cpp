@@ -24,6 +24,7 @@ namespace engine::play {
             .input = &step_input_,
             .prefabs = &scene::prefabs(),
             .camera = &camera_,
+            .audio = script_audio_,
             .ui = ui_,
             .clock = this,
             .exit = this,

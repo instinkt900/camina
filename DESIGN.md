@@ -2997,6 +2997,21 @@ that is wrong has to be made again.
 primary camera when a scene names none. A scene says where the ears are, and the editor flying
 its own camera must not move them.
 
+**A voice a script starts belongs to that script.** M8.5 settled that a reload restarts a
+script and the script table goes with it, because carrying a table across two versions has no
+answer for a value whose shape changed. A voice is the same kind of thing: scratch, not
+storage. So the host stops every voice an instance started when that instance goes, whether it
+went to a reload, a changed script, or a destroyed entity. Otherwise a looping sound plays on
+with nothing left that holds its number, and only restarting the game would quiet it.
+
+A sound that has to survive a reload belongs on a `scene::AudioSource`, which is a component
+and therefore storage. That is the same split M8.5 drew.
+
+**Nothing in the script surface reports what the mixer is doing.** A script starts a voice and
+stops it, and it cannot ask whether one is still playing. That answer comes off another thread
+against the real clock, and a game that read it would stop being reproducible. Issue #245 took
+the wall clock away from `on_update` for that reason, and this is the same rule.
+
 The increments, in build order:
 
 | Increment | What it builds |

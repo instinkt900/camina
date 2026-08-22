@@ -26,6 +26,7 @@
  */
 
 #include "core/guid.h"
+#include "script/audio_surface.h"
 #include "script/game_clock.h"
 #include "script/game_exit.h"
 #include "script/ui_surface.h"
@@ -116,6 +117,11 @@ namespace engine::script {
         const scene::PrefabLibrary* prefabs = nullptr;
         /// @brief The view pose. Null makes every camera read nil.
         const CameraView* camera = nullptr;
+        /**
+         * @brief The sound. Null makes every call in the `audio` table answer
+         *        false or zero.
+         */
+        AudioSurface* audio = nullptr;
         /// @brief The game UI. Null makes every call in the `ui` table answer false.
         UiSurface* ui = nullptr;
         /// @brief The fixed step. Null makes every call in the `game` table answer false.

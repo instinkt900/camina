@@ -89,6 +89,7 @@ if(ENGINE_WITH_AUDIO)
         audio/device.cpp
         audio/mixer.cpp
         audio/scene_audio.cpp
+        audio/script_audio.cpp
         audio/miniaudio_impl.cpp
     )
 
