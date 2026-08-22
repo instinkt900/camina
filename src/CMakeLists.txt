@@ -1,4 +1,15 @@
+# Every source under physics/, named once. add_library() takes it below and the
+# contraction flag further down takes the same list, so a file added here is
+# covered by both. Issue #229 is what the second use is for.
+set(engine_physics_sources
+    physics/components.cpp
+    physics/conventions.cpp
+    physics/simulation.cpp
+    physics/world.cpp
+)
+
 add_library(engine_core STATIC
+    ${engine_physics_sources}
     core/log.cpp
     core/jobs.cpp
     core/arena.cpp
@@ -55,10 +66,6 @@ add_library(engine_core STATIC
     render/scene_renderer.cpp
     render/tonemap_pass.cpp
     render/debug_line_pass.cpp
-    physics/components.cpp
-    physics/conventions.cpp
-    physics/simulation.cpp
-    physics/world.cpp
     play/session.cpp
     scene/camera.cpp
     scene/step_motion.cpp
@@ -155,6 +162,31 @@ target_link_libraries(engine_core
         # application that calls ImGui itself links imgui::imgui as well.
         imgui::imgui
 )
+
+# Issue #229. Box3D turns contraction into a fused multiply-add off for the
+# determinism its solver depends on, and third_party/CMakeLists.txt sets that
+# flag on the library. The flag is PRIVATE there, so it reaches the library and
+# not the callers, and the inline math in box3d/math_functions.h is compiled by
+# whoever includes it. Two copies of one function that round differently give
+# two answers for one input, which is the failure the flag exists to stop.
+#
+# **This covers the directory rather than the two files that include a Box3D
+# header today.** scripts/check-box3d-containment.sh already fails the build
+# when one appears outside src/physics/, so the directory is a boundary the
+# project enforces rather than a list somebody has to keep. A new file in here
+# is covered without anybody remembering.
+#
+# It is not PUBLIC on the box3d target, because that would push it onto every
+# translation unit of engine_core and change float code generation for the
+# renderer and the math library as well.
+#
+# Upstream tests the compiler rather than the platform, and so does this. MSVC
+# is left alone for the same reason it is in third_party/CMakeLists.txt.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(${engine_physics_sources}
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off"
+    )
+endif()
 
 # M8. Lua and sol2 reach script/host.cpp and nothing else. The header holds an
 # opaque pointer, so no consumer of engine::core sees a sol2 type or needs its
