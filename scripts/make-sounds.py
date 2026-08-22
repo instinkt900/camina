@@ -45,6 +45,19 @@ def write_wav(path, samples):
     print(f"{path}: {frames} frames, {frames / RATE:.3f} s")
 
 
+def noise(index):
+    """Repeatable white noise.
+
+    A generator seeded from the clock would give different files on every run,
+    and the content tree has to be the same bytes for everybody. This is a
+    small integer hash instead, which is the same on every machine and in every
+    Python.
+    """
+    value = (index * 1103515245 + 12345) & 0x7FFFFFFF
+    value ^= value >> 13
+    return ((value % 20001) - 10000) / 10000.0
+
+
 def envelope(index, frames, attack_frames, curve):
     """A quick rise and an exponential fall, which is what a short effect is."""
     if index < attack_frames:
@@ -66,10 +79,56 @@ def click(seconds=0.06, frequency=880.0):
     return out
 
 
+def thud(seconds=0.22, frequency=110.0):
+    """A low knock, for a crate landing on something."""
+    frames = int(RATE * seconds)
+    attack = int(RATE * 0.002)
+    out = []
+    for i in range(frames):
+        # A low tone that falls as it decays, which is what a solid thing
+        # hitting the floor sounds like.
+        sweep = frequency * (1.0 - 0.35 * i / frames)
+        tone = math.sin(2 * math.pi * sweep * i / RATE)
+        # A little noise at the front is the impact itself. Without it the
+        # sound reads as a drum note rather than as wood on stone.
+        knock = noise(i) * math.exp(-40.0 * i / frames)
+        out.append(0.7 * (tone * envelope(i, frames, attack, 7.0) + 0.3 * knock))
+    return out
+
+
+def whoosh(seconds=0.18):
+    """Filtered noise that falls away, for a crate leaving the camera."""
+    frames = int(RATE * seconds)
+    out = []
+    smoothed = 0.0
+    for i in range(frames):
+        # A one pole low pass whose cutoff closes as the sound goes, so the
+        # noise darkens the way something moving away does.
+        alpha = 0.35 * (1.0 - 0.8 * i / frames)
+        smoothed += alpha * (noise(i) - smoothed)
+        out.append(0.6 * smoothed * envelope(i, frames, int(RATE * 0.01), 5.0))
+    return out
+
+
+def sweep(seconds=0.16, low=440.0, high=880.0):
+    """A short rise, for the puzzle going back to the start."""
+    frames = int(RATE * seconds)
+    out = []
+    phase = 0.0
+    for i in range(frames):
+        frequency = low + (high - low) * i / frames
+        phase += 2 * math.pi * frequency / RATE
+        out.append(0.45 * math.sin(phase) * envelope(i, frames, int(RATE * 0.004), 4.0))
+    return out
+
+
 def main():
     root = pathlib.Path(__file__).resolve().parent.parent
     sounds = root / "sandbox" / "content" / "sounds"
     write_wav(sounds / "click.wav", click())
+    write_wav(sounds / "thud.wav", thud())
+    write_wav(sounds / "throw.wav", whoosh())
+    write_wav(sounds / "reset.wav", sweep())
     return 0
 
 

@@ -4,28 +4,63 @@
     {
       "parent": -1,
       "components": {
-        "Name": { "__version": 1, "value": "crate" },
+        "Name": {
+          "__version": 1,
+          "value": "crate"
+        },
         "Transform": {
           "__version": 1,
-          "position": [0.0, 0.0, 0.0],
-          "rotation": [1.0, 0.0, 0.0, 0.0],
-          "scale": [1.0, 1.0, 1.0]
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
         },
         "MeshRenderer": {
           "__version": 1,
           "mesh": "asset:models/crate/crate.gltf#mesh:0"
+        },
+        "ScriptComponent": {
+          "script": "asset:scripts/crate_sound.lua"
         }
       }
     },
     {
       "parent": 0,
       "components": {
-        "Name": { "__version": 1, "value": "lid" },
+        "Name": {
+          "__version": 1,
+          "value": "lid"
+        },
         "Transform": {
           "__version": 1,
-          "position": [0.0, 0.575, 0.0],
-          "rotation": [1.0, 0.0, 0.0, 0.0],
-          "scale": [0.9, 0.15, 0.9]
+          "position": [
+            0.0,
+            0.575,
+            0.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.9,
+            0.15,
+            0.9
+          ]
         },
         "MeshRenderer": {
           "__version": 1,

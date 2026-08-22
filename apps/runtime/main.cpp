@@ -1116,6 +1116,9 @@ namespace {
         engine::audio::SceneAudio scene_audio;
         /// M11.6. What a script's `audio` table talks to.
         engine::audio::ScriptAudio script_audio;
+        /// What apply_mix() last pushed, so a bus the panel did not touch is
+        /// left where the game put it. See apply_mix().
+        engine::audio::MixSettings applied_mix;
 #endif
 
         bool overlay = false; ///< True once ImGui owns resources on the device.
@@ -1151,20 +1154,34 @@ namespace {
      * @param content The assets to read the sound from.
      */
     /**
-     * Puts the saved volumes on the mixer.
+     * Puts the saved volumes on the mixer, when a person has changed one.
      *
-     * Every frame rather than on a change, because the panel writes the
-     * settings straight into the struct and nothing reports that it did. The
-     * call is a few floats, and setting a bus to the value it already holds
-     * asks miniaudio for a ramp that is already finished.
+     * **Only what changed.** The panel and the game both write to a bus: a
+     * person drags a slider, and a script mutes the room while the game is
+     * paused. Pushing the whole settings struct on every frame made the panel
+     * the only writer that lasted, because it overwrote the game's change on
+     * the very next frame. A pause quieted the room for one frame and then
+     * unquieted it.
      *
-     * @param runtime The mixer to set.
-     * @param settings What the volumes are.
+     * So this compares against what it last applied. A slider still reaches the
+     * mixer at once, and a bus nobody touched is left where the game put it.
+     *
+     * @param runtime The mixer to set, and the copy of what was last applied.
+     * @param settings What the panel holds now.
      */
     void apply_mix(Runtime& runtime, const ViewSettings& settings) {
-        runtime.mixer.set_bus(engine::audio::Bus::Master, settings.mix.master);
-        runtime.mixer.set_bus(engine::audio::Bus::Music, settings.mix.music);
-        runtime.mixer.set_bus(engine::audio::Bus::Effects, settings.mix.effects);
+        const auto push = [&runtime](engine::audio::Bus bus,
+                                     const engine::audio::BusSettings& wanted,
+                                     engine::audio::BusSettings& applied) {
+            if (wanted.volume == applied.volume && wanted.mute == applied.mute) {
+                return;
+            }
+            applied = wanted;
+            runtime.mixer.set_bus(bus, wanted);
+        };
+        push(engine::audio::Bus::Master, settings.mix.master, runtime.applied_mix.master);
+        push(engine::audio::Bus::Music, settings.mix.music, runtime.applied_mix.music);
+        push(engine::audio::Bus::Effects, settings.mix.effects, runtime.applied_mix.effects);
     }
 
     void update_audio(Runtime& runtime, const engine::assets::AssetSource& content) {
@@ -1685,6 +1702,46 @@ namespace {
      * will never make up, so anything above zero says the machine could not
      * keep up with the step rate that was asked for.
      */
+#if defined(ENGINE_WITH_AUDIO)
+    /**
+     * Reports what the audio did over the run.
+     *
+     * The voices started are the part worth reading. A run that played nothing
+     * says so here, which is the difference between a game with no sound and a
+     * game whose sound is not audible on this machine. Neither one can be told
+     * from the other by listening to a silent device.
+     *
+     * A voice count above zero at the end is not a leak on its own: a looping
+     * sound is meant to be there. It is a leak when the run ended with the game
+     * quiet.
+     *
+     * @param runtime The device and the mixer to read.
+     */
+    void report_audio(const Runtime& runtime) {
+        if (runtime.audio == nullptr) {
+            ENGINE_LOG_INFO("audio | no device at all");
+            return;
+        }
+        ENGINE_LOG_INFO("audio | {} at {} Hz | {} voices started, {} still playing | {} sounds "
+                        "loaded, {} buses",
+                        runtime.audio->backend_name(), runtime.audio->sample_rate(),
+                        runtime.mixer.started(), runtime.mixer.voices(),
+                        runtime.mixer.sounds(), runtime.mixer.buses());
+
+        // What each bus is set to. A game that turned one down and never turned
+        // it back up is silent for a reason nothing else here would show, and
+        // that is a question somebody asks the moment sound goes missing.
+        const auto say_bus = [&runtime](engine::audio::Bus bus) {
+            const engine::audio::BusSettings& settings = runtime.mixer.bus_settings(bus);
+            ENGINE_LOG_INFO("audio | {} bus at {:.2f}{}", engine::audio::to_text(bus),
+                            settings.volume, settings.mute ? ", muted" : "");
+        };
+        say_bus(engine::audio::Bus::Master);
+        say_bus(engine::audio::Bus::Music);
+        say_bus(engine::audio::Bus::Effects);
+    }
+#endif
+
     void report_physics(const engine::FixedTimestep& clock, const engine::FrameStats& stats) {
         const engine::FrameSummary run = stats.summarize();
         ENGINE_LOG_INFO("physics on the cpu | {:.0f} Hz | {} steps | median {:.3f} ms each frame",
@@ -2155,6 +2212,9 @@ namespace {
         // domains and the labels say so: the solver runs on the CPU.
         report_frame_time(stats, options, *context.scene);
         report_physics(session.clock(), physics_stats);
+#if defined(ENGINE_WITH_AUDIO)
+        report_audio(runtime);
+#endif
         return true;
     }
 

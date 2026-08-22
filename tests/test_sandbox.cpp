@@ -28,6 +28,13 @@
 #include "scene/step_motion.h"
 #include "script/components.h"
 #include "script/host.h"
+
+#if defined(ENGINE_WITH_AUDIO)
+#include "audio/bus.h"
+#include "audio/mixer.h"
+#include "audio/scene_audio.h"
+#include "audio/script_audio.h"
+#endif
 #endif
 
 #include <algorithm>
@@ -457,6 +464,9 @@ namespace {
 
     /// Everything one step of the real game needs, built from the shipped tree.
     struct Game {
+        /// The cooked tree, held rather than opened and dropped. The audio
+        /// surfaces keep a reference to it, so it has to outlive them.
+        engine::assets::Content cooked;
         sc::ComponentRegistry registry;
         sc::PrefabLibrary library;
         sc::World world;
@@ -466,6 +476,14 @@ namespace {
         engine::scene::StepMotion motion;
         engine::script::CameraView camera;
         double seconds = 0.0;
+
+#if defined(ENGINE_WITH_AUDIO)
+        /// A real mixer with no device under it. Nothing is audible and every
+        /// count is real, which is what a check about sound needs.
+        engine::audio::Mixer mixer;
+        engine::audio::ScriptAudio script_audio;
+        engine::audio::SceneAudio scene_audio;
+#endif
 
         /// Every trigger overlap since the game started. The simulation keeps
         /// the events of one step, so a check written after the run would read
@@ -477,6 +495,9 @@ namespace {
                                              .input = &input,
                                              .prefabs = &library,
                                              .camera = &camera,
+#if defined(ENGINE_WITH_AUDIO)
+                                             .audio = &script_audio,
+#endif
                                              .motion = &motion };
         }
 
@@ -526,26 +547,36 @@ namespace {
         game.input.bind("throw", engine::platform::Key::F);
         game.input.bind("reset", engine::platform::Key::R);
 
-        engine::assets::Content cooked;
-        if (!cooked.open(sandbox::default_content_directory())) {
+        if (!game.cooked.open(sandbox::default_content_directory())) {
             return false;
         }
-        if (!sandbox::load(sandbox::default_content_directory(), &cooked, game.world,
+        if (!sandbox::load(sandbox::default_content_directory(), &game.cooked, game.world,
                            game.registry, game.library)) {
             return false;
         }
 
+#if defined(ENGINE_WITH_AUDIO)
+        // A mixer with no device under it. Nothing pulls frames from it, so
+        // nothing is heard and nothing is timed: what a voice count says here
+        // is exactly what the game asked for.
+        if (!game.mixer.create(2, 48000)) {
+            return false;
+        }
+        game.script_audio.bind(game.mixer, game.cooked);
+        game.scene_audio.bind(game.mixer, game.cooked);
+#endif
+
         // Every cooked script, the way the runtime loads them: out of the
         // manifest rather than out of a list somebody keeps up to date.
         std::size_t loaded = 0;
-        for (const engine::assets::ManifestEntry& entry : cooked.manifest().entries) {
+        for (const engine::assets::ManifestEntry& entry : game.cooked.manifest().entries) {
             for (const engine::assets::ManifestOutput& output : entry.outputs) {
                 if (!std::string_view{ output.cooked }.ends_with(
                         engine::assets::kScriptExtension)) {
                     continue;
                 }
                 std::vector<std::byte> bytes;
-                if (cooked.read_bytes(output, bytes) &&
+                if (game.cooked.read_bytes(output, bytes) &&
                     game.host.load(output.guid, output.cooked, bytes)) {
                     ++loaded;
                 }
@@ -722,6 +753,88 @@ namespace {
         check(named_both, "and it named the volume first and the crate second");
     }
 
+#if defined(ENGINE_WITH_AUDIO)
+
+    /**
+     * The game makes a sound when something happens, and not before.
+     *
+     * This is the milestone test of M11 in the form a test can hold. The rest
+     * of it is a person listening, which no check here stands in for.
+     *
+     * The counts come off a mixer with no device under it, so nothing is heard
+     * and nothing is timed. A voice count is then exactly what the game asked
+     * for.
+     */
+    void test_the_game_makes_a_sound() {
+        section("the shipped game plays sounds");
+
+        Game game;
+        check(start_game(game), "the shipped game starts");
+
+        // A game that has done nothing has played nothing. Without this a build
+        // that played a sound on every step would pass every check below.
+        game.run(30);
+        check(game.mixer.started() == 0, "a game where nothing happened has played nothing");
+
+        game.press(engine::platform::Key::F);
+        game.run(1);
+        const std::uint64_t after_throw = game.mixer.started();
+        check(after_throw >= 1, "the throw plays something");
+
+        // The crate lands, hits the stack, and the stack moves. Every one of
+        // those is a contact, and crate_sound.lua is what turns them into a
+        // sound.
+        game.run(120);
+        const std::uint64_t after_landing = game.mixer.started();
+        check(after_landing > after_throw, "and landing plays more");
+
+        // Not one for every contact. A crate that lands touches many times over
+        // and a stack touches every neighbour, so a thud for each one is a
+        // burst rather than an impact.
+        check(after_landing - after_throw < 30,
+              "but not one for every contact, because the cooldown holds them apart");
+
+        game.press(engine::platform::Key::R);
+        game.run(1);
+        check(game.mixer.started() > after_landing, "and the reset plays something");
+
+        // Four sounds ship and the run above has reason to reach three of them:
+        // the throw, the thud, and the reset. The click needs a button.
+        check(game.mixer.sounds() >= 3, "at least three different sounds were loaded");
+    }
+
+    /**
+     * The world's sounds and the menu's are on different buses.
+     *
+     * That split is what lets a pause quiet the room without silencing the menu
+     * that is doing the pausing. **The pause itself is not checked here**, and
+     * cannot be: this build binds no UI surface, so `pause_game` in puzzle.lua
+     * returns before it pauses. A pause with no menu on the screen would be a
+     * game nobody could resume, which M10 settled. The runtime's audio report
+     * is where that half is read instead.
+     *
+     * What this does check is the half a test can hold: a thrown crate is heard
+     * on the effects bus, so muting that bus reaches it.
+     */
+    void test_the_world_plays_on_its_own_bus() {
+        section("the world's sounds are on the effects bus");
+
+        Game game;
+        check(start_game(game), "the shipped game starts");
+        check(game.mixer.buses() == 0, "a game that has played nothing has built no bus");
+
+        game.press(engine::platform::Key::F);
+        game.run(60);
+
+        check(game.mixer.buses() == 1, "the throw and the landing built one bus");
+        check(!game.mixer.bus_settings(engine::audio::Bus::Effects).mute,
+              "which is not muted while the game runs");
+        check(!game.mixer.bus_settings(engine::audio::Bus::Master).mute,
+              "and neither is the master, because the menu lives on it");
+    }
+
+#endif
+
     void test_the_reset_puts_the_room_back() {
         section("puzzle.lua puts the crates back and clears what was thrown");
 
@@ -895,6 +1008,10 @@ int main() {
     test_the_throw_makes_a_crate_that_falls();
     test_a_crate_at_rest_in_the_goal_wins();
     test_the_reset_puts_the_room_back();
+#if defined(ENGINE_WITH_AUDIO)
+    test_the_game_makes_a_sound();
+    test_the_world_plays_on_its_own_bus();
+#endif
 #endif
 
     engine::jobs::shutdown();

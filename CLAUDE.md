@@ -23,7 +23,7 @@ tests both platforms on every pull request, and a release carries an archive for
 
 ## Current status
 
-M9, M12 and M13 are complete. M10 is next.
+M9, M10, M11, M12 and M13 are complete. Every milestone in `DESIGN.md` §10 has landed.
 
 **M9 closed with M9.8**, the milestone test: a level built in the editor, saved, cooked, and
 run by the runtime. Hard rule 3 was re-checked after M13 rather than before it, and it holds:
