@@ -15,6 +15,7 @@
 #include "assets/meta.h"
 #include "assets/reference.h"
 #include "assets/shader.h"
+#include "assets/sound.h"
 #include "assets/texture.h"
 #include "check.h"
 #include "import/cook.h"
@@ -803,6 +804,147 @@ void main() { out_color = push.model[0]; }
               "a linear chain averages the numbers, so the same texels give 128");
         check(red(color_view) != red(normal_view),
               "so the color space really does change the cooked bytes");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A minimal 16-bit WAV, built as bytes.
+     *
+     * The cooker test needs one to prove a sound cooks end to end, and a file
+     * committed to the repository would prove less: a generated one says
+     * exactly what is in it, so a wrong sample is a wrong number here rather
+     * than a file nobody can read.
+     */
+    std::string wav_16_bit(std::uint16_t channels, std::uint32_t rate,
+                           const std::vector<std::int16_t>& samples) {
+        std::string out;
+        const auto put_u16 = [&out](std::uint16_t value) {
+            out.push_back(static_cast<char>(value & 0xFFU));
+            out.push_back(static_cast<char>((value >> 8U) & 0xFFU));
+        };
+        const auto put_u32 = [&out](std::uint32_t value) {
+            for (unsigned i = 0; i < 4; ++i) {
+                out.push_back(static_cast<char>((value >> (8U * i)) & 0xFFU));
+            }
+        };
+
+        const auto data_bytes = static_cast<std::uint32_t>(samples.size() * 2);
+        out += "RIFF";
+        put_u32(36 + data_bytes);
+        out += "WAVEfmt ";
+        put_u32(16);
+        put_u16(1); // integer PCM
+        put_u16(channels);
+        put_u32(rate);
+        put_u32(rate * channels * 2);
+        put_u16(static_cast<std::uint16_t>(channels * 2));
+        put_u16(16);
+        out += "data";
+        put_u32(data_bytes);
+        for (const std::int16_t sample : samples) {
+            put_u16(static_cast<std::uint16_t>(sample));
+        }
+        return out;
+    }
+
+    /**
+     * A sound cooks, and the sidecar decides which of the two forms it takes.
+     *
+     * The two forms are the whole of the decision in DESIGN.md section 10 M11,
+     * and each one is a different cooked file from the same source. So this
+     * cooks one source both ways rather than trusting the rule twice.
+     */
+    void test_a_sound_cooks_both_ways() {
+        const std::filesystem::path source = scratch("sound/src");
+        const std::filesystem::path out = scratch("sound/out");
+        const std::filesystem::path wav = source / "click.wav";
+        write_file(wav, wav_16_bit(1, 44100, { 0, 16384, -16384, 0 }));
+        // Nothing decodes a streamed sound at cook time, so these bytes need
+        // not be real music. That is the property being checked.
+        write_file(source / "theme.ogg", std::string(64, 'Z'));
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the tree cooks");
+        check(first.cooked == 2, "and it cooks both sounds");
+
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "a second cook works");
+        check(second.cooked == 0 && second.skipped == 2, "and it cooks nothing");
+
+        // The guess reaches the sidecar the first cook wrote, and it is what
+        // decides the form. A WAV decodes and everything else streams.
+        as::AssetMeta wav_meta;
+        as::AssetMeta ogg_meta;
+        check(as::load_meta(wav, wav_meta) && !wav_meta.sound.stream,
+              "the WAV is guessed as decoded");
+        check(as::load_meta(source / "theme.ogg", ogg_meta) && ogg_meta.sound.stream,
+              "and anything else as streamed");
+
+        as::SoundView view;
+        const std::string cooked_wav = read_file(out / "click.wav.snd");
+        const std::span<const std::byte> wav_bytes{
+            reinterpret_cast<const std::byte*>(cooked_wav.data()), cooked_wav.size()
+        };
+        check(as::read_sound(wav_bytes, view, "click.wav.snd"), "the cooked WAV reads back");
+        check(view.storage == as::SoundStorage::Pcm, "it is PCM");
+        check(view.sample_rate == 44100 && view.channels == 1 && view.frame_count == 4,
+              "and it kept the rate, the channels and the frames the source had");
+
+        const std::string cooked_ogg = read_file(out / "theme.ogg.snd");
+        const std::span<const std::byte> ogg_bytes{
+            reinterpret_cast<const std::byte*>(cooked_ogg.data()), cooked_ogg.size()
+        };
+        check(as::read_sound(ogg_bytes, view, "theme.ogg.snd"), "the cooked stream reads back");
+        check(view.storage == as::SoundStorage::Encoded, "it is encoded");
+        check(view.payload.size() == 64, "and it carries the source bytes untouched");
+
+        // The sidecar is an input. Turning the WAV into a streamed sound has to
+        // cook it again, and it has to change the cooked file rather than only
+        // the sidecar.
+        wav_meta.sound.stream = true;
+        check(as::save_meta(wav, wav_meta), "the sidecar takes an edit");
+        engine::import::Result third;
+        check(engine::import::cook_all(options, third), "the third cook works");
+        check(third.cooked == 1 && third.skipped == 1, "and it cooks only the sound that changed");
+
+        const std::string restreamed = read_file(out / "click.wav.snd");
+        const std::span<const std::byte> restreamed_bytes{
+            reinterpret_cast<const std::byte*>(restreamed.data()), restreamed.size()
+        };
+        check(as::read_sound(restreamed_bytes, view, "click.wav.snd"), "it reads back");
+        check(view.storage == as::SoundStorage::Encoded,
+              "and the same source is stored the other way now");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A sound that cannot decode at cook time is refused, not cooked wrongly.
+     *
+     * This is the one shape the guess cannot fix: somebody edits a sidecar to
+     * decode a file the cook-time reader cannot read. It must fail the cook and
+     * name the file, because the alternative is a cooked sound holding bytes
+     * that are not samples.
+     */
+    void test_a_sound_that_cannot_decode_is_refused() {
+        const std::filesystem::path source = scratch("sound-bad/src");
+        const std::filesystem::path out = scratch("sound-bad/out");
+        write_file(source / "theme.ogg", std::string(64, 'Z'));
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "it cooks as a streamed sound");
+
+        as::AssetMeta meta;
+        check(as::load_meta(source / "theme.ogg", meta), "the sidecar reads");
+        meta.sound.stream = false;
+        check(as::save_meta(source / "theme.ogg", meta), "and it takes the edit");
+
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second), "the cook now fails");
+        check(second.failed == 1, "and it names one asset as the reason");
 
         test::remove_tree(source.parent_path());
     }
@@ -3011,6 +3153,11 @@ void main() { color = vec4(1.0); }
                R"({"__version":1,"entities":[{"parent":-1,"components":{)"
                R"("MeshRenderer":{"__version":1,"mesh":"asset:models/crate.gltf#mesh:1"}}}]})");
     write_file(source / "spin.lua", "return {}\n");
+    // Both storage forms of a sound. The decoded one and the streamed one take
+    // different paths through the rule, so one of them alone would leave half
+    // the agreement unchecked.
+    write_file(source / "click.wav", wav_16_bit(2, 48000, { 0, 1, 2, 3 }));
+    write_file(source / "theme.ogg", std::string(48, 'Q'));
 
     engine::import::Options options{ .content = source, .out = out };
     engine::import::Result result;
@@ -3176,6 +3323,40 @@ void test_the_index_skips_a_gltf_buffer() {
     check(scripts.front().source == "real.lua", "only the real script is an asset");
 }
 
+
+/**
+ * The editor's index writes the same sidecar the cooker would have written.
+ *
+ * A sidecar is written by whichever side reaches a file with none, and it
+ * decides how that file is read from then on. So a guess made on one side and
+ * not on the other is not a difference that shows up once. It is a wrong file
+ * on disk, and nothing reports it.
+ *
+ * The index used to call meta_for() directly, which makes no guess at all. A
+ * normal map the editor opened first was recorded as sRGB whatever its name
+ * said, and every later cook honored that.
+ */
+void test_the_index_writes_the_same_sidecar_a_cook_would() {
+    const std::filesystem::path source = scratch("index-meta/src");
+    // The name is what the guess reads. This one has to come out linear, and
+    // the sound has to come out streamed.
+    write_tga(source / "wall_normal.tga", 2, 2, half_black_half_white());
+    write_file(source / "theme.ogg", std::string(32, 'M'));
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the tree opens as a source project");
+
+    as::AssetMeta image;
+    check(as::load_meta(source / "wall_normal.tga", image), "the index wrote an image sidecar");
+    check(image.texture.color_space == as::ColorSpace::Linear,
+          "and it guessed the color space from the name, as a cook would");
+
+    as::AssetMeta sound;
+    check(as::load_meta(source / "theme.ogg", sound), "the index wrote a sound sidecar");
+    check(sound.sound.stream, "and it guessed that a file it cannot decode streams");
+
+    test::remove_tree(source.parent_path());
+}
 
 // M13.3b. The whole point of the milestone: what the editor imports and
 // what the cooker writes are the same bytes. If they ever differ, the
@@ -3418,6 +3599,9 @@ int main() {
     test::section("textures");
     test_color_space_decides_the_mip_chain();
     test_editing_the_sidecar_cooks_again();
+    test::section("sounds");
+    test_a_sound_cooks_both_ways();
+    test_a_sound_that_cannot_decode_is_refused();
     test_an_older_manifest_cooks_again();
     test_an_older_cooker_cooks_again();
     test_compression_and_mip_switches();
@@ -3443,6 +3627,7 @@ int main() {
     test_a_bad_file_does_not_stop_the_index();
     test_the_index_skips_a_gltf_buffer();
     test::section("importing from source");
+    test_the_index_writes_the_same_sidecar_a_cook_would();
     test_an_import_gives_the_cooked_bytes();
     test_an_import_is_kept_for_the_session();
     test_a_failed_import_does_not_stop_the_project();

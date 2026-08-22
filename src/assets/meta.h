@@ -197,6 +197,27 @@ namespace engine::assets {
     };
 
     /**
+     * @brief How the cooker must turn a sound file into a cooked sound.
+     *
+     * There is one decision here, and DESIGN.md section 10 M11 holds the
+     * reasoning. A short effect decodes at cook time so that nothing decodes
+     * when it plays. A long track keeps its encoded bytes, because decoding an
+     * album at cook time fills the cooked tree for no gain.
+     */
+    struct SoundImport {
+        /**
+         * @brief Keep the encoded bytes and decode while playing.
+         *
+         * The cooker guesses this once, when it writes a new sidecar, and then
+         * honors what the file says. The guess is that anything which is not a
+         * WAV is streamed, because the cook-time decoder reads WAV alone. So a
+         * short effect in another format is one edit away from being a short
+         * effect, rather than a cook that fails.
+         */
+        bool stream = false;
+    };
+
+    /**
      * @brief What the engine keeps about a source asset, next to the file.
      */
     struct AssetMeta {
@@ -205,6 +226,7 @@ namespace engine::assets {
         ShaderImport shader;           ///< Read by the shader rule. Ignored by every other rule.
         EnvironmentImport environment; ///< Read by the environment rule. Ignored by the rest.
         BrdfImport brdf;               ///< Read by the BRDF rule. Ignored by every other rule.
+        SoundImport sound;             ///< Read by the sound rule. Ignored by every other rule.
     };
 
     /**
@@ -352,6 +374,23 @@ struct engine::reflect::Describe<engine::assets::BrdfImport> {
     }
 };
 
+/// @brief Field descriptors for the sound import settings.
+template <>
+struct engine::reflect::Describe<engine::assets::SoundImport> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "SoundImport";
+
+    /// @brief The fields, in the order a document holds them.
+    /// @return The field descriptors.
+    static constexpr auto fields() {
+        return std::make_tuple(ENGINE_FIELD(
+            engine::assets::SoundImport, stream,
+            engine::reflect::Tooltip{ "Keep the encoded bytes and decode while playing. Off "
+                                      "decodes at cook time, which is what a short effect "
+                                      "wants." }));
+    }
+};
+
 /// @brief Field descriptors for the sidecar, so reflect/ reads and writes it.
 template <>
 struct engine::reflect::Describe<engine::assets::AssetMeta> {
@@ -380,6 +419,10 @@ struct engine::reflect::Describe<engine::assets::AssetMeta> {
             // Version 5, so every sidecar written before the BRDF rule reads
             // back with no warning about a field it cannot have.
             ENGINE_FIELD(engine::assets::AssetMeta, brdf, engine::reflect::Version{ 5 },
-                         engine::reflect::Tooltip{ "Read by the BRDF rule alone." }));
+                         engine::reflect::Tooltip{ "Read by the BRDF rule alone." }),
+            // Version 6, so every sidecar written before the sound rule reads
+            // back with no warning about a field it cannot have.
+            ENGINE_FIELD(engine::assets::AssetMeta, sound, engine::reflect::Version{ 6 },
+                         engine::reflect::Tooltip{ "Read by the sound rule alone." }));
     }
 };

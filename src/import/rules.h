@@ -13,6 +13,7 @@
  */
 
 #include "assets/asset_source.h"
+#include "assets/meta.h"
 #include "core/guid.h"
 
 #include <cstdint>
@@ -30,6 +31,7 @@ namespace engine::import {
         Environment, ///< An HDR panorama through stb, out as a half float cubemap.
         Brdf,        ///< The split sum BRDF table, integrated from its sidecar alone.
         Mesh,        ///< glTF through cgltf, out as one cooked mesh for each mesh.
+        Sound,       ///< A sound file, decoded to PCM or kept encoded to stream.
         Document,    ///< A scene or a prefab, with its asset references resolved.
         Script,      ///< Lua source text, copied. See src/assets/script.h.
         Font,        ///< A TrueType face, copied. src/ui/font.h opens it by name.
@@ -54,6 +56,25 @@ namespace engine::import {
      * @return The rule, or nothing.
      */
     [[nodiscard]] std::optional<Rule> rule_for(const std::filesystem::path& source);
+
+    /**
+     * @brief Reads the sidecar of a source asset, with the guess its rule makes.
+     *
+     * Two rules fill in a field when they write a new sidecar. The texture rule
+     * guesses a color space from the file name, and the sound rule guesses
+     * whether a file streams. Both guesses are written once, into a sidecar
+     * that was not there, and the file decides from then on.
+     *
+     * **Every caller that may write a sidecar goes through this.** The cooker
+     * and the editor both index a tree, and a guess made in one and not in the
+     * other is a difference nothing reports: the file on disk is written by
+     * whichever arrived first, and it is wrong forever after.
+     *
+     * @param source The source asset path. The file must exist.
+     * @param out The metadata to fill.
+     * @return True when @p out holds a valid GUID.
+     */
+    [[nodiscard]] bool asset_meta(const std::filesystem::path& source, assets::AssetMeta& out);
 
     /**
      * @brief The name a rule adds to the source name, or nothing for a copy.

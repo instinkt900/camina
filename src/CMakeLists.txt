@@ -14,6 +14,7 @@ add_library(engine_core STATIC
     assets/reference.cpp
     assets/mesh.cpp
     assets/shader.cpp
+    assets/sound.cpp
     assets/texture.cpp
     platform/window.cpp
     platform/input.cpp
