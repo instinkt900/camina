@@ -19,6 +19,16 @@ namespace engine::editor {
         if (desc.bind_actions != nullptr) {
             desc.bind_actions(session_->input());
         }
+
+        // The sound, for as long as the session lasts. In Edit state nothing is
+        // wired, so an authored scene is silent and a person hears only what
+        // they pressed Play to hear.
+        script_audio_ = desc.script_audio;
+        session_->set_script_audio(script_audio_);
+#if defined(ENGINE_WITH_AUDIO)
+        scene_audio_ = desc.scene_audio;
+        session_->set_audio(scene_audio_);
+#endif
         if (desc.content != nullptr) {
             session_->load_scripts(*desc.content);
         }
@@ -31,6 +41,16 @@ namespace engine::editor {
         state_ = PlayState::Playing;
         ENGINE_LOG_INFO("Play started on {} entities.", world.size());
         return true;
+    }
+
+    void PlayMode::silence() {
+#if defined(ENGINE_WITH_AUDIO)
+        if (scene_audio_ != nullptr) {
+            scene_audio_->stop_all();
+        }
+        scene_audio_ = nullptr;
+#endif
+        script_audio_ = nullptr;
     }
 
     void PlayMode::pause() {
@@ -52,8 +72,16 @@ namespace engine::editor {
 
         // While the simulation is still up, so a teardown that pushes a body or
         // reads a velocity reaches a live one rather than nothing.
+        //
+        // This is also where a script's own voices stop: the host stops what
+        // each instance started as it destroys that instance.
         session_->stop_scripts(world);
         session_.reset();
+
+        // And everything a scene started. A component is not a script, so
+        // nothing above has touched those voices, and a looping one would play
+        // on over an editor that is back in Edit state.
+        silence();
 
         // Every entity goes, and the session that held poses and bodies for
         // them has already gone. EnTT hands the same numbers out again, so

@@ -1580,6 +1580,17 @@ namespace engine::script {
             if (registry.valid(entity)) {
                 impl_->call(instance, entity, Callback::Destroy, instance.on_destroy);
             }
+
+            // The same rule sync() follows when it drops one instance: a voice
+            // belongs to the script that started it, so it goes when the script
+            // does. Without this a session that ends leaves a looping sound
+            // playing with nothing left that holds its number.
+            //
+            // After on_destroy, so a script that wanted to stop its own sounds
+            // has had its turn.
+            if (services.audio != nullptr) {
+                services.audio->stop_owned_by(entity);
+            }
         }
         impl_->instances.clear();
         impl_->stopped = 0;

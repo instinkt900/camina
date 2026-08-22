@@ -14,6 +14,13 @@
 #include "editor/edits.h"
 #include "editor/history.h"
 #include "editor/interaction.h"
+#if defined(ENGINE_WITH_AUDIO)
+#include "assets/script.h"
+#include "assets/sound.h"
+#include "audio/mixer.h"
+#include "audio/scene_audio.h"
+#include "audio/script_audio.h"
+#endif
 #include "editor/play_mode.h"
 #include "play/session.h"
 #include "editor/panels.h"
@@ -1057,6 +1064,134 @@ void test_a_game_that_quits_stops_play() {
 }
 #endif
 
+#if defined(ENGINE_WITH_AUDIO)
+
+/// A cooked PCM sound, built by hand. This needs no cooker and no WAV.
+std::vector<std::byte> cooked_tone() {
+    engine::assets::SoundHeader header;
+    header.storage = static_cast<std::uint32_t>(engine::assets::SoundStorage::Pcm);
+    header.channels = 2;
+    header.sample_rate = 48000;
+    header.frame_count = 48000;
+    const std::size_t samples = static_cast<std::size_t>(header.frame_count) *
+                                header.channels;
+    header.payload_size = static_cast<std::uint32_t>(samples * sizeof(float));
+
+    std::vector<std::byte> out(sizeof(header) + header.payload_size);
+    std::memcpy(out.data(), &header, sizeof(header));
+    const std::vector<float> values(samples, 0.25F);
+    std::memcpy(out.data() + sizeof(header), values.data(), header.payload_size);
+    return out;
+}
+
+/// A project holding one sound and one script that plays it forever.
+class NoisyProject final : public engine::assets::AssetSource {
+public:
+    [[nodiscard]] bool assets_for(std::string_view /*source*/,
+                                  std::vector<engine::assets::AssetRecord>& /*out*/) const override {
+        return false;
+    }
+
+    [[nodiscard]] bool assets_of_kind(
+        std::string_view suffix,
+        std::vector<engine::assets::AssetRecord>& out) const override {
+        out.clear();
+        if (suffix == engine::assets::kSoundExtension) {
+            out.push_back(engine::assets::AssetRecord{ .guid = kSound,
+                                                       .source = "sounds/hum.wav",
+                                                       .name = "sounds/hum.wav.snd" });
+        }
+        if (suffix == engine::assets::kScriptExtension) {
+            out.push_back(engine::assets::AssetRecord{ .guid = kScript,
+                                                       .source = "scripts/noisy.lua",
+                                                       .name = "scripts/noisy.lua" });
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool read(engine::Guid guid, std::vector<std::byte>& out) const override {
+        if (guid == kSound) {
+            out = cooked_tone();
+            return true;
+        }
+        if (guid == kScript) {
+            static constexpr std::string_view kText = R"(
+                    function on_start()
+                        audio.play("sounds/hum.wav", { looping = true })
+                    end
+                )";
+            out.assign(reinterpret_cast<const std::byte*>(kText.data()),                 // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+                       reinterpret_cast<const std::byte*>(kText.data()) + kText.size()); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+            return true;
+        }
+        return false;
+    }
+
+    static constexpr engine::Guid kSound{ 42, 1 };
+    static constexpr engine::Guid kScript{ 42, 2 };
+};
+
+/**
+ * A stopped session is silent, looping sounds included.
+ *
+ * This is the trap issue #427 named. A session plays what a scene and its
+ * scripts ask for, and a person who presses Stop expects the room to go
+ * quiet. A looping voice left behind would have nothing holding its number,
+ * so nothing could ever stop it: only closing the editor would.
+ *
+ * Both kinds of voice are here, because they are stopped by different
+ * paths. The script's voice goes when the host destroys its instance, and
+ * the component's goes because PlayMode silences the scene.
+ */
+void test_a_stopped_session_is_silent() {
+    section("a stopped session is silent");
+
+    NoisyProject project;
+    engine::audio::Mixer mixer;
+    check(mixer.create(2, 48000), "the mixer builds");
+
+    engine::audio::SceneAudio scene_audio;
+    scene_audio.bind(mixer, project);
+    engine::audio::ScriptAudio script_audio;
+    script_audio.bind(mixer, project);
+
+    engine::scene::World world;
+
+    // One entity plays through a component, and one through a script.
+    const entt::entity speaker = world.create();
+    world.registry().emplace<engine::scene::AudioSource>(
+        speaker, engine::scene::AudioSource{ .sound = NoisyProject::kSound,
+                                             .looping = true,
+                                             .play_on_start = true });
+    const entt::entity noisy = world.create();
+    world.registry().emplace<engine::script::ScriptComponent>(
+        noisy, engine::script::ScriptComponent{ NoisyProject::kScript });
+    world.update();
+
+    engine::editor::PlayMode play;
+    const engine::editor::PlayDesc desc{ .content = &project,
+                                         .bind_actions = nullptr,
+                                         .script_audio = &script_audio,
+                                         .scene_audio = &scene_audio };
+    check(play.play(world, desc), "the session starts");
+
+    run(play, world, 4);
+    check(scene_audio.playing() == 1, "the scene is playing its sound");
+    check(script_audio.voices() == 1, "and the script is playing one of its own");
+    check(mixer.voices() == 2, "so the mixer holds two voices");
+
+    play.stop(world);
+    check(scene_audio.playing() == 0, "stopping the session stopped the scene's voice");
+    check(script_audio.voices() == 0, "and the script's voice with it");
+    check(mixer.voices() == 0, "and the mixer holds none at all");
+
+    // Nothing starts again on its own once the session is over. The world
+    // is the authored one now, and nothing is stepping it.
+    check(!play.running(), "the session is over");
+}
+
+#endif
+
 int main() {
     register_everything();
 
@@ -1078,6 +1213,9 @@ int main() {
     test_placing_a_root_entity();
 
     test_a_dragged_entity_survives_the_scene_file();
+#if defined(ENGINE_WITH_AUDIO)
+    test_a_stopped_session_is_silent();
+#endif
     test_stop_restores_the_authored_world();
     test_a_second_session_starts_from_the_same_place();
     test_pause_holds_the_step();
