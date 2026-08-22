@@ -113,7 +113,10 @@ namespace {
                            const std::vector<std::byte>& wav, bool stream) {
         im::MemoryWriter writer;
         const as::SoundImport settings{ .stream = stream };
-        if (!im::cook_sound_bytes(wav, writer, "sound.snd", settings, "sound")) {
+        // A rule stages rather than publishes since #104, so this commits
+        // before it reads what was written.
+        if (!im::cook_sound_bytes(wav, writer, "sound.snd", settings, "sound") ||
+            !writer.commit()) {
             return {};
         }
         const engine::Guid guid{ .high = id, .low = id };

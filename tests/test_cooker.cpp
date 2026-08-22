@@ -21,6 +21,7 @@
 #include "import/cook.h"
 #include "import/document.h"
 #include "import/source_assets.h"
+#include "import/writer.h"
 #include "core/guid.h"
 #include "platform/paths.h"
 #include "reflect/attributes.h"
@@ -410,6 +411,205 @@ namespace {
      * appeared. A cook that ignored the defines would write two identical
      * modules and pass a weaker test.
      */
+
+    // Issue #104. A rule that writes several outputs used to write each one to
+    // its final path as it went, so a failure part way left the ones before it
+    // behind. The manifest carried the previous entry forward, hash and all, so
+    // the tree held part 0 from the new source and part 1 from the old one and
+    // said both came from the old cook. A hot reload is what reached it: the
+    // cooker runs on a save and the runtime reads the tree straight after.
+    //
+    // Every rule stages through the writer now, so these two cases check the
+    // one mechanism through two rules rather than checking two mechanisms.
+
+    /// The bytes of a triangle: 3 vertices of position, normal and texcoord.
+    /// @p size scales it, so two calls give two different cooked meshes.
+    void write_triangle_buffer(const std::filesystem::path& path, float size) {
+        const std::array<float, 24> vertices{
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            0.0F,
+            0.0F, //
+            size,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            1.0F,
+            0.0F, //
+            0.0F,
+            size,
+            0.0F,
+            0.0F,
+            0.0F,
+            1.0F,
+            0.0F,
+            1.0F,
+        };
+        const std::array<std::uint16_t, 4> indices{ 0, 1, 2, 0 };
+
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(vertices.data()),
+                   static_cast<std::streamsize>(vertices.size() * sizeof(float)));
+        file.write(reinterpret_cast<const char*>(indices.data()),
+                   static_cast<std::streamsize>(indices.size() * sizeof(std::uint16_t)));
+    }
+
+    /// A glTF of two meshes. The second holds no primitives when @p broken,
+    /// which is the failure `cook_mesh` reports after the first is written.
+    [[nodiscard]] std::string two_mesh_gltf(bool broken) {
+        const std::string second = broken ? R"({"primitives": []})"
+                                          : R"({"primitives": [{"attributes":
+            {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}, "indices": 3}]})";
+        return R"({
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0, 1]}],
+  "nodes": [{"mesh": 0}, {"mesh": 1}],
+  "meshes": [
+    {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}, "indices": 3}]},
+    )" + second +
+               R"(
+  ],
+  "accessors": [
+    {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+     "min": [0, 0, 0], "max": [1, 1, 0]},
+    {"bufferView": 0, "byteOffset": 12, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 0, "byteOffset": 24, "componentType": 5126, "count": 3, "type": "VEC2"},
+    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 96, "byteStride": 32},
+    {"buffer": 0, "byteOffset": 96, "byteLength": 6}
+  ],
+  "buffers": [{"byteLength": 104, "uri": "two.bin"}]
+})";
+    }
+
+    void test_a_failed_gltf_leaves_the_earlier_mesh_alone() {
+        const std::filesystem::path source = scratch("partial_gltf/src");
+        const std::filesystem::path out = scratch("partial_gltf/out");
+        write_triangle_buffer(source / "two.bin", 1.0F);
+        write_file(source / "two.gltf", two_mesh_gltf(false));
+
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "a glTF of two meshes cooks");
+
+        const std::filesystem::path part0 = out / "two.gltf.0.mesh";
+        const std::string before = read_file(part0);
+        check(!before.empty(), "the first mesh was written");
+
+        // The second mesh broken, and the geometry resized so that a cook which
+        // published part 0 would write different bytes for it.
+        //
+        // **The buffer has to change, not the node.** A first version of this
+        // test moved the second node instead, and a node translation goes into
+        // the prefab rather than into a mesh. Part 0 came out identical either
+        // way and the check below passed with the bug still in place. The
+        // mutation is what found that, not review.
+        write_triangle_buffer(source / "two.bin", 4.0F);
+        write_file(source / "two.gltf", two_mesh_gltf(true));
+
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second), "a broken second mesh fails the cook");
+        check(read_file(part0) == before,
+              "and the first mesh on disk still holds the bytes from before");
+    }
+
+    void test_a_failed_shader_variant_leaves_the_base_form_alone() {
+        const std::filesystem::path source = scratch("partial_shader/src");
+        const std::filesystem::path out = scratch("partial_shader/out");
+
+        const auto shader = [](std::string_view body, bool broken) {
+            return std::string{ R"(#version 450
+layout(location = 0) out vec4 out_color;
+void main() {
+    out_color = )" } +
+                   std::string{ body } + R"(;
+#ifdef SECOND
+    )" + (broken ? "this is not glsl" : "out_color *= 0.5") +
+                   R"(;
+#endif
+}
+)";
+        };
+
+        write_file(source / "pair.frag", shader("vec4(1.0)", false));
+        write_file(source / "pair.frag.meta", R"({
+  "__version": 3,
+  "guid": "5c2d4e77-1f3a-4b90-8d61-0e7a2c9b4d10",
+  "shader": {
+    "__version": 1,
+    "variants": [
+      { "name": "base", "defines": [] },
+      { "name": "second", "defines": ["SECOND"] }
+    ]
+  }
+})");
+
+        engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "a shader with two variants cooks");
+
+        const std::filesystem::path base = out / shader_part("pair.frag", 0);
+        const std::string before = read_file(base);
+        check(!before.empty(), "the base form was written");
+
+        // The base form still compiles and now says something different, so a
+        // cook that published it would change these bytes. The second variant
+        // does not compile at all.
+        write_file(source / "pair.frag", shader("vec4(0.25)", true));
+
+        engine::import::Result second;
+        check(!engine::import::cook_all(options, second),
+              "a variant that will not compile fails the cook");
+        check(read_file(base) == before,
+              "and the base form on disk still holds the bytes from before");
+    }
+
+    void test_a_discarded_write_leaves_the_file_it_would_have_replaced() {
+        const std::filesystem::path out = scratch("staging");
+        write_file(out / "kept.bin", "the bytes that were already there");
+
+        const auto bytes = [](std::string_view text) {
+            return std::as_bytes(std::span{ text.data(), text.size() });
+        };
+
+        engine::import::FileWriter writer(out);
+        check(writer.write("kept.bin", bytes("replaced")), "a write is taken");
+        check(writer.write("fresh.bin", bytes("new")), "and so is a second one");
+        check(read_file(out / "kept.bin") == "the bytes that were already there",
+              "neither one is visible before the commit");
+        check(!std::filesystem::exists(out / "fresh.bin"), "and a new path does not appear");
+
+        writer.discard();
+        check(read_file(out / "kept.bin") == "the bytes that were already there",
+              "a discard leaves the file that was there");
+        check(!std::filesystem::exists(out / "fresh.bin"), "and writes no new one");
+
+        check(writer.write("kept.bin", bytes("replaced")), "the same pair is written again");
+        check(writer.write("fresh.bin", bytes("new")), "both of them");
+        check(writer.commit(), "and the commit reports success");
+        check(read_file(out / "kept.bin") == "replaced", "the commit replaced the old file");
+        check(read_file(out / "fresh.bin") == "new", "and wrote the new one");
+
+        // Nothing staged is left behind under a name a reader could open.
+        bool leftover = false;
+        for (const auto& entry : std::filesystem::directory_iterator(out)) {
+            if (entry.path().filename().string().find(".cooking") != std::string::npos) {
+                leftover = true;
+            }
+        }
+        check(!leftover, "and left no staging file behind");
+    }
+
     void test_a_shader_cooks_once_for_each_variant() {
         const std::filesystem::path source = scratch("variants/src");
         const std::filesystem::path out = scratch("variants/out");
@@ -3565,6 +3765,10 @@ int main() {
     test::section("hashing");
     test_hash_is_content_not_time();
     test_input_order_matters();
+    test::section("a cook that fails leaves the tree as it was");
+    test_a_discarded_write_leaves_the_file_it_would_have_replaced();
+    test_a_failed_gltf_leaves_the_earlier_mesh_alone();
+    test_a_failed_shader_variant_leaves_the_base_form_alone();
     test::section("cooking");
     test_cook_and_skip();
     test_a_script_cooks_as_source_text();

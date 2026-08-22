@@ -460,6 +460,14 @@ namespace engine::import {
             }
             const Rule rule = *found;
 
+            // Nothing this rule writes reaches the cooked tree until the commit
+            // at the end. Every failure below returns through this guard, which
+            // takes the staged outputs away again. Issue #104: a rule that
+            // wrote two of three outputs used to leave the two behind, and the
+            // manifest carried the previous entry forward, so the tree held
+            // parts of one asset from two versions of its source.
+            StagedWrites staged(writer);
+
             // asset_meta() reads the sidecar and makes whatever guess the
             // rule makes when it has to write one. The editor's index calls the
             // same function, so a sidecar says the same thing whichever side
@@ -476,6 +484,7 @@ namespace engine::import {
             const as::ManifestEntry* old = as::find_by_source(previous, entry.source);
             if (can_skip(options, relative, rule, entry, old, same_cooker)) {
                 entry = *old;
+                // Nothing was written, so the guard has nothing to take away.
                 return Outcome::Skipped;
             }
 
@@ -485,6 +494,15 @@ namespace engine::import {
 
             if (!as::hash_inputs(options.content, entry.inputs, entry.hash)) {
                 ENGINE_LOG_ERROR("{}: cooked, but an input would not read back.",
+                                 source.string());
+                return Outcome::Failed;
+            }
+
+            // Last, after every step that can still fail. This is the one that
+            // makes the outputs visible, and the hash above is the step that
+            // used to run with them already on disk.
+            if (!staged.commit()) {
+                ENGINE_LOG_ERROR("{}: cooked, but the outputs could not be published.",
                                  source.string());
                 return Outcome::Failed;
             }
@@ -517,7 +535,13 @@ namespace engine::import {
         const Options options{
             .content = content_root, .out = {}, .force = false, .components = &types
         };
-        return cook_one(options, writer, *found, relative, meta, outputs);
+        // The same all-or-nothing rule the cooker gets. An import that fails
+        // part way leaves the editor holding no half of an asset.
+        StagedWrites staged(writer);
+        if (!cook_one(options, writer, *found, relative, meta, outputs)) {
+            return false;
+        }
+        return staged.commit();
     }
 
     /// Removes cooked files that nothing in the manifest names.
