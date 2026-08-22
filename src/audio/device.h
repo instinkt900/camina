@@ -64,6 +64,37 @@ namespace engine::audio {
     };
 
     /**
+     * @brief Whatever fills the device's buffer.
+     *
+     * The device owns a thread and a connection to the machine. It does not
+     * know what a sound is. Something above it implements this, and
+     * `audio::Mixer` is the one thing that does today.
+     *
+     * @warning Every call happens on the device thread, and the thread waits
+     *          for it. Do not read a file, take a lock a game thread holds, or
+     *          allocate here. A callback that runs long is heard as a gap.
+     */
+    class IAudioSource {
+    public:
+        IAudioSource() = default;
+        virtual ~IAudioSource() = default;
+
+        IAudioSource(const IAudioSource&) = delete;
+        IAudioSource& operator=(const IAudioSource&) = delete;
+        IAudioSource(IAudioSource&&) = delete;
+        IAudioSource& operator=(IAudioSource&&) = delete;
+
+        /**
+         * @brief Fills a buffer with the next frames.
+         *
+         * @param output Interleaved float samples to write. It holds
+         *        @p frames times the device's channel count.
+         * @param frames How many frames to write.
+         */
+        virtual void mix(float* output, std::uint32_t frames) = 0;
+    };
+
+    /**
      * @brief One output device and the mixer thread behind it.
      *
      * The device is running when create_device() returns it. Destroying it
@@ -126,6 +157,19 @@ namespace engine::audio {
          * value until start() runs again.
          */
         virtual void stop() = 0;
+
+        /**
+         * @brief Says what fills the buffer. Null goes back to silence.
+         *
+         * The device stops while the source changes and starts again
+         * afterwards, so the callback is never part way through a source that
+         * is going away. That is what makes it safe to destroy a mixer while
+         * the device is open.
+         *
+         * @param source What to pull frames from. It must outlive the device,
+         *        or be taken off with null before it goes.
+         */
+        virtual void set_source(IAudioSource* source) = 0;
     };
 
     /**
