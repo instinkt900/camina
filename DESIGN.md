@@ -925,7 +925,8 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   `ImageFactory` frees it, `UiPass` forgets its descriptor sets, the node tree asks the
   factory again, and the probe asks again. A set naming a freed texture is undefined rather
   than an error, and `moth_ui::NodeImage` keeps the image it was handed with the handle
-  inside it.
+  inside it. **#439 took the probe away, so three hold it now**, and the lesson is kept here
+  because the count is the part that was wrong rather than the ordering.
 
   **The fourth holder was found by comparing pictures, not by a crash.** A run that swapped
   the image part way through drew a different frame from a run that started with it, and the

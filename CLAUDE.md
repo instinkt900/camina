@@ -317,11 +317,15 @@ closed that gap.** `ctest -L gpu` opens a device, drives the editor and the runt
 and fails when a frame collapses to one colour. It skips itself where no device opens, so a
 plain `ctest` run includes it, and CI leaves it out with `-LE gpu`.
 
-**The editor capture is the sharp half**, because it carries no game UI and no ImGui overlay,
-so every pixel came from the scene. Reintroducing #188 takes that frame to one colour. The
-same mutation leaves the runtime capture at 4676 colours and passing, because the M6.2 UI probe
-draws over the tonemapped image. #200 takes that probe away and the runtime half sharpens with
-it.
+**Both captures are sharp since #439**, and only one of them was at first. Reintroducing #188
+takes each frame to one colour. Until #439 the same mutation left the runtime capture at 4676
+colours and passing, because the M6.2 UI probe drew over the tonemapped image and survived a
+frame that rendered nothing.
+
+**The editor capture is still the one to trust.** It carries no game UI and no ImGui overlay by
+construction, so every pixel came from the scene whatever the project holds. The runtime capture
+is sharp only because `tests/content` names no layout. A game that draws a UI would blunt it
+again, and that is why the editor half exists rather than the runtime half standing alone.
 
 `tests/content/` is the scene, and each word of "opaque, single sided, no environment" is
 load-bearing. The sandbox cannot be it, for the reason above. An environment cannot be in it
