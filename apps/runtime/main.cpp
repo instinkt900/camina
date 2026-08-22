@@ -36,9 +36,7 @@
 #include "render/debug_line_pass.h"
 #include "scene/camera.h"
 #include "scene/component_registry.h"
-#if defined(ENGINE_WITH_LUA)
 #include "script/components.h"
-#endif
 #include "scene/components.h"
 #include "scene/prefab.h"
 #include "scene/world.h"
@@ -2096,9 +2094,7 @@ int main(int argc, char** argv) {
     // Physics registers its own, so scene/ needs no physics header.
     engine::scene::register_builtin_components();
     engine::physics::register_components();
-#if defined(ENGINE_WITH_LUA)
     engine::script::register_components();
-#endif
     sandbox::register_components();
 
     const std::filesystem::path content = options.content.empty()

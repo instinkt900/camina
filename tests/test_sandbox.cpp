@@ -22,11 +22,13 @@
 #include "scene/references.h"
 #include "scene/scene_file.h"
 #include "scene/world.h"
+// Outside the guard below. The component is registered in every build since
+// #288, because a scene that names a script has to open with no interpreter.
+#include "script/components.h"
 
 #if defined(ENGINE_WITH_LUA)
 #include "platform/input.h"
 #include "scene/step_motion.h"
-#include "script/components.h"
 #include "script/host.h"
 
 #if defined(ENGINE_WITH_AUDIO)
@@ -64,9 +66,7 @@ namespace {
         sc::ComponentRegistry registry;
         sc::register_builtin_components(registry);
         engine::physics::register_components(registry);
-#if defined(ENGINE_WITH_LUA)
         engine::script::register_components(registry);
-#endif
         sandbox::register_components(registry);
         return registry;
     }
@@ -109,16 +109,14 @@ namespace {
 
         // The engine never names a game type. The game joins the same registry,
         // and so do physics and script. Seven built in, three physics, the
-        // game's own Spin and Goal, and the one ScriptComponent when Lua is in.
+        // game's own Spin and Goal, and the one ScriptComponent.
         const sc::ComponentRegistry full = make_registry();
-        // The two audio components joined at M11.4. They are registered in
-        // every build, audio or not, because a scene that carries one has to
-        // open either way. See scene/components.h.
-#if defined(ENGINE_WITH_LUA)
+        // The two audio components joined at M11.4, and ScriptComponent is the
+        // same case since #288. Each is registered in every build, whatever the
+        // option, because a scene that carries one has to open either way. An
+        // option decides what runs, never what a document may hold. See
+        // scene/components.h and script/components.h.
         constexpr std::size_t kExpected = 15;
-#else
-        constexpr std::size_t kExpected = 14;
-#endif
         check(full.size() == kExpected, "every subsystem and the game share one registry");
     }
 
