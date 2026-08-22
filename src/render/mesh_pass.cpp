@@ -1391,8 +1391,12 @@ namespace engine::render {
             // This runs before the opaque and blended split, so both kinds get
             // it. The sphere is conservative, so a mesh it keeps may still be
             // wholly outside. That costs a draw call and never a hole.
-            const Sphere bounds = world_sphere_from_bounds(transform.matrix, mesh->min, mesh->max);
-            if (!frustum_contains_sphere(frustum_, bounds.center, bounds.radius)) {
+            // The box rather than the sphere, for the reason ShadowPass::draw
+            // gives. A light keeps its sphere test above, because a point light
+            // range really is a sphere and there is nothing tighter to use.
+            const Obb bounds = world_box_from_bounds(transform.matrix, mesh->min, mesh->max);
+            if (!frustum_contains_box(frustum_, bounds.center, bounds.axis_x, bounds.axis_y,
+                                      bounds.axis_z)) {
                 ++culled_meshes_;
                 continue;
             }

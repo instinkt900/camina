@@ -33,6 +33,52 @@ namespace engine {
     };
 
     /**
+     * @brief A box in world space, as a center and three half axes.
+     *
+     * The axes carry both direction and length, so a rotated or scaled entity
+     * needs no separate rotation. The box is the set of points
+     * `center + a*axis_x + b*axis_y + c*axis_z` for each of a, b and c in
+     * [-1, 1].
+     *
+     * This is the tight bound. Sphere is the loose one, and it is still the
+     * right answer where a test runs often and the meshes are small. See
+     * ::frustum_contains_box for when the difference is worth paying for.
+     */
+    struct Obb {
+        Vec3 center{ 0.0F, 0.0F, 0.0F }; ///< Where it sits, in world space.
+        Vec3 axis_x{ 0.0F, 0.0F, 0.0F }; ///< Half extent along local X, in world space.
+        Vec3 axis_y{ 0.0F, 0.0F, 0.0F }; ///< Half extent along local Y, in world space.
+        Vec3 axis_z{ 0.0F, 0.0F, 0.0F }; ///< Half extent along local Z, in world space.
+    };
+
+    /**
+     * @brief The local box of a mesh put into world space, without growing it.
+     *
+     * The same inputs ::world_sphere_from_bounds takes, and the tight answer
+     * rather than the loose one. A long thin mesh gets a sphere far larger than
+     * itself, and that sphere keeps the mesh in every volume it comes near.
+     *
+     * @param world_from_local The transform of the entity, translation included.
+     * @param min The smallest corner of the box, in local space.
+     * @param max The largest corner of the box, in local space.
+     * @return The box, in the space @p world_from_local maps into.
+     */
+    [[nodiscard]] inline Obb world_box_from_bounds(const Mat4& world_from_local, const Vec3& min,
+                                                   const Vec3& max) {
+        const Vec3 local_center = (min + max) * 0.5F;
+        const Vec3 half_extent = (max - min) * 0.5F;
+        return Obb{
+            .center = Vec3{ world_from_local * Vec4{ local_center, 1.0F } },
+            // Each column of the linear part, scaled by the half extent along
+            // its own axis. That is the same decomposition the sphere above
+            // sums over, kept apart rather than folded into one length.
+            .axis_x = Vec3{ world_from_local[0] } * half_extent.x,
+            .axis_y = Vec3{ world_from_local[1] } * half_extent.y,
+            .axis_z = Vec3{ world_from_local[2] } * half_extent.z,
+        };
+    }
+
+    /**
      * @brief The smallest sphere around a local box put into world space.
      *
      * The box arrives as two opposite corners in the local space of a mesh. This

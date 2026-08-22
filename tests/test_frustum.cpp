@@ -6,6 +6,7 @@
 // failure points back here. See issue #62.
 
 #include "check.h"
+#include "math/bounds.h"
 #include "math/frustum.h"
 
 #include <cstdlib>
@@ -238,6 +239,151 @@ namespace {
               "the volume narrows with distance, so it is not orthographic");
     }
 
+    /**
+     * The whole reason the box test exists.
+     *
+     * A long thin slab, well off to one side of the light volume but reaching
+     * along it. The sphere around that slab is huge and overlaps the volume, so
+     * the sphere test keeps it. The box does not overlap, so the box test drops
+     * it. Measured on Intel Sponza, this is 493 thousand triangles a frame.
+     */
+    void a_long_box_beside_the_volume_is_dropped() {
+        const Frustum frustum = light_volume();
+        // Centered 6 meters to the right of a volume 2 meters wide, and 18
+        // meters long along Z.
+        const Vec3 center{ 6.0F, 0.0F, 0.0F };
+        const Vec3 axis_x{ 0.5F, 0.0F, 0.0F };
+        const Vec3 axis_y{ 0.0F, 0.5F, 0.0F };
+        const Vec3 axis_z{ 0.0F, 0.0F, 9.0F };
+
+        // The sphere around it reaches back past the volume, so the loose test
+        // cannot reject it. This check is what makes the next one mean
+        // something: without it a box test that dropped everything would pass.
+        const float radius = glm::length(axis_x + axis_y + axis_z);
+        check(frustum_contains_sphere(frustum, center, radius),
+              "the sphere around the slab overlaps the volume");
+        check(!frustum_contains_box(frustum, center, axis_x, axis_y, axis_z),
+              "the box beside the volume is dropped");
+    }
+
+    /// A box inside the volume is kept, which is the case that must never break.
+    void a_box_inside_the_volume_is_kept() {
+        const Frustum frustum = light_volume();
+        check(frustum_contains_box(frustum, Vec3{ 0.0F, 0.0F, 0.0F }, Vec3{ 0.5F, 0.0F, 0.0F },
+                                   Vec3{ 0.0F, 0.5F, 0.0F }, Vec3{ 0.0F, 0.0F, 0.5F }),
+              "a small box at the middle of the volume is kept");
+    }
+
+    /**
+     * A box that pokes in through one face is kept.
+     *
+     * The test is wrong in the cheap direction on purpose, the same way the
+     * sphere test is. Dropping this one would be the dangerous failure: the
+     * mesh is partly in view and the hole shows at the edge of the frame.
+     */
+    void a_box_that_straddles_a_plane_is_kept() {
+        const Frustum frustum = light_volume();
+        // Centered outside the 2 meter half width, reaching back inside it.
+        check(frustum_contains_box(frustum, Vec3{ 2.5F, 0.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F },
+                                   Vec3{ 0.0F, 0.5F, 0.0F }, Vec3{ 0.0F, 0.0F, 0.5F }),
+              "a box reaching in through the side is kept");
+    }
+
+    /**
+     * Rotation is carried by the axes rather than by a separate matrix.
+     *
+     * The same slab turned to lie along the volume instead of beside it has to
+     * come back inside. A test that read only the axis lengths, or that took
+     * the longest axis as a radius, would answer the same for both and this is
+     * what separates them.
+     */
+    void turning_a_box_changes_the_answer() {
+        const Frustum frustum = light_volume();
+        const Vec3 center{ 6.0F, 0.0F, 0.0F };
+        const Vec3 thin_x{ 0.5F, 0.0F, 0.0F };
+        const Vec3 thin_y{ 0.0F, 0.5F, 0.0F };
+        check(!frustum_contains_box(frustum, center, thin_x, thin_y, Vec3{ 0.0F, 0.0F, 9.0F }),
+              "the slab reaching along Z stays outside");
+        // The same box turned a quarter turn, so its long axis now points at
+        // the volume and reaches into it.
+        check(frustum_contains_box(frustum, center, Vec3{ 9.0F, 0.0F, 0.0F }, thin_y, thin_x),
+              "the slab turned to reach the volume is kept");
+    }
+
+    /**
+     * Each of the three axes has to reach on its own.
+     *
+     * Three boxes, each centered outside one face of the volume and reaching
+     * back in along a different axis. Dropping any one axis from the sum makes
+     * that box look thin and culls it, and the other two checks still pass.
+     * A first version of these tests summed the axes in a way that let the Z
+     * term go missing with nothing failing.
+     */
+    void every_axis_reaches_on_its_own() {
+        const Frustum frustum = light_volume();
+        const Vec3 none{ 0.0F, 0.0F, 0.0F };
+
+        // Past the right face, reaching back through it along X.
+        check(frustum_contains_box(frustum, Vec3{ 5.0F, 0.0F, 0.0F }, Vec3{ 4.0F, 0.0F, 0.0F },
+                                   none, none),
+              "the X axis reaches into the volume");
+        // Past the top face, reaching back down along Y.
+        check(frustum_contains_box(frustum, Vec3{ 0.0F, 5.0F, 0.0F }, none,
+                                   Vec3{ 0.0F, 4.0F, 0.0F }, none),
+              "the Y axis reaches into the volume");
+        // Past the far face, reaching back along Z. The volume looks down -Z
+        // from z = 10 and ends 20 meters along, so -14 is outside it.
+        check(frustum_contains_box(frustum, Vec3{ 0.0F, 0.0F, -14.0F }, none, none,
+                                   Vec3{ 0.0F, 0.0F, 6.0F }),
+              "the Z axis reaches into the volume");
+    }
+
+    /// A box with no extent is a point, and answers like one.
+    void a_degenerate_box_is_a_point() {
+        const Frustum frustum = light_volume();
+        const Vec3 none{ 0.0F, 0.0F, 0.0F };
+        check(frustum_contains_box(frustum, Vec3{ 0.0F, 0.0F, 0.0F }, none, none, none),
+              "a point inside the volume is kept");
+        check(!frustum_contains_box(frustum, Vec3{ 9.0F, 0.0F, 0.0F }, none, none, none),
+              "a point outside the volume is dropped");
+    }
+
+    /**
+     * The world box and the world sphere agree about where the mesh is.
+     *
+     * They are two bounds on one box, so the sphere has to hold every corner
+     * the box describes. A sign error in either one shows up as a corner
+     * outside the sphere.
+     */
+    void the_world_box_sits_inside_the_world_sphere() {
+        const Mat4 world = glm::translate(Mat4{ 1.0F }, Vec3{ 3.0F, -2.0F, 1.0F }) *
+                           glm::rotate(Mat4{ 1.0F }, 0.7F, Vec3{ 0.3F, 1.0F, 0.2F }) *
+                           glm::scale(Mat4{ 1.0F }, Vec3{ 2.0F, 0.5F, 3.0F });
+        const Vec3 min{ -1.0F, -2.0F, -0.5F };
+        const Vec3 max{ 4.0F, 1.0F, 2.5F };
+
+        const engine::Obb box = engine::world_box_from_bounds(world, min, max);
+        const engine::Sphere sphere = engine::world_sphere_from_bounds(world, min, max);
+
+        check(glm::length(box.center - sphere.center) < 1e-4F,
+              "the box and the sphere share a center");
+
+        bool every_corner_inside = true;
+        for (int corner = 0; corner < 8; ++corner) {
+            const float sx = (corner & 1) != 0 ? 1.0F : -1.0F;
+            const float sy = (corner & 2) != 0 ? 1.0F : -1.0F;
+            const float sz = (corner & 4) != 0 ? 1.0F : -1.0F;
+            const Vec3 point =
+                box.center + (box.axis_x * sx) + (box.axis_y * sy) + (box.axis_z * sz);
+            // A small tolerance, because the sphere radius is the longest of
+            // four corner offsets and the compare is against that same length.
+            if (glm::length(point - sphere.center) > sphere.radius + 1e-3F) {
+                every_corner_inside = false;
+            }
+        }
+        check(every_corner_inside, "every corner of the box is inside the sphere");
+    }
+
 } // namespace
 
 int main() {
@@ -252,5 +398,12 @@ int main() {
     an_orthographic_volume_has_six_real_planes();
     an_orthographic_volume_culls_outside_itself();
     an_orthographic_volume_does_not_narrow();
+    a_long_box_beside_the_volume_is_dropped();
+    a_box_inside_the_volume_is_kept();
+    a_box_that_straddles_a_plane_is_kept();
+    turning_a_box_changes_the_answer();
+    every_axis_reaches_on_its_own();
+    a_degenerate_box_is_a_point();
+    the_world_box_sits_inside_the_world_sphere();
     return test::report();
 }

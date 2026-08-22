@@ -12,6 +12,7 @@
 #include "math/conventions.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 
 namespace engine {
@@ -140,6 +141,47 @@ namespace engine {
                                                       float radius) {
         for (const Plane& plane : frustum.planes) {
             if (plane.signed_distance(center) < -radius) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @brief Whether any part of an oriented box is inside the frustum.
+     *
+     * The tight companion to ::frustum_contains_sphere. The box arrives as a
+     * center and three half axes, which is what ::world_box_from_bounds
+     * returns, and the parameters are loose rather than a struct for the same
+     * reason the sphere test takes a center and a radius.
+     *
+     * For each plane it projects the box onto the plane normal. The projection
+     * reaches `|n.x| + |n.y| + |n.z|` from the center, summing the three axes,
+     * and the box is outside when the center sits further out than that. This
+     * is the same "wrong in the cheap direction" test the sphere gets: a box
+     * that straddles two planes without crossing the volume is kept.
+     *
+     * **Prefer the sphere unless the meshes are long.** This costs three dot
+     * products for each plane rather than one, and a sphere around a compact
+     * mesh is barely larger than the mesh. The difference is worth paying for
+     * when one entity spans a large part of the world, because then the sphere
+     * reaches into every volume nearby and rejects nothing.
+     *
+     * @param frustum The planes, from frustum_from_view_projection().
+     * @param center Where the box is, in the same space as the planes.
+     * @param axis_x The half extent along local X, as a world-space vector.
+     * @param axis_y The half extent along local Y, as a world-space vector.
+     * @param axis_z The half extent along local Z, as a world-space vector.
+     * @return False only when the box is wholly outside one plane.
+     */
+    [[nodiscard]] inline bool frustum_contains_box(const Frustum& frustum, const Vec3& center,
+                                                   const Vec3& axis_x, const Vec3& axis_y,
+                                                   const Vec3& axis_z) {
+        for (const Plane& plane : frustum.planes) {
+            const float reach = std::abs(glm::dot(plane.normal, axis_x)) +
+                                std::abs(glm::dot(plane.normal, axis_y)) +
+                                std::abs(glm::dot(plane.normal, axis_z));
+            if (plane.signed_distance(center) < -reach) {
                 return false;
             }
         }
