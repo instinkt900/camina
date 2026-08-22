@@ -231,7 +231,7 @@ namespace engine::script {
      * that is no longer true.
      */
     struct Calling {
-        Calling(struct ScriptContext& context, entt::entity entity);
+        Calling(struct ScriptContext& owner, entt::entity entity);
         ~Calling();
 
         Calling(const Calling&) = delete;
