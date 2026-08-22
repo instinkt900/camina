@@ -1,0 +1,24 @@
+#pragma once
+
+/**
+ * @file
+ * @brief What miniaudio is built with, for every file that includes it.
+ *
+ * The declarations and the implementation must agree about these macros, so
+ * both `audio/device.cpp` and `audio/miniaudio_impl.cpp` include this first. A
+ * macro set in one and not in the other changes what a struct looks like, and
+ * that failure links cleanly and goes wrong at run time.
+ *
+ * The decoders stay on. M11.2 streams a long track from its encoded bytes, and
+ * that path reads them through miniaudio.
+ *
+ * @warning This header is inside the containment line. Nothing outside
+ *          `src/audio/` may include it. See
+ *          `scripts/check-miniaudio-containment.sh`.
+ */
+
+/// @brief The engine writes no audio file. This takes the encoders out.
+#define MA_NO_ENCODING
+
+/// @brief Nothing synthesizes a waveform. `scripts/` generates the sandbox sounds.
+#define MA_NO_GENERATION

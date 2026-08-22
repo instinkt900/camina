@@ -316,6 +316,18 @@ else()
     message(STATUS "bash not found, skipping the containment tests")
 endif()
 
+# M11.1. The audio device. Every case runs on the silent device, so this needs
+# no sound card and opens none. It only builds when the option is on, because
+# with it off engine_core holds no device at all.
+if(ENGINE_WITH_AUDIO)
+    add_executable(test_audio test_audio.cpp)
+    target_link_libraries(test_audio PRIVATE engine::core)
+    engine_set_warnings(test_audio)
+    engine_enable_clang_tidy(test_audio)
+
+    add_test(NAME audio COMMAND test_audio)
+endif()
+
 # M6.2. The moth_ui batching recorder. It names no Vulkan type and opens no
 # device, so the state stack and the batching decision are testable directly.
 # Only built when the game UI is on, because the target it links does not exist

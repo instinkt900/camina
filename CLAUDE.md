@@ -1292,10 +1292,18 @@ here, consider whether moth_ui wants the same change.
   library needs. See `DESIGN.md` §5.
 - **Third-party sources we compile.** `SKIP_LINTING` is a source file property, not a
   target property. Setting it on a target does nothing and reports nothing.
-  `gfx/vulkan/vk_vma.cpp`, `src/import/stb_image_impl.cpp`, `bc7enc.cpp`, and every
-  Box3D source all carry it on the file, with `-w` alongside. A source file property
+  `gfx/vulkan/vk_vma.cpp`, `src/import/stb_image_impl.cpp`, `src/audio/miniaudio_impl.cpp`,
+  `bc7enc.cpp`, and every Box3D source all carry it on the file, with `-w` alongside. A source file property
   belongs to the directory that declared the file, so the Box3D sources need the
   `DIRECTORY` form of `set_source_files_properties`.
+- **miniaudio is contained inside `src/audio/`**, the way Vulkan is inside
+  `src/gfx/vulkan/` and Box3D is inside `src/physics/`.
+  `scripts/check-miniaudio-containment.sh` fails CI when a header escapes, and it
+  covers `audio/miniaudio_config.h` as well as `miniaudio.h`. That config header
+  carries the macros miniaudio is built with, and the declarations and the
+  implementation must agree about them. A macro set in one translation unit and not
+  in the other changes what a struct looks like, and that failure links cleanly and
+  goes wrong at run time.
 - **EnTT assertions.** `src/core/entt.h` points `ENTT_ASSERT` at `ENGINE_ASSERT`.
   Include it before any EnTT header. Every engine header that includes one does that
   already, and the file fails the build with a message when the order is wrong.
@@ -1496,9 +1504,10 @@ The Linux CI jobs cover both.
 Conan lives in a virtual environment at `~/.venv/conan`. Add `~/.venv/conan/bin` to
 PATH, or call the binary by its full path.
 
-Conan options: `with_editor`, `with_ui`, `with_lua`, `with_audio`. Every one defaults
-to False and turns on at its milestone. `with_ui` needs moth_ui in the local Conan
-cache, because it is not on Conan Center.
+Conan options: `with_editor`, `with_ui`, `with_lua`, `with_audio`. Each one starts off
+and its own milestone turns it on. `with_lua` and `with_audio` default to True today,
+because the sandbox game runs on a script and plays sound. `with_ui` needs moth_ui in
+the local Conan cache, because it is not on Conan Center.
 
 **Turning an option on does not reach a build directory that already exists.** Conan
 writes each option into the toolchain as a cache variable, and CMake keeps the value

@@ -78,6 +78,13 @@ if(ENGINE_WITH_LUA)
     find_package(sol2 REQUIRED)
 endif()
 
+# M11. Audio. Only src/audio/ links this, and only when the option is on.
+# miniaudio is one header with its own implementation, so it costs one
+# translation unit and no build of its own. See DESIGN.md section 10 M11.
+if(ENGINE_WITH_AUDIO)
+    find_package(miniaudio REQUIRED)
+endif()
+
 # The ImGui backends live in the Conan package, so this needs find_package(imgui)
 # above and no Conan install in the docs job.
 include(ImGuiBackends)

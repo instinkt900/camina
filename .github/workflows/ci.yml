@@ -66,6 +66,9 @@ jobs:
       - name: Check Box3D containment
         if: ${{ !cancelled() }}
         run: bash scripts/check-box3d-containment.sh .
+      - name: Check miniaudio containment
+        if: ${{ !cancelled() }}
+        run: bash scripts/check-miniaudio-containment.sh .
 
   # The engine targets Clang on Linux and MSVC on Windows. See DESIGN.md
   # section 2. Every step below runs under bash, including on Windows, so that

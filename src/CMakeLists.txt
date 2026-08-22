@@ -76,6 +76,26 @@ if(ENGINE_WITH_LUA)
     )
 endif()
 
+# M11. The audio device. These join engine_core the way the script host does,
+# because audio/device.h names no miniaudio type and so nothing leaks out.
+# miniaudio stays a PRIVATE link below for the same reason, and
+# scripts/check-miniaudio-containment.sh keeps it inside this directory.
+if(ENGINE_WITH_AUDIO)
+    target_sources(engine_core PRIVATE
+        audio/device.cpp
+        audio/miniaudio_impl.cpp
+    )
+
+    # miniaudio carries its own implementation, and exactly one translation unit
+    # asks for it. That unit holds nothing else, so the warning set and
+    # clang-tidy stay off it without covering any of our own code. This is the
+    # same treatment gfx/vulkan/vk_vma.cpp gets.
+    set_source_files_properties(audio/miniaudio_impl.cpp PROPERTIES
+        SKIP_LINTING ON
+        COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
+    )
+endif()
+
 # The shaders are cooked content now, not generated source. tools/cooker builds
 # them into ENGINE_COOKED_CONTENT_DIR, and render/cube_pass.cpp reads them from
 # there through assets::Content.
@@ -127,6 +147,16 @@ target_link_libraries(engine_core
 if(ENGINE_WITH_LUA)
     target_link_libraries(engine_core PRIVATE lua::lua sol2::sol2)
     target_compile_definitions(engine_core PUBLIC ENGINE_WITH_LUA)
+endif()
+
+# M11. miniaudio reaches audio/device.cpp and audio/miniaudio_impl.cpp and
+# nothing else. The header holds an interface with no miniaudio type in it, so
+# no consumer of engine::core sees one or needs its include directory.
+# ENGINE_WITH_AUDIO is PUBLIC, because an application has to know whether a
+# device can be created before it asks for one.
+if(ENGINE_WITH_AUDIO)
+    target_link_libraries(engine_core PRIVATE miniaudio::miniaudio)
+    target_compile_definitions(engine_core PUBLIC ENGINE_WITH_AUDIO)
 endif()
 
 # The math conventions in DESIGN.md section 3. These must reach every translation
