@@ -40,12 +40,12 @@ namespace {
             bytes_.emplace(guid, std::move(bytes));
         }
 
-        [[nodiscard]] bool assets_for(std::string_view, std::vector<as::AssetRecord>&) const override {
+        [[nodiscard]] bool assets_for(std::string_view /*source*/, std::vector<as::AssetRecord>& /*out*/) const override {
             return false;
         }
 
-        [[nodiscard]] bool assets_of_kind(std::string_view,
-                                          std::vector<as::AssetRecord>&) const override {
+        [[nodiscard]] bool assets_of_kind(std::string_view /*suffix*/,
+                                          std::vector<as::AssetRecord>& /*out*/) const override {
             return true;
         }
 

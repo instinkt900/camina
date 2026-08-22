@@ -141,13 +141,14 @@ namespace {
             : guid_(guid)
             , bytes_(std::move(bytes)) {}
 
-        [[nodiscard]] bool assets_for(std::string_view,
-                                      std::vector<engine::assets::AssetRecord>&) const override {
+        [[nodiscard]] bool assets_for(std::string_view /*source*/,
+                                      std::vector<engine::assets::AssetRecord>& /*out*/) const override {
             return false;
         }
 
         [[nodiscard]] bool assets_of_kind(
-            std::string_view, std::vector<engine::assets::AssetRecord>&) const override {
+            std::string_view /*suffix*/,
+            std::vector<engine::assets::AssetRecord>& /*out*/) const override {
             return true;
         }
 
