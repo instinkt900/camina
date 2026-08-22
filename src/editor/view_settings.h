@@ -15,6 +15,7 @@
  * and in the file.
  */
 
+#include "audio/mix_settings.h"
 #include "core/timestep.h"
 #include "math/conventions.h"
 #include "reflect/attributes.h"
@@ -79,6 +80,15 @@ namespace engine::editor {
          */
         bool physics_debug = false;
 
+        /**
+         * @brief What the volumes are set to.
+         *
+         * These are player settings rather than view settings, and they are
+         * here because this is the struct an application saves and shows. The
+         * physics rate is here for the same reason. See `DESIGN.md` §10 M11.
+         */
+        audio::MixSettings mix;
+
         std::uint64_t frames_drawn = 0; ///< Read only, and never saved.
     };
 
@@ -120,6 +130,10 @@ struct engine::reflect::Describe<engine::editor::ViewSettings> {
             // ReadOnly keeps the editor from changing it. Transient keeps it out
             // of the file. The two attributes are read by different consumers,
             // and neither consumer knows about the other.
+            // Version 2, so a view.json written before the buses reads back
+            // with no warning about a field it cannot have.
+            ENGINE_FIELD(ViewSettings, mix, Version{ 2 }, Category{ "Audio" },
+                         Tooltip{ "The volumes, and what a bus is muted" }),
             ENGINE_FIELD(ViewSettings, frames_drawn, ReadOnly{}, Transient{},
                          Category{ "Debug" }));
     }

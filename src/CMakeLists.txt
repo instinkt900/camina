@@ -16,6 +16,8 @@ add_library(engine_core STATIC
     assets/shader.cpp
     assets/sound.cpp
     audio/attenuation.cpp
+    audio/bus.cpp
+    audio/mix_settings.cpp
     assets/texture.cpp
     platform/window.cpp
     platform/input.cpp

@@ -687,6 +687,169 @@ namespace {
         test::check(mixer.voices() == 1, "with one voice, not two");
     }
 
+    // ---------------------------------------------------------------------
+    // M11.5. The buses.
+
+    void test_a_bus_is_built_only_when_it_is_used() {
+        test::section("A bus nothing plays on is not built at all");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 40, flat_wav(kMixerRate, 48000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        test::check(mixer.buses() == 0, "a new mixer has built no bus");
+
+        // The master is the output itself rather than a group in front of it,
+        // so playing on it builds nothing either.
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Master }) != 0,
+                    "a sound plays on the master");
+        test::check(mixer.buses() == 0, "and the master is still not a node");
+
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Music }) != 0,
+                    "a sound plays on the music bus");
+        test::check(mixer.buses() == 1, "which built that one bus");
+
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Music }) != 0,
+                    "a second sound plays on it");
+        test::check(mixer.buses() == 1, "and it was not built again");
+
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Effects }) != 0,
+                    "a sound plays on the effects bus");
+        test::check(mixer.buses() == 2, "which built the second one");
+    }
+
+    void test_a_bus_volume_turns_its_own_sounds_down() {
+        test::section("A bus volume moves what that bus carries, and nothing else");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 41, flat_wav(kMixerRate, 48000, 0.4F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+
+        // One voice on each of the two buses, so the check is that one moved
+        // and the other did not. A single voice would pass on a build where the
+        // bus volume was applied to everything.
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Music }) != 0, "music plays");
+        const float both = pump(mixer, 2400);
+        test::check(both > 0.1F, "and it is heard");
+
+        mixer.set_bus(au::Bus::Music, { .volume = 0.0F, .mute = false });
+        // Past the ramp, which is what makes the change inaudible as a click.
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) < 0.01F, "turning the music bus down silences it");
+
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Effects }) != 0, "effects play");
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) > 0.1F,
+                    "and the effects bus is untouched by the music setting");
+    }
+
+    void test_mute_keeps_the_volume_it_was_at() {
+        test::section("Mute silences a bus and keeps its volume");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 42, flat_wav(kMixerRate, 48000, 0.4F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Effects }) != 0, "a sound plays");
+
+        mixer.set_bus(au::Bus::Effects, { .volume = 0.8F, .mute = true });
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) < 0.01F, "a muted bus is silent");
+        test::check(near(mixer.bus_settings(au::Bus::Effects).volume, 0.8F, 0.001F),
+                    "and it still holds the volume it was at");
+
+        // A person who mutes and unmutes expects the slider where they left it.
+        // A mute written as a volume of zero would come back at zero.
+        mixer.set_bus(au::Bus::Effects, { .volume = 0.8F, .mute = false });
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) > 0.1F, "and unmuting brings it back");
+    }
+
+    void test_the_master_carries_every_bus() {
+        test::section("Every bus feeds the master");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 43, flat_wav(kMixerRate, 48000, 0.4F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Music }) != 0, "music plays");
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Effects }) != 0, "effects play");
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Master }) != 0,
+                    "and something plays on the master itself");
+
+        (void)pump(mixer, 2400);
+        test::check(pump(mixer, 2400) > 0.1F, "all three are heard");
+
+        mixer.set_bus(au::Bus::Master, { .volume = 0.0F, .mute = false });
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) < 0.01F, "and the master turns down all of them");
+    }
+
+    void test_a_volume_change_is_a_ramp() {
+        test::section("A volume change arrives as a ramp, not as a step");
+
+        // A volume applied to the next sample is a discontinuity in the stream,
+        // and a discontinuity is a click. It is loud, it is on every change, and
+        // it is the thing a person notices first about a settings screen.
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 44, flat_wav(kMixerRate, 48000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        test::check(mixer.play(assets, guid, { .bus = au::Bus::Music }) != 0, "a sound plays");
+        (void)pump(mixer, 4800);
+
+        mixer.set_bus(au::Bus::Music, { .volume = 0.0F, .mute = false });
+
+        // One millisecond after the change. A step would already be silent
+        // here, and the ramp is set to take about fifteen.
+        const float just_after = pump(mixer, 48);
+        test::check(just_after > 0.05F, "it is still sounding a millisecond later");
+
+        // And it does arrive. A ramp that never finished would be a volume
+        // control that does not work.
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) < 0.01F, "and it has arrived by the time it should");
+    }
+
+    void test_a_scene_source_plays_on_its_bus() {
+        test::section("A source plays on the bus its component names");
+
+        FakeAssets assets;
+        const engine::Guid guid = add_sound(assets, 45, flat_wav(kMixerRate, 48000, 0.5F),
+                                            false);
+
+        au::Mixer mixer;
+        test::check(mixer.create(kMixerChannels, kMixerRate), "the mixer builds");
+        au::SceneAudio audio;
+        audio.bind(mixer, assets);
+
+        engine::scene::World world;
+        const entt::entity entity = add_source(world, { 0.0F, 0.0F, -2.0F }, guid);
+        world.registry().get<engine::scene::AudioSource>(entity).bus = au::Bus::Music;
+        world.update();
+
+        audio.update(world);
+        test::check(audio.playing() == 1, "the source plays");
+        test::check(mixer.buses() == 1, "and it built the bus it named");
+
+        // Turning that bus down has to reach it, which is the whole point of
+        // the field being on the component.
+        mixer.set_bus(au::Bus::Music, { .volume = 0.0F, .mute = false });
+        (void)pump(mixer, 4800);
+        test::check(pump(mixer, 2400) < 0.01F, "and the bus setting reaches it");
+    }
+
 } // namespace
 
 int main() {
@@ -708,5 +871,11 @@ int main() {
     test_a_source_that_does_not_ask_stays_quiet();
     test_a_one_shot_in_a_scene_is_let_go();
     test_a_changed_sound_starts_again();
+    test_a_bus_is_built_only_when_it_is_used();
+    test_a_bus_volume_turns_its_own_sounds_down();
+    test_mute_keeps_the_volume_it_was_at();
+    test_the_master_carries_every_bus();
+    test_a_volume_change_is_a_ramp();
+    test_a_scene_source_plays_on_its_bus();
     return test::report();
 }
