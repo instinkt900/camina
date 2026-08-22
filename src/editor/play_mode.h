@@ -20,6 +20,11 @@
  */
 
 #include "play/session.h"
+#include "script/audio_surface.h"
+
+#if defined(ENGINE_WITH_AUDIO)
+#include "audio/scene_audio.h"
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -66,6 +71,19 @@ namespace engine::editor {
         /// @brief Binds the game's actions on the session input. Null binds
         /// nothing, and every action a script reads is then false.
         void (*bind_actions)(platform::Input&) = nullptr;
+
+        /**
+         * @brief What a script's `audio` table talks to. Null makes it silent.
+         *
+         * Not behind `ENGINE_WITH_AUDIO`, the same as `Session::set_script_audio`,
+         * so this struct is one shape in every build.
+         */
+        script::AudioSurface* script_audio = nullptr;
+
+#if defined(ENGINE_WITH_AUDIO)
+        /// @brief What plays the sounds a scene carries. Null plays none.
+        audio::SceneAudio* scene_audio = nullptr;
+#endif
     };
 
     /**
@@ -169,6 +187,16 @@ namespace engine::editor {
         /// @return True in Playing and in Paused.
         [[nodiscard]] bool running() const { return state_ != PlayState::Edit; }
 
+        /**
+         * @brief Stops every voice this session started.
+         *
+         * stop() calls it, and so does the destructor by way of stop(). It is
+         * here rather than in the application because the session is what owns
+         * the sounds: a person who presses Stop expects silence, and a looping
+         * sound left running would have nothing left that could stop it.
+         */
+        void silence();
+
         /// @brief The running session, or null in Edit state.
         /// @return The session, for a caller that draws its bodies.
         [[nodiscard]] play::Session* session() { return session_.get(); }
@@ -189,6 +217,13 @@ namespace engine::editor {
 
         /// The authored world, as a document. Taken before the first step.
         nlohmann::json snapshot_;
+
+        /// What plays the sounds, held from the PlayDesc so that stop() can
+        /// silence what play() started.
+        script::AudioSurface* script_audio_ = nullptr;
+#if defined(ENGINE_WITH_AUDIO)
+        audio::SceneAudio* scene_audio_ = nullptr;
+#endif
 
         PlayState state_ = PlayState::Edit;
     };

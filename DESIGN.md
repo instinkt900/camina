@@ -3007,6 +3007,23 @@ with nothing left that holds its number, and only restarting the game would quie
 A sound that has to survive a reload belongs on a `scene::AudioSource`, which is a component
 and therefore storage. That is the same split M8.5 drew.
 
+**The editor plays a session's sound, and the ears are the scene's.** A session in the editor
+is the game, so it hears what the game hears: `scene::AudioListener` if the scene names one and
+`scene::primary_camera` otherwise. The editor's own fly camera is never the listener.
+
+That is a choice with a cost, and the cost is worth naming. A person can fly the editor camera
+across the level while a session runs, and they then hear a place they are not looking at. The
+alternative costs more. Making the editor camera the listener would mean a level's own listener
+placement is never heard until the game ships, and it would break the property M11.4 built:
+that flying the editor camera cannot move the ears. One behaviour that is occasionally
+surprising beats two behaviours that disagree.
+
+**In Edit state the editor is silent.** Nothing is wired until Play, so an authored scene makes
+no sound and a person hears only what they asked to hear. Stop silences everything the session
+started, a looping voice included, by two paths: the host stops what each script instance
+started as it destroys that instance, and `PlayMode::silence` stops what the scene's components
+started. Both are needed, and deleting either one fails `tests/test_editor.cpp`.
+
 **Nothing in the script surface reports what the mixer is doing.** A script starts a voice and
 stops it, and it cannot ask whether one is still playing. That answer comes off another thread
 against the real clock, and a game that read it would stop being reproducible. Issue #245 took

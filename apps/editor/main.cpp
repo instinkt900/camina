@@ -27,6 +27,13 @@
 #include "editor/panels.h"
 #include "editor/picking.h"
 #include "editor/placement.h"
+#if defined(ENGINE_WITH_AUDIO)
+#include "audio/bus.h"
+#include "audio/device.h"
+#include "audio/mixer.h"
+#include "audio/scene_audio.h"
+#include "audio/script_audio.h"
+#endif
 #include "editor/play_mode.h"
 #include "editor/view_settings.h"
 #include "editor/viewport.h"
@@ -368,6 +375,18 @@ namespace {
         /// between two large members pads the struct out.
         bool watching = false;
 
+#if defined(ENGINE_WITH_AUDIO)
+        /// M11.7. The output device, or a silent one on a machine with no sound
+        /// card. Held by pointer because create_device() decides which it is.
+        std::unique_ptr<engine::audio::IAudioDevice> audio;
+        /// Every sound loaded and every voice playing. The device pulls from it.
+        engine::audio::Mixer mixer;
+        /// Plays what a scene says to play, while a session runs.
+        engine::audio::SceneAudio scene_audio;
+        /// What a script's `audio` table talks to, while a session runs.
+        engine::audio::ScriptAudio script_audio;
+#endif
+
         /// The engine's own cooked assets: the shaders and the split sum table.
         engine::assets::Content engine_content;
         /// The shadow, cull, mesh, and tonemap passes. The same ones the
@@ -638,6 +657,25 @@ namespace {
         // input when a session starts, which is sandbox::bind_actions.
         engine::editor::bind_fly_actions(editor.input);
 
+#if defined(ENGINE_WITH_AUDIO)
+        // The device opens silent on a machine with no sound card, so the
+        // editor runs the same way in CI as on a desktop. An offscreen run
+        // forces silence: nobody is listening to one and a capture has to stay
+        // reproducible.
+        engine::audio::DeviceDesc audio_desc;
+        audio_desc.force_silent = options.offscreen;
+        editor.audio = engine::audio::create_device(audio_desc);
+        if (editor.audio != nullptr &&
+            editor.mixer.create(editor.audio->channels(), editor.audio->sample_rate())) {
+            editor.audio->set_source(&editor.mixer);
+        }
+
+        // Bound to the project once. A session hands these to the game when a
+        // person presses Play, and takes them away again on Stop.
+        editor.scene_audio.bind(editor.mixer, editor.content);
+        editor.script_audio.bind(editor.mixer, editor.content);
+#endif
+
         // ImGui reads every event, and the window still acts on the ones it owns.
         editor.window.set_event_hook(
             [](const void* event, void* /*user*/) { engine::gfx::imgui_process_event(event); },
@@ -647,6 +685,17 @@ namespace {
 
     /// Releases what start() built, in the opposite order. Safe after a partial start.
     void stop(Editor& editor) {
+#if defined(ENGINE_WITH_AUDIO)
+        // The device thread pulls from the mixer, so it lets go first.
+        // set_source stops the device to change it, which is what makes this
+        // safe rather than a race.
+        editor.scene_audio.stop_all();
+        if (editor.audio != nullptr) {
+            editor.audio->set_source(nullptr);
+        }
+        editor.mixer.destroy();
+        editor.audio.reset();
+#endif
         if (editor.device != nullptr) {
             engine::gfx::device_wait_idle(editor.device);
         }
@@ -949,8 +998,14 @@ namespace {
         using engine::editor::PlayRequest;
         switch (request) {
         case PlayRequest::Play: {
-            const engine::editor::PlayDesc desc{ .content = &editor.content,
-                                                 .bind_actions = &sandbox::bind_actions };
+            const engine::editor::PlayDesc desc{
+                .content = &editor.content,
+                .bind_actions = &sandbox::bind_actions,
+#if defined(ENGINE_WITH_AUDIO)
+                .script_audio = &editor.script_audio,
+                .scene_audio = &editor.scene_audio,
+#endif
+            };
             // The selection stays. A play snapshots the world and runs it in
             // place, so the entity somebody was looking at is still that entity.
             (void)editor.play.play(editor.world, desc);
@@ -1970,6 +2025,21 @@ namespace {
                                            view.forward);
             }
             editor.play.advance(editor.world, view, delta);
+
+#if defined(ENGINE_WITH_AUDIO)
+            // A one-shot holds its cursor or its decoder until something frees
+            // it, and the device thread must not: freeing takes a lock and
+            // allocates. This runs whether or not a session is playing, because
+            // a voice started before a Stop still has to be let go.
+            editor.mixer.update();
+
+            // The volumes the panel edits. Every frame rather than on a change,
+            // for the reason the runtime gives: the panel writes into the
+            // struct and nothing reports that it did.
+            editor.mixer.set_bus(engine::audio::Bus::Master, editor.view.mix.master);
+            editor.mixer.set_bus(engine::audio::Bus::Music, editor.view.mix.music);
+            editor.mixer.set_bus(engine::audio::Bus::Effects, editor.view.mix.effects);
+#endif
 
             // After the step, because that is where a script can destroy an
             // entity, and before the frame below reads the camera.
