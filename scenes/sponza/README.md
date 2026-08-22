@@ -16,16 +16,16 @@ it. `--content` takes the cooked tree and `--watch` takes this source one. Pass
 Nothing fetches this during a build and nothing fetches it in CI. A clean clone builds
 and tests with no network.
 
-## It does not draw yet
+## What it draws
 
-The scene loads and cooks, and the viewport is black. Issue #188 holds it. The cause is
-not this scene: a sandbox scene with no blended geometry goes black the same way, and the
-clear colour does not arrive either, so it sits between the mesh pass and the tonemap.
+The scene draws. It closed M5 as issue #88, at 3.75M triangles over 115 meshes and 28
+materials, lit by a sun with four cascades, 22 lamp point lights, and image based lighting
+from the sky the model ships with.
 
-What works today is everything up to the picture. 158 entities, 115 meshes, 28 materials
-and 74 textures load, and the mesh pass reports its draws and its culls. The ImGui overlay
-draws over the tonemapped image rather than through it, so a windowed run still shows the
-whole scene tree and every component on it.
+It went black once, and that was issue #188 rather than this scene. Every graphics pipeline
+declares dynamic cull mode, so the tonemap pass inherited back face culling from the mesh pass
+and its one full-screen triangle was culled. A sandbox scene with no blended geometry went
+black the same way. Both are fixed.
 
 ## Why it is not in git
 
