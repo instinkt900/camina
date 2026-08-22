@@ -51,6 +51,10 @@ namespace engine::editor {
         , types_(types != nullptr ? types : &scene::components())
         , label_(std::string(verb_for(before_, after_)) + " " + component_) {}
 
+    bool ComponentEdit::fits(const scene::World& world) const {
+        return world.find(entity_) != entt::null;
+    }
+
     void ComponentEdit::put(scene::World& world, const nlohmann::json& state) {
         const entt::entity entity = world.find(entity_);
         if (entity == entt::null) {
@@ -120,6 +124,13 @@ namespace engine::editor {
         , types_(types != nullptr ? types : &scene::components())
         , library_(library != nullptr ? library : &scene::prefabs())
         , label_(std::move(label)) {}
+
+    bool EntityEdit::fits(const scene::World& world) const {
+        // The state this edit last left behind. A create left the entity in the
+        // world and a delete left it out, so a rebuild that disagrees either
+        // way is a rebuild this edit was not recorded against.
+        return (world.find(entity_) != entt::null) == exists_after_;
+    }
 
     void EntityEdit::put(scene::World& world, bool exists) {
         const entt::entity found = world.find(entity_);
@@ -319,6 +330,17 @@ namespace engine::editor {
             void revert(scene::World& world) override { put(world, before_); }
 
             [[nodiscard]] const char* name() const override { return label_.c_str(); }
+
+            /// The entity and both ends of the move. A reparent reaches all
+            /// three, so all three have to be there.
+            [[nodiscard]] bool fits(const scene::World& world) const override {
+                const auto present = [&world](Guid id) {
+                    return !id.valid() || world.find(id) != entt::null;
+                };
+                return world.find(entity_) != entt::null && present(before_.parent) &&
+                       present(before_.before) && present(after_.parent) &&
+                       present(after_.before);
+            }
 
         private:
             /// Finds the entity one half of a place names, or reports why not.

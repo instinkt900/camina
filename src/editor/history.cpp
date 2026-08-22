@@ -28,6 +28,16 @@ namespace engine::editor {
         next_ = edits_.size();
     }
 
+    bool History::fits(const scene::World& world) const {
+        // Every entry, not only the ones behind the cursor. A redo is as much a
+        // promise as an undo, and a stack half of which cannot run is not one
+        // worth keeping.
+        return std::all_of(edits_.begin(), edits_.end(),
+                           [&world](const std::unique_ptr<Edit>& edit) {
+                               return edit == nullptr || edit->fits(world);
+                           });
+    }
+
     bool History::undo(scene::World& world) {
         if (!can_undo()) {
             return false;

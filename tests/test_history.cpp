@@ -41,9 +41,20 @@ namespace {
 
         [[nodiscard]] const char* name() const override { return label_.c_str(); }
 
+        /// Answers what the case asked for, so History::fits can be driven
+        /// without a world that has entities in it.
+        [[nodiscard]] bool fits(const engine::scene::World& /*world*/) const override {
+            return fits_;
+        }
+
     private:
         Trace* trace_;
         std::string label_;
+        bool fits_ = true;
+
+    public:
+        /// Makes this edit report that the world moved out from under it.
+        void stop_fitting() { fits_ = false; }
     };
 
     [[nodiscard]] std::unique_ptr<engine::editor::Edit> edit(Trace& trace, std::string label) {
@@ -181,6 +192,38 @@ namespace {
  * step: the entries belong to the scene somebody authored, and a stop reads
  * the snapshot back over anything an undo did anyway.
  */
+/**
+ * A history is kept when every entry still fits, and dropped when one does not.
+ *
+ * Issue #371. A reload rebuilds the world, and whether the stack survives
+ * depends on whether the entities came back under the identities the
+ * entries name. This drives that decision with no world and no scene file,
+ * because the decision is History's and not the editor's.
+ */
+void test_a_history_knows_whether_it_still_fits() {
+    Trace trace;
+    engine::scene::World world;
+
+    engine::editor::History history;
+    auto first = std::make_unique<CountingEdit>(trace, "first");
+    auto second = std::make_unique<CountingEdit>(trace, "second");
+    CountingEdit* const second_raw = second.get();
+    history.record(std::move(first));
+    history.record(std::move(second));
+
+    test::check(history.fits(world), "a history of edits that fit, fits");
+
+    // One entry stops fitting, and it is the one behind the cursor rather
+    // than in front of it, so this also covers the redo side.
+    test::check(history.undo(world), "an undo runs, leaving one entry ahead");
+    second_raw->stop_fitting();
+    test::check(!history.fits(world),
+                "and one entry that no longer fits is enough to lose the stack");
+
+    engine::editor::History empty;
+    test::check(empty.fits(world), "an empty history fits any world");
+}
+
 void test_the_menu_says_what_it_will_do() {
     section("the Edit menu");
 
@@ -227,5 +270,6 @@ int main() {
     test_recording_drops_the_redo_side();
     test_the_history_has_a_bottom();
     test_clearing_forgets_everything();
+    test_a_history_knows_whether_it_still_fits();
     return test::report();
 }
