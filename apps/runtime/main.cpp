@@ -11,6 +11,7 @@
 #if defined(ENGINE_WITH_AUDIO)
 #include "assets/sound.h"
 #include "audio/device.h"
+#include "audio/bus.h"
 #include "audio/mixer.h"
 #include "audio/scene_audio.h"
 #endif
@@ -1146,6 +1147,23 @@ namespace {
      * @param runtime The mixer to play through.
      * @param content The assets to read the sound from.
      */
+    /**
+     * Puts the saved volumes on the mixer.
+     *
+     * Every frame rather than on a change, because the panel writes the
+     * settings straight into the struct and nothing reports that it did. The
+     * call is a few floats, and setting a bus to the value it already holds
+     * asks miniaudio for a ramp that is already finished.
+     *
+     * @param runtime The mixer to set.
+     * @param settings What the volumes are.
+     */
+    void apply_mix(Runtime& runtime, const ViewSettings& settings) {
+        runtime.mixer.set_bus(engine::audio::Bus::Master, settings.mix.master);
+        runtime.mixer.set_bus(engine::audio::Bus::Music, settings.mix.music);
+        runtime.mixer.set_bus(engine::audio::Bus::Effects, settings.mix.effects);
+    }
+
     void update_audio(Runtime& runtime, const engine::assets::AssetSource& content) {
         // A one-shot holds its cursor or its decoder until something frees it,
         // and the device thread must not: freeing takes a lock and allocates.
@@ -1921,6 +1939,7 @@ namespace {
         // and every frame whether or not a key was touched, because a voice
         // that ended has to be freed either way.
         update_audio(runtime, *context.game_content);
+        apply_mix(runtime, *context.settings);
 #endif
 
         // And fold it into what the next step will read. A key down on any

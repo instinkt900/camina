@@ -59,7 +59,8 @@ namespace engine::audio {
                              .attenuation = source.attenuation,
                              .min_distance = source.min_distance,
                              .max_distance = source.max_distance,
-                             .rolloff = source.rolloff };
+                             .rolloff = source.rolloff,
+                             .bus = source.bus };
         }
 
     } // namespace

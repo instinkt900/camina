@@ -17,6 +17,11 @@ namespace engine::audio {
 
         namespace as = engine::assets;
 
+        /// How long a volume change takes to arrive, in milliseconds. Long
+        /// enough that no step in the samples is audible, short enough that a
+        /// slider still feels like it did something.
+        constexpr std::uint32_t kVolumeSmoothMs = 15;
+
         /// One loaded sound, kept in whichever form the cooker wrote.
         struct Sound {
             as::SoundStorage storage = as::SoundStorage::Pcm;
@@ -74,7 +79,41 @@ namespace engine::audio {
         std::map<VoiceId, std::unique_ptr<Voice>> voices;
         VoiceId next_voice = 1;
         std::uint64_t started = 0;
+
+        MixSettings mix;
+        /// One group for each bus that something has played on. The master is
+        /// not here: it is the engine's own output, so it needs no node.
+        std::map<Bus, std::unique_ptr<ma_sound_group>> groups;
+
+        /**
+         * The mixing node for a bus, built the first time one is asked for.
+         *
+         * A method of State rather than of Mixer, because it names a miniaudio
+         * type and the Mixer header names none.
+         *
+         * @param bus Which bus.
+         * @return The group, or null for the master, which is the output
+         *         itself.
+         */
+        [[nodiscard]] ma_sound_group* group_for(Bus bus);
     };
+
+    namespace {
+
+        /// The settings for one bus, to write. `settings_for` is the read half.
+        [[nodiscard]] BusSettings& bus_of(MixSettings& settings, Bus bus) {
+            switch (bus) {
+            case Bus::Music:
+                return settings.music;
+            case Bus::Effects:
+                return settings.effects;
+            case Bus::Master:
+                break;
+            }
+            return settings.master;
+        }
+
+    } // namespace
 
     Mixer::Mixer()
         : state_(std::make_unique<State>()) {}
@@ -101,6 +140,12 @@ namespace engine::audio {
         config.channels = channels;
         config.sampleRate = sample_rate;
 
+        // A volume applied to the next sample is a step in the stream, and a
+        // step is heard as a click. This ramps every volume change, on a voice
+        // and on a bus alike. miniaudio defaults it to zero, which is the
+        // clicking form.
+        config.defaultVolumeSmoothTimeInPCMFrames = (sample_rate * kVolumeSmoothMs) / 1000U;
+
         const ma_result result = ma_engine_init(&config, &state_->engine);
         if (result != MA_SUCCESS) {
             ENGINE_LOG_ERROR("Audio: the mixer would not start ({}).",
@@ -118,6 +163,8 @@ namespace engine::audio {
             return;
         }
         stop_all();
+        // The groups go after the voices, because a voice is attached to one.
+        state_->groups.clear();
         ma_engine_uninit(&state_->engine);
         state_->engine_open = false;
         state_->sounds.clear();
@@ -211,6 +258,64 @@ namespace engine::audio {
 
     } // namespace
 
+    ma_sound_group* Mixer::State::group_for(Bus bus) {
+        // The master is the engine's own output. A group in front of it would
+        // be a node that only ever passes its input through.
+        if (bus == Bus::Master) {
+            return nullptr;
+        }
+
+        const auto found = groups.find(bus);
+        if (found != groups.end()) {
+            return found->second.get();
+        }
+
+        // Built on first use, so a bus nothing plays on costs no node and no
+        // work in the mixer. Whatever set_bus() was told is applied here.
+        auto group = std::make_unique<ma_sound_group>();
+        const ma_result result = ma_sound_group_init(&engine, 0, nullptr, group.get());
+        if (result != MA_SUCCESS) {
+            ENGINE_LOG_ERROR("Audio: the {} bus would not open ({}). Its sounds play on the "
+                             "master instead.",
+                             to_text(bus), ma_result_description(result));
+            return nullptr;
+        }
+
+        const BusSettings& settings = settings_for(mix, bus);
+        ma_sound_group_set_volume(group.get(), settings.mute ? 0.0F : settings.volume);
+
+        ma_sound_group* raw = group.get();
+        groups.emplace(bus, std::move(group));
+        return raw;
+    }
+
+    void Mixer::set_bus(Bus bus, const BusSettings& settings) {
+        BusSettings& held = bus_of(state_->mix, bus);
+        held = settings;
+        if (!state_->engine_open) {
+            return;
+        }
+
+        const float volume = settings.mute ? 0.0F : settings.volume;
+        if (bus == Bus::Master) {
+            ma_engine_set_volume(&state_->engine, volume);
+            return;
+        }
+
+        // A bus nothing has played on yet is not built. The setting is kept
+        // above, and group_for() applies it when the bus first exists.
+        const auto found = state_->groups.find(bus);
+        if (found != state_->groups.end()) {
+            ma_sound_group_set_volume(found->second.get(), volume);
+        }
+    }
+
+    const BusSettings& Mixer::bus_settings(Bus bus) const {
+        return settings_for(state_->mix, bus);
+    }
+
+    std::size_t Mixer::buses() const { return state_->groups.size(); }
+
     VoiceId Mixer::play(const assets::AssetSource& content, Guid guid, const PlayDesc& desc) {
         if (!load(content, guid)) {
             return 0;
@@ -234,7 +339,8 @@ namespace engine::audio {
         // is meant to be heard flat has to stay flat whatever the listener does.
         const ma_uint32 flags = desc.spatial ? 0U : MA_SOUND_FLAG_NO_SPATIALIZATION;
         const ma_result result = ma_sound_init_from_data_source(&state_->engine, source, flags,
-                                                                nullptr, &voice->sound);
+                                                                state_->group_for(desc.bus),
+                                                                &voice->sound);
         if (result != MA_SUCCESS) {
             ENGINE_LOG_ERROR("Audio: a voice would not start ({}).",
                              ma_result_description(result));

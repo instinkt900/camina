@@ -10,6 +10,7 @@
  */
 
 #include "audio/attenuation.h"
+#include "audio/bus.h"
 #include "core/entt.h"
 #include "core/guid.h"
 #include "math/conventions.h"
@@ -127,6 +128,15 @@ namespace engine::scene {
          * wherever the listener stands. Music and a menu click are that.
          */
         bool spatial = true;
+
+        /**
+         * @brief Which group it plays on, so one slider can turn it down.
+         *
+         * Effects rather than Master, because a source in the world is what the
+         * Effects bus is for. Music on a source is the case that names the
+         * other one.
+         */
+        audio::Bus bus = audio::Bus::Effects;
 
         /// @brief The curve between @ref min_distance and @ref max_distance.
         audio::Attenuation attenuation = audio::Attenuation::Inverse;
@@ -361,6 +371,8 @@ struct engine::reflect::Describe<engine::scene::AudioSource> {
                          Tooltip{ "Start as soon as the entity carries this" }),
             ENGINE_FIELD(AudioSource, spatial,
                          Tooltip{ "Off is heard the same wherever the listener stands" }),
+            ENGINE_FIELD(AudioSource, bus,
+                         Tooltip{ "The group it plays on, so one slider turns it down" }),
             ENGINE_FIELD(AudioSource, attenuation,
                          Tooltip{ "The curve between the two distances" }),
             ENGINE_FIELD(AudioSource, min_distance, Range{ 0.01, 100.0, 0.05 },

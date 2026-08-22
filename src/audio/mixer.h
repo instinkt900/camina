@@ -30,7 +30,9 @@
 
 #include "assets/asset_source.h"
 #include "audio/attenuation.h"
+#include "audio/bus.h"
 #include "audio/device.h"
+#include "audio/mix_settings.h"
 #include "core/guid.h"
 #include "math/conventions.h"
 
@@ -87,6 +89,9 @@ namespace engine::audio {
 
         /// @brief How sharply the curve falls between the two distances.
         float rolloff = 1.0F;
+
+        /// @brief Which group it plays on. See engine::audio::Bus.
+        Bus bus = Bus::Master;
     };
 
     /**
@@ -179,6 +184,37 @@ namespace engine::audio {
         void set_voice_position(VoiceId voice, const Vec3& position);
 
         /**
+         * @brief Sets the volume and the mute of one bus.
+         *
+         * The change is smoothed over a few milliseconds rather than applied to
+         * the next sample, so a slider dragged while a sound plays is heard as
+         * a fade and not as a click. A step change in a sample stream is a
+         * click, and it is loud.
+         *
+         * Setting a bus that nothing has played on yet costs nothing and is
+         * remembered. The bus exists once a voice needs it, and it starts at
+         * whatever was set here.
+         *
+         * @param bus Which bus.
+         * @param settings The volume and the mute to apply.
+         */
+        void set_bus(Bus bus, const BusSettings& settings);
+
+        /// @brief What a bus is set to. @param bus Which bus. @return Its settings.
+        [[nodiscard]] const BusSettings& bus_settings(Bus bus) const;
+
+        /**
+         * @brief How many buses exist as real mixing nodes.
+         *
+         * A bus that no sound has ever named is not built, so it costs no node,
+         * no memory and no work in the mixer. The master is not counted,
+         * because it is the output itself rather than a group in front of it.
+         *
+         * @return The number of groups built so far.
+         */
+        [[nodiscard]] std::size_t buses() const;
+
+        /**
          * @brief Says where the sound is heard from.
          *
          * **The axes are the engine's own**, and miniaudio agrees with them
@@ -246,6 +282,9 @@ namespace engine::audio {
         void mix(float* output, std::uint32_t frames) override;
 
     private:
+        // Every miniaudio type this class touches lives in State, which is
+        // defined in the .cpp. So this header names none of them, which is what
+        // scripts/check-miniaudio-containment.sh is there to keep true.
         struct State;
         std::unique_ptr<State> state_;
     };
