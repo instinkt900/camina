@@ -32,7 +32,7 @@ class CaminaConan(ConanFile):
         "with_editor": False,   # M9
         "with_ui": False,       # M10, and the M6 spike
         "with_lua": True,       # M8. On, because the sandbox game runs on it
-        "with_audio": False,    # M11
+        "with_audio": True,     # M11. On, because the sandbox game plays sound
 
         # HarfBuzz takes glib by default, and glib drags elfutils, gettext,
         # libiconv, pcre2 and libffi in behind it. The engine calls no glib
