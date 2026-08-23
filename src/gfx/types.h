@@ -213,6 +213,78 @@ namespace engine::gfx {
     };
 
     /**
+     * @brief One term of the blend equation.
+     *
+     * The result is `src * src_factor` combined with `dst * dst_factor` by the
+     * BlendOp. "Src" is what the fragment shader wrote and "Dst" is what the
+     * attachment already holds.
+     *
+     * The list carries what the engine draws with rather than every factor
+     * Vulkan names. Rule 4.6 says to add one when a pass needs it, and adding
+     * one is a name here and a case in `to_vk_blend_factor`.
+     */
+    enum class BlendFactor : std::uint32_t {
+        /// @brief The term contributes nothing.
+        Zero = 0,
+        /// @brief The term contributes unchanged.
+        One,
+        /// @brief Scaled by the color the fragment shader wrote.
+        SrcColor,
+        /// @brief Scaled by the alpha the fragment shader wrote.
+        SrcAlpha,
+        /// @brief Scaled by what that alpha leaves, which is the "over" operator.
+        OneMinusSrcAlpha,
+        /// @brief Scaled by the color already in the attachment.
+        DstColor,
+        /// @brief Scaled by the alpha already in the attachment.
+        DstAlpha,
+    };
+
+    /**
+     * @brief How the two terms of the blend equation are combined.
+     */
+    enum class BlendOp : std::uint32_t {
+        /// @brief `src * src_factor + dst * dst_factor`. What every mode here uses.
+        Add = 0,
+        /// @brief `src * src_factor - dst * dst_factor`.
+        Subtract,
+        /// @brief `dst * dst_factor - src * src_factor`.
+        ReverseSubtract,
+        /// @brief The smaller of the two terms, before either factor applies.
+        Min,
+        /// @brief The larger of the two terms, before either factor applies.
+        Max,
+    };
+
+    /**
+     * @brief The whole blend equation, for color and for alpha separately.
+     *
+     * The default is the "over" operator, which is what `alphaMode` `BLEND`
+     * asks for and what every blended surface in the scene wants. So a pipeline
+     * that sets `blend` and nothing else keeps blending exactly as it did
+     * before this struct existed.
+     *
+     * @warning The color and the alpha are two equations, not one. Alpha takes
+     * `One` and `OneMinusSrcAlpha` rather than the color pair, so blending
+     * twice into the same attachment builds the coverage up instead of scaling
+     * it down.
+     */
+    struct BlendState {
+        /// @brief What scales the color the fragment shader wrote.
+        BlendFactor src_color = BlendFactor::SrcAlpha;
+        /// @brief What scales the color already in the attachment.
+        BlendFactor dst_color = BlendFactor::OneMinusSrcAlpha;
+        /// @brief How the two color terms combine.
+        BlendOp color_op = BlendOp::Add;
+        /// @brief What scales the alpha the fragment shader wrote.
+        BlendFactor src_alpha = BlendFactor::One;
+        /// @brief What scales the alpha already in the attachment.
+        BlendFactor dst_alpha = BlendFactor::OneMinusSrcAlpha;
+        /// @brief How the two alpha terms combine.
+        BlendOp alpha_op = BlendOp::Add;
+    };
+
+    /**
      * @brief The format of a color attachment.
      *
      * This is a separate enum from TextureFormat, for two reasons. A render
@@ -523,6 +595,19 @@ namespace engine::gfx {
          * front, because nothing in the pipeline can do it.
          */
         bool blend = false;
+        /**
+         * @brief The equation to blend with, read only while @c blend is true.
+         *
+         * The default is "over", so a pipeline that asks for blending and says
+         * nothing more gets what every blended surface in the scene wants.
+         *
+         * A pass that draws what an author picked needs the rest. moth_ui
+         * offers five blend modes and three of them are neither "replace" nor
+         * "over", so `engine::ui::UiPass` builds one pipeline for each. Until
+         * issue #206 those three drew as "over", which is wrong rather than
+         * missing, and nothing reported it.
+         */
+        BlendState blend_state{};
         /**
          * @brief Whether to cull back faces.
          *

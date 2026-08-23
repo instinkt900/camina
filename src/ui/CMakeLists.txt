@@ -5,6 +5,7 @@
 # and a replacement stays possible. The applications link this target instead.
 add_library(engine_ui STATIC
     ui.cpp
+    blend.cpp
     font.cpp
     font_factory.cpp
     image.cpp
