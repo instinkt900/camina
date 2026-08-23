@@ -164,6 +164,15 @@ namespace engine::audio {
         }
         stop_all();
         // The groups go after the voices, because a voice is attached to one.
+        //
+        // **Each one is uninitialised before its memory goes.** A group is a
+        // node in the engine's graph and it attaches itself there when it is
+        // built, so freeing the memory alone leaves the graph naming it.
+        // ma_engine_uninit then walks that graph and reads what was freed.
+        // Issue #450.
+        for (auto& [bus, group] : state_->groups) {
+            ma_sound_group_uninit(group.get());
+        }
         state_->groups.clear();
         ma_engine_uninit(&state_->engine);
         state_->engine_open = false;
