@@ -18,6 +18,7 @@
 #include "check.h"
 #include "import/cook.h"
 #include "import/mesh.h"
+#include "import/texture.h"
 
 #include <nlohmann/json.hpp>
 
@@ -1229,7 +1230,7 @@ namespace {
         test::remove_tree(source.parent_path());
     }
 
-    void test_the_gltf_rule_guesses_the_color_space() {
+    void test_the_gltf_rule_takes_the_color_space_from_the_slot() {
         const std::filesystem::path source = scratch("guess/src");
         const std::filesystem::path out = scratch("guess/out");
 
@@ -1239,7 +1240,7 @@ namespace {
         // color from then on. Nothing about the result would look broken
         // enough to find.
         write_tga(source / "skin_Normal.tga");
-        write_glb(source / "a.glb", build_triangle(), 1, "skin_Normal.tga");
+        write_glb(source / "a.glb", build_triangle(), 1, "skin_Normal.tga", ImageSlot::Normal);
 
         const engine::import::Options options{ .content = source, .out = out };
         engine::import::Result result;
@@ -1249,6 +1250,81 @@ namespace {
         check(as::load_meta(source / "skin_Normal.tga", image), "the image sidecar reads");
         check(image.texture.color_space == as::ColorSpace::Linear,
               "a normal map reads as linear even when the glTF rule wrote the sidecar");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * The slot beats the file name when the two disagree.
+     *
+     * Issue #187. An image inside a glTF took its colour space from the slot
+     * that used it, and an image beside the glTF took a guess from its file
+     * name instead. So the cooker had the right answer in hand and used the
+     * weaker one.
+     *
+     * **This is the Intel Sponza case**, and it is one real file rather than a
+     * hypothetical: a base colour map called
+     * `..._mask_gltf_alpha_dirt_decal_Opacity.png`. The name holds "mask",
+     * which is in the linear list, so it read as linear. A base colour read as
+     * linear is wrong at every value except 0 and 1.
+     */
+    void test_the_slot_wins_when_the_file_name_disagrees() {
+        const std::filesystem::path source = scratch("slot_wins/src");
+        const std::filesystem::path out = scratch("slot_wins/out");
+
+        // A name the guess reads as linear, used in the one slot that is
+        // colour. Both halves have to be true for this to prove anything.
+        write_tga(source / "decal_mask.tga");
+        check(engine::import::guess_color_space(source / "decal_mask.tga") ==
+                  as::ColorSpace::Linear,
+              "the file name alone reads as linear");
+        write_glb(source / "a.glb", build_triangle(), 1, "decal_mask.tga", ImageSlot::BaseColor);
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result result;
+        check(engine::import::cook_all(options, result), "the cook works");
+
+        as::AssetMeta image;
+        check(as::load_meta(source / "decal_mask.tga", image), "the image sidecar reads");
+        check(image.texture.color_space == as::ColorSpace::Srgb,
+              "and the base colour slot wins over the name in it");
+
+        test::remove_tree(source.parent_path());
+    }
+
+    /**
+     * A sidecar that already exists still decides, so an edit survives a cook.
+     *
+     * The slot only fills in a sidecar that is being created. Overwriting one
+     * would undo a person's edit on every cook, and the guess has always had
+     * that rule. #187 gave the slot the same one.
+     */
+    void test_an_existing_sidecar_beats_the_slot() {
+        const std::filesystem::path source = scratch("sidecar_wins/src");
+        const std::filesystem::path out = scratch("sidecar_wins/out");
+
+        write_tga(source / "plate.tga");
+        write_glb(source / "a.glb", build_triangle(), 1, "plate.tga", ImageSlot::BaseColor);
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "the first cook works");
+
+        as::AssetMeta image;
+        check(as::load_meta(source / "plate.tga", image), "the sidecar was written");
+        check(image.texture.color_space == as::ColorSpace::Srgb, "the base colour slot decided");
+
+        // A person disagrees with the model and says so in the sidecar.
+        image.texture.color_space = as::ColorSpace::Linear;
+        check(as::save_meta(source / "plate.tga", image), "the edit saves");
+
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "the second cook works");
+
+        as::AssetMeta again;
+        check(as::load_meta(source / "plate.tga", again), "the sidecar reads back");
+        check(again.texture.color_space == as::ColorSpace::Linear,
+              "and the edit survived the cook that the slot would have overruled");
 
         test::remove_tree(source.parent_path());
     }
@@ -1731,7 +1807,9 @@ int main() {
     test::section("materials");
     test_a_material_names_its_textures_by_guid();
     test_the_image_sidecar_is_an_input();
-    test_the_gltf_rule_guesses_the_color_space();
+    test_the_gltf_rule_takes_the_color_space_from_the_slot();
+    test_the_slot_wins_when_the_file_name_disagrees();
+    test_an_existing_sidecar_beats_the_slot();
     test_an_escaped_uri_names_the_file_it_means();
     test_a_material_naming_a_missing_image_fails();
     test::section("images with no file of their own");

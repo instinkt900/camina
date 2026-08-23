@@ -13,6 +13,7 @@
 #include "assets/texture.h"
 #include "import/writer.h"
 
+#include <optional>
 #include <cstddef>
 #include <filesystem>
 #include <span>
@@ -57,12 +58,20 @@ namespace engine::import {
      * rule wrote would otherwise carry the default of sRGB, and every normal map
      * in that model would read as color from then on.
      *
+     * A caller that knows better than the name says so with @p known. A glTF
+     * material states what it uses an image for, and that is an answer rather
+     * than a guess. It fills in a sidecar that is being created and never
+     * overwrites one that is already there, so a person's edit still decides.
+     *
      * @param source The image path. The file must exist.
      * @param out The metadata to fill.
+     * @param known The color space the caller knows the image is used in, or
+     * `std::nullopt` to guess it from the file name.
      * @return True when @p out holds a valid GUID.
      */
     [[nodiscard]] bool image_meta(const std::filesystem::path& source,
-                                  engine::assets::AssetMeta& out);
+                                  engine::assets::AssetMeta& out,
+                                  std::optional<engine::assets::ColorSpace> known = std::nullopt);
 
     /**
      * @brief Cooks one image into one cooked texture file.
