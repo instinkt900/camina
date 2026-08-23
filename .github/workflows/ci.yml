@@ -177,6 +177,117 @@ jobs:
       - name: Lint
         run: .github/scripts/lint.sh build/RelWithDebInfo
 
+  # AddressSanitizer and UndefinedBehaviorSanitizer, over the whole test suite.
+  #
+  # Issue #450 is why this exists. A heap use-after-free in the mixer went
+  # unfound for months. Windows CI failed about one run in six, and the cause
+  # read as a flaky runner. AddressSanitizer named it in one run, with the
+  # allocation, the free and the read all pointing at three lines of one
+  # function.
+  #
+  # **This does not run on a pull request**, the same as the lint job above and
+  # for the same reason: a sanitized build and a sanitized test suite are both
+  # slower than the plain ones, and a review should not wait on them. It runs on
+  # a push to main and on request from the Actions tab. So a green pull request
+  # says nothing about the sanitizer.
+  #
+  # Linux with Clang only. MSVC has an AddressSanitizer of its own, under a
+  # different flag, with a runtime DLL to ship and no UndefinedBehaviorSanitizer
+  # at all. That is a separate piece of work.
+  #
+  # It builds the editor configuration, which is the superset, for the reason
+  # the lint job gives: rule 4.3 says WITH_EDITOR removes code and never changes
+  # it, so a file compiled with the editor off is also compiled with it on.
+  sanitize:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    # A sanitized build is about as long as a plain one and a sanitized test run
+    # is several times longer, so this is generous against the 45 the build jobs
+    # take.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system packages
+        run: |
+          .github/scripts/apt-install.sh ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev \
+            libudev-dev
+
+      - name: Install LLVM 19
+        run: |
+          .github/scripts/retry.sh 90 'wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null'
+          # The source is written directly rather than through
+          # add-apt-repository, which runs an apt-get update of its own. Killing
+          # that on a timeout left the update alive and holding the apt lock,
+          # and every later attempt then failed at once. apt-install.sh does the
+          # update, once, where it can be retried.
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-19.list > /dev/null
+          .github/scripts/apt-install.sh clang-19
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan profile detect --force
+
+      - name: Add the moth_ui remote
+        run: |
+          conan remote add --force artifactory \
+            https://artifactory.matthewcotton.net/artifactory/api/conan/conan-local
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          # The same key the editor build job and the lint job use. The
+          # dependencies are not sanitized, so they are the same packages and
+          # the three jobs share one cache. Only this project carries the flags.
+          key: conan-linux-clang-uitrue-editortrue-${{ hashFiles('conanfile.py') }}
+          restore-keys: |
+            conan-linux-clang-uitrue-editortrue-
+            conan-linux-clang-uitrue-
+            conan-linux-clang-
+
+      - name: Conan install
+        run: |
+          conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang \
+            -b missing -o "&:with_ui=True" -o "&:with_editor=True" \
+            -c tools.system.package_manager:mode=install \
+            -c tools.system.package_manager:sudo=True
+
+      # clang-tidy is off, the same as in the build jobs. The lint job runs it.
+      - name: Configure
+        run: |
+          cmake --preset conan-relwithdebinfo \
+            -DENGINE_SANITIZERS=address,undefined \
+            -DENGINE_ENABLE_CLANG_TIDY=OFF
+
+      - name: Build
+        run: cmake --build --preset conan-relwithdebinfo
+
+      # print_stacktrace is what turns an UndefinedBehaviorSanitizer report from
+      # one line into something a person can act on. cmake/Sanitizers.cmake
+      # already builds with -fno-sanitize-recover, so a finding aborts the test
+      # rather than printing into a log nobody reads.
+      #
+      # -LE gpu leaves out the one check that needs a device, the same as the
+      # build jobs.
+      - name: Test
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --preset conan-relwithdebinfo --output-on-failure -LE gpu
+
   build:
     name: build (${{ matrix.profile }}, ui=${{ matrix.with_ui }}, editor=${{ matrix.with_editor }}, lua=${{ matrix.with_lua }})
     runs-on: ${{ matrix.os }}
