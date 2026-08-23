@@ -1383,27 +1383,40 @@ namespace {
         }
 
         // Every entity goes and comes back, so anything holding one lets go.
-        //
-        // **The undo history goes with them.** An edit names its entity by
-        // identity, and a scene file carries those identities only from version
-        // 4, which is what the editor writes. The shipped sandbox scene is
-        // version 2, so its entities come back with new identities and every
-        // entry on the stack would name an entity that is not there. Each one
-        // then reports and does nothing, which is worse than an empty stack.
-        // Issue #371 is keeping the history when the identities do survive.
+        // The selection is an entt::entity, which is a slot number, so it goes.
         editor.selected = entt::null;
-        editor.history.clear();
         editor.world.clear();
         engine::scene::prefabs().clear();
 
         if (!sandbox::load(editor.watcher.root(), &editor.content, editor.world)) {
+            // The world is empty and the history names entities in a world that
+            // is gone, so there is nothing for it to reach.
+            editor.history.clear();
             ENGINE_LOG_ERROR("The scene did not load, so the world is empty. Fix the file "
                              "and save it again.");
             return;
         }
         bind_camera(editor);
-        ENGINE_LOG_INFO("The project was read again. The world holds {} entities.",
-                        editor.world.size());
+
+        // **The undo history is kept when the entities came back.** An edit
+        // names its entity by identity, and a scene file carries those only
+        // from version 4, which is what the editor writes. A scene the editor
+        // has saved therefore gives the same entities back and every entry
+        // still reaches its own. The shipped sandbox scene is version 2 and
+        // carries none, so its entities come back new and the stack cannot.
+        //
+        // The question is asked of the world rather than of the file, because
+        // that is the question the stack actually cares about. See issue #371.
+        const bool kept = editor.history.fits(editor.world);
+        if (!kept) {
+            // A stack of entries that name entities which are not there is
+            // worse than an empty one: each undo reports and nothing moves.
+            editor.history.clear();
+        }
+
+        ENGINE_LOG_INFO("The project was read again. The world holds {} entities, and the undo "
+                        "history was {}.",
+                        editor.world.size(), kept ? "kept" : "cleared");
     }
 
     /// The cooker that ships beside this executable.

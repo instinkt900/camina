@@ -3472,12 +3472,24 @@ a half seconds later, which is the watcher settling.
 step, and a stop reads a snapshot back over anything a reload did. That is the same reason undo
 is off during play.
 
-**The undo history is cleared when a reload rebuilds the world, and that is a limit rather than
-a decision.** An edit names its entity by identity, and a scene file carries identities only
-from version 4, which is what the editor writes. The shipped sandbox scene is version 2 and
-carries none, so its entities come back new and every entry would name an entity that is not
-there. Each one then reports and does nothing, which is worse than an empty stack. Issue #371
-holds the fix, which is to keep the history when every identity did come back.
+**The undo history survives a reload when the entities do, which #371 settled.** An edit names
+its entity by identity, and a scene file carries identities only from version 4, which is what
+the editor writes. A scene the editor has saved therefore gives the same entities back and the
+whole stack is still good. The shipped sandbox scene is version 2 and carries none, so its
+entities come back new and every entry would name an entity that is not there. Each one then
+reports and does nothing, which is worse than an empty stack, so that case still clears.
+
+**The question is asked of the world, not of the document.** #371 offered both: check that
+every identity the stack names is in the world after the rebuild, or decide by whether the
+document carried identities for every entity. The first is what `History::fits` does, because
+it is the question the stack actually cares about. A document can carry identities and still
+fail to give an entry its entity back, and then deciding by the document would keep a stack
+that cannot run.
+
+**Each edit answers for its own shape rather than for "the entity is present".** A create
+expects its entity to be in the world and a delete expects it to be gone, so an entry whose
+expectation the rebuild no longer meets is stale whichever way it disagrees. `Edit::fits` is
+pure, so an edit added later cannot forget to answer.
 
 **Import is not cheap and the answer is a cache, not a shortcut.** A cold cook of the sandbox
 tree is 2.8 seconds for 30 assets, most of it BC7 and the environment prefilter; an

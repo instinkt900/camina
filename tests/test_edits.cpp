@@ -345,6 +345,70 @@ namespace {
     }
 
     /**
+     * A reload keeps the undo history when the scene carries identities.
+     *
+     * Issue #371. The editor rebuilt the world on every reload and threw the
+     * stack away with it, because a scene that carries no identity gives its
+     * entities back new ones and every entry then names something that is not
+     * there. A scene the editor has saved is version 4 and carries one for each
+     * entity, so the stack is still good and losing an afternoon of undo
+     * because a texture changed is the authoring pain M12 exists to remove.
+     *
+     * This drives the decision rather than the editor's reload, because the
+     * decision is History's. The two halves are one document with identities
+     * and the same document with them taken out, which is what a version 2
+     * file is.
+     */
+    void test_a_reload_keeps_the_history_when_the_entities_come_back() {
+        sc::ComponentRegistry types = make_registry();
+        sc::PrefabLibrary library;
+
+        sc::World world;
+        const entt::entity entity = world.create();
+        world.registry().emplace<sc::Name>(entity, sc::Name{ "target" });
+
+        ed::History history;
+        auto edit = ed::component_changed(world.identity(entity), "Name",
+                                          nlohmann::json{ { "value", "target" } },
+                                          nlohmann::json{ { "value", "renamed" } }, &types);
+        check(edit != nullptr, "an edit records against that entity");
+        edit->apply(world);
+        history.record(std::move(edit));
+
+        const nlohmann::json saved = sc::save_scene(world, types, library);
+
+        // The reload: every entity goes and the document builds them again.
+        {
+            sc::World reloaded;
+            check(sc::load_scene(saved, reloaded, types, library), "the scene loads again");
+            check(history.fits(reloaded),
+                  "a scene that carries identities gives back a history that still fits");
+            check(history.undo(reloaded), "and an undo after the reload runs");
+
+            const entt::entity found = reloaded.find(world.identity(entity));
+            check(found != entt::null, "the entity came back under the identity it had");
+            if (found != entt::null) {
+                check(reloaded.registry().get<sc::Name>(found).value == "target",
+                      "and the undo reached it, so the name went back");
+            }
+        }
+
+        // The same document with every identity taken out, which is what every
+        // scene and prefab this project ships looks like.
+        nlohmann::json without = saved;
+        for (auto& record : without.at(sc::kEntitiesKey)) {
+            record.erase(sc::kIdKey);
+        }
+        {
+            sc::World reloaded;
+            check(sc::load_scene(without, reloaded, types, library),
+                  "the same scene without identities loads");
+            check(!history.fits(reloaded),
+                  "and a history that names entities it cannot find does not fit");
+        }
+    }
+
+    /**
      * An edit still names its entity after that entity has come back.
      *
      * This is the box on the milestone. Undo builds the entity again with the
@@ -639,6 +703,8 @@ int main() {
     test_a_deleted_member_comes_back_a_member();
     std::printf("the parent link\n");
     test_a_reparented_entity_goes_back();
+    std::printf("a reload\n");
+    test_a_reload_keeps_the_history_when_the_entities_come_back();
     std::printf("the actions a panel calls\n");
     test_the_delete_pair_records_and_goes_back();
     test_the_component_pairs_record_and_go_back();
