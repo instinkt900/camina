@@ -66,6 +66,45 @@ namespace engine::gfx {
             VkPipelineColorBlendStateCreateInfo blend{};
         };
 
+        VkBlendFactor to_vk_blend_factor(BlendFactor factor) {
+            switch (factor) {
+            case BlendFactor::Zero:
+                return VK_BLEND_FACTOR_ZERO;
+            case BlendFactor::One:
+                return VK_BLEND_FACTOR_ONE;
+            case BlendFactor::SrcColor:
+                return VK_BLEND_FACTOR_SRC_COLOR;
+            case BlendFactor::SrcAlpha:
+                return VK_BLEND_FACTOR_SRC_ALPHA;
+            case BlendFactor::OneMinusSrcAlpha:
+                return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            case BlendFactor::DstColor:
+                return VK_BLEND_FACTOR_DST_COLOR;
+            case BlendFactor::DstAlpha:
+                return VK_BLEND_FACTOR_DST_ALPHA;
+            }
+            // Unreachable while the switch is exhaustive. Zero rather than One,
+            // because a term that contributes nothing is the safer answer for a
+            // value that should not exist.
+            return VK_BLEND_FACTOR_ZERO;
+        }
+
+        VkBlendOp to_vk_blend_op(BlendOp op) {
+            switch (op) {
+            case BlendOp::Add:
+                return VK_BLEND_OP_ADD;
+            case BlendOp::Subtract:
+                return VK_BLEND_OP_SUBTRACT;
+            case BlendOp::ReverseSubtract:
+                return VK_BLEND_OP_REVERSE_SUBTRACT;
+            case BlendOp::Min:
+                return VK_BLEND_OP_MIN;
+            case BlendOp::Max:
+                return VK_BLEND_OP_MAX;
+            }
+            return VK_BLEND_OP_ADD;
+        }
+
         void fill_fixed_state(FixedState& state, const GraphicsPipelineDesc& desc) {
             state.vertex_input.sType =
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -110,17 +149,22 @@ namespace engine::gfx {
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
-            // The "over" operator. The color arrives multiplied by nothing, so
-            // the source factor is its own alpha. The alpha channel takes what
-            // is left rather than the same pair, so blending twice into the same
-            // attachment builds up the coverage instead of scaling it down.
+            // GraphicsPipelineDesc defaults every field of this to the "over"
+            // operator, so a pipeline that sets blend and nothing else gets
+            // what it always did. The alpha pair is deliberately not the color
+            // pair: blending twice into one attachment then builds the coverage
+            // up instead of scaling it down.
             state.blend_attachment.blendEnable = desc.blend ? VK_TRUE : VK_FALSE;
-            state.blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            state.blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            state.blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-            state.blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            state.blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            state.blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+            state.blend_attachment.srcColorBlendFactor =
+                to_vk_blend_factor(desc.blend_state.src_color);
+            state.blend_attachment.dstColorBlendFactor =
+                to_vk_blend_factor(desc.blend_state.dst_color);
+            state.blend_attachment.colorBlendOp = to_vk_blend_op(desc.blend_state.color_op);
+            state.blend_attachment.srcAlphaBlendFactor =
+                to_vk_blend_factor(desc.blend_state.src_alpha);
+            state.blend_attachment.dstAlphaBlendFactor =
+                to_vk_blend_factor(desc.blend_state.dst_alpha);
+            state.blend_attachment.alphaBlendOp = to_vk_blend_op(desc.blend_state.alpha_op);
 
             state.blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
             // A depth-only pipeline has no color attachment to blend into, and

@@ -7,6 +7,7 @@
 
 #include "assets/asset_source.h"
 #include "gfx/device.h"
+#include "ui/blend.h"
 #include "ui/renderer.h"
 
 #include <array>
@@ -102,12 +103,26 @@ namespace engine::ui {
          */
         void report_filter_gap(moth_ui::TextureFilter filter);
 
+        /**
+         * @brief Destroys every pipeline and nulls its handle.
+         *
+         * A handle that was never built is null, and destroy_pipeline() takes
+         * one, so this needs no count of how far create() got.
+         */
+        void destroy_pipelines();
+
         gfx::Device* device_ = nullptr;
 
-        /// @brief The pipeline for a run that replaces what is under it.
-        gfx::PipelineHandle opaque_;
-        /// @brief The pipeline for a run that blends over what is under it.
-        gfx::PipelineHandle blended_;
+        /**
+         * @brief One pipeline for each blend mode, indexed by blend_mode_index().
+         *
+         * Five rather than two. Add, Multiply and Modulate each need blend
+         * state of their own, and until issue #206 they took the Alpha pipeline
+         * and drew as "over". That is wrong rather than missing, so an author
+         * who changed a mode saw the picture barely move and had no way to tell
+         * the layout from the backend.
+         */
+        std::array<gfx::PipelineHandle, kBlendModeCount> pipelines_{};
 
         /**
          * @brief One white texel, for a run that draws no image.

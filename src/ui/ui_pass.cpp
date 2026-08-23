@@ -20,16 +20,6 @@ namespace engine::ui {
             float inv_logical_height = 0.0F;
         };
 
-        /// Whether a moth_ui blend mode needs the blending pipeline.
-        [[nodiscard]] bool needs_blending(moth_ui::BlendMode mode) {
-            // Replace takes the opaque pipeline and Alpha takes the blending
-            // one, and both are correct. Add, Multiply and Modulate each want
-            // blend state of their own and draw as straight alpha here, which
-            // is wrong rather than missing. Issue #206 holds it. No layout
-            // asks for one yet, because nothing loads a layout.
-            return mode != moth_ui::BlendMode::Replace;
-        }
-
     } // namespace
 
     bool UiPass::create(gfx::Device* device, const assets::AssetSource& content) {
@@ -90,19 +80,20 @@ namespace engine::ui {
             .color_format = gfx::ColorTargetFormat::Swapchain,
         };
 
-        if (!gfx::succeeded(gfx::create_graphics_pipeline(device_, desc, &opaque_))) {
-            ENGINE_LOG_ERROR("The opaque UI pipeline did not build.");
-            device_ = nullptr;
-            return false;
-        }
-
-        desc.blend = true;
-        if (!gfx::succeeded(gfx::create_graphics_pipeline(device_, desc, &blended_))) {
-            ENGINE_LOG_ERROR("The blended UI pipeline did not build.");
-            gfx::destroy_pipeline(device_, opaque_);
-            opaque_ = gfx::PipelineHandle{};
-            device_ = nullptr;
-            return false;
+        // One pipeline for each blend mode. They differ in nothing but the
+        // blend state, so the descriptor above is built once and only those two
+        // fields change. Issue #206.
+        for (std::size_t slot = 0; slot < kBlendModeCount; ++slot) {
+            const BlendPipeline wanted = blend_pipeline_for(slot);
+            desc.blend = wanted.blend;
+            desc.blend_state = wanted.state;
+            if (!gfx::succeeded(
+                    gfx::create_graphics_pipeline(device_, desc, &pipelines_[slot]))) {
+                ENGINE_LOG_ERROR("UI blend pipeline {} did not build.", slot);
+                destroy_pipelines();
+                device_ = nullptr;
+                return false;
+            }
         }
 
         // One white texel for every run that draws no image. The fragment stage
@@ -120,10 +111,7 @@ namespace engine::ui {
         };
         if (!gfx::succeeded(gfx::create_texture(device_, white_desc, &white_))) {
             ENGINE_LOG_ERROR("The white UI texel was not created.");
-            gfx::destroy_pipeline(device_, blended_);
-            blended_ = gfx::PipelineHandle{};
-            gfx::destroy_pipeline(device_, opaque_);
-            opaque_ = gfx::PipelineHandle{};
+            destroy_pipelines();
             device_ = nullptr;
             return false;
         }
@@ -156,10 +144,10 @@ namespace engine::ui {
               .buffer = {} },
         } };
 
-        // Both pipelines come from the same two shaders, so their set layouts
-        // are identical and a set built against one binds with the other.
+        // Every pipeline comes from the same two shaders, so their set layouts
+        // are identical and a set built against one binds with any of them.
         gfx::DescriptorSetHandle set;
-        if (!gfx::succeeded(gfx::create_descriptor_set(device_, opaque_, 0, writes.data(),
+        if (!gfx::succeeded(gfx::create_descriptor_set(device_, pipelines_[0], 0, writes.data(),
                                                        writes.size(), &set))) {
             ENGINE_LOG_ERROR("A UI descriptor set was not built. The pool serves a fixed "
                              "number, so a layout with many images can run out.");
@@ -198,11 +186,18 @@ namespace engine::ui {
             gfx::destroy_buffer(device_, buffer);
             buffer = gfx::BufferHandle{};
         }
-        gfx::destroy_pipeline(device_, blended_);
-        blended_ = gfx::PipelineHandle{};
-        gfx::destroy_pipeline(device_, opaque_);
-        opaque_ = gfx::PipelineHandle{};
+        destroy_pipelines();
         device_ = nullptr;
+    }
+
+    void UiPass::destroy_pipelines() {
+        // Every failure path in create() runs this, and a handle that was never
+        // built is null. destroy_pipeline takes a null handle, so the loop needs
+        // no count of how many were built before the one that failed.
+        for (gfx::PipelineHandle& pipeline : pipelines_) {
+            gfx::destroy_pipeline(device_, pipeline);
+            pipeline = gfx::PipelineHandle{};
+        }
     }
 
     bool UiPass::upload(gfx::BufferHandle& buffer, const void* data, std::size_t bytes,
@@ -275,7 +270,7 @@ namespace engine::ui {
                 continue;
             }
 
-            const gfx::PipelineHandle wanted = needs_blending(batch.blend) ? blended_ : opaque_;
+            const gfx::PipelineHandle wanted = pipelines_[blend_mode_index(batch.blend)];
             if (wanted.value != bound.value) {
                 gfx::cmd_bind_pipeline(commands, wanted);
                 gfx::cmd_push_constants(commands, wanted, &push, sizeof(push));

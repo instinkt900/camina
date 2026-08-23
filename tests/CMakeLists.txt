@@ -409,6 +409,36 @@ if(ENGINE_WITH_UI)
 
     add_test(NAME ui_font COMMAND test_ui_font)
 
+    # Issue #206. The blend mode a batch draws with. It names no Vulkan type and
+    # opens no device, because the mapping from a mode to pipeline state is a
+    # pure function and the draw call it feeds is not the part that was wrong.
+    add_executable(test_ui_blend test_ui_blend.cpp)
+    target_link_libraries(test_ui_blend PRIVATE engine::ui)
+    engine_set_warnings(test_ui_blend)
+    engine_enable_clang_tidy(test_ui_blend)
+
+    add_test(NAME ui_blend COMMAND test_ui_blend)
+
+    # Issue #206. A mode the pass has no pipeline for stops rather than drawing
+    # the wrong one. The refusal is an assertion, so the program is expected to
+    # die and the message is the whole test. See the entt_assert entry above.
+    #
+    # ENGINE_ASSERT compiles out in a Release build, so this is not registered
+    # there.
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        add_executable(test_ui_blend_invalid test_ui_blend_invalid.cpp)
+        target_link_libraries(test_ui_blend_invalid PRIVATE engine::ui)
+        engine_set_warnings(test_ui_blend_invalid)
+        engine_enable_clang_tidy(test_ui_blend_invalid)
+
+        add_test(
+            NAME ui_blend_invalid
+            COMMAND ${CMAKE_COMMAND}
+                    -DEXE=$<TARGET_FILE:test_ui_blend_invalid>
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_assert.cmake
+        )
+    endif()
+
     # M6.3. RenderImage refuses a nine-sliced image rather than stretching it.
     # The refusal is an assertion, so the program is expected to die and the
     # message is the whole test. See the entt_assert entry above.
