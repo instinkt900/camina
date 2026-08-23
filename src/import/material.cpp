@@ -9,6 +9,7 @@
 
 #include <cgltf.h>
 
+#include <optional>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -174,8 +175,9 @@ namespace engine::import {
          */
         [[nodiscard]] bool texture_guid(const cgltf_data& data, const cgltf_texture* texture,
                                         const std::filesystem::path& directory,
-                                        const InlineImages& images, std::string_view where,
-                                        engine::Guid& out) {
+                                        const InlineImages& images,
+                                        const std::map<std::size_t, as::ColorSpace>& uses,
+                                        std::string_view where, engine::Guid& out) {
             out = engine::Guid{};
             if (texture == nullptr || texture->image == nullptr) {
                 return true;
@@ -208,8 +210,20 @@ namespace engine::import {
                 return false;
             }
 
+            // What the model uses this image for, which beats a guess from the
+            // file name. image_meta() takes it only when it creates the
+            // sidecar, so a person's edit still wins on every cook after the
+            // first. Issue #187.
+            std::optional<as::ColorSpace> known;
+            std::size_t index = 0;
+            if (image_index(data, texture, index)) {
+                if (const auto found = uses.find(index); found != uses.end()) {
+                    known = found->second;
+                }
+            }
+
             as::AssetMeta meta;
-            if (!image_meta(image, meta)) {
+            if (!image_meta(image, meta, known)) {
                 return false;
             }
             out = meta.guid;
@@ -259,10 +273,11 @@ namespace engine::import {
         [[nodiscard]] bool read_gltf_material(const cgltf_data& data,
                                               const cgltf_material& source,
                                               const std::filesystem::path& directory,
-                                              const InlineImages& images, std::string_view where,
-                                              as::Material& out) {
+                                              const InlineImages& images,
+                                              const std::map<std::size_t, as::ColorSpace>& uses,
+                                              std::string_view where, as::Material& out) {
             const auto resolve = [&](const cgltf_texture* texture, engine::Guid& guid) {
-                return texture_guid(data, texture, directory, images, where, guid);
+                return texture_guid(data, texture, directory, images, uses, where, guid);
             };
 
             if (source.has_pbr_metallic_roughness != 0) {
@@ -361,12 +376,16 @@ namespace engine::import {
                         const std::filesystem::path& relative, engine::Guid parent,
                         const InlineImages& images, CookedMaterials& out) {
         const std::filesystem::path directory = source.parent_path();
+        // Built once for the whole file rather than for each material, because
+        // it reads every material to answer for one image. cook_inline_images()
+        // builds the same map for the images that have no file.
+        const std::map<std::size_t, as::ColorSpace> uses = image_uses(data);
 
         for (cgltf_size at = 0; at < data.materials_count; ++at) {
             const std::string where = source.string() + " material " + std::to_string(at);
 
             as::Material material;
-            if (!read_gltf_material(data, data.materials[at], directory, images, where,
+            if (!read_gltf_material(data, data.materials[at], directory, images, uses, where,
                                     material)) {
                 return false;
             }

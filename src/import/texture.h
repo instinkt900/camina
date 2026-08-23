@@ -13,6 +13,7 @@
 #include "assets/texture.h"
 #include "import/writer.h"
 
+#include <optional>
 #include <cstddef>
 #include <filesystem>
 #include <span>
@@ -62,7 +63,8 @@ namespace engine::import {
      * @return True when @p out holds a valid GUID.
      */
     [[nodiscard]] bool image_meta(const std::filesystem::path& source,
-                                  engine::assets::AssetMeta& out);
+                                  engine::assets::AssetMeta& out,
+                                  std::optional<engine::assets::ColorSpace> known = std::nullopt);
 
     /**
      * @brief Cooks one image into one cooked texture file.

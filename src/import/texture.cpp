@@ -5,6 +5,7 @@
 #include <bc7enc.h>
 #include <stb_image.h>
 
+#include <optional>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -324,12 +325,16 @@ namespace engine::import {
         return as::ColorSpace::Srgb;
     }
 
-    bool image_meta(const std::filesystem::path& source, as::AssetMeta& out) {
+    bool image_meta(const std::filesystem::path& source, as::AssetMeta& out,
+                    std::optional<as::ColorSpace> known) {
         bool created = false;
         if (!as::meta_for(source, out, &created)) {
             return false;
         }
         if (!created) {
+            // The file decides from here on, so an edit survives a re-cook and
+            // a caller that knows better than the sidecar does not get to
+            // overrule a person. That holds whether or not @p known is set.
             return true;
         }
 
@@ -337,12 +342,21 @@ namespace engine::import {
         // starting guess than "sRGB" for every file. So the guess goes in once,
         // when the file is written, and after that the file decides. A wrong
         // guess is one edit to fix and it never comes back.
-        out.texture.color_space = guess_color_space(source);
+        //
+        // **A caller that knows beats the guess.** A glTF material says what it
+        // uses an image for, and that is an answer rather than a guess from the
+        // file name. Until #187 an image on disk took the guess even when the
+        // model had already said. Intel Sponza is where it showed: a base
+        // colour map named "..._Opacity.png" holds "mask", which is in the
+        // linear list, so it was read as linear and came out wrong at every
+        // value except 0 and 1.
+        out.texture.color_space = known.value_or(guess_color_space(source));
         if (!as::save_meta(source, out)) {
             return false;
         }
-        ENGINE_LOG_INFO("{}: reading it as {}. Edit the sidecar to change that.", source.string(),
-                        as::to_text(out.texture.color_space));
+        ENGINE_LOG_INFO("{}: reading it as {}, {}. Edit the sidecar to change that.",
+                        source.string(), as::to_text(out.texture.color_space),
+                        known ? "which is what the model uses it for" : "guessed from the name");
         return true;
     }
 
