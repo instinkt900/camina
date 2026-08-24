@@ -35,12 +35,11 @@ namespace {
     /// Runs this program as a child that writes back the arguments it received.
     constexpr std::string_view kChildArgs = "--child-args";
 
+    /// Names this binary's scratch tree. See test::scratch.
+    constexpr std::string_view kSuite = "platform";
+
     std::filesystem::path scratch(std::string_view name) {
-        const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "camina_test_platform" / name;
-        test::remove_tree(path);
-        std::filesystem::create_directories(path);
-        return path;
+        return test::scratch(kSuite, name);
     }
 
     void write_file(const std::filesystem::path& path, std::string_view text) {
@@ -337,8 +336,11 @@ namespace {
      * settings of somebody's editor. The directory is removed on the way out.
      */
     void test_the_preferences_directory_is_there_and_writable() {
-        const std::filesystem::path directory =
-            pf::preferences_directory("camina_test_paths");
+        // The process id is in the name for the reason test::scratch carries
+        // one: two runs of this binary would otherwise write and remove one
+        // directory. See issue #293.
+        const std::string application = "camina_test_paths_" + test::process_id();
+        const std::filesystem::path directory = pf::preferences_directory(application.c_str());
         check(!directory.empty(), "the platform says where the settings of this user go");
         if (directory.empty()) {
             return;
@@ -346,7 +348,7 @@ namespace {
 
         // A path with a trailing separator joins as "dir//name" and its
         // filename() is empty, so both of these are what a caller relies on.
-        check(directory.filename() == "camina_test_paths",
+        check(directory.filename() == application,
               "the last part of the path is the application name");
         check(std::filesystem::is_directory(directory),
               "the directory is created rather than only named");
@@ -369,7 +371,7 @@ namespace {
         // somebody else, and leaving it is the answer rather than the failure.
         std::error_code failed;
         std::filesystem::remove(file, failed);
-        if (directory.filename() == "camina_test_paths") {
+        if (directory.filename() == application) {
             std::filesystem::remove(directory, failed);
         }
     }

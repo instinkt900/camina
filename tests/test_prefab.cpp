@@ -200,10 +200,7 @@ namespace {
      * meantime. See issue #185.
      */
     void test_add_file() {
-        const std::filesystem::path dir =
-            std::filesystem::temp_directory_path() / "camina_test_prefab";
-        test::remove_tree(dir);
-        std::filesystem::create_directories(dir);
+        const std::filesystem::path dir = test::scratch("prefab", "add_file");
 
         const std::filesystem::path good = dir / "crate.prefab";
         {
