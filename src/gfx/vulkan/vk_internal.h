@@ -12,6 +12,7 @@
 #include "gfx/vulkan/vk_common.h"
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -182,6 +183,36 @@ namespace engine::gfx {
         /// @brief Slots that destroy_descriptor_set() released.
         std::vector<std::uint32_t> free_descriptor_sets;
 
+        /**
+         * @brief What retire_*() recorded, and the frame it has to outlive.
+         *
+         * The kind says which handle table the index belongs to, because a
+         * handle carries no type of its own once it is stored.
+         */
+        struct Retired {
+            /// @brief Which table the handle names.
+            enum class Kind : std::uint8_t { Buffer,
+                                             Texture,
+                                             Pipeline,
+                                             DescriptorSet };
+
+            Kind kind = Kind::Buffer; ///< Which table to free from.
+            std::uint64_t handle = 0; ///< The raw handle value.
+            std::uint64_t frame = 0;  ///< The frame counter when it was retired.
+        };
+
+        /// @brief Resources waiting for the frames that could read them to end.
+        std::vector<Retired> retired;
+
+        /**
+         * @brief Frames begun since the device started. Never reset.
+         *
+         * Not the same as frame_index, which is a slot in the ring and comes
+         * back around. A retired resource needs a number that only goes up, or
+         * two retires kFramesInFlight apart would compare equal.
+         */
+        std::uint64_t frame_counter = 0;
+
         std::array<Frame, kFramesInFlight> frames{}; ///< The frames-in-flight ring.
         std::uint32_t frame_index = 0;               ///< Which ring slot the next frame uses.
         std::uint32_t image_index = 0;               ///< Which swapchain image the open frame holds.
@@ -227,6 +258,29 @@ namespace engine::gfx {
          * @return Result::Success, or the reason the build failed.
          */
         [[nodiscard]] Result create_swapchain(Device& device, Extent2D size);
+
+        /**
+         * @brief Frees every retired resource the frames have moved past.
+         *
+         * begin_frame() calls this after it waits on the fence of the slot it
+         * is about to reuse. At that point the frame recorded
+         * @ref kFramesInFlight begins ago has finished on the GPU, so anything
+         * retired during it or earlier is unreferenced.
+         *
+         * @param device The device to sweep.
+         */
+        void release_retired(Device& device);
+
+        /**
+         * @brief Frees every retired resource whatever frame it was recorded on.
+         *
+         * destroy_device() calls this after it waits for the device. A device
+         * that stopped drawing would otherwise leak whatever was retired after
+         * the last frame.
+         *
+         * @param device The device to empty.
+         */
+        void release_all_retired(Device& device);
 
         /**
          * @brief Builds the images a headless device draws into.

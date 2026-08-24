@@ -76,6 +76,68 @@ namespace engine::gfx {
     void device_wait_idle(Device* device);
 
     /**
+     * @brief Frees a resource once every frame that could read it has finished.
+     *
+     * This is the answer to the stall a reload used to pay. Freeing a resource
+     * a submitted frame may still read is a use-after-free, so the caller used
+     * to wait for the whole device first. A wait costs a frame or two, which a
+     * person saving a file cannot see and a streaming system cannot pay.
+     *
+     * A retired resource is recorded against the frame that was current when
+     * the call happened, and it is released once @ref kFramesInFlight frames
+     * have begun after that one. By then the fence of the frame that could
+     * have been recording it has been waited on.
+     *
+     * **The handle is stale from the moment this returns.** Nothing may bind
+     * it, and nothing may destroy it a second time. The slot itself is not
+     * reused until the release happens.
+     *
+     * A device that never opens another frame releases everything it holds in
+     * destroy_device(), so nothing leaks when an application stops drawing.
+     *
+     * @param device The device that owns the resource. Null does nothing.
+     * @param buffer The handle to retire. A null or stale handle does nothing.
+     *
+     * @code
+     * // Instead of: device_wait_idle(device); destroy_buffer(device, old);
+     * engine::gfx::retire_buffer(device, old);
+     * @endcode
+     */
+    void retire_buffer(Device* device, BufferHandle buffer);
+
+    /**
+     * @brief Frees a texture behind the frames. See retire_buffer().
+     * @param device The device that owns the texture. Null does nothing.
+     * @param texture The handle to retire. A null or stale handle does nothing.
+     */
+    void retire_texture(Device* device, TextureHandle texture);
+
+    /**
+     * @brief Frees a pipeline behind the frames. See retire_buffer().
+     * @param device The device that owns the pipeline. Null does nothing.
+     * @param pipeline The handle to retire. A null or stale handle does nothing.
+     */
+    void retire_pipeline(Device* device, PipelineHandle pipeline);
+
+    /**
+     * @brief Frees a descriptor set behind the frames. See retire_buffer().
+     * @param device The device that owns the set. Null does nothing.
+     * @param set The handle to retire. A null or stale handle does nothing.
+     */
+    void retire_descriptor_set(Device* device, DescriptorSetHandle set);
+
+    /**
+     * @brief How many retired resources are waiting to be released.
+     *
+     * A measurement rather than a control. A number that never falls means
+     * frames stopped running, or something retires on every frame.
+     *
+     * @param device The device to ask. Null answers zero.
+     * @return The count.
+     */
+    [[nodiscard]] std::size_t retired_count(const Device* device);
+
+    /**
      * @brief Rebuilds the swapchain at a new size.
      *
      * Call this when the window changes size, and when begin_frame() reports

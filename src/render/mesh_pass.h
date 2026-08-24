@@ -673,8 +673,15 @@ namespace engine::render {
                                           const std::vector<gfx::DescriptorBinding>& bindings,
                                           bool blend, gfx::PipelineHandle& out);
 
-        /// Frees every pipeline in @p set and clears the handles.
-        void destroy_pipelines(PipelineSet& set);
+        /**
+         * Frees every pipeline in @p set and clears the handles.
+         *
+         * @param set The pipelines to release.
+         * @param behind_the_frames True to retire them rather than free them
+         * now. A reload needs that, because a submitted frame may still have
+         * one bound. A half-built set has never been submitted, so it does not.
+         */
+        void destroy_pipelines(PipelineSet& set, bool behind_the_frames = false);
 
         /// The pipeline every descriptor set is allocated against. See the note
         /// on PipelineSet about why any of them would serve.

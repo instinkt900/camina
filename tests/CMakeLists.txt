@@ -490,6 +490,18 @@ engine_enable_clang_tidy(test_gpu_buffer)
 add_test(NAME gpu_buffer COMMAND test_gpu_buffer)
 set_tests_properties(gpu_buffer PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
 
+# Issue #60. The deferred free queue, against a real device. It checks that a
+# retired resource is *held* rather than freed, which is the whole of the
+# contract: a queue that freed at once would pass every other check and be the
+# use-after-free the wait used to stop. Labelled "gpu" for the reason above.
+add_executable(test_gpu_retire test_gpu_retire.cpp)
+target_link_libraries(test_gpu_retire PRIVATE engine::core)
+engine_set_warnings(test_gpu_retire)
+engine_enable_clang_tidy(test_gpu_retire)
+
+add_test(NAME gpu_retire COMMAND test_gpu_retire)
+set_tests_properties(gpu_retire PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
+
 # Issue #268. The Key to scancode table, checked against the names SDL gives
 # those scancodes. It links engine::core for platform::scancode_name, which
 # reads a static SDL table and opens no window, so this runs in CI.
