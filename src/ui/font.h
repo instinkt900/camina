@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -175,9 +176,17 @@ namespace engine::ui {
      * @warning Call destroy() before the device goes away. The atlas texture is
      *          a device resource and nothing else frees it.
      */
+    /// @cond
+    // One glyph, rasterized and waiting to be packed. Defined in font.cpp,
+    // because nothing outside it has any use for the bitmap.
+    struct PendingGlyph;
+    /// @endcond
+
     class Font final : public moth_ui::IFont {
     public:
-        Font() = default;
+        /// @brief Builds an empty font. Defined out of line, because the packer
+        /// it holds is an incomplete type here.
+        Font();
 
         Font(const Font&) = delete;
         Font& operator=(const Font&) = delete;
@@ -328,11 +337,77 @@ namespace engine::ui {
          */
         [[nodiscard]] const std::vector<std::uint8_t>& atlas_pixels() const { return pixels_; }
 
+        /**
+         * @brief Whether the atlas bytes have changed since the last upload.
+         *
+         * The atlas is packed on demand now, so the bytes can change after
+         * upload() has already turned them into a texture. load() leaves this
+         * true, because the preload set is in pixels_ and no texture holds it
+         * yet, and upload() clears it.
+         *
+         * Nothing acts on this yet. Issue #213 wires the draw path to it, and
+         * replacing a texture a frame in flight may still be reading is the
+         * work that half carries. This half is the packer alone.
+         *
+         * @return True when pixels_ holds something the texture does not.
+         */
+        [[nodiscard]] bool atlas_changed() const { return atlas_changed_; }
+
+        /**
+         * @brief The face glyph index one codepoint maps to.
+         *
+         * Shaping answers in glyph indices rather than characters, and
+         * pack_glyph() takes one. This is the way in from a codepoint, for a
+         * caller that wants to warm the atlas before it draws.
+         *
+         * @param codepoint The character to look up.
+         * @return The glyph index, or 0 when the face carries no glyph for it.
+         * Zero is the "missing glyph" index in every face, so it is both the
+         * refusal and a real answer nobody wants.
+         */
+        [[nodiscard]] std::uint32_t glyph_index_for(char32_t codepoint) const;
+
+        /**
+         * @brief Packs one glyph of the face, growing the atlas when it fills.
+         *
+         * This is what makes the coverage range a preload rather than a limit.
+         * The range in ::kCoverageFirst and ::kCoverageLast is what load()
+         * asks for, and anything else is packed the first time somebody asks
+         * for it.
+         *
+         * Growth packs every glyph again from nothing, because the packer
+         * cannot relocate a rectangle it already placed. So every texture
+         * coordinate this returned before a growth is stale, and a caller that
+         * kept one has to read it again from glyph().
+         *
+         * @param glyph_index A glyph index in the face, which is what
+         * HarfBuzz answers with. It is not a codepoint.
+         * @return The index into glyph(), or -1 when the face will not render
+         * the glyph or the atlas cannot grow to hold it.
+         */
+        [[nodiscard]] int pack_glyph(std::uint32_t glyph_index);
+
     private:
-        // Packs every covered codepoint and rasterizes it, at whatever size
-        // load() already set on the face. Reports false when the glyphs will
-        // not fit any atlas this is willing to build.
+        /// The live rectangle packer. Defined in font.cpp, so font.h names no
+        /// stb type.
+        struct Packer;
+
+        // Packs the preload range, at whatever size load() already set on the
+        // face. Reports false when the face carries none of it, or when the
+        // atlas cannot grow far enough to hold it.
         [[nodiscard]] bool build_atlas();
+
+        // Empties the atlas to one square of the given size and starts the
+        // packer over it.
+        void reset_atlas(int size);
+
+        // Copies one rasterized glyph into the atlas at a packed position and
+        // fills in its metrics and texture coordinates.
+        void blit(const PendingGlyph& source, int x0, int y0, Glyph& out);
+
+        // Doubles the square and packs every glyph again. Reports false at the
+        // largest size a device is guaranteed to accept.
+        [[nodiscard]] bool grow_atlas();
 
         // Breaks one newline-free run into lines and appends them. wrap() is
         // the newline split, and this is the word wrap under it.
@@ -352,8 +427,15 @@ namespace engine::ui {
 
         std::vector<Glyph> glyphs_;
         // HarfBuzz answers in face glyph indices, and the atlas holds only the
-        // covered ones. This turns the first into the second.
+        // packed ones. This turns the first into the second.
         std::map<std::uint32_t, int> glyph_index_to_atlas_;
+        // Which face glyph each atlas entry came from, in packing order. A
+        // growth packs every one of them again, and nothing else reads it.
+        std::vector<std::uint32_t> packed_order_;
+        // Held behind a pointer because it carries stb types and because
+        // stbrp_context points into its own node array, so it cannot be moved.
+        std::unique_ptr<Packer> packer_;
+        bool atlas_changed_ = false;
 
         std::vector<std::uint8_t> pixels_;
         int atlas_width_ = 0;
