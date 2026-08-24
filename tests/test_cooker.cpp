@@ -2092,6 +2092,39 @@ void main() { out_color = push.model[0]; }
     constexpr const char* kMinimalGltf =
         R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"scene":0,"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
 
+    /// @brief The 102 bytes @ref kMinimalGltf carries inline, as a separate file.
+    ///
+    /// One triangle: three positions, three normals, three texture
+    /// coordinates, then three indices, in the order the buffer views name.
+    /// A cook reads the buffer and refuses a glTF whose buffer is the wrong
+    /// length, so a test that names an external buffer has to write real bytes.
+    [[nodiscard]] std::string gltf_buffer_bytes() {
+        std::string bytes;
+        const auto put = [&bytes](const void* from, std::size_t count) {
+            std::array<char, sizeof(float)> held{};
+            std::memcpy(held.data(), from, count);
+            bytes.append(held.data(), count);
+        };
+        for (const float value : { 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
+                                   0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F,
+                                   0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F }) {
+            put(&value, sizeof(value));
+        }
+        for (const std::uint16_t index : { std::uint16_t{ 0 }, std::uint16_t{ 1 },
+                                           std::uint16_t{ 2 } }) {
+            put(&index, sizeof(index));
+        }
+        return bytes;
+    }
+
+    /// @brief @ref kMinimalGltf with its inline buffer replaced by a file name.
+    [[nodiscard]] std::string gltf_naming_its_buffer(std::string_view uri) {
+        std::string gltf = kMinimalGltf;
+        const std::size_t at = gltf.find("data:application/octet-stream;base64,");
+        check(at != std::string::npos, "the fixture carries an inline buffer to replace");
+        return gltf.substr(0, at) + std::string{ uri } + "\"}]}";
+    }
+
     /// The same triangle twice, so a reference to mesh 1 has something to name.
     constexpr const char* kTwoMeshGltf =
         R"GLTF({"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"scene":0,"nodes":[{"mesh":0},{"mesh":1}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]},{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6}],"buffers":[{"byteLength":102,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"}]})GLTF";
@@ -3505,12 +3538,8 @@ void test_the_index_skips_a_gltf_buffer() {
 
     // The buffer is named payload.lua, which the script rule would
     // otherwise make an asset of its own.
-    std::string gltf = kMinimalGltf;
-    const std::size_t at = gltf.find("data:application/octet-stream;base64,");
-    check(at != std::string::npos, "the fixture carries an inline buffer to replace");
-    gltf = gltf.substr(0, at) + "payload.lua\"}]}";
-    write_file(source / "models" / "crate.gltf", gltf);
-    write_file(source / "models" / "payload.lua", "not really a script");
+    write_file(source / "models" / "crate.gltf", gltf_naming_its_buffer("payload.lua"));
+    write_file(source / "models" / "payload.lua", gltf_buffer_bytes());
     write_file(source / "real.lua", "return {}\n");
 
     engine::import::SourceAssets index;
@@ -3520,6 +3549,52 @@ void test_the_index_skips_a_gltf_buffer() {
     check(index.assets_of_kind(".lua", scripts), "the scripts are listed");
     check(scripts.size() == 1, "and the buffer is not one of them");
     check(scripts.front().source == "real.lua", "only the real script is an asset");
+}
+
+
+// The other half of the skip above. The cooker drops a glTF buffer at
+// `cook_all`, and until now only the index's copy was tested.
+//
+// The same trap applies: a `.bin` buffer proves nothing, because no rule
+// cooks a `.bin` and `gather` has already dropped it. The buffer here is
+// named payload.lua, so a rule really does want it and only the skip keeps
+// it out.
+void test_the_cooker_skips_a_gltf_buffer() {
+    const std::filesystem::path source = scratch("cook_buffer/src");
+    const std::filesystem::path out = scratch("cook_buffer/out");
+    std::filesystem::create_directories(source / "models");
+
+    write_file(source / "models" / "crate.gltf", gltf_naming_its_buffer("payload.lua"));
+    write_file(source / "models" / "payload.lua", gltf_buffer_bytes());
+    write_file(source / "real.lua", "return {}\n");
+
+    const engine::import::Options options{ .content = source, .out = out };
+    engine::import::Result result;
+    check(engine::import::cook_all(options, result), "the tree cooks");
+
+    // The manifest is the list the runtime reads, so the buffer must not be
+    // an entry in it.
+    as::Content content;
+    check(content.open(out), "the cooked directory opens");
+    bool found_buffer = false;
+    bool found_real = false;
+    for (const as::ManifestEntry& entry : content.manifest().entries) {
+        found_buffer = found_buffer || entry.source == "models/payload.lua";
+        found_real = found_real || entry.source == "real.lua";
+    }
+    check(!found_buffer, "the buffer is not an asset in the manifest");
+
+    // And the script rule wrote no cooked file for it either. A cooked script
+    // keeps its own name, so this is where a second copy of the vertex data
+    // would land.
+    check(!std::filesystem::exists(out / "models" / "payload.lua"),
+          "and nothing cooked it");
+
+    // The script that is not a buffer still cooks, so the skip took the file
+    // it was aimed at rather than the rule.
+    check(found_real, "a script that is not a buffer still cooks");
+
+    test::remove_tree(source.parent_path());
 }
 
 
@@ -3829,6 +3904,7 @@ int main() {
     test_the_index_resolves_a_reference();
     test_a_bad_file_does_not_stop_the_index();
     test_the_index_skips_a_gltf_buffer();
+    test_the_cooker_skips_a_gltf_buffer();
     test::section("importing from source");
     test_the_index_writes_the_same_sidecar_a_cook_would();
     test_an_import_gives_the_cooked_bytes();
