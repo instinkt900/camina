@@ -79,18 +79,12 @@ namespace engine::gfx {
          * count that is a number rather than a constant.
          *
          * Like Uniform, this lives in host-visible memory and stays mapped, so
-         * update_buffer() writes it. Set BufferDesc::device_only when a shader
-         * is the only writer. See DESIGN.md section 9 and issue #98.
+         * update_buffer() writes it. Ask for BufferMemory::DeviceLocal when a
+         * shader is the only writer. See DESIGN.md section 9 and issue #98.
          */
         Storage,
     };
 
-    /**
-     * @brief Settings for create_buffer().
-     *
-     * The device copies the data through a staging buffer, so the memory ends up
-     * in device-local storage. The source only has to live for the create call.
-     */
     /**
      * @brief Where a buffer lives, and so who is able to write it.
      *
@@ -135,6 +129,13 @@ namespace engine::gfx {
         HostVisible,
     };
 
+    /**
+     * @brief Settings for create_buffer().
+     *
+     * By default the device copies the data through a staging buffer, so the
+     * memory ends up in device-local storage and the source only has to live
+     * for the create call. ::BufferMemory changes where it lands.
+     */
     struct BufferDesc {
         /// @brief The bytes to upload. May be null for BufferMemory::DeviceLocal
         /// and BufferMemory::HostVisible, and required otherwise.
