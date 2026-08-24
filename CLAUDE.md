@@ -188,9 +188,14 @@ one descriptor pool serve both kinds. The cull is a pass in the frame graph, so 
 the first graph resource that is a buffer rather than an image and the barrier falls out of
 `derive_barriers`.
 
-`BufferDesc::device_only` came from this. A uniform or a storage buffer is host-visible and
-mapped by default, which is the wrong memory for three megabytes a shader fills and another
-shader reads.
+`BufferDesc::memory` came from this. A uniform or a storage buffer is host-visible and mapped by
+default, which is the wrong memory for three megabytes a shader fills and another shader reads.
+
+**It was a `device_only` boolean until #204.** That said half the question and nothing about a
+vertex buffer the host writes each frame, which `gfx::` refused outright, so `UiPass` destroyed
+and rebuilt its buffers every frame behind a ring of three. `BufferMemory::HostVisible`
+allocates one now and `update_buffer` fills it. The frames in flight stay the caller's problem
+and the doc says so: 6 allocations over 300 frames against two on every frame that drew.
 
 The slices are exponential in view distance. Linear in NDC depth looks reasonable and is not:
 reverse-Z puts infinity at zero, so an even split of that range leaves fifteen of sixteen slices

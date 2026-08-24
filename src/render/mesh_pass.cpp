@@ -758,7 +758,7 @@ namespace engine::render {
                 const gfx::BufferDesc desc{ .data = nullptr,
                                             .size = size,
                                             .usage = gfx::BufferUsage::Storage,
-                                            .device_only = true };
+                                            .memory = gfx::BufferMemory::DeviceLocal };
                 if (!gfx::succeeded(gfx::create_buffer(device_, desc, &cluster_grids_[i]))) {
                     ENGINE_LOG_ERROR("A cluster grid buffer could not be allocated.");
                     return false;

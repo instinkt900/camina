@@ -79,39 +79,71 @@ namespace engine::gfx {
          * count that is a number rather than a constant.
          *
          * Like Uniform, this lives in host-visible memory and stays mapped, so
-         * update_buffer() writes it. Set BufferDesc::device_only when a shader
-         * is the only writer. See DESIGN.md section 9 and issue #98.
+         * update_buffer() writes it. Ask for BufferMemory::DeviceLocal when a
+         * shader is the only writer. See DESIGN.md section 9 and issue #98.
          */
         Storage,
     };
 
     /**
-     * @brief Settings for create_buffer().
+     * @brief Where a buffer lives, and so who is able to write it.
      *
-     * The device copies the data through a staging buffer, so the memory ends up
-     * in device-local storage. The source only has to live for the create call.
+     * One name for one thing: this replaces the `device_only` flag, which said
+     * half of it and had nothing to say about a vertex buffer the host writes.
      */
-    struct BufferDesc {
-        const void* data = nullptr;              ///< The bytes to upload. Required.
-        std::size_t size = 0;                    ///< How many bytes to upload.
-        BufferUsage usage = BufferUsage::Vertex; ///< How the buffer will be bound.
+    enum class BufferMemory : std::uint32_t {
         /**
-         * @brief Whether a shader is the only thing that writes this buffer.
+         * @brief Whatever the usage calls for.
          *
-         * A uniform or a storage buffer is host-visible and mapped by default,
-         * because the common case is a block the CPU rewrites every frame. That
-         * memory is the wrong home for a buffer one shader fills and another
-         * reads. On a discrete GPU it is system memory across PCIe, and the
-         * write-combined kind is slow to read back.
+         * A uniform or a storage buffer is host-visible and mapped, because the
+         * common case is a block the CPU rewrites every frame. A vertex or an
+         * index buffer is device-local and staged through a copy, which is what
+         * a cooked mesh wants and what it stays.
+         */
+        Auto = 0,
+        /**
+         * @brief Device-local, and never mapped.
          *
-         * Set this and the buffer lands in device-local memory instead. @c data
-         * may then be null, which leaves the contents undefined until a shader
-         * writes them.
+         * For a buffer one shader fills and another reads. Host-visible memory
+         * is the wrong home for that: on a discrete GPU it is system memory
+         * across PCIe, and the write-combined kind is slow to read back.
+         *
+         * @c BufferDesc::data may be null, which leaves the contents undefined
+         * until a shader writes them.
          *
          * @warning update_buffer() cannot write one of these, and it says so.
-         * The memory is not mapped, so a shader is the only way to fill it.
          */
-        bool device_only = false;
+        DeviceLocal,
+        /**
+         * @brief Host-visible and mapped, whatever the usage.
+         *
+         * This is what per-frame geometry needs. @c BufferDesc::data may be
+         * null, so a buffer is allocated once at a capacity and filled by
+         * update_buffer() on each frame that draws.
+         *
+         * @warning The caller owns the frames in flight. update_buffer() writes
+         * straight into memory the GPU may be reading, so a buffer one frame
+         * still reads must not be written. Keep one for each frame in flight,
+         * the way `engine::ui::UiPass` does, or wait for the device.
+         */
+        HostVisible,
+    };
+
+    /**
+     * @brief Settings for create_buffer().
+     *
+     * By default the device copies the data through a staging buffer, so the
+     * memory ends up in device-local storage and the source only has to live
+     * for the create call. ::BufferMemory changes where it lands.
+     */
+    struct BufferDesc {
+        /// @brief The bytes to upload. May be null for BufferMemory::DeviceLocal
+        /// and BufferMemory::HostVisible, and required otherwise.
+        const void* data = nullptr;
+        std::size_t size = 0;                    ///< How many bytes the buffer holds.
+        BufferUsage usage = BufferUsage::Vertex; ///< How the buffer will be bound.
+        /// @brief Where it lives. See ::BufferMemory.
+        BufferMemory memory = BufferMemory::Auto;
     };
 
     /// @brief How a sampler picks a color between texel centers.

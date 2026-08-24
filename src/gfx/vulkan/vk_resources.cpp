@@ -698,18 +698,24 @@ namespace engine::gfx {
             ENGINE_LOG_ERROR("create_buffer needs a size.");
             return Result::ErrorInit;
         }
+        // A uniform or a storage buffer is written again every time something it
+        // holds changes, so by default it lives in host-visible memory and stays
+        // mapped. Staging it into device-local memory would cost a copy and a
+        // queue wait on every frame that moved a light. BufferMemory::HostVisible
+        // asks for the same thing whatever the usage, which is what per-frame
+        // geometry needs. See issue #204.
         const bool mapped_kind =
-            (desc.usage == BufferUsage::Uniform || desc.usage == BufferUsage::Storage) &&
-            !desc.device_only;
-        if (desc.data == nullptr && !mapped_kind && !desc.device_only) {
-            ENGINE_LOG_ERROR("create_buffer needs data for a vertex or an index buffer.");
+            desc.memory == BufferMemory::HostVisible ||
+            (desc.memory == BufferMemory::Auto &&
+             (desc.usage == BufferUsage::Uniform || desc.usage == BufferUsage::Storage));
+
+        if (desc.data == nullptr && desc.memory == BufferMemory::Auto && !mapped_kind) {
+            ENGINE_LOG_ERROR("create_buffer needs data for a vertex or an index buffer in "
+                             "BufferMemory::Auto. Ask for BufferMemory::HostVisible to "
+                             "allocate one now and fill it each frame.");
             return Result::ErrorInit;
         }
 
-        // A uniform or a storage buffer is written again every time something it
-        // holds changes, so it lives in host-visible memory and stays mapped.
-        // Staging it into device-local memory would cost a copy and a queue wait
-        // on every frame that moved a light.
         if (mapped_kind) {
             return create_mapped_buffer(*device, desc, out_buffer);
         }
@@ -1171,8 +1177,9 @@ namespace engine::gfx {
             return;
         }
         if (entry->mapped == nullptr) {
-            ENGINE_LOG_ERROR("update_buffer works only on a uniform or a storage buffer. A "
-                             "vertex or an index buffer lives in memory the host cannot reach.");
+            ENGINE_LOG_ERROR("update_buffer works only on a mapped buffer. A vertex or an "
+                             "index buffer is device-local unless it asked for "
+                             "BufferMemory::HostVisible.");
             return;
         }
         if (size > entry->size) {
