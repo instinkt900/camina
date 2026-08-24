@@ -98,6 +98,13 @@ namespace engine::gfx {
 
         ENGINE_VK_TRY(vkWaitForFences(device->device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX));
 
+        // This slot's last frame has finished, which is what makes anything
+        // retired kFramesInFlight frames ago unreferenced. The counter moves
+        // first, so a resource retired during this frame is compared against
+        // this frame's number and not the last one's.
+        ++device->frame_counter;
+        vk::release_retired(*device);
+
         const Result got = acquire_target(*device, frame);
         if (!succeeded(got)) {
             // Leave the fence signaled. Nothing was submitted, so the slot is free.

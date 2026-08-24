@@ -203,7 +203,8 @@ namespace engine::render {
                 continue;
             }
             if (device != nullptr) {
-                gfx::destroy_texture(device, found->second.texture);
+                // Behind the frames, for the reason MeshCache::drop gives.
+                gfx::retire_texture(device, found->second.texture);
             }
             loaded_.erase(found);
         }

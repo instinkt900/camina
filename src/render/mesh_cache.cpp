@@ -117,8 +117,10 @@ namespace engine::render {
             return;
         }
         if (device != nullptr) {
-            gfx::destroy_buffer(device, found->second.vertices);
-            gfx::destroy_buffer(device, found->second.indices);
+            // Behind the frames. A frame the GPU has not finished may still be
+            // reading these, and a reload cannot afford to wait for it.
+            gfx::retire_buffer(device, found->second.vertices);
+            gfx::retire_buffer(device, found->second.indices);
         }
         loaded_.erase(found);
     }

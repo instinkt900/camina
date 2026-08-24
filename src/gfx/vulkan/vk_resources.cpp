@@ -1369,4 +1369,92 @@ namespace engine::gfx {
                          first_instance);
     }
 
+    namespace {
+
+        /// Frees one retired resource from whichever table its kind names.
+        void free_retired(Device& device, const Device::Retired& retired) {
+            switch (retired.kind) {
+            case Device::Retired::Kind::Buffer:
+                destroy_buffer(&device, BufferHandle{ retired.handle });
+                return;
+            case Device::Retired::Kind::Texture:
+                destroy_texture(&device, TextureHandle{ retired.handle });
+                return;
+            case Device::Retired::Kind::Pipeline:
+                destroy_pipeline(&device, PipelineHandle{ retired.handle });
+                return;
+            case Device::Retired::Kind::DescriptorSet:
+                destroy_descriptor_set(&device, DescriptorSetHandle{ retired.handle });
+                return;
+            }
+        }
+
+        /// Records one handle against the frame that was current when it went.
+        void retire(Device* device, Device::Retired::Kind kind, std::uint64_t handle) {
+            if (device == nullptr || handle == 0) {
+                return;
+            }
+            device->retired.push_back(
+                Device::Retired{ .kind = kind, .handle = handle, .frame = device->frame_counter });
+        }
+
+    } // namespace
+
+    namespace vk {
+
+        void release_retired(Device& device) {
+            // A resource retired on frame F may be read by frame F itself, so it
+            // is safe once kFramesInFlight frames have begun after F. That is
+            // exactly when the fence of F's ring slot has been waited on.
+            if (device.frame_counter < kFramesInFlight) {
+                return;
+            }
+            const std::uint64_t safe = device.frame_counter - kFramesInFlight;
+
+            std::size_t kept = 0;
+            for (std::size_t i = 0; i < device.retired.size(); ++i) {
+                const Device::Retired entry = device.retired[i];
+                if (entry.frame > safe) {
+                    device.retired[kept] = entry;
+                    ++kept;
+                    continue;
+                }
+                free_retired(device, entry);
+            }
+            device.retired.resize(kept);
+        }
+
+        void release_all_retired(Device& device) {
+            // Copied out first. free_retired() calls destroy_*(), and none of
+            // those touch this list today, but a walk over a vector another
+            // call could push to is the kind of thing that breaks quietly.
+            const std::vector<Device::Retired> going = std::move(device.retired);
+            device.retired.clear();
+            for (const Device::Retired& entry : going) {
+                free_retired(device, entry);
+            }
+        }
+
+    } // namespace vk
+
+    void retire_buffer(Device* device, BufferHandle buffer) {
+        retire(device, Device::Retired::Kind::Buffer, buffer.value);
+    }
+
+    void retire_texture(Device* device, TextureHandle texture) {
+        retire(device, Device::Retired::Kind::Texture, texture.value);
+    }
+
+    void retire_pipeline(Device* device, PipelineHandle pipeline) {
+        retire(device, Device::Retired::Kind::Pipeline, pipeline.value);
+    }
+
+    void retire_descriptor_set(Device* device, DescriptorSetHandle set) {
+        retire(device, Device::Retired::Kind::DescriptorSet, set.value);
+    }
+
+    std::size_t retired_count(const Device* device) {
+        return device == nullptr ? 0 : device->retired.size();
+    }
+
 } // namespace engine::gfx

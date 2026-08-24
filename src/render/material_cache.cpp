@@ -161,10 +161,16 @@ namespace engine::render {
         return true;
     }
 
-    void MaterialCache::release(gfx::Device* device, GpuMaterial& material) {
+    void MaterialCache::release(gfx::Device* device, GpuMaterial& material,
+                                bool behind_the_frames) {
         // The set first, because it names the buffer.
-        gfx::destroy_descriptor_set(device, material.set);
-        gfx::destroy_buffer(device, material.uniforms);
+        if (behind_the_frames) {
+            gfx::retire_descriptor_set(device, material.set);
+            gfx::retire_buffer(device, material.uniforms);
+        } else {
+            gfx::destroy_descriptor_set(device, material.set);
+            gfx::destroy_buffer(device, material.uniforms);
+        }
         material.set = gfx::DescriptorSetHandle{};
         material.uniforms = gfx::BufferHandle{};
     }
@@ -246,7 +252,10 @@ namespace engine::render {
                                   material.normal == guid || material.occlusion == guid ||
                                   material.emissive == guid;
             if (names_it) {
-                release(device, entry.second);
+                // A frame in flight may still bind this set, so it goes behind
+                // the frames rather than now. That is what lets MeshPass::reload
+                // run without waiting for the device.
+                release(device, entry.second, true);
             }
             return names_it;
         });
@@ -254,11 +263,11 @@ namespace engine::render {
 
     void MaterialCache::destroy(gfx::Device* device) {
         for (auto& entry : loaded_) {
-            release(device, entry.second);
+            release(device, entry.second, false);
         }
         loaded_.clear();
         failed_.clear();
-        release(device, fallback_);
+        release(device, fallback_, false);
         fallback_ = GpuMaterial{};
     }
 

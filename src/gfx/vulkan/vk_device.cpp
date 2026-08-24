@@ -625,6 +625,12 @@ namespace engine::gfx {
 
         if (device->device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(device->device);
+
+            // Everything a reload retired since the last frame. The device has
+            // just gone idle, so the frame count no longer decides anything.
+            // Before the tables below go, because this frees out of them.
+            vk::release_all_retired(*device);
+
             vk::destroy_pipelines(*device);
             vk::destroy_textures(*device);
             vk::destroy_buffers(*device);

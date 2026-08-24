@@ -557,6 +557,10 @@ namespace engine::render {
         // Every frame in flight may be reading its own buffer, and the sets name
         // the buffers, so both go together and both wait. This is why the
         // capacity doubles rather than growing to fit exactly.
+        //
+        // The buffers could go behind the frames now, and the sets could not:
+        // they are freed and rebuilt in one go against a pool of a fixed size.
+        // See issue #471.
         gfx::device_wait_idle(device_);
         destroy_frame_sets();
         for (gfx::BufferHandle& buffer : light_buffers_) {
@@ -825,6 +829,9 @@ namespace engine::render {
         }
         environment_ = resolved;
 
+        // The frame sets name the cubemap, so they are freed and built again
+        // here. A fixed-size descriptor pool cannot hold both at once, which is
+        // why this still waits. See issue #471.
         gfx::device_wait_idle(device_);
         destroy_frame_sets();
         if (!build_frame_sets()) {
@@ -970,10 +977,15 @@ namespace engine::render {
         return true;
     }
 
-    void MeshPass::destroy_pipelines(PipelineSet& set) {
+    void MeshPass::destroy_pipelines(PipelineSet& set, bool behind_the_frames) {
         for (std::size_t at = 0; at < kMeshVariantCount; ++at) {
-            gfx::destroy_pipeline(device_, set.opaque[at]);
-            gfx::destroy_pipeline(device_, set.blend[at]);
+            if (behind_the_frames) {
+                gfx::retire_pipeline(device_, set.opaque[at]);
+                gfx::retire_pipeline(device_, set.blend[at]);
+            } else {
+                gfx::destroy_pipeline(device_, set.opaque[at]);
+                gfx::destroy_pipeline(device_, set.blend[at]);
+            }
         }
         set = PipelineSet{};
     }
@@ -1060,12 +1072,18 @@ namespace engine::render {
             return false;
         }
 
-        // The old pipelines may still be bound by a frame the GPU has not
-        // finished. See the note in reload() about what this wait costs and
-        // what replaces it.
-        gfx::device_wait_idle(device_);
-        destroy_pipelines(pipelines_);
+        // The pipelines no longer need a wait. They go behind the frames, the
+        // way a reloaded mesh or texture does.
+        //
+        // **The descriptor sets still do, and that is what this wait is for.**
+        // The lines below free every set the pass owns and build the same
+        // number again, against a descriptor pool of a fixed size. Retiring
+        // them would hold two sets for every one for the next two frames, and a
+        // scene with enough materials would then run the pool out. Issue #471
+        // holds the growing pool that would lift it.
+        destroy_pipelines(pipelines_, true);
         pipelines_ = rebuilt;
+        gfx::device_wait_idle(device_);
 
         // Every descriptor set was allocated against the layout of the pipeline
         // that just went. A rebuilt shader may declare a different set, and a
@@ -1113,9 +1131,10 @@ namespace engine::render {
             return false;
         }
 
-        // The new table is ready. Now it is safe to wait for the GPU and
-        // retire the old one. The frame sets bake the BRDF handle at creation
-        // time, so they go with it.
+        // The new table is ready, so the old one can go. The texture itself
+        // goes behind the frames now, and the frame sets do not: they bake the
+        // BRDF handle at creation time and they are rebuilt in one go against a
+        // pool of a fixed size. That is what this wait is for. See issue #471.
         gfx::device_wait_idle(device_);
         textures_.drop(device_, old_guid);
         destroy_frame_sets();
@@ -1183,15 +1202,15 @@ namespace engine::render {
             return;
         }
 
-        // A frame that has not finished may still read the buffer or the
-        // texture about to be freed. That is a use-after-free the validation
-        // layer may or may not report, and it does not happen on every run.
+        // No wait here. A frame that has not finished may still read the
+        // buffer or the texture that goes, so each cache retires rather than
+        // frees: gfx::retire_buffer and its neighbours hold a resource until
+        // kFramesInFlight frames have begun, which is when the frame that could
+        // have been reading it has finished on the GPU.
         //
-        // A reload follows a person saving a file, so a wait here costs a
-        // stall nobody can see. Streaming cannot pay that. Issue #60 holds the
-        // queue that frees behind the frames instead.
-        gfx::device_wait_idle(device_);
-
+        // A wait was the right first answer, because a reload follows a person
+        // saving a file and a stall of a frame or two is invisible. Streaming
+        // cannot pay one. That was issue #60.
         for (const Guid guid : changed) {
             // An identity is a mesh, a texture, or a material, and the caller
             // does not know which. Asking all three costs one lookup each and

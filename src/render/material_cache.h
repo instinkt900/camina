@@ -257,8 +257,17 @@ namespace engine::render {
         [[nodiscard]] static bool build(gfx::Device* device, gfx::PipelineHandle pipeline,
                                         const assets::Material& material, GpuMaterial& out);
 
-        /// Frees the parameter block and the descriptor set one material owns.
-        static void release(gfx::Device* device, GpuMaterial& material);
+        /**
+         * Frees the parameter block and the descriptor set one material owns.
+         *
+         * @param device The device that owns them.
+         * @param material The material to empty.
+         * @param behind_the_frames True to retire them rather than free them
+         * now, which is what a reload wants: a submitted frame may still bind
+         * the set. False frees at once, which only a teardown may do.
+         */
+        static void release(gfx::Device* device, GpuMaterial& material,
+                            bool behind_the_frames);
 
         std::map<Guid, GpuMaterial> loaded_;
         /// The GUIDs that failed, so one bad reference reports once.
