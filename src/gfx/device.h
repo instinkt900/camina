@@ -472,11 +472,22 @@ namespace engine::gfx {
                   std::uint32_t first_instance);
 
     /**
-     * @brief Uploads data into a device-local buffer.
+     * @brief Allocates a buffer, and uploads into it when it is given data.
+     *
+     * `BufferDesc::memory` decides where it lives and who may write it. The
+     * default stages a vertex or an index buffer into device-local memory,
+     * which is what a cooked mesh wants, and keeps a uniform or a storage
+     * buffer host-visible and mapped.
+     *
+     * `BufferMemory::HostVisible` is how per-frame geometry is allocated once
+     * and written by update_buffer() on each frame. See issue #204.
+     *
      * @param device The device that owns the buffer.
-     * @param desc The bytes, the size, and how the buffer will be bound.
+     * @param desc The bytes, the size, how the buffer will be bound, and where
+     * it lives. `data` is required only for BufferMemory::Auto on a vertex or
+     * an index buffer.
      * @param out_buffer Receives the handle on success, and a null handle on failure.
-     * @return Result::Success, or the reason the upload failed.
+     * @return Result::Success, or the reason the allocation or the upload failed.
      */
     [[nodiscard]] Result create_buffer(Device* device, const BufferDesc& desc,
                                        BufferHandle* out_buffer);
@@ -489,21 +500,24 @@ namespace engine::gfx {
     void destroy_buffer(Device* device, BufferHandle buffer);
 
     /**
-     * @brief Writes new contents into a uniform or a storage buffer.
+     * @brief Writes new contents into a host-visible buffer.
      *
-     * The buffer stays mapped, so this is a copy and nothing else. It works on a
-     * BufferUsage::Uniform or a BufferUsage::Storage buffer, because those are
-     * the two that live in host-visible memory. A vertex or an index buffer
-     * lives in device-local memory the host cannot reach.
+     * The buffer stays mapped, so this is a copy and nothing else. It works on
+     * any buffer in host-visible memory: a BufferUsage::Uniform or a
+     * BufferUsage::Storage buffer by default, and a vertex or an index buffer
+     * that asked for BufferMemory::HostVisible. A buffer in device-local memory
+     * is refused, and it says so.
      *
      * @param device The device that owns the buffer.
      * @param buffer The buffer to write. A null or stale handle logs and does nothing.
      * @param data The bytes to copy in.
      * @param size How many bytes. It must not be more than the buffer holds.
      *
-     * @warning This writes straight into memory the GPU may be reading. A buffer
-     * a frame in flight still reads must not be written. Either wait for the
-     * device, or keep one buffer for each frame in flight.
+     * @warning This writes straight into memory the GPU may be reading, and
+     * **the caller owns that problem.** A buffer a frame in flight still reads
+     * must not be written. Either wait for the device, or keep one buffer for
+     * each frame in flight the way `engine::ui::UiPass` does. Nothing here
+     * tracks which frame last read a buffer.
      */
     void update_buffer(Device* device, BufferHandle buffer, const void* data, std::size_t size);
 

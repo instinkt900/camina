@@ -186,6 +186,8 @@ namespace engine::ui {
             gfx::destroy_buffer(device_, buffer);
             buffer = gfx::BufferHandle{};
         }
+        vertex_capacity_.fill(0);
+        index_capacity_.fill(0);
         destroy_pipelines();
         device_ = nullptr;
     }
@@ -200,30 +202,46 @@ namespace engine::ui {
         }
     }
 
-    bool UiPass::upload(gfx::BufferHandle& buffer, const void* data, std::size_t bytes,
-                        gfx::BufferUsage usage) {
-        // gfx has no dynamic vertex or index buffer. create_buffer refuses one
-        // with no data, and update_buffer refuses a vertex or an index buffer
-        // outright, because both live in device-local memory the host cannot
-        // reach. So the only way to put new geometry on the GPU each frame is
-        // to build a new buffer from it.
+    bool UiPass::upload(gfx::BufferHandle& buffer, std::size_t& capacity, const void* data,
+                        std::size_t bytes, gfx::BufferUsage usage) {
+        // A host-visible vertex or index buffer, which closed issue #204.
+        // Before it, gfx refused a vertex buffer with no data and refused to
+        // update one, so the only way to put new geometry on the GPU each frame
+        // was to destroy the buffer and build another from the recording. That
+        // was an allocation and a free for each of two buffers on every frame,
+        // and it was a correctness trap besides: destroying the buffer the
+        // previous frame is still reading is a real error the validation layer
+        // reports.
         //
-        // That is a real cost and it is not what this should do. It is the
-        // largest gap the M6 spike found in gfx, and issue #204 holds it. A UI
-        // is small, so the picture is right and the cost is bounded until then.
-        gfx::destroy_buffer(device_, buffer);
-        buffer = gfx::BufferHandle{};
+        // The slot ring is still what answers the frames in flight, and it has
+        // to be. update_buffer() writes straight into memory the GPU may be
+        // reading, so the buffer written here must be one no frame in flight
+        // still names. gfx says whose problem that is on BufferMemory.
+        if (bytes > capacity) {
+            // Grown rather than resized, because a mapped allocation cannot
+            // change size. Half again on top of what is asked for, so a
+            // recording that creeps upward does not reallocate every frame.
+            const std::size_t wanted = bytes + (bytes / 2);
+            gfx::destroy_buffer(device_, buffer);
+            buffer = gfx::BufferHandle{};
+            capacity = 0;
 
-        const gfx::BufferDesc desc{
-            .data = data,
-            .size = bytes,
-            .usage = usage,
-            .device_only = false,
-        };
-        if (!gfx::succeeded(gfx::create_buffer(device_, desc, &buffer))) {
-            ENGINE_LOG_ERROR("A UI buffer of {} bytes was not created.", bytes);
-            return false;
+            const gfx::BufferDesc desc{
+                .data = nullptr,
+                .size = wanted,
+                .usage = usage,
+                .memory = gfx::BufferMemory::HostVisible,
+            };
+            if (!gfx::succeeded(gfx::create_buffer(device_, desc, &buffer))) {
+                ENGINE_LOG_ERROR("A UI buffer of {} bytes was not created.", wanted);
+                return false;
+            }
+            capacity = wanted;
+            ENGINE_LOG_DEBUG("A UI buffer grew to {} bytes for a recording of {}.", wanted,
+                             bytes);
         }
+
+        gfx::update_buffer(device_, buffer, data, bytes);
         return true;
     }
 
@@ -248,10 +266,10 @@ namespace engine::ui {
         gfx::BufferHandle& vertex_buffer = vertices_.at(slot_);
         gfx::BufferHandle& index_buffer = indices_.at(slot_);
 
-        if (!upload(vertex_buffer, renderer.vertices().data(), vertex_bytes,
-                    gfx::BufferUsage::Vertex) ||
-            !upload(index_buffer, renderer.indices().data(), index_bytes,
-                    gfx::BufferUsage::Index)) {
+        if (!upload(vertex_buffer, vertex_capacity_.at(slot_), renderer.vertices().data(),
+                    vertex_bytes, gfx::BufferUsage::Vertex) ||
+            !upload(index_buffer, index_capacity_.at(slot_), renderer.indices().data(),
+                    index_bytes, gfx::BufferUsage::Index)) {
             return;
         }
 

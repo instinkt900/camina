@@ -79,9 +79,22 @@ namespace engine::ui {
         void draw(gfx::CommandList* commands, const Renderer& renderer, gfx::Extent2D extent);
 
     private:
-        /// @brief Replaces a buffer with a new one holding @p bytes of @p data.
-        [[nodiscard]] bool upload(gfx::BufferHandle& buffer, const void* data, std::size_t bytes,
-                                  gfx::BufferUsage usage);
+        /**
+         * @brief Writes @p bytes of @p data into a host-visible buffer.
+         *
+         * The buffer is allocated on the first frame that needs one and grown
+         * only when a recording outgrows it. Everything else is a write into
+         * memory that is already mapped.
+         *
+         * @param buffer The handle to fill. Replaced when it has to grow.
+         * @param capacity How large @p buffer is, in bytes. Kept in step.
+         * @param data The bytes to write.
+         * @param bytes How many.
+         * @param usage Vertex or Index.
+         * @return False when a buffer would not be allocated.
+         */
+        [[nodiscard]] bool upload(gfx::BufferHandle& buffer, std::size_t& capacity,
+                                  const void* data, std::size_t bytes, gfx::BufferUsage usage);
 
         /**
          * @brief The descriptor set that binds one texture, built on first use.
@@ -160,6 +173,10 @@ namespace engine::ui {
         static constexpr std::size_t kSlots = 3;
         std::array<gfx::BufferHandle, kSlots> vertices_{};
         std::array<gfx::BufferHandle, kSlots> indices_{};
+        /// How large each buffer above is, so a frame that fits writes into the
+        /// one it already has. See upload().
+        std::array<std::size_t, kSlots> vertex_capacity_{};
+        std::array<std::size_t, kSlots> index_capacity_{};
         std::size_t slot_ = 0;
     };
 

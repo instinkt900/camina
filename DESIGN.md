@@ -2035,9 +2035,30 @@ has no layout to change.
 
 It is also the first buffer that only the GPU touches. A uniform or a storage buffer is
 host-visible and mapped by default, which is right for a block the CPU rewrites every frame and
-wrong for three megabytes one shader fills and another reads. `BufferDesc::device_only` is the
-answer, and `update_buffer` refuses such a buffer rather than writing through a pointer that is
-not there.
+wrong for three megabytes one shader fills and another reads. `BufferDesc::memory` is the
+answer, and `update_buffer` refuses a device-local buffer rather than writing through a pointer
+that is not there.
+
+**That field started as `device_only` and became `BufferMemory`, which closed issue #204.** The
+boolean said half of the question and had nothing to say about the other half: a vertex buffer
+the host writes every frame. `gfx::` refused one outright. `create_buffer` would not take a
+vertex or an index buffer with no data, and `update_buffer` would not write one, so per-frame
+geometry had to destroy its buffer and build another from the recording on every frame.
+
+That is what `engine::ui::UiPass` did. It cost an allocation and a free for each of two buffers
+on each frame, and it was a correctness trap besides: destroying the buffer the previous frame
+is still reading is a real error, and synchronization validation reported it. Every later
+consumer, and M7 debug draw and particles are the ones in view, would have rediscovered the
+same trap.
+
+`BufferMemory::HostVisible` allocates one now and lets `update_buffer` fill it. `UiPass` grows
+a buffer only when a recording outgrows it, by half again so a recording that creeps upward
+does not reallocate every frame: 6 allocations over 300 frames, which is one for each of two
+buffers in each of three slots, against two on every frame that drew.
+
+**The frames in flight stay the caller's problem, and the doc says so.** `update_buffer` writes
+straight into memory the GPU may be reading, and nothing in `gfx::` tracks which frame last read
+a buffer. The slot ring in `UiPass` is what answers it there.
 
 **A mesh is culled against the camera frustum before it is drawn, and that belongs to M5.** The
 light cull answered this question for lights and nothing answered it for geometry. `MeshPass` used

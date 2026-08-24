@@ -479,6 +479,17 @@ add_test(NAME gpu_frame
 # machine cannot run it" and "this branch broke it".
 set_tests_properties(gpu_frame PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
 
+# Issue #204. The buffer contract, against a real device. Labelled "gpu" for the
+# reason test_gpu_frame is: CI has no GPU, and it skips itself where no device
+# opens.
+add_executable(test_gpu_buffer test_gpu_buffer.cpp)
+target_link_libraries(test_gpu_buffer PRIVATE engine::core)
+engine_set_warnings(test_gpu_buffer)
+engine_enable_clang_tidy(test_gpu_buffer)
+
+add_test(NAME gpu_buffer COMMAND test_gpu_buffer)
+set_tests_properties(gpu_buffer PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
+
 # Issue #268. The Key to scancode table, checked against the names SDL gives
 # those scancodes. It links engine::core for platform::scancode_name, which
 # reads a static SDL table and opens no window, so this runs in CI.
