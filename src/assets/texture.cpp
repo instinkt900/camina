@@ -7,20 +7,6 @@
 
 namespace engine::assets {
 
-    namespace {
-
-        /// Matches two words without regard to letter case.
-        [[nodiscard]] bool same_word(std::string_view a, std::string_view b) {
-            return std::ranges::equal(a, b, [](char left, char right) {
-                const auto lower = [](char c) {
-                    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
-                };
-                return lower(left) == lower(right);
-            });
-        }
-
-    } // namespace
-
     std::uint32_t mip_extent(std::uint32_t base, std::uint32_t level) {
         const std::uint32_t shifted = level >= 32U ? 0U : base >> level;
         return std::max(shifted, 1U);
@@ -155,22 +141,6 @@ namespace engine::assets {
         out.face_count = header.face_count;
         out.payload = bytes.subspan(sizeof(TextureHeader));
         return true;
-    }
-
-    std::string to_text(const ColorSpace& value) {
-        return value == ColorSpace::Linear ? "Linear" : "sRGB";
-    }
-
-    bool from_text(std::string_view text, ColorSpace& out) {
-        if (same_word(text, "sRGB")) {
-            out = ColorSpace::Srgb;
-            return true;
-        }
-        if (same_word(text, "Linear")) {
-            out = ColorSpace::Linear;
-            return true;
-        }
-        return false;
     }
 
 } // namespace engine::assets

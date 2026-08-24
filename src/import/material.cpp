@@ -366,7 +366,7 @@ namespace engine::import {
             out.outputs.push_back(as::ManifestOutput{ .cooked = record.name, .guid = guid });
 
             ENGINE_LOG_INFO("{}: it has no file, so it cooked as {} and reads as {}.", where,
-                            guid.to_text(), as::to_text(space));
+                            guid.to_text(), engine::reflect::enumerator_name(space));
         }
         return true;
     }
