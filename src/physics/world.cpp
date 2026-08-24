@@ -292,6 +292,25 @@ namespace engine::physics {
             // The flags go on the shape that is *not* the sensor. Box3D ignores
             // both on a sensor itself, which is what its own comment on
             // b3Shape_EnableSensorEvents says.
+            //
+            // Every shape reports, and ShapeOptions carries no switch for
+            // either. That was measured rather than assumed. Issue #278 asked
+            // whether a settling stack pays for events nobody reads, on a
+            // 12 by 12 by 20 stack of 2881 bodies over a static floor, which is
+            // report_step_cost in tests/test_physics.cpp with the constants
+            // raised. Five runs each way, in milliseconds for one step:
+            //
+            //   60 steps, the stack still falling and colliding
+            //     on   1.025 to 1.092 on 8 workers, 2.809 to 3.154 on 1
+            //     off  1.010 to 1.144 on 8 workers, 2.699 to 2.898 on 1
+            //   400 steps, most of it settled and asleep
+            //     on   0.406 on 8 workers, 1.111 on 1
+            //     off  0.393 on 8 workers, 1.109 on 1
+            //
+            // The largest difference is 0.065 ms of 2.8 ms on one thread, and
+            // the spread of one configuration alone is five times that. So the
+            // cost is below the noise floor and a switch would buy nothing. Add
+            // one when a scene appears that can measure a difference.
             def.enableSensorEvents = true;
             def.enableContactEvents = true;
             return def;

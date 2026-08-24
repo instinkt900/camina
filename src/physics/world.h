@@ -358,9 +358,10 @@ namespace engine::physics {
          * @warning **Every shape this class creates reports contacts, whether
          * anything reads them or not.** Box3D buffers a begin and an end event
          * for each pair that touches, so a settling stack pays for events
-         * nobody asks for. There is no opt-in today because the sandbox wants
-         * them and rule 4.6 says to build what it needs. Issue #278 holds the
-         * switch, and the measurement that would justify one.
+         * nobody asks for. There is no opt-in, and that was measured rather
+         * than assumed: on a stack of 2881 bodies the flags cost less than the
+         * run-to-run spread of one configuration. The numbers are next to the
+         * flags, in `to_box3d` in `world.cpp`.
          *
          * @param out Receives the events. Cleared first.
          */
