@@ -6,6 +6,7 @@
 
 #include <enkiTS/TaskScheduler.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +42,13 @@ namespace engine::jobs {
         std::mutex g_task_mutex;
         std::vector<std::uint32_t> g_free_tasks;
 
+        /// How much of a task name a slot keeps, counting the terminator. Box3D
+        /// is the caller that sets this number as well: it formats its names into
+        /// a 16 byte buffer, so 32 leaves room and still costs 8 KiB over the
+        /// whole pool. A longer name is cut rather than refused, because a
+        /// profiler label is not worth failing a step over.
+        constexpr std::size_t kTaskNameSize = 32;
+
     } // namespace
 
     /**
@@ -53,13 +61,22 @@ namespace engine::jobs {
     struct Task : enki::ITaskSet {
         TaskFn fn = nullptr;
         void* context = nullptr;
-        const char* name = nullptr;
         std::uint32_t slot = 0;
+
+        /// The name, copied rather than pointed at. enqueue() used to keep the
+        /// caller's pointer, and the worker then read it through strlen after the
+        /// caller had moved on. Box3D formats its names into a stack buffer
+        /// inside the block that queues the task, so that read was of a stack
+        /// frame that had already ended. See DESIGN.md section 5.
+        std::array<char, kTaskNameSize> name{};
+
+        /// The length of the copy, so the worker never measures the string again.
+        std::size_t name_length = 0;
 
         void ExecuteRange(enki::TaskSetPartition /*range*/, std::uint32_t /*thread*/) override {
             ENGINE_PROFILE_ZONE_N("task");
-            if (name != nullptr) {
-                ENGINE_PROFILE_ZONE_TEXT(name, std::strlen(name));
+            if (name_length != 0) {
+                ENGINE_PROFILE_ZONE_TEXT(name.data(), name_length);
             }
             fn(context);
         }
@@ -159,7 +176,16 @@ namespace engine::jobs {
 
         task->fn = fn;
         task->context = context;
-        task->name = name;
+
+        // The caller's string is alive for the length of this call and no
+        // longer, so measure and copy it here rather than on the worker.
+        task->name_length = 0;
+        if (name != nullptr) {
+            const std::size_t length = std::strlen(name);
+            task->name_length = std::min(length, kTaskNameSize - 1);
+            std::memcpy(task->name.data(), name, task->name_length);
+            task->name[task->name_length] = '\0';
+        }
 
         g_scheduler->AddTaskSetToPipe(task);
         return task;
@@ -182,6 +208,14 @@ namespace engine::jobs {
 
     std::uint32_t task_capacity() {
         return static_cast<std::uint32_t>(kTaskPoolSize);
+    }
+
+    std::uint32_t task_name_capacity() {
+        return static_cast<std::uint32_t>(kTaskNameSize - 1);
+    }
+
+    const char* task_name(const Task* task) {
+        return task != nullptr ? task->name.data() : "";
     }
 
 } // namespace engine::jobs
