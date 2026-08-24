@@ -65,3 +65,9 @@ engine_cook_content(game "${CMAKE_SOURCE_DIR}/sandbox/content")
 # frame check renders. The sandbox cannot be that scene, because its glass panes
 # are blended and double sided. See tests/content/README.md and issue #190.
 engine_cook_content(test "${CMAKE_SOURCE_DIR}/tests/content")
+
+# The sky tree holds one blended pane over open sky, which is the case issue
+# #435 broke. The test tree cannot be that scene, because it names no
+# environment on purpose, and the sandbox cannot either, because it is a closed
+# room. See tests/content_sky/README.md.
+engine_cook_content(sky "${CMAKE_SOURCE_DIR}/tests/content_sky")

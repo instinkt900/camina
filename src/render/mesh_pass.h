@@ -209,7 +209,8 @@ namespace engine::render {
      * @brief Draws the meshes a world names.
      *
      * cull() runs first and outside any rendering scope, because it dispatches
-     * a compute shader and because it uploads the frame block that draw() binds.
+     * a compute shader and because it uploads the frame block the two draw
+     * halves bind.
      *
      * @code
      * engine::render::MeshPass pass;
@@ -220,7 +221,9 @@ namespace engine::render {
      *                                         .viewport_height = 720.0F };
      * pass.cull(commands, world, game_content, view_projection, camera_position, view);
      * // Open the rendering scope here.
-     * pass.draw(commands, world, game_content, camera_position);
+     * pass.draw_opaque(commands, world, game_content, camera_position);
+     * // The sky goes here, between the two halves. See issue #435.
+     * pass.draw_blended(commands);
      * @endcode
      */
     class MeshPass {
@@ -383,7 +386,11 @@ namespace engine::render {
                   const Vec3& camera_position, const ClusterView& view);
 
         /**
-         * @brief Draws every entity that has a MeshRenderer and a WorldTransform.
+         * @brief Draws the opaque half of every entity that has a MeshRenderer.
+         *
+         * This is the first half of the pass. It gathers every visible submesh,
+         * issues the opaque draws, and holds the blended ones for
+         * draw_blended(). Both halves have to run, in that order.
          *
          * A mesh, a material, and a texture each load the first time something
          * asks for it, so the first frame that shows a new mesh pays for the
@@ -406,8 +413,27 @@ namespace engine::render {
          * view matrix of its own. The frustum this culls against comes from
          * there too.
          */
-        void draw(gfx::CommandList* commands, const scene::World& world,
-                  const assets::AssetSource& content, const Vec3& camera_position);
+        void draw_opaque(gfx::CommandList* commands, const scene::World& world,
+                         const assets::AssetSource& content, const Vec3& camera_position);
+
+        /**
+         * @brief Draws every blended submesh draw_opaque() collected, back to front.
+         *
+         * This is the second half of the pass, and it is a call of its own so
+         * that the caller can draw the sky between the two. A blended surface
+         * reads what is already in the colour attachment, so over open sky it
+         * has to run after the sky rather than before it. SkyPass is opaque and
+         * tests depth for equality, and blended geometry writes no depth, so a
+         * sky drawn afterwards does not tint the pane. It paints over it. That
+         * was issue #435.
+         *
+         * @param commands The open command list.
+         *
+         * @warning Call this after draw_opaque() in the same frame and the same
+         * rendering scope. draw_opaque() is what gathers the list, so calling
+         * this alone draws nothing and reports once.
+         */
+        void draw_blended(gfx::CommandList* commands);
 
         /**
          * @brief The mesh cache, so another pass can draw the same geometry.
@@ -657,9 +683,9 @@ namespace engine::render {
         /**
          * Sorts every visible submesh into ::opaque_ and ::blended_.
          *
-         * Separate from draw() because it records no command. It reads the
-         * world, culls each entity against ::frustum_, and builds the two
-         * lists. draw() then issues them.
+         * Separate from draw_opaque() because it records no command. It reads
+         * the world, culls each entity against ::frustum_, and builds the two
+         * lists. The two draw halves then issue them.
          *
          * @param world The world to read.
          * @param content The game content tree, for the mesh and material loads.
@@ -667,9 +693,6 @@ namespace engine::render {
          */
         void gather_draws(const scene::World& world, const assets::AssetSource& content,
                           const Vec3& camera_position);
-
-        /// Draws what gather_draws() collected, back to front.
-        void draw_blended(gfx::CommandList* commands);
 
         /// Builds the per-frame blocks and the sets that bind them.
         [[nodiscard]] bool build_frame_sets();
@@ -786,7 +809,8 @@ namespace engine::render {
         /**
          * @brief Whether cull() has run for the frame draw() is about to record.
          *
-         * cull() sets it and draw() clears it, so the pair has to alternate.
+         * cull() sets it and draw_opaque() clears it, so the pair has to
+         * alternate.
          * Without it a caller that forgot cull() would draw with the frame slot
          * and the frame block of the frame before, and the only sign would be a
          * picture one frame stale.
@@ -796,6 +820,19 @@ namespace engine::render {
         /// @brief Whether the warning above has been logged. It says the same
         /// thing every frame once the order is wrong, and once is enough.
         bool warned_missing_cull_ = false;
+
+        /**
+         * @brief Whether draw_opaque() ran for this frame.
+         *
+         * draw_blended() draws the list draw_opaque() gathered, so calling it
+         * alone draws nothing. The two halves are separate for the sky (#435),
+         * and a caller that keeps only the first half loses every blended
+         * surface with no other sign.
+         */
+        bool gathered_this_frame_ = false;
+
+        /// @brief Whether the warning above has been logged. Once is enough.
+        bool warned_missing_gather_ = false;
 
         /// @brief Reads and uploads the cluster cull compute shader, and builds its pipeline.
         [[nodiscard]] bool build_compute_pipeline(const assets::AssetSource& content);

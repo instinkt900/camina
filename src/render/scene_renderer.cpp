@@ -3,6 +3,7 @@
 #include "core/assert.h"
 #include "core/log.h"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace engine::render {
@@ -160,6 +161,15 @@ namespace engine::render {
             const std::uint32_t first = timestamp_slot(static_cast<ScenePass>(i));
             gpu_pass_ns_[i] = static_cast<double>(ticks[first + 1] - ticks[first]) * period;
         }
+
+        // The sky draws between the two halves of the mesh pass, so its range
+        // is inside the mesh range and the mesh number would otherwise report
+        // both. See issue #435 and the draw order in draw_scene(). Taking it
+        // off keeps "mesh" the cost of the geometry, which is what the frame
+        // report has always meant by it.
+        const std::size_t mesh = static_cast<std::size_t>(ScenePass::Mesh);
+        const std::size_t sky = static_cast<std::size_t>(ScenePass::Sky);
+        gpu_pass_ns_[mesh] = std::max(gpu_pass_ns_[mesh] - gpu_pass_ns_[sky], 0.0);
     }
 
     bool SceneRenderer::derive_frame_barriers(gfx::TextureHandle output, GraphSchedule& out) {
@@ -283,24 +293,32 @@ namespace engine::render {
             // geometry comes from a cooked file that a glTF produced, and
             // nothing here knows which file that was.
             gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Mesh));
-            mesh_.draw(commands, world, content, view.camera_position);
-            gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Mesh) + 1);
+            mesh_.draw_opaque(commands, world, content, view.camera_position);
 
-            // The sky fills what the geometry left. It is a pass of its own in
-            // the code and not in the graph: it draws in the scope the mesh
-            // pass opened, and it touches the same two attachments in the same
-            // two states MeshPass::declare() already named. A declaration of
-            // its own would derive a barrier, because derive_barriers() orders
-            // every write against what came before it, and issuing a barrier
-            // inside a rendering scope is invalid.
+            // The sky fills what the opaque geometry left. It is a pass of its
+            // own in the code and not in the graph: it draws in the scope the
+            // mesh pass opened, and it touches the same two attachments in the
+            // same two states MeshPass::declare() already named. A declaration
+            // of its own would derive a barrier, because derive_barriers()
+            // orders every write against what came before it, and issuing a
+            // barrier inside a rendering scope is invalid.
             //
-            // After the mesh pass rather than before it, so the depth test
-            // rejects every pixel the geometry covered and the cubemap is
-            // sampled only where the frame would otherwise show its clear.
+            // After the opaque draws, so the depth test rejects every pixel the
+            // geometry covered and the cubemap is sampled only where the frame
+            // would otherwise show its clear.
+            //
+            // Before the blended draws, which is issue #435. A blended surface
+            // reads what is already in the attachment and writes no depth. So a
+            // sky drawn afterwards passes its own depth-equal test over that
+            // surface and, being opaque, paints over it. Over open sky the pane
+            // was not tinted wrongly. It was gone.
             gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Sky));
             sky_.draw(commands, mesh_.environment(), glm::inverse(view.clip_from_world),
                       view.camera_position);
             gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Sky) + 1);
+
+            mesh_.draw_blended(commands);
+            gfx::cmd_write_timestamp(commands, timestamp_slot(ScenePass::Mesh) + 1);
 
             gfx::cmd_end_rendering(commands);
         }

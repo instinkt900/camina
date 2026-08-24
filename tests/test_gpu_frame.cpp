@@ -27,6 +27,9 @@
 // that go with it. See src/import/stb_image_impl.cpp.
 #include <stb_image.h>
 
+#include <array>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <set>
@@ -54,6 +57,10 @@ namespace {
     /// How many distinct colours a frame that drew a shaded scene must hold.
     constexpr std::size_t kShadedFloor = 32;
 
+    /// How far apart the two outer thirds of the sky frame must be, per channel.
+    /// See the sky section in main() for where the number comes from.
+    constexpr double kPaneFloor = 10.0;
+
     /**
      * @brief What one capture came back as.
      */
@@ -61,7 +68,21 @@ namespace {
         bool read = false;        ///< True when the file decoded.
         std::size_t pixels = 0;   ///< How many pixels it holds.
         std::size_t distinct = 0; ///< How many distinct colours it holds.
+        /// @brief The mean colour of the left third, in 0 to 255.
+        std::array<double, 3> left{};
+        /// @brief The mean colour of the right third, in 0 to 255.
+        std::array<double, 3> right{};
     };
+
+    /// The largest difference between two mean colours, over the channels.
+    [[nodiscard]] double widest(const std::array<double, 3>& a,
+                                const std::array<double, 3>& b) {
+        double most = 0.0;
+        for (std::size_t at = 0; at < a.size(); ++at) {
+            most = std::max(most, std::abs(a[at] - b[at]));
+        }
+        return most;
+    }
 
     /// Whether a device opens on this machine at all.
     ///
@@ -115,7 +136,35 @@ namespace {
             const unsigned int b = pixels[(at * 3) + 2];
             colours.insert((r << 16U) | (g << 8U) | b);
         }
+
+        // The outer thirds, summed for the sky order check. A third rather than
+        // a half, so the seam where the pane stops falls in neither band and
+        // the check does not depend on where the pane's edge lands.
+        const int band = width / 3;
+        std::array<double, 3> left{};
+        std::array<double, 3> right{};
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < band; ++x) {
+                const std::size_t near_edge = (static_cast<std::size_t>(y) *
+                                               static_cast<std::size_t>(width)) +
+                                              static_cast<std::size_t>(x);
+                const std::size_t far_edge = near_edge +
+                                             static_cast<std::size_t>(width - band);
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    left[channel] += pixels[(near_edge * 3) + channel];
+                    right[channel] += pixels[(far_edge * 3) + channel];
+                }
+            }
+        }
         stbi_image_free(pixels);
+
+        const auto band_pixels = static_cast<double>(band) * static_cast<double>(height);
+        if (band_pixels > 0.0) {
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                frame.left[channel] = left[channel] / band_pixels;
+                frame.right[channel] = right[channel] / band_pixels;
+            }
+        }
 
         frame.read = true;
         frame.pixels = count;
@@ -216,6 +265,38 @@ int main(int argc, char** argv) {
             std::fflush(stdout);
             check(frame.distinct > 1, "the runtime frame is not one flat colour");
             check(frame.distinct >= kShadedFloor, "the runtime frame holds a shaded scene");
+        }
+    }
+
+    section("A blended pane draws over open sky");
+    // Issue #435. SkyPass used to draw after every mesh draw, blended ones
+    // included. A blended surface writes no depth, so the sky then passed its
+    // own depth-equal test over that surface, and the sky is opaque, so it
+    // painted over the pane rather than tinting it.
+    //
+    // tests/content_sky is one pane over the left of a frame of open sky. The
+    // environment is a vertical gradient and nothing else, so the two outer
+    // thirds of a frame of sky alone are the same picture. A difference between
+    // them is the pane, and only the pane.
+    if (fs::exists(runtime)) {
+        const fs::path cooked = engine::platform::cooked_content_root() / "sky";
+        check(fs::is_directory(cooked), "the cooked sky content tree is there");
+        const Frame frame = capture(
+            runtime, { "--content", cooked.string(), "--frames", kFrames, "--no-watch" },
+            scratch / "sky.png");
+        check(frame.read, "the runtime wrote a capture of the sky scene");
+        if (frame.read) {
+            const double apart = widest(frame.left, frame.right);
+            std::printf("  note  left %.1f %.1f %.1f, right %.1f %.1f %.1f, widest %.1f\n",
+                        frame.left[0], frame.left[1], frame.left[2], frame.right[0],
+                        frame.right[1], frame.right[2], apart);
+            std::fflush(stdout);
+            check(frame.distinct >= kShadedFloor, "the sky frame holds a shaded scene");
+            // The floor is low against what the fix gives. The pane moved two
+            // channels by about 44 of 255 when this was written, and the sky
+            // painting over it gives under 1. Anything in between is a picture
+            // worth looking at rather than a driver disagreeing.
+            check(apart >= kPaneFloor, "the pane is in the picture rather than under the sky");
         }
     }
 
