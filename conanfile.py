@@ -138,6 +138,14 @@ class CaminaConan(ConanFile):
             # The ceiling stays below 2, because the 2.x line is a separate fork
             # for a larger toolkit and not the next version of this one. See
             # DESIGN.md section 8.5.
+            #
+            # The floor is load-bearing for a second reason. moth_ui carries
+            # tags 1.5.0, 1.6.0 and 1.7.0 that were never published, and a
+            # version range takes the highest version it can find rather than
+            # the newest one. So a floor below them would let anybody who runs
+            # `conan create` on one move this engine back to April 2026. Raise
+            # this with the moth_ui release that needs it, never after. That is
+            # issue #390.
             self.requires("moth_ui/[>=1.9 <2]")
 
             # M6.4. moth_ui::IFont declares no methods, so the backend owns
