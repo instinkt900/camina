@@ -8,14 +8,24 @@
  * runtime reads that and nothing else.
  *
  * **This rule needs no audio device and no mixer.** A short effect is decoded
- * here, by the WAV reader below, and a long track is passed through with its
- * encoded bytes untouched. So the rule links no miniaudio, it runs on a build
- * machine with no sound card, and a build with `with_audio` off still cooks a
- * content tree correctly.
+ * here and a long track is passed through with its encoded bytes untouched. So
+ * it runs on a build machine with no sound card, and a build with `with_audio`
+ * off cooks the same tree to the same bytes.
  *
- * **Only WAV decodes at cook time.** Everything else is streamed, and the
- * runtime decoder reads it while it plays. A source that is not a WAV and that
- * a sidecar marks as not streamed is refused by name rather than cooked wrongly.
+ * **It does link the decoding half of miniaudio**, through
+ * `engine::audio::decode_encoded`. That library is built with `MA_NO_DEVICE_IO`
+ * when `with_audio` is off, so a build with no audio carries the decoders and no
+ * backend. Issue #424 is why: before it, only WAV decoded at cook time, so a
+ * project keeping its effects compressed got none of the benefit of the PCM path.
+ *
+ * **Which decoder reads a file is decided by its bytes, not by its name.** A WAV
+ * goes through decode_wav() below, which is unchanged so that every cooked WAV
+ * keeps the bytes it already has. FLAC and MP3 go through miniaudio.
+ *
+ * **Ogg Vorbis is accepted and cannot be decoded.** miniaudio 0.11 carries no
+ * Vorbis decoder, so an `.ogg` marked as an effect is refused by name here, and a
+ * streamed one cooks and then cannot be played either. That is issue #477 and it
+ * is older than the rule above.
  */
 
 #include "assets/meta.h"

@@ -45,6 +45,12 @@ target_link_libraries(engine_import
     PUBLIC
         engine::core
     PRIVATE
+        # Issue #424. A short effect that is not a WAV is decoded here at cook
+        # time, so that nothing decodes while it plays. This is the decoding
+        # half of miniaudio with no device layer under it, and it is built
+        # whatever with_audio says, because a cook has to produce the same bytes
+        # either way.
+        engine::miniaudio
         stb::stb
         bc7enc
         cgltf::cgltf

@@ -70,6 +70,12 @@ engine_enable_clang_tidy(test_cooker)
 # looking for a program that is not there yet.
 add_dependencies(test_cooker cooker)
 
+# Issue #424. A real Ogg Vorbis file, because a made-up one cannot show that a
+# short effect decodes to PCM at cook time. See tests/sounds/README.md.
+target_compile_definitions(test_cooker PRIVATE
+    ENGINE_TEST_SOUNDS_DIR="${CMAKE_SOURCE_DIR}/tests/sounds"
+)
+
 add_test(NAME cooker COMMAND test_cooker)
 
 # The glTF importer and the cooked mesh format. This links engine::import for the
