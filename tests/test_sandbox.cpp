@@ -28,6 +28,7 @@
 
 #if defined(ENGINE_WITH_LUA)
 #include "platform/input.h"
+#include "play/session.h"
 #include "scene/step_motion.h"
 #include "script/host.h"
 
@@ -460,20 +461,32 @@ namespace {
     // result worse than no test at all.
     // ---------------------------------------------------------------------
 
+    /// The step this test drives the session at, in seconds.
+    ///
+    /// The same number the runtime feeds an offscreen frame. One step for each
+    /// call, so a run of N is N steps whatever the machine is doing.
+    constexpr float kStepSeconds = 1.0F / 60.0F;
+
     /// Everything one step of the real game needs, built from the shipped tree.
+    ///
+    /// The step order is engine::play::Session::advance and not a copy of it.
+    /// This used to hold its own, under a comment saying it was the order the
+    /// runtime runs. The runtime stopped holding that order at #315, and a
+    /// copy with no compiler tying it to the original drifts with nothing to
+    /// report it.
     struct Game {
         /// The cooked tree, held rather than opened and dropped. The audio
         /// surfaces keep a reference to it, so it has to outlive them.
         engine::assets::Content cooked;
-        sc::ComponentRegistry registry;
         sc::PrefabLibrary library;
         sc::World world;
-        engine::physics::Simulation simulation;
-        engine::script::Host host{ registry };
-        engine::platform::Input input;
-        engine::scene::StepMotion motion;
-        engine::script::CameraView camera;
-        double seconds = 0.0;
+
+        /// The clock, the solver, the scripts and the input the game reads.
+        engine::play::Session session;
+
+        /// Where the view stands, for a script that acts along the line of
+        /// sight. The throw reads it.
+        engine::play::View view;
 
 #if defined(ENGINE_WITH_AUDIO)
         /// A real mixer with no device under it. Nothing is audible and every
@@ -488,38 +501,22 @@ namespace {
         /// an empty list and pass whatever happened.
         std::vector<engine::physics::Simulation::Touch> triggers;
 
-        [[nodiscard]] engine::script::Services services() {
-            return engine::script::Services{ .physics = &simulation,
-                                             .input = &input,
-                                             .prefabs = &library,
-                                             .camera = &camera,
-#if defined(ENGINE_WITH_AUDIO)
-                                             .audio = &script_audio,
-#endif
-                                             .motion = &motion };
-        }
-
-        /// One fixed step, in the order the runtime runs it.
+        /// One frame worth exactly one fixed step.
         void step() {
-            seconds += 1.0 / 60.0;
-            motion.begin_step(world);
-            host.update(world, seconds, services());
-            simulation.step(world, 1.0F / 60.0F);
-            host.deliver_physics_events(world, simulation, services());
-            for (const engine::physics::Simulation::Touch& touch : simulation.trigger_events()) {
+            // What the devices read this frame, which is nothing unless press()
+            // fed a key for this one. The session folds every device frame
+            // since the last step into what that step reads, so a key fed once
+            // is down for one step and up for the next.
+            session.feed_input(engine::platform::InputFrame{});
+            session.advance(world, view, kStepSeconds);
+
+            // The simulation keeps the events of one step, and one advance ran
+            // one step, so this is that step's list.
+            for (const engine::physics::Simulation::Touch& touch :
+                 session.simulation().trigger_events()) {
                 triggers.push_back(touch);
             }
-
-            // What a frame would do. Alpha of one draws the newest step with no
-            // blending, which is what a test with no frames wants: the entity
-            // transform is where the solver just put it, not part way there.
-            simulation.interpolate(world, 1.0F);
-            motion.interpolate(world, 1.0F);
             world.update();
-
-            // The edges the last update() raised are finished, so an action
-            // pressed for one step is not pressed for the next.
-            input.update(engine::platform::InputFrame{});
         }
 
         void run(std::uint32_t steps) {
@@ -532,24 +529,33 @@ namespace {
         void press(engine::platform::Key key) {
             engine::platform::InputFrame frame;
             frame.keys.at(static_cast<std::size_t>(key)) = true;
-            input.update(frame);
+            session.feed_input(frame);
         }
     };
 
     /// Loads the shipped scene and every cooked script into a Game.
     [[nodiscard]] bool start_game(Game& game) {
-        game.registry = make_registry();
+        // The process-wide registry, filled the way apps/runtime fills it.
+        // engine::play::Session builds its script host from that one, so a
+        // registry local to this test would leave the host unable to name a
+        // component the game defines.
+        sc::register_builtin_components();
+        engine::physics::register_components();
+        engine::script::register_components();
+        sandbox::register_components();
 
-        // The same keys the runtime binds. A script names the action, so this is
-        // the only place a key appears.
-        game.input.bind("throw", engine::platform::Key::F);
-        game.input.bind("reset", engine::platform::Key::R);
+        // The game's own table, not a copy of it. A key changed in
+        // sandbox::bind_actions used to leave this test pressing the old one,
+        // and the failure read as a broken script.
+        sandbox::bind_actions(game.session.input());
 
         if (!game.cooked.open(sandbox::default_content_directory())) {
             return false;
         }
-        if (!sandbox::load(sandbox::default_content_directory(), &game.cooked, game.world,
-                           game.registry, game.library)) {
+        // The process-wide library too, for the same reason: a script instances
+        // a prefab through engine::scene::prefabs() and a session hands it that
+        // one.
+        if (!sandbox::load(sandbox::default_content_directory(), &game.cooked, game.world)) {
             return false;
         }
 
@@ -562,27 +568,23 @@ namespace {
         }
         game.script_audio.bind(game.mixer, game.cooked);
         game.scene_audio.bind(game.mixer, game.cooked);
+        game.session.set_audio(&game.scene_audio);
+        game.session.set_script_audio(&game.script_audio);
 #endif
 
-        // Every cooked script, the way the runtime loads them: out of the
-        // manifest rather than out of a list somebody keeps up to date.
-        std::size_t loaded = 0;
-        for (const engine::assets::ManifestEntry& entry : game.cooked.manifest().entries) {
-            for (const engine::assets::ManifestOutput& output : entry.outputs) {
-                if (!std::string_view{ output.cooked }.ends_with(
-                        engine::assets::kScriptExtension)) {
-                    continue;
-                }
-                std::vector<std::byte> bytes;
-                if (game.cooked.read_bytes(output, bytes) &&
-                    game.host.load(output.guid, output.cooked, bytes)) {
-                    ++loaded;
-                }
-            }
+        // A tree with no script would make every test below vacuous, so this
+        // asks the project what it holds before it loads anything.
+        std::vector<engine::assets::AssetRecord> scripts;
+        if (!game.cooked.assets_of_kind(engine::assets::kScriptExtension, scripts) ||
+            scripts.empty()) {
+            return false;
         }
 
-        game.simulation.build(game.world);
-        return loaded > 0;
+        // The engine's loader, the same call the runtime makes. It reads the
+        // project rather than a list somebody keeps up to date.
+        game.session.load_scripts(game.cooked);
+        game.session.build(game.world);
+        return true;
     }
 
     void test_spin_turns_what_it_should() {
@@ -621,7 +623,7 @@ namespace {
         // The step owns the pose, so a frame between two steps blends it rather
         // than showing the newest. Without this a Spin steps at 60 Hz and holds
         // still in between, which is the judder a fixed step exists to remove.
-        check(game.motion.tracked() == 2, "and both are recorded for blending");
+        check(game.session.motion().tracked() == 2, "and both are recorded for blending");
     }
 
     void test_a_bad_spin_turns_nothing() {
@@ -688,18 +690,18 @@ namespace {
 
         Game game;
         check(start_game(game), "the shipped game starts");
-        game.camera = engine::script::CameraView{ .position = { 0.0F, 3.0F, 4.0F },
-                                                  .forward = { 0.0F, 0.0F, -1.0F } };
+        game.view = engine::play::View{ .position = { 0.0F, 3.0F, 4.0F },
+                                        .forward = { 0.0F, 0.0F, -1.0F } };
 
         game.run(2);
-        const std::size_t bodies = game.simulation.body_count();
+        const std::size_t bodies = game.session.simulation().body_count();
         check(count_named(game.world, "thrown crate") == 0, "nothing has been thrown yet");
 
-        game.press(engine::platform::Key::F);
+        game.press(sandbox::kThrowKey);
         game.step();
 
         check(count_named(game.world, "thrown crate") == 1, "the throw made one crate");
-        check(game.simulation.body_count() == bodies + 1,
+        check(game.session.simulation().body_count() == bodies + 1,
               "and it has a body, so it is not hanging in the air");
 
         // The press edge and not the key being down. A throw on every step would
@@ -722,23 +724,23 @@ namespace {
         // Transform write, because a dynamic body owns its pose.
         game.run(2);
         const engine::Vec3 target = world_position(game.world, goal);
-        check(game.simulation.teleport(game.world, crate,
-                                       engine::Vec3{ target.x, 0.5F, target.z },
-                                       engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
+        check(game.session.simulation().teleport(game.world, crate,
+                                                 engine::Vec3{ target.x, 0.5F, target.z },
+                                                 engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
               "the crate moves into the goal");
 
         // Long enough for the body to come to rest, because the win waits for a
         // crate to settle rather than firing as it passes through.
         game.run(240);
 
-        check(!game.simulation.is_awake(crate), "the crate went to sleep in the goal");
-        check(game.host.stopped_count() == 0, "and no script raised an error");
+        check(!game.session.simulation().is_awake(crate), "the crate went to sleep in the goal");
+        check(game.session.scripts().stopped_count() == 0, "and no script raised an error");
 
         // The win itself, read off the component the script keeps it on. A log
         // line is what a player sees and nothing a test can check.
         const auto* won = game.world.registry().try_get<const sandbox::Goal>(goal);
         check(won != nullptr && won->won, "and the puzzle says it is won");
-        check(game.host.call_count(engine::script::Callback::Trigger) > 0,
+        check(game.session.scripts().call_count(engine::script::Callback::Trigger) > 0,
               "the goal volume reported the crate crossing into it");
 
         // The direction, which the M8.4 test used to carry. The volume has to be
@@ -774,7 +776,7 @@ namespace {
         game.run(30);
         check(game.mixer.started() == 0, "a game where nothing happened has played nothing");
 
-        game.press(engine::platform::Key::F);
+        game.press(sandbox::kThrowKey);
         game.run(1);
         const std::uint64_t after_throw = game.mixer.started();
         check(after_throw >= 1, "the throw plays something");
@@ -792,7 +794,7 @@ namespace {
         check(after_landing - after_throw < 30,
               "but not one for every contact, because the cooldown holds them apart");
 
-        game.press(engine::platform::Key::R);
+        game.press(sandbox::kResetKey);
         game.run(1);
         check(game.mixer.started() > after_landing, "and the reset plays something");
 
@@ -821,7 +823,7 @@ namespace {
         check(start_game(game), "the shipped game starts");
         check(game.mixer.buses() == 0, "a game that has played nothing has built no bus");
 
-        game.press(engine::platform::Key::F);
+        game.press(sandbox::kThrowKey);
         game.run(60);
 
         check(game.mixer.buses() == 1, "the throw and the landing built one bus");
@@ -838,8 +840,8 @@ namespace {
 
         Game game;
         check(start_game(game), "the shipped game starts");
-        game.camera = engine::script::CameraView{ .position = { 0.0F, 3.0F, 4.0F },
-                                                  .forward = { 0.0F, 0.0F, -1.0F } };
+        game.view = engine::play::View{ .position = { 0.0F, 3.0F, 4.0F },
+                                        .forward = { 0.0F, 0.0F, -1.0F } };
 
         const entt::entity crate = find_by_name(game.world, "stack crate 2");
         check(crate != entt::null, "the top of the stack is there");
@@ -849,10 +851,10 @@ namespace {
 
         // Knock it a long way from home, and throw something as well, so the
         // reset has both kinds of work to undo.
-        check(game.simulation.teleport(game.world, crate, engine::Vec3{ 4.0F, 0.5F, 4.0F },
-                                       engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
+        check(game.session.simulation().teleport(game.world, crate, engine::Vec3{ 4.0F, 0.5F, 4.0F },
+                                                 engine::Quat{ 1.0F, 0.0F, 0.0F, 0.0F }),
               "the crate is moved away");
-        game.press(engine::platform::Key::F);
+        game.press(sandbox::kThrowKey);
         game.step();
         check(count_named(game.world, "thrown crate") == 1, "and a crate was thrown");
 
@@ -860,7 +862,7 @@ namespace {
         check(glm::length(world_position(game.world, crate) - home) > 1.0F,
               "the crate is nowhere near where it started");
 
-        game.press(engine::platform::Key::R);
+        game.press(sandbox::kResetKey);
         game.step();
         game.run(2);
 
