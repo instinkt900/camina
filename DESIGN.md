@@ -118,8 +118,9 @@ a diff against one directory, not against the whole engine.
 patched once. The whole of it is one flag moved out of the root CMakeLists, and the containment
 script has never had anything to report.
 
-Seven things it did cost, each of which had to be read out of the source rather than out of the
-documentation. M7 found the first four, and M8.4 found the last three:
+Eight things it did cost, each of which had to be read out of the source rather than out of the
+documentation. M7 found the first four, M8.4 found the next three, and a sanitizer run found the
+last one:
 
 - **Gravity is −10, not −9.8.** The documentation says one and the code says the other. §3
   holds the check that pins it.
@@ -146,6 +147,12 @@ documentation. M7 found the first four, and M8.4 found the last three:
   and `DrawQueryCallback` gives it `b3_colorWheat` rather than the solid color. So
   `--physics-debug` shows a trigger, and shows it apart from a collider, with no engine code.
   Neither half is documented, so `tests/test_physics.cpp` pins both.
+- **A task name does not outlive the call that queues the task.** `b3Solve` formats the name
+  into a stack buffer inside the block that queues the task, so the buffer is gone before a
+  worker reads it. `jobs::enqueue` keeps its own copy for that reason, and `jobs.h` says so.
+  It used to keep the caller's pointer, which is a read of a dead stack frame on every solve.
+  Nothing reported it: a dead frame usually still holds the bytes. AddressSanitizer named it
+  in five test binaries at once. See issue #453.
 
 **The solver is deterministic across threads.** Three offscreen runs of the sandbox, with a
 crate thrown at a stack on a fixed frame and the solver split over eight job system workers,
@@ -319,6 +326,13 @@ the solver starts several pieces of work and joins them itself, which `parallel_
 express. The two Box3D callbacks pass a plain function pointer straight through, so a task
 costs no allocation. The pool holds 256 tasks, which is the most Box3D queues in one step,
 and it says so in its own header for this exact reason.
+
+**A task slot keeps its own copy of the name.** The name reaches the profiler on the worker
+rather than on the caller, so a pointer is the wrong thing to keep: Box3D builds its names on
+a stack frame that ends before the task runs. The slot holds 32 bytes and cuts a longer name,
+which costs 8 KiB over the whole pool and no allocation. `jobs::task_name` is what makes the
+copy checkable, because a test can only tell a copy from a pointer by overwriting the buffer
+the caller passed.
 
 **`jobs::worker_count()` counts the calling thread.** enkiTS creates one fewer thread than
 it reports, because `parallel_for` and `wait` both run work on the caller. Box3D counts the

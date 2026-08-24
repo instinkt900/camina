@@ -10,14 +10,38 @@
 #include "math/conventions.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
 
     using test::check;
+
+    /// Counts one run. The task under test does nothing else.
+    void count_one_run(void* context) {
+        static_cast<std::atomic<int>*>(context)->fetch_add(1, std::memory_order_relaxed);
+    }
+
+    /// Launders the pointer wipe() writes through, so the compiler cannot trace
+    /// it back to a buffer it has already proved dead.
+    char* volatile g_wipe_target = nullptr;
+
+    /**
+     * Overwrites a buffer the caller is about to leave.
+     *
+     * A plain fill here is removed at -O2, because the buffer is dead after the
+     * scope ends. The test then passes whether enqueue copied the name or kept
+     * the pointer, which is the opposite of what it is for.
+     */
+    void wipe(char* data, std::size_t size) {
+        g_wipe_target = data;
+        std::memset(g_wipe_target, 'x', size);
+    }
 
     void test_arena() {
         engine::Arena arena(1024);
@@ -81,6 +105,54 @@ namespace {
               "right cross up gives backward, so the basis is right-handed");
     }
 
+    /**
+     * A task name that the caller does not keep.
+     *
+     * Box3D is why this matters. b3Solve formats the name into a stack buffer
+     * inside the block that queues the task, so the buffer is gone by the time a
+     * worker looks at it. enqueue() used to keep that pointer and measure it on
+     * the worker, which read a stack frame that had already ended. See issue
+     * #453 and DESIGN.md section 5.
+     *
+     * The test overwrites the caller's buffer straight after the call. A task
+     * that kept the pointer then reports the overwritten text, and a task that
+     * copied reports the name. **That is what makes this a check rather than a
+     * sanitizer run.** AddressSanitizer did find the original bug, but it cannot
+     * find it in a case this small: at -O2 the compiler is free to keep the
+     * buffer alive for the whole function, and then there is no dead frame to
+     * report.
+     */
+    void test_task_name_is_copied() {
+        std::atomic<int> runs{ 0 };
+        engine::jobs::Task* task = nullptr;
+        {
+            std::array<char, 16> buffer{};
+            std::snprintf(buffer.data(), buffer.size(), "solve[%d]", 3);
+            task = engine::jobs::enqueue(count_one_run, &runs, buffer.data());
+            wipe(buffer.data(), buffer.size());
+        }
+
+        check(task != nullptr, "an empty pool gives the task a slot");
+        check(std::strcmp(engine::jobs::task_name(task), "solve[3]") == 0,
+              "enqueue copies the name rather than keeping the caller's pointer");
+
+        engine::jobs::wait(task);
+        check(runs.load() == 1, "the task ran once");
+    }
+
+    /// A name longer than a slot holds. It is cut rather than refused, and the
+    /// copy is still null terminated.
+    void test_long_task_name_is_cut() {
+        const std::string long_name(engine::jobs::task_name_capacity() + 10, 'n');
+
+        std::atomic<int> runs{ 0 };
+        engine::jobs::Task* task = engine::jobs::enqueue(count_one_run, &runs, long_name.c_str());
+        check(task != nullptr, "an empty pool gives the task a slot");
+        check(std::strlen(engine::jobs::task_name(task)) == engine::jobs::task_name_capacity(),
+              "a name longer than the slot is cut to the capacity");
+        engine::jobs::wait(task);
+    }
+
     void test_jobs() {
         engine::jobs::init();
         check(engine::jobs::worker_count() > 0, "the job system starts workers");
@@ -108,6 +180,9 @@ namespace {
         // An empty range must not deadlock or crash.
         engine::jobs::parallel_for(0, 1, [](std::uint32_t, std::uint32_t, std::uint32_t) {});
         check(true, "parallel_for accepts an empty range");
+
+        test_task_name_is_copied();
+        test_long_task_name_is_cut();
 
         engine::jobs::shutdown();
         check(engine::jobs::worker_count() == 0, "shutdown stops the workers");

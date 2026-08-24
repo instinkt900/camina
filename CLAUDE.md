@@ -507,7 +507,8 @@ Box3D turned out to need nothing patched. What it did cost is four things that h
 out of its source: gravity is -10 rather than -9.8, a sleeping body ignores a velocity of zero
 silently, the debug wireframe of a shape is cached by the application through a callback on the
 world definition, and a hull stores half-edges so every edge is in the array twice. `DESIGN.md`
-section 5 holds all four. M8.4 found three more, so that section now carries seven.
+section 5 holds all four. M8.4 found three more and a sanitizer run found an eighth, so
+that section now carries eight.
 
 **M8 is complete, and the sandbox game is Lua.** M8.0 put input in `platform/`, because every
 read sat inline in `apps/runtime/main.cpp` and a script API over that would have inherited an

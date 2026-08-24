@@ -86,8 +86,9 @@ namespace engine::jobs {
      * @param fn The work to run. It must not be null.
      * @param context Passed to fn. This may be null, and the caller owns whatever
      *                it points at until wait() returns.
-     * @param name Names the task in the profiler. The pointer must outlive the
-     *             task, so pass a string literal.
+     * @param name Names the task in the profiler, or null for no name. The
+     *             string is copied, so it does not have to outlive the call. A
+     *             name longer than task_name_capacity() is cut.
      * @return A handle to pass to wait(), or null when the task already ran on
      *         the calling thread. See the warning below.
      *
@@ -117,5 +118,29 @@ namespace engine::jobs {
     /// @brief How many tasks enqueue() can hold at once before it runs work inline.
     /// @return The size of the task pool.
     [[nodiscard]] std::uint32_t task_capacity();
+
+    /**
+     * @brief How many characters of a task name a slot keeps, without the terminator.
+     *
+     * enqueue() copies the name into the slot, so the caller may build it on the
+     * stack. A longer name is cut to this length.
+     *
+     * @return The largest name enqueue() keeps whole.
+     */
+    [[nodiscard]] std::uint32_t task_name_capacity();
+
+    /**
+     * @brief The name a task kept.
+     *
+     * This is what makes the copy checkable. enqueue() keeps its own copy rather
+     * than the caller's pointer, and a test can only tell the two apart by
+     * overwriting the caller's buffer and asking the task what it holds.
+     *
+     * @param task The handle enqueue() returned. Null gives an empty string,
+     *             because the work already ran and no slot holds a name.
+     * @return The stored name, always null terminated. It stays valid until
+     *         wait() releases the task.
+     */
+    [[nodiscard]] const char* task_name(const Task* task);
 
 } // namespace engine::jobs
