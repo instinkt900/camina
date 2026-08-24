@@ -12,6 +12,7 @@
 #include "check.h"
 #include "ui/font.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -406,6 +407,123 @@ namespace {
         font.destroy(nullptr);
     }
 
+    /// The alpha of one texel of the atlas.
+    std::uint8_t coverage_at(const Font& font, int x, int y) {
+        const auto texel = (static_cast<std::size_t>(y) * static_cast<std::size_t>(font.atlas_width())) +
+                           static_cast<std::size_t>(x);
+        return font.atlas_pixels()[(texel * 4) + 3];
+    }
+
+    /// Whether a glyph's rectangle holds any coverage at all.
+    bool glyph_has_ink(const Font& font, const Glyph& glyph) {
+        const int left = static_cast<int>(glyph.u0 * static_cast<float>(font.atlas_width()));
+        const int top = static_cast<int>(glyph.v0 * static_cast<float>(font.atlas_height()));
+        for (int y = 0; y < glyph.height; ++y) {
+            for (int x = 0; x < glyph.width; ++x) {
+                if (coverage_at(font, left + x, top + y) != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A glyph outside the preload range packs when somebody asks for it.
+     *
+     * This is the half of issue #213 that needs no device. The range in
+     * kCoverageFirst and kCoverageLast is what load() warms the atlas with, and it
+     * has stopped being a limit.
+     */
+    void packs_a_glyph_on_demand(const FontLibrary& library) {
+        section("packing on demand");
+
+        Font font;
+        check(font.load(library, font_path(), kSize), "the font loads");
+        // The preload set is in pixels_ and no texture holds it yet, so a freshly
+        // loaded atlas has something to upload. upload() is what clears this, and
+        // it needs a device that this test does not open.
+        check(font.atlas_changed(), "a freshly loaded atlas has something to upload");
+
+        const std::size_t preloaded = font.glyph_count();
+
+        // Greek capital alpha, which is outside the Latin-1 range the preload
+        // covers. Liberation Sans carries it. A face that did not would make this
+        // check say so rather than pass quietly.
+        const std::uint32_t alpha = font.glyph_index_for(U'\u0391');
+        check(alpha != 0, "the face carries a glyph outside the preload range");
+        if (alpha == 0) {
+            font.destroy(nullptr);
+            return;
+        }
+
+        const int index = font.pack_glyph(alpha);
+        check(index >= 0, "and it packs when somebody asks for it");
+        check(font.glyph_count() == preloaded + 1, "which is one more glyph than the preload");
+        check(font.atlas_changed(), "and the atlas says it holds something new");
+
+        const Glyph& packed = font.glyph(index);
+        check(packed.advance_x > 0, "the packed glyph carries an advance");
+        check(packed.u0 >= 0.0F && packed.u1 <= 1.0F, "its coordinates are inside the atlas");
+        check(packed.v0 >= 0.0F && packed.v1 <= 1.0F, "in both directions");
+        check(glyph_has_ink(font, packed), "and the atlas holds its coverage");
+
+        // Asking twice gives the same entry rather than a second copy.
+        check(font.pack_glyph(alpha) == index, "asking again gives the entry it already packed");
+        check(font.glyph_count() == preloaded + 1, "and packs nothing a second time");
+
+        // A glyph index no face entry uses is refused rather than packed as a box.
+        check(font.glyph_index_for(U'\U0001F600') == 0, "the face carries no emoji");
+
+        font.destroy(nullptr);
+    }
+
+    /**
+     * The atlas doubles when it fills, and everything already in it survives.
+     *
+     * Growth packs every glyph again from nothing, because the packer cannot
+     * relocate a rectangle it already placed. So this checks the thing that would
+     * break: a glyph packed before the growth still reads back with coverage
+     * where its coordinates say it is.
+     */
+    void grows_the_atlas_when_it_fills(const FontLibrary& library) {
+        section("growing the atlas");
+
+        Font font;
+        check(font.load(library, font_path(), kSize), "the font loads");
+
+        const int first_size = font.atlas_width();
+        const std::uint32_t capital_a = font.glyph_index_for(U'A');
+        check(capital_a != 0, "the face carries a capital A");
+        const int a_index = font.pack_glyph(capital_a);
+        check(a_index >= 0, "which is already in the preload");
+
+        // Enough of the face to overflow the square the preload fitted into.
+        // Whatever the face carries here, and it does not matter which.
+        std::size_t asked = 0;
+        for (char32_t codepoint = 0x100; codepoint <= 0x2FFF; ++codepoint) {
+            const std::uint32_t glyph_index = font.glyph_index_for(codepoint);
+            if (glyph_index != 0 && font.pack_glyph(glyph_index) >= 0) {
+                ++asked;
+            }
+        }
+        check(asked > 0, "the face carries glyphs beyond the preload range");
+        check(font.atlas_width() > first_size, "and packing them grew the atlas");
+        check(font.atlas_width() == font.atlas_height(), "which is still square");
+        check(font.atlas_pixels().size() == static_cast<std::size_t>(font.atlas_width()) *
+                                                static_cast<std::size_t>(font.atlas_height()) * 4,
+              "and the bytes match the new size");
+
+        // The whole risk of a growth, checked from the side that would go wrong.
+        // The index is stable, and the coordinates are the new ones.
+        check(font.pack_glyph(capital_a) == a_index, "a glyph keeps its index across a growth");
+        const Glyph& letter = font.glyph(a_index);
+        check(letter.u1 <= 1.0F && letter.v1 <= 1.0F, "its coordinates are inside the new atlas");
+        check(glyph_has_ink(font, letter), "and its coverage moved with it");
+
+        font.destroy(nullptr);
+    }
+
 }
 
 int main() {
@@ -422,6 +540,8 @@ int main() {
     measures_text(library);
     wraps_text(library);
     glyphs_carry_atlas_coordinates(library);
+    packs_a_glyph_on_demand(library);
+    grows_the_atlas_when_it_fills(library);
 
     std::printf("%d failure(s)\n", test::g_failures);
     return test::g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

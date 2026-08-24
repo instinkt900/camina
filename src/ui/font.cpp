@@ -11,11 +11,25 @@
 #include <stb_rect_pack.h>
 
 #include <cctype>
+#include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 
 namespace engine::ui {
+
+    /// One glyph, rasterized and waiting to be packed.
+    struct PendingGlyph {
+        std::uint32_t index = 0; ///< The glyph index in the face.
+        int width = 0;           ///< Bitmap width in texels.
+        int height = 0;          ///< Bitmap height in texels.
+        int bearing_x = 0;
+        int bearing_y = 0;
+        int advance_x = 0;
+        int advance_y = 0;
+        std::vector<std::uint8_t> coverage; ///< width times height bytes.
+    };
 
     namespace {
 
@@ -54,18 +68,6 @@ namespace engine::ui {
                                 : -((-fixed + half) / kFixedToPixels);
         }
 
-        /// One glyph, rasterized and waiting to be packed.
-        struct PendingGlyph {
-            std::uint32_t index = 0; ///< The glyph index in the face.
-            int width = 0;           ///< Bitmap width in texels.
-            int height = 0;          ///< Bitmap height in texels.
-            int bearing_x = 0;
-            int bearing_y = 0;
-            int advance_x = 0;
-            int advance_y = 0;
-            std::vector<std::uint8_t> coverage; ///< width times height bytes.
-        };
-
         bool is_space(char character) {
             return std::isspace(static_cast<unsigned char>(character)) != 0;
         }
@@ -96,122 +98,127 @@ namespace engine::ui {
         }
 
         /**
-         * Rasterizes every codepoint the atlas covers and keeps each bitmap.
+         * Rasterizes one glyph of the face and keeps its bitmap.
          *
-         * The reference renders every glyph twice, once to measure it for the
-         * packer and once to blit it. Holding the coverage here costs a few
-         * hundred kilobytes and halves the rasterization.
+         * One glyph rather than the whole covered set, because the atlas packs
+         * on demand now. The caller decides which glyphs it wants and when.
+         *
+         * @return The glyph, or nothing when the face will not render it. A
+         * refusal is reported where it needs saying and quiet where it does
+         * not: a face with no glyph for a codepoint is normal.
          */
-        std::vector<PendingGlyph> rasterize_covered(FT_Face face) {
-            std::vector<PendingGlyph> pending;
-            std::set<FT_UInt> seen;
+        std::optional<PendingGlyph> rasterize_one(FT_Face face, FT_UInt glyph_index) {
+            if (FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER) != 0) {
+                return std::nullopt;
+            }
 
+            const FT_GlyphSlot slot = face->glyph;
+
+            // FT_LOAD_RENDER picks the hinting target, not the bitmap format. A
+            // bitmap-only face can answer with one bit for each pixel, and
+            // reading that as one byte for each pixel turns a glyph into noise
+            // eight times too wide. Refuse it rather than draw it wrongly. An
+            // empty bitmap is fine and normal: a space has an advance and no
+            // coverage.
+            if (slot->bitmap.width != 0 && slot->bitmap.rows != 0 &&
+                slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
+                ENGINE_LOG_WARN("The face answered glyph {} in pixel mode {}, and this "
+                                "reads 8-bit gray only. The glyph is skipped.",
+                                glyph_index, static_cast<int>(slot->bitmap.pixel_mode));
+                return std::nullopt;
+            }
+
+            PendingGlyph glyph;
+            glyph.index = glyph_index;
+            glyph.width = static_cast<int>(slot->bitmap.width);
+            glyph.height = static_cast<int>(slot->bitmap.rows);
+            glyph.bearing_x = static_cast<int>(slot->metrics.horiBearingX / kFixedToPixels);
+            // Negative, because the pen sits on the baseline and a screen
+            // rectangle grows downward.
+            glyph.bearing_y = -static_cast<int>(slot->metrics.horiBearingY / kFixedToPixels);
+            glyph.advance_x = static_cast<int>(slot->advance.x / kFixedToPixels);
+            glyph.advance_y = static_cast<int>(slot->advance.y / kFixedToPixels);
+
+            glyph.coverage.resize(static_cast<std::size_t>(glyph.width) *
+                                  static_cast<std::size_t>(glyph.height));
+
+            // The sign of the pitch is the row order. A positive pitch puts the
+            // top row first, and a negative one puts the bottom row first and
+            // counts backward. Taking the absolute value alone would read the
+            // right bytes in the wrong order and draw every glyph upside down,
+            // so the start row moves with the sign.
+            const int pitch = slot->bitmap.pitch;
+            const std::uint8_t* first_row = slot->bitmap.buffer;
+            if (pitch < 0) {
+                first_row += static_cast<std::ptrdiff_t>(pitch) * (glyph.height - 1);
+            }
+            const int stride = (pitch < 0) ? -pitch : pitch;
+            for (int y = 0; y < glyph.height; ++y) {
+                for (int x = 0; x < glyph.width; ++x) {
+                    glyph.coverage[(static_cast<std::size_t>(y) *
+                                    static_cast<std::size_t>(glyph.width)) +
+                                   static_cast<std::size_t>(x)] = first_row[x + (y * stride)];
+                }
+            }
+            return glyph;
+        }
+
+        /**
+         * Every face glyph index the preload range names, in codepoint order.
+         *
+         * Several codepoints can share one glyph, and the atlas holds it once.
+         */
+        std::vector<FT_UInt> preload_indices(FT_Face face) {
+            std::vector<FT_UInt> wanted;
+            std::set<FT_UInt> seen;
             for (char32_t codepoint = kCoverageFirst; codepoint <= kCoverageLast; ++codepoint) {
                 const FT_UInt glyph_index = FT_Get_Char_Index(face, codepoint);
                 if (glyph_index == 0) {
                     // The face carries no glyph for this codepoint.
                     continue;
                 }
-                // Several codepoints can share one glyph, and the atlas holds
-                // it once.
-                if (!seen.insert(glyph_index).second) {
-                    continue;
-                }
-                if (FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER) != 0) {
-                    continue;
-                }
-
-                const FT_GlyphSlot slot = face->glyph;
-
-                // FT_LOAD_RENDER picks the hinting target, not the bitmap
-                // format. A bitmap-only face can answer with one bit for each
-                // pixel, and reading that as one byte for each pixel turns a
-                // glyph into noise eight times too wide. Refuse it rather than
-                // draw it wrongly. An empty bitmap is fine and normal: a space
-                // has an advance and no coverage.
-                if (slot->bitmap.width != 0 && slot->bitmap.rows != 0 &&
-                    slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
-                    ENGINE_LOG_WARN("The face answered glyph {} in pixel mode {}, and this "
-                                    "reads 8-bit gray only. The glyph is skipped.",
-                                    glyph_index, static_cast<int>(slot->bitmap.pixel_mode));
-                    continue;
-                }
-
-                PendingGlyph glyph;
-                glyph.index = glyph_index;
-                glyph.width = static_cast<int>(slot->bitmap.width);
-                glyph.height = static_cast<int>(slot->bitmap.rows);
-                glyph.bearing_x = static_cast<int>(slot->metrics.horiBearingX / kFixedToPixels);
-                // Negative, because the pen sits on the baseline and a screen
-                // rectangle grows downward.
-                glyph.bearing_y =
-                    -static_cast<int>(slot->metrics.horiBearingY / kFixedToPixels);
-                glyph.advance_x = static_cast<int>(slot->advance.x / kFixedToPixels);
-                glyph.advance_y = static_cast<int>(slot->advance.y / kFixedToPixels);
-
-                glyph.coverage.resize(static_cast<std::size_t>(glyph.width) *
-                                      static_cast<std::size_t>(glyph.height));
-
-                // The sign of the pitch is the row order. A positive pitch puts
-                // the top row first, and a negative one puts the bottom row
-                // first and counts backward. Taking the absolute value alone
-                // would read the right bytes in the wrong order and draw every
-                // glyph upside down, so the start row moves with the sign.
-                const int pitch = slot->bitmap.pitch;
-                const std::uint8_t* first_row = slot->bitmap.buffer;
-                if (pitch < 0) {
-                    first_row += static_cast<std::ptrdiff_t>(pitch) * (glyph.height - 1);
-                }
-                const int stride = (pitch < 0) ? -pitch : pitch;
-                for (int y = 0; y < glyph.height; ++y) {
-                    for (int x = 0; x < glyph.width; ++x) {
-                        glyph.coverage[(static_cast<std::size_t>(y) *
-                                        static_cast<std::size_t>(glyph.width)) +
-                                       static_cast<std::size_t>(x)] =
-                            first_row[x + (y * stride)];
-                    }
-                }
-                pending.push_back(std::move(glyph));
-            }
-
-            return pending;
-        }
-
-        /**
-         * Packs the glyphs into the smallest square that holds them.
-         *
-         * The reference tries every width and height pair and keeps the
-         * tightest. A square that doubles is within a texel or two of that for
-         * a set this size, and it packs once for each size rather than once for
-         * each pair.
-         *
-         * @return The square size, or zero when nothing this large enough was
-         * allowed.
-         */
-        int pack_glyphs(const std::vector<PendingGlyph>& pending,
-                        std::vector<stbrp_rect>& rects) {
-            rects.resize(pending.size());
-            for (int size = kMinAtlasSize; size <= kMaxAtlasSize; size *= 2) {
-                for (std::size_t i = 0; i < pending.size(); ++i) {
-                    rects[i] = stbrp_rect{};
-                    rects[i].id = static_cast<int>(i);
-                    rects[i].w = static_cast<stbrp_coord>(pending[i].width + (kBorderTexels * 2));
-                    rects[i].h =
-                        static_cast<stbrp_coord>(pending[i].height + (kBorderTexels * 2));
-                }
-                std::vector<stbrp_node> nodes(static_cast<std::size_t>(size));
-                stbrp_context context{};
-                stbrp_init_target(&context, size, size, nodes.data(),
-                                  static_cast<int>(nodes.size()));
-                if (stbrp_pack_rects(&context, rects.data(), static_cast<int>(rects.size())) !=
-                    0) {
-                    return size;
+                if (seen.insert(glyph_index).second) {
+                    wanted.push_back(glyph_index);
                 }
             }
-            return 0;
+            return wanted;
         }
 
-    }
+    } // namespace
+
+    /**
+     * The live rectangle packer, which the atlas keeps between glyphs.
+     *
+     * `stbrp_context` holds pointers into its node array, so the two travel
+     * together and neither one may be copied. Font holds this behind a pointer
+     * for that reason, and so that font.h names no stb type.
+     */
+    struct Font::Packer {
+        stbrp_context context{};
+        std::vector<stbrp_node> nodes;
+
+        /// Starts a packer over an empty square of the given size.
+        void reset(int size) {
+            nodes.assign(static_cast<std::size_t>(size), stbrp_node{});
+            stbrp_init_target(&context, size, size, nodes.data(),
+                              static_cast<int>(nodes.size()));
+        }
+
+        /// Finds room for one rectangle. Reports false when the square is full.
+        [[nodiscard]] bool place(int width, int height, int& out_x, int& out_y) {
+            stbrp_rect rect{};
+            rect.w = static_cast<stbrp_coord>(width);
+            rect.h = static_cast<stbrp_coord>(height);
+            if (stbrp_pack_rects(&context, &rect, 1) == 0 || rect.was_packed == 0) {
+                return false;
+            }
+            out_x = rect.x;
+            out_y = rect.y;
+            return true;
+        }
+    };
+
+    Font::Font() = default;
 
     FontLibrary::~FontLibrary() {
         destroy();
@@ -260,7 +267,10 @@ namespace engine::ui {
         // working font that draws nothing.
         glyphs_.clear();
         glyph_index_to_atlas_.clear();
+        packed_order_.clear();
         pixels_.clear();
+        packer_.reset();
+        atlas_changed_ = false;
         atlas_width_ = 0;
         atlas_height_ = 0;
         line_height_ = 0;
@@ -345,23 +355,12 @@ namespace engine::ui {
         return true;
     }
 
-    bool Font::build_atlas() {
-        const std::vector<PendingGlyph> pending = rasterize_covered(face_);
-        if (pending.empty()) {
-            ENGINE_LOG_ERROR("The face carries no glyph between U+{:04X} and U+{:04X}.",
-                             static_cast<std::uint32_t>(kCoverageFirst),
-                             static_cast<std::uint32_t>(kCoverageLast));
-            return false;
+    void Font::reset_atlas(int size) {
+        if (packer_ == nullptr) {
+            packer_ = std::make_unique<Packer>();
         }
-
-        std::vector<stbrp_rect> rects;
-        const int packed_size = pack_glyphs(pending, rects);
-        if (packed_size == 0) {
-            return false;
-        }
-
-        atlas_width_ = packed_size;
-        atlas_height_ = packed_size;
+        atlas_width_ = size;
+        atlas_height_ = size;
 
         // White everywhere, with the coverage in alpha. A glyph is then an
         // ordinary textured quad and text shares the one UI pipeline. See the
@@ -375,45 +374,141 @@ namespace engine::ui {
             pixels_[i + 2] = kFull;
         }
 
+        packer_->reset(size);
+    }
+
+    void Font::blit(const PendingGlyph& source, int x0, int y0, Glyph& out) {
+        const std::size_t stride =
+            static_cast<std::size_t>(atlas_width_) * static_cast<std::size_t>(kBytesPerTexel);
+        for (int y = 0; y < source.height; ++y) {
+            for (int x = 0; x < source.width; ++x) {
+                const std::size_t target = (static_cast<std::size_t>(y0 + y) * stride) +
+                                           (static_cast<std::size_t>(x0 + x) * kBytesPerTexel) +
+                                           3;
+                pixels_[target] = source.coverage[(static_cast<std::size_t>(y) *
+                                                   static_cast<std::size_t>(source.width)) +
+                                                  static_cast<std::size_t>(x)];
+            }
+        }
+
         const auto atlas_width_f = static_cast<float>(atlas_width_);
         const auto atlas_height_f = static_cast<float>(atlas_height_);
 
-        glyphs_.resize(pending.size());
-        for (const stbrp_rect& rect : rects) {
-            const PendingGlyph& source = pending[static_cast<std::size_t>(rect.id)];
-            const int x0 = rect.x + kBorderTexels;
-            const int y0 = rect.y + kBorderTexels;
+        out.width = source.width;
+        out.height = source.height;
+        out.bearing_x = source.bearing_x;
+        out.bearing_y = source.bearing_y;
+        out.advance_x = source.advance_x;
+        out.advance_y = source.advance_y;
+        // The coordinates cover the glyph and not its border, so a sampler
+        // never reads the transparent ring on purpose.
+        out.u0 = static_cast<float>(x0) / atlas_width_f;
+        out.v0 = static_cast<float>(y0) / atlas_height_f;
+        out.u1 = static_cast<float>(x0 + source.width) / atlas_width_f;
+        out.v1 = static_cast<float>(y0 + source.height) / atlas_height_f;
+    }
 
-            for (int y = 0; y < source.height; ++y) {
-                for (int x = 0; x < source.width; ++x) {
-                    const std::size_t target =
-                        (static_cast<std::size_t>(y0 + y) * stride) +
-                        (static_cast<std::size_t>(x0 + x) * kBytesPerTexel) + 3;
-                    pixels_[target] =
-                        source.coverage[(static_cast<std::size_t>(y) *
-                                         static_cast<std::size_t>(source.width)) +
-                                        static_cast<std::size_t>(x)];
-                }
-            }
-
-            Glyph& glyph = glyphs_[static_cast<std::size_t>(rect.id)];
-            glyph.width = source.width;
-            glyph.height = source.height;
-            glyph.bearing_x = source.bearing_x;
-            glyph.bearing_y = source.bearing_y;
-            glyph.advance_x = source.advance_x;
-            glyph.advance_y = source.advance_y;
-            // The coordinates cover the glyph and not its border, so a sampler
-            // never reads the transparent ring on purpose.
-            glyph.u0 = static_cast<float>(x0) / atlas_width_f;
-            glyph.v0 = static_cast<float>(y0) / atlas_height_f;
-            glyph.u1 = static_cast<float>(x0 + source.width) / atlas_width_f;
-            glyph.v1 = static_cast<float>(y0 + source.height) / atlas_height_f;
-
-            glyph_index_to_atlas_[source.index] = rect.id;
+    bool Font::grow_atlas() {
+        if (atlas_width_ >= kMaxAtlasSize) {
+            ENGINE_LOG_ERROR("The font atlas is full at {} texels square, which is the largest "
+                             "a Vulkan 1.3 device is guaranteed to accept. {} glyphs are "
+                             "packed. A further glyph will not draw.",
+                             atlas_width_, glyphs_.size());
+            return false;
         }
 
+        // Everything is packed again from nothing rather than moved. The
+        // packer has no way to relocate a rectangle it already placed, and a
+        // glyph the face can rasterize once it can rasterize twice.
+        const std::vector<std::uint32_t> again = packed_order_;
+        const int size = atlas_width_ * 2;
+
+        glyphs_.clear();
+        glyph_index_to_atlas_.clear();
+        packed_order_.clear();
+        reset_atlas(size);
+
+        for (const std::uint32_t glyph_index : again) {
+            if (pack_glyph(glyph_index) < 0) {
+                // A set that fitted the smaller square and not the larger one
+                // is a packer fault rather than a full atlas, and carrying on
+                // would lose glyphs silently.
+                ENGINE_LOG_ERROR("A glyph that was packed at {} texels would not pack at {}.",
+                                 size / 2, size);
+                return false;
+            }
+        }
         return true;
+    }
+
+    std::uint32_t Font::glyph_index_for(char32_t codepoint) const {
+        if (face_ == nullptr) {
+            return 0;
+        }
+        return FT_Get_Char_Index(face_, codepoint);
+    }
+
+    int Font::pack_glyph(std::uint32_t glyph_index) {
+        if (face_ == nullptr) {
+            return -1;
+        }
+        const auto found = glyph_index_to_atlas_.find(glyph_index);
+        if (found != glyph_index_to_atlas_.end()) {
+            return found->second;
+        }
+
+        const std::optional<PendingGlyph> source =
+            rasterize_one(face_, static_cast<FT_UInt>(glyph_index));
+        if (!source) {
+            return -1;
+        }
+
+        int x0 = 0;
+        int y0 = 0;
+        const int wanted_width = source->width + (kBorderTexels * 2);
+        const int wanted_height = source->height + (kBorderTexels * 2);
+        if (!packer_->place(wanted_width, wanted_height, x0, y0)) {
+            // grow_atlas() packs every glyph again, this one included when it
+            // is already in packed_order_. It is not, so it is packed here
+            // after the growth, against the fresh packer.
+            if (!grow_atlas()) {
+                return -1;
+            }
+            if (!packer_->place(wanted_width, wanted_height, x0, y0)) {
+                ENGINE_LOG_ERROR("One glyph does not fit an atlas of {} texels square.",
+                                 atlas_width_);
+                return -1;
+            }
+        }
+
+        const auto index = static_cast<int>(glyphs_.size());
+        glyphs_.emplace_back();
+        blit(*source, x0 + kBorderTexels, y0 + kBorderTexels, glyphs_.back());
+        glyph_index_to_atlas_[glyph_index] = index;
+        packed_order_.push_back(glyph_index);
+        atlas_changed_ = true;
+        return index;
+    }
+
+    bool Font::build_atlas() {
+        reset_atlas(kMinAtlasSize);
+
+        const std::vector<FT_UInt> wanted = preload_indices(face_);
+        if (wanted.empty()) {
+            ENGINE_LOG_ERROR("The face carries no glyph between U+{:04X} and U+{:04X}.",
+                             static_cast<std::uint32_t>(kCoverageFirst),
+                             static_cast<std::uint32_t>(kCoverageLast));
+            return false;
+        }
+
+        for (const FT_UInt glyph_index : wanted) {
+            // A glyph the face refuses is skipped, the way it always was. A
+            // full atlas is not, because that loses the rest of the range.
+            if (pack_glyph(glyph_index) < 0 && atlas_width_ >= kMaxAtlasSize) {
+                return false;
+            }
+        }
+        return !glyphs_.empty();
     }
 
     bool Font::upload(gfx::Device* device) {
@@ -429,6 +524,10 @@ namespace engine::ui {
             return false;
         }
         if (texture_.valid()) {
+            // Already uploaded. Anything packed since then is in pixels_ and
+            // not in the texture, and atlas_changed() still says so. Replacing
+            // the texture is the second half of issue #213, because freeing one
+            // a frame in flight is still reading is a real error.
             return true;
         }
 
@@ -453,6 +552,7 @@ namespace engine::ui {
             return false;
         }
         owns_texture_ = true;
+        atlas_changed_ = false;
         return true;
     }
 
