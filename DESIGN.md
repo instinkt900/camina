@@ -834,12 +834,33 @@ transfer function to the color channels and leaves alpha linear.
 
 **Two parts are a rewrite rather than a port.** The reference packs every glyph in the face.
 That cannot work in general, because a CJK face carries more than 20000 glyphs and one atlas of
-them is tens of megabytes. `engine::ui::Font` packs the codepoints from U+0020 to U+00FF
-instead, which is about 190 glyphs in a 512 square atlas at 32 pixels. A string outside that
-range loses those glyphs, and packing on demand is the real answer. Issue #213 holds it, and
-issue #214 holds the cost of one atlas for each size. The reference also walks the string once
-and backtracks its loop counter to the last break it passed. Splitting the words out first says
-the same thing and cannot run an index past the start of a line.
+them is tens of megabytes. `engine::ui::Font` packs on demand instead, which closed issue #213.
+U+0020 to U+00FF is a preload rather than a limit: it is about 190 glyphs in a 512 square atlas
+at 32 pixels, and it is what a European interface needs on its first frame. Anything else packs
+the first time shaping asks for it. Issue #214 still holds the cost of one atlas for each size.
+The reference also walks the string once and backtracks its loop counter to the last break it
+passed. Splitting the words out first says the same thing and cannot run an index past the
+start of a line.
+
+**A glyph is one frame late, and that is forced rather than chosen.** Growing the atlas repacks
+everything, because the packer cannot relocate a rectangle it already placed, so every texture
+coordinate moves. A frame part way through recording would then hold coordinates for an atlas
+that the texture is not, and the strings it had already recorded would sample the wrong place.
+
+So there are two atlases. `pack_glyph` grows the working one, and `glyph()` and `shape()` answer
+for the uploaded one. `shape()` reports -1 for a glyph the texture does not hold and remembers
+that somebody wanted it. `UiPass::refresh_fonts` runs after the draw, packs what was wanted,
+replaces the texture, and parks the old one in the slot ring the vertex buffers already use, so
+it is freed three frames later when nothing in flight names it. The frame after that draws the
+glyph.
+
+The cost is one frame of a missing letter, the first time a string uses a glyph nothing has used
+before. Stalling the device instead, the way `MeshPass::reload` does, was the other option: it
+trades a missing letter for a hitch on a frame nobody asked to pause.
+
+**`borrow_texture` publishes the working atlas**, because borrowing says that the handle holds
+the atlas as it stands. That is what lets `tests/test_ui_font.cpp` drive the whole one-frame
+rule with no device.
 
 `load()` is separate from `upload()` so that none of this needs a GPU to test. The
 rasterization, the packing, the shaping, the measurement and the wrapping are all driven by
