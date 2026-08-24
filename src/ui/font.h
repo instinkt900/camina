@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -44,23 +45,27 @@ struct hb_buffer_t;
 namespace engine::ui {
 
     /**
-     * @brief The first codepoint engine::ui::Font packs into its atlas.
+     * @brief The first codepoint engine::ui::Font preloads into its atlas.
      *
      * Space. Everything below it is a control character that no face draws.
      */
     inline constexpr char32_t kCoverageFirst = 0x20;
 
     /**
-     * @brief The last codepoint engine::ui::Font packs into its atlas.
+     * @brief The last codepoint engine::ui::Font preloads into its atlas.
      *
      * The end of the Latin-1 supplement. That is about 190 glyphs, which packs
      * into a small atlas and loads quickly.
      *
-     * **This is a limit, and a string outside it loses those glyphs.** The
-     * reference walks every glyph in the face instead. That cannot work in
-     * general: a CJK face carries more than 20000 glyphs, and one atlas of them
-     * at a readable size is tens of megabytes. A real answer packs on demand,
-     * and issue #213 holds it.
+     * **This is a hint and not a limit.** Anything outside it packs the first
+     * time shaping asks for it, and draws from the frame after that. The range
+     * is what a European interface needs on its first frame, so preloading it
+     * costs one atlas and saves the one-frame miss on almost every string.
+     *
+     * Walking the whole face instead is what the reference backend does, and it
+     * cannot work in general: a CJK face carries more than 20000 glyphs, and one
+     * atlas of them at a readable size is tens of megabytes rasterized at load.
+     * See issue #213.
      */
     inline constexpr char32_t kCoverageLast = 0xFF;
 
@@ -173,6 +178,16 @@ namespace engine::ui {
      * correct under an sRGB swapchain, because Vulkan applies the sRGB transfer
      * function to the color channels only and leaves alpha linear.
      *
+     * **A glyph is one frame late.** The atlas packs on demand, and a growth
+     * repacks everything, so every texture coordinate moves. A frame part way
+     * through recording would then hold coordinates for an atlas that the
+     * texture is not. So there are two atlases: the working one that
+     * pack_glyph() grows, and the uploaded one that glyph() and shape() read.
+     * shape() reports -1 for a glyph the texture does not hold and remembers
+     * that somebody wanted it, refresh() packs and uploads it, and the frame
+     * after that draws it. The cost is one frame of a missing letter the first
+     * time a string uses a glyph nothing has used before. See issue #213.
+     *
      * @warning Call destroy() before the device goes away. The atlas texture is
      *          a device resource and nothing else frees it.
      */
@@ -220,6 +235,27 @@ namespace engine::ui {
         [[nodiscard]] bool upload(gfx::Device* device);
 
         /**
+         * @brief Packs whatever shaping asked for, and uploads it if anything did.
+         *
+         * Call this once for each frame, after the frame that drew the text has
+         * been recorded. See the note on the class for why a glyph is one frame
+         * late.
+         *
+         * @param device The device that holds the texture. Held, not owned.
+         * @param out_retired Set to the texture this replaced, when it replaced
+         * one. **The caller owns that handle now and must free it behind the
+         * frames in flight.** A command list recorded this frame still names
+         * it, so freeing it here would be a use after free.
+         * @return True when the texture changed, so a caller can drop whatever
+         * it cached against the old handle.
+         */
+        [[nodiscard]] bool refresh(gfx::Device* device, gfx::TextureHandle& out_retired);
+
+        /// @brief Whether shaping has asked for a glyph the texture does not hold.
+        /// @return True when the next refresh() has work.
+        [[nodiscard]] bool wants_glyphs() const { return !wanted_.empty(); }
+
+        /**
          * @brief Frees the atlas texture. Safe to call twice.
          *
          * @param device The device the texture was uploaded to.
@@ -250,9 +286,14 @@ namespace engine::ui {
          */
         [[nodiscard]] const Glyph& glyph(int index) const;
 
-        /// @brief How many glyphs the atlas holds.
-        /// @return The count, which is the covered set the face carries.
-        [[nodiscard]] std::size_t glyph_count() const { return glyphs_.size(); }
+        /// @brief How many glyphs the uploaded atlas holds.
+        /// @return The count. Growing the working atlas does not move it until
+        /// refresh() uploads.
+        [[nodiscard]] std::size_t glyph_count() const { return uploaded_glyphs_.size(); }
+
+        /// @brief How many glyphs the working atlas holds, uploaded or not.
+        /// @return The count. This is the one a test that never uploads reads.
+        [[nodiscard]] std::size_t packed_count() const { return glyphs_.size(); }
 
         /**
          * @brief Runs the text through HarfBuzz.
@@ -314,6 +355,10 @@ namespace engine::ui {
          *
          * destroy() frees only what upload() made, so a handle that arrives
          * here is never freed by this object.
+         *
+         * A valid handle also publishes the working atlas, because borrowing
+         * says that this handle holds the atlas as it stands. Without that,
+         * glyph() and shape() would answer for a texture nobody claimed.
          *
          * @param texture The handle to report. Pass a null handle to clear it.
          */
@@ -409,6 +454,10 @@ namespace engine::ui {
         // largest size a device is guaranteed to accept.
         [[nodiscard]] bool grow_atlas();
 
+        // Copies the working atlas into the uploaded one, which is what glyph()
+        // and shape() read. Called where the bytes have just been uploaded.
+        void publish();
+
         // Breaks one newline-free run into lines and appends them. wrap() is
         // the newline split, and this is the word wrap under it.
         void wrap_segment(std::string_view segment, int width,
@@ -425,10 +474,23 @@ namespace engine::ui {
         // buffer every time. shape() is const and this is its scratch space.
         mutable hb_buffer_t* hb_buffer_ = nullptr;
 
+        // The working atlas, which pack_glyph() adds to and grow_atlas()
+        // rebuilds. Nothing that draws reads these: a growth moves every
+        // texture coordinate, and a frame part way through recording would
+        // then hold coordinates for an atlas the texture is not.
         std::vector<Glyph> glyphs_;
         // HarfBuzz answers in face glyph indices, and the atlas holds only the
         // packed ones. This turns the first into the second.
         std::map<std::uint32_t, int> glyph_index_to_atlas_;
+
+        // What the texture holds, which is what glyph() and shape() read. It is
+        // the working atlas as it stood at the last refresh().
+        std::vector<Glyph> uploaded_glyphs_;
+        std::map<std::uint32_t, int> uploaded_index_;
+        // Glyph indices shaping asked for and the texture does not hold. shape()
+        // is const and fills this, which is what makes measure_width() and
+        // wrap() stay const.
+        mutable std::set<std::uint32_t> wanted_;
         // Which face glyph each atlas entry came from, in packing order. A
         // growth packs every one of them again, and nothing else reads it.
         std::vector<std::uint32_t> packed_order_;

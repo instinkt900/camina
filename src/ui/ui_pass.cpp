@@ -1,5 +1,7 @@
 #include "ui/ui_pass.h"
 
+#include "ui/font.h"
+
 #include "assets/shader.h"
 #include "core/assert.h"
 #include "core/log.h"
@@ -158,6 +160,23 @@ namespace engine::ui {
         return set;
     }
 
+    void UiPass::refresh_fonts(const Renderer& renderer) {
+        if (device_ == nullptr) {
+            return;
+        }
+        for (Font* font : renderer.fonts_drawn()) {
+            if (font == nullptr) {
+                continue;
+            }
+            gfx::TextureHandle retired;
+            if (font->refresh(device_, retired) && retired.valid()) {
+                // Parked in the slot this frame drew from, so it is freed when
+                // that slot comes round again and nothing in flight reads it.
+                retired_.at(slot_).push_back(retired);
+            }
+        }
+    }
+
     void UiPass::forget_sets() {
         if (device_ == nullptr) {
             return;
@@ -176,6 +195,12 @@ namespace engine::ui {
             gfx::destroy_descriptor_set(device_, set);
         }
         sets_.clear();
+        for (std::vector<gfx::TextureHandle>& parked : retired_) {
+            for (const gfx::TextureHandle& old_atlas : parked) {
+                gfx::destroy_texture(device_, old_atlas);
+            }
+            parked.clear();
+        }
         gfx::destroy_texture(device_, white_);
         white_ = gfx::TextureHandle{};
         for (gfx::BufferHandle& buffer : vertices_) {
@@ -245,6 +270,22 @@ namespace engine::ui {
         // them is safe. Reusing one slot would destroy a buffer the frame
         // before is still reading, which synchronization validation reports.
         slot_ = (slot_ + 1) % kSlots;
+
+        // Whatever a font retired three frames ago. Nothing reads it now, for
+        // the same reason the buffers in this slot are safe to replace. See
+        // issue #213.
+        for (const gfx::TextureHandle& old_atlas : retired_.at(slot_)) {
+            // The set that named it goes with it. Leaving it behind would let
+            // a later texture with the same handle value bind a set built
+            // against a freed image.
+            if (const auto found = sets_.find(old_atlas.value); found != sets_.end()) {
+                gfx::destroy_descriptor_set(device_, found->second);
+                sets_.erase(found);
+            }
+            gfx::destroy_texture(device_, old_atlas);
+        }
+        retired_.at(slot_).clear();
+
         gfx::BufferHandle& vertex_buffer = vertices_.at(slot_);
         gfx::BufferHandle& index_buffer = indices_.at(slot_);
 

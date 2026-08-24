@@ -908,6 +908,13 @@ namespace {
             // have to agree with the image actually being drawn into.
             record_ui(*context.ui_renderer, info.extent, context.ui_surface);
             context.ui_pass->draw(info.commands, *context.ui_renderer, info.extent);
+
+            // After the draw, never before it. A font atlas packs a glyph the
+            // first time shaping asks for it, and this is what uploads it. The
+            // batches just recorded name the texture it replaces, so the old
+            // one is parked rather than freed. A glyph is therefore one frame
+            // late the first time a string uses it. See issue #213.
+            context.ui_pass->refresh_fonts(*context.ui_renderer);
         }
 #endif
 

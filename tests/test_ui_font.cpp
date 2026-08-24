@@ -10,6 +10,7 @@
 // The font is the one the sandbox ships. See sandbox/content/ui/fonts/.
 
 #include "check.h"
+#include "gfx/device.h"
 #include "ui/font.h"
 
 #include <cstdint>
@@ -429,27 +430,31 @@ namespace {
     }
 
     /**
-     * A glyph outside the preload range packs when somebody asks for it.
+     * A glyph outside the preload range packs when somebody asks for it, and it
+     * reaches the picture one frame later.
      *
-     * This is the half of issue #213 that needs no device. The range in
-     * kCoverageFirst and kCoverageLast is what load() warms the atlas with, and it
-     * has stopped being a limit.
+     * The one-frame rule is the whole shape of issue #213. A growth repacks
+     * everything, so every texture coordinate moves, and a frame part way
+     * through recording would hold coordinates for an atlas the texture is not.
+     * So there are two atlases, and shape() answers for the uploaded one.
+     *
+     * borrow_texture() stands in for the upload here, because it publishes the
+     * working atlas and needs no device. That is what it is for.
      */
     void packs_a_glyph_on_demand(const FontLibrary& library) {
         section("packing on demand");
 
         Font font;
         check(font.load(library, font_path(), kSize), "the font loads");
-        // The preload set is in pixels_ and no texture holds it yet, so a freshly
-        // loaded atlas has something to upload. upload() is what clears this, and
-        // it needs a device that this test does not open.
         check(font.atlas_changed(), "a freshly loaded atlas has something to upload");
 
         const std::size_t preloaded = font.glyph_count();
+        check(font.packed_count() == preloaded, "and the two atlases start out the same");
 
         // Greek capital alpha, which is outside the Latin-1 range the preload
-        // covers. Liberation Sans carries it. A face that did not would make this
-        // check say so rather than pass quietly.
+        // covers. Liberation Sans carries it. The bytes are spelled out because
+        // a narrow literal is not UTF-8 on every compiler.
+        constexpr std::string_view kAlpha = "\xCE\x91";
         const std::uint32_t alpha = font.glyph_index_for(U'\u0391');
         check(alpha != 0, "the face carries a glyph outside the preload range");
         if (alpha == 0) {
@@ -457,10 +462,25 @@ namespace {
             return;
         }
 
+        // Frame one. Shaping cannot find it, and that is what queues it.
+        check(!font.wants_glyphs(), "nothing is queued before anything shapes");
+        const std::vector<ShapedGlyph> missing = font.shape(kAlpha);
+        check(missing.size() == 1, "the letter shapes to one glyph");
+        check(!missing.empty() && missing[0].glyph < 0,
+              "which the uploaded atlas does not hold, so it draws nothing");
+        check(font.wants_glyphs(), "and shaping remembered that somebody wanted it");
+
         const int index = font.pack_glyph(alpha);
-        check(index >= 0, "and it packs when somebody asks for it");
-        check(font.glyph_count() == preloaded + 1, "which is one more glyph than the preload");
-        check(font.atlas_changed(), "and the atlas says it holds something new");
+        check(index >= 0, "it packs when somebody asks for it");
+        check(font.packed_count() == preloaded + 1, "which is one more than the preload");
+        check(font.glyph_count() == preloaded, "and the uploaded atlas has not moved");
+
+        // The upload. Frame two.
+        font.borrow_texture(engine::gfx::TextureHandle{ 1 });
+        check(font.glyph_count() == preloaded + 1, "publishing moves it to the uploaded atlas");
+
+        const std::vector<ShapedGlyph> now = font.shape(kAlpha);
+        check(now.size() == 1 && now[0].glyph >= 0, "and shaping finds it the next frame");
 
         const Glyph& packed = font.glyph(index);
         check(packed.advance_x > 0, "the packed glyph carries an advance");
@@ -470,11 +490,12 @@ namespace {
 
         // Asking twice gives the same entry rather than a second copy.
         check(font.pack_glyph(alpha) == index, "asking again gives the entry it already packed");
-        check(font.glyph_count() == preloaded + 1, "and packs nothing a second time");
+        check(font.packed_count() == preloaded + 1, "and packs nothing a second time");
 
-        // A glyph index no face entry uses is refused rather than packed as a box.
+        // A codepoint no face entry covers is refused rather than packed as a box.
         check(font.glyph_index_for(U'\U0001F600') == 0, "the face carries no emoji");
 
+        font.borrow_texture(engine::gfx::TextureHandle{});
         font.destroy(nullptr);
     }
 
@@ -517,10 +538,12 @@ namespace {
         // The whole risk of a growth, checked from the side that would go wrong.
         // The index is stable, and the coordinates are the new ones.
         check(font.pack_glyph(capital_a) == a_index, "a glyph keeps its index across a growth");
+        font.borrow_texture(engine::gfx::TextureHandle{ 1 });
         const Glyph& letter = font.glyph(a_index);
         check(letter.u1 <= 1.0F && letter.v1 <= 1.0F, "its coordinates are inside the new atlas");
         check(glyph_has_ink(font, letter), "and its coverage moved with it");
 
+        font.borrow_texture(engine::gfx::TextureHandle{});
         font.destroy(nullptr);
     }
 

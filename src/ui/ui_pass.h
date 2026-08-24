@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <vector>
 
 namespace engine::ui {
 
@@ -77,6 +78,21 @@ namespace engine::ui {
          * @param extent The size of the swapchain image being drawn into.
          */
         void draw(gfx::CommandList* commands, const Renderer& renderer, gfx::Extent2D extent);
+
+        /**
+         * @brief Packs and uploads whatever the fonts of this frame still owe.
+         *
+         * A font atlas packs a glyph the first time shaping asks for it, and
+         * that glyph reaches the picture on the next frame. This is what moves
+         * it: it walks `Renderer::fonts_drawn`, lets each font replace its
+         * atlas texture, and parks the old texture until nothing reads it.
+         *
+         * **Call it once for each frame, after draw().** Calling it before
+         * would replace a texture that this frame's batches already name.
+         *
+         * @param renderer The recorder, after its recording is drawn.
+         */
+        void refresh_fonts(const Renderer& renderer);
 
     private:
         /// @brief Replaces a buffer with a new one holding @p bytes of @p data.
@@ -161,6 +177,18 @@ namespace engine::ui {
         std::array<gfx::BufferHandle, kSlots> vertices_{};
         std::array<gfx::BufferHandle, kSlots> indices_{};
         std::size_t slot_ = 0;
+
+        /**
+         * @brief Atlas textures a font replaced, parked until nothing reads them.
+         *
+         * A font packs a glyph on demand and replaces its atlas texture, and
+         * the command list this frame recorded still names the old one. So the
+         * old handle waits in the slot of the frame that retired it, and
+         * draw() frees it when that slot comes round again three frames later.
+         * The buffers above use the same ring for the same reason. See issue
+         * #213.
+         */
+        std::array<std::vector<gfx::TextureHandle>, kSlots> retired_{};
     };
 
 }

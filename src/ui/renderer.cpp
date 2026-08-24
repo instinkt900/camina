@@ -81,6 +81,7 @@ namespace engine::ui {
         m_indices.clear();
         m_batches.clear();
         m_clip.clear();
+        m_fonts.clear();
 
         m_color.assign(1, moth_ui::Color{ 1.0F, 1.0F, 1.0F, 1.0F });
         m_blend.assign(1, moth_ui::BlendMode::Replace);
@@ -483,6 +484,14 @@ namespace engine::ui {
             ENGINE_LOG_ERROR("A layout drew text with a font this renderer did not make.");
             return;
         }
+        // Remembered whatever happens next, because shaping is what discovers
+        // a glyph the atlas does not hold, and an empty string or a font with
+        // no texture still has to reach refresh_fonts() once the atlas has
+        // work. See issue #213.
+        if (std::ranges::find(m_fonts, ours) == m_fonts.end()) {
+            m_fonts.push_back(ours);
+        }
+
         if (text.empty() || !ours->texture().valid()) {
             return;
         }

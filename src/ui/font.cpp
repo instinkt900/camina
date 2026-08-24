@@ -267,6 +267,9 @@ namespace engine::ui {
         // working font that draws nothing.
         glyphs_.clear();
         glyph_index_to_atlas_.clear();
+        uploaded_glyphs_.clear();
+        uploaded_index_.clear();
+        wanted_.clear();
         packed_order_.clear();
         pixels_.clear();
         packer_.reset();
@@ -348,6 +351,11 @@ namespace engine::ui {
         descent_ = static_cast<int>(face_->size->metrics.descender / kFixedToPixels);
         underline_ = static_cast<int>(
             FT_MulFix(face_->underline_position, face_->size->metrics.y_scale) / kFixedToPixels);
+
+        // The preload set is readable straight away, so measure_width() and
+        // wrap() work with no device the way they always have. upload() then
+        // uploads exactly these bytes. See issue #213.
+        publish();
 
         ENGINE_LOG_INFO("Font {} at {} px: {} glyphs in a {}x{} atlas, line height {}.",
                         path.filename().string(), pixel_size, glyphs_.size(), atlas_width_,
@@ -552,6 +560,75 @@ namespace engine::ui {
             return false;
         }
         owns_texture_ = true;
+        publish();
+        atlas_changed_ = false;
+        return true;
+    }
+
+    void Font::publish() {
+        // What a caller may read. glyph() and shape() answer from these, so
+        // they move only here: at the end of load(), where the preload set is
+        // ready to measure, and after each upload, where the bytes they
+        // describe have just reached the device.
+        uploaded_glyphs_ = glyphs_;
+        uploaded_index_ = glyph_index_to_atlas_;
+    }
+
+    bool Font::refresh(gfx::Device* device, gfx::TextureHandle& out_retired) {
+        out_retired = gfx::TextureHandle{};
+        if (device == nullptr || face_ == nullptr) {
+            return false;
+        }
+
+        // Whatever shaping could not find. Taken first, because pack_glyph()
+        // may grow the atlas and a growth repacks everything.
+        const std::set<std::uint32_t> asked = std::move(wanted_);
+        wanted_.clear();
+        for (const std::uint32_t glyph_index : asked) {
+            // A refusal is remembered by the map staying empty for it, so the
+            // next shape() asks again. That is one wasted rasterize attempt for
+            // each frame that draws a glyph the face does not carry, and the
+            // alternative is a second map of failures for a case a real font
+            // does not have.
+            (void)pack_glyph(glyph_index);
+        }
+
+        if (!atlas_changed_) {
+            return false;
+        }
+        if (!texture_.valid()) {
+            // Nothing has been uploaded yet, so there is nothing to replace.
+            return upload(device);
+        }
+        if (!owns_texture_) {
+            // borrow_texture() handed this one over. Replacing it would free
+            // somebody else's texture, and a test that borrows never draws.
+            return false;
+        }
+
+        const gfx::TextureDesc desc{
+            .pixels = pixels_.data(),
+            .size = pixels_.size(),
+            .width = static_cast<std::uint32_t>(atlas_width_),
+            .height = static_cast<std::uint32_t>(atlas_height_),
+            .mip_count = 1,
+            .format = gfx::TextureFormat::RGBA8Srgb,
+            .sampler = { .filter = gfx::Filter::Linear,
+                         .address = gfx::AddressMode::ClampToEdge },
+        };
+        gfx::TextureHandle fresh;
+        if (!gfx::succeeded(gfx::create_texture(device, desc, &fresh))) {
+            ENGINE_LOG_ERROR("The font atlas texture was not replaced, so {} glyphs will not "
+                             "draw until it is.",
+                             glyphs_.size() - uploaded_glyphs_.size());
+            return false;
+        }
+
+        // The caller frees this behind the frames in flight. A command list
+        // recorded this frame still names it.
+        out_retired = texture_;
+        texture_ = fresh;
+        publish();
         atlas_changed_ = false;
         return true;
     }
@@ -571,6 +648,13 @@ namespace engine::ui {
                       "borrow_texture() would drop an atlas this font uploaded. Call destroy() "
                       "first.");
         texture_ = texture;
+        // Borrowing says "this handle holds the atlas as it stands", so the
+        // working atlas becomes the uploaded one. Without this, glyph() and
+        // shape() would answer for a texture nobody claimed and every glyph
+        // would report -1. See issue #213.
+        if (texture.valid()) {
+            publish();
+        }
     }
 
     const Glyph& Font::glyph(int index) const {
@@ -581,9 +665,9 @@ namespace engine::ui {
                                   "glyph the atlas does not hold reports -1, and the caller "
                                   "has to skip it.");
         const auto slot = static_cast<std::size_t>(index);
-        ENGINE_ASSERT(slot < glyphs_.size(),
+        ENGINE_ASSERT(slot < uploaded_glyphs_.size(),
                       "A glyph index reached ui::Font::glyph() that the atlas does not hold.");
-        return glyphs_[slot];
+        return uploaded_glyphs_[slot];
     }
 
     std::vector<ShapedGlyph> Font::shape(std::string_view text) const {
@@ -616,9 +700,18 @@ namespace engine::ui {
         for (unsigned int i = 0; i < count; ++i) {
             // HarfBuzz calls this field a codepoint, and after shaping it holds
             // a glyph index in the face rather than a character.
-            const auto found = glyph_index_to_atlas_.find(infos[i].codepoint);
+            const auto found = uploaded_index_.find(infos[i].codepoint);
             ShapedGlyph shaped;
-            shaped.glyph = (found == glyph_index_to_atlas_.end()) ? -1 : found->second;
+            if (found == uploaded_index_.end()) {
+                // The texture does not hold it. Remember that somebody wanted
+                // it, so the next refresh() packs and uploads it, and report -1
+                // so this frame skips it rather than drawing a glyph from
+                // wherever that atlas region happens to be. See issue #213.
+                shaped.glyph = -1;
+                wanted_.insert(infos[i].codepoint);
+            } else {
+                shaped.glyph = found->second;
+            }
             shaped.advance_x = round_fixed(positions[i].x_advance);
             shaped.advance_y = round_fixed(positions[i].y_advance);
             shaped.offset_x = round_fixed(positions[i].x_offset);

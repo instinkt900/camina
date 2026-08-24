@@ -14,6 +14,8 @@
 
 namespace engine::ui {
 
+    class Font;
+
     /// @brief One vertex of a recorded quad, in screen space and linear colour.
     struct Vertex {
         float x = 0.0F; ///< Screen x in pixels, origin at the top left.
@@ -128,6 +130,18 @@ namespace engine::ui {
         [[nodiscard]] const std::vector<Batch>& batches() const { return m_batches; }
 
         /**
+         * @brief Every font this frame drew text with, each one once.
+         *
+         * The atlas packs on demand, so a font that met a glyph it does not
+         * hold has work to do before the next frame. `UiPass::refresh_fonts`
+         * walks this. See issue #213.
+         *
+         * @return The fonts, in the order they were first drawn with. Cleared
+         * by begin().
+         */
+        [[nodiscard]] const std::vector<Font*>& fonts_drawn() const { return m_fonts; }
+
+        /**
          * @brief The logical width the recording was made against.
          *
          * @return The logical width the recording was made against.
@@ -225,6 +239,9 @@ namespace engine::ui {
         std::vector<moth_ui::FloatMat4x4> m_transform;
         std::vector<moth_ui::IntRect> m_clip;
         std::vector<moth_ui::TextureFilter> m_filter;
+        // Every font RenderText met this frame, each once. Raw pointers,
+        // because FontFactory owns them and they outlive the frame.
+        std::vector<Font*> m_fonts;
 
         std::uint32_t m_width = 1;
         std::uint32_t m_height = 1;
