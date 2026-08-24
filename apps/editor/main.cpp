@@ -73,10 +73,9 @@
 #include <string_view>
 #include <thread>
 
-// The target defines this and nothing else does. It carries no code today, and
-// reflect::EditorOnly is the first consumer. See issue #305. A build that lost
-// the define would compile and quietly stop dropping editor-only code, so say
-// so here rather than find out later.
+// The target defines this and nothing else does. A build that lost the define
+// would compile and quietly stop dropping editor-only code, so say so here
+// rather than find out later.
 #if !defined(ENGINE_WITH_EDITOR)
 #error "The editor must be built with ENGINE_WITH_EDITOR. See apps/editor/CMakeLists.txt."
 #endif
