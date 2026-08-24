@@ -416,8 +416,13 @@ opened and touches the same attachments in the same states. A declaration of its
 derive a barrier, because `derive_barriers` orders every write against what came before it and
 not only a write in a new state, and a barrier inside a rendering scope is invalid.
 
-**The sky draws after the blended geometry**, so a blended surface over open sky blends against
-the clear color. That is #435, and no scene here has both halves yet.
+**The sky draws between the opaque draws and the blended ones**, which closed #435.
+`MeshPass::draw` is `draw_opaque` and `draw_blended`, and `SceneRenderer` puts the sky between
+them. A blended surface writes no depth, so the sky used to pass its own depth-equal test over
+that surface and, being opaque, paint over it. A pane over open sky was gone rather than tinted
+wrongly. `draw_blended` binds the frame set again, because the sky binds a set against an
+incompatible layout in between. `tests/content_sky/` is the scene that proves it, because
+nothing else here has open sky and blended geometry at once.
 
 `gfx::GraphicsPipelineDesc::depth_equal` came from this. Reverse-Z tests greater-than
 everywhere else, which rejects a sky sitting at the cleared far plane.

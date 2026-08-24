@@ -1,0 +1,60 @@
+{
+  "__version": 2,
+  "entities": [
+    {
+      "parent": -1,
+      "prefab": "models/pane/pane.gltf",
+      "overrides": {
+        "0": {
+          "Name": {
+            "__version": 1,
+            "value": "pane"
+          }
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "environment"
+        },
+        "Environment": {
+          "cubemap": "da82d9ab-9588-473b-bd04-0c6897a1d167"
+        }
+      }
+    },
+    {
+      "parent": -1,
+      "components": {
+        "Name": {
+          "value": "camera"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Camera": {
+          "fov_degrees": 60.0,
+          "near_plane": 0.1,
+          "exposure": 1.0,
+          "primary": true
+        }
+      }
+    }
+  ]
+}

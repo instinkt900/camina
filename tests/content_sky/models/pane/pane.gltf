@@ -1,0 +1,111 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "camina tests/content_sky generate.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "pane"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "pane",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "tinted glass",
+   "alphaMode": "BLEND",
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.9,
+     0.12,
+     0.1,
+     0.55
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.35
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -3.0,
+    -2.0,
+    -2.0
+   ],
+   "max": [
+    -0.05,
+    2.0,
+    -2.0
+   ]
+  },
+  {
+   "bufferView": 0,
+   "byteOffset": 12,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 0,
+   "byteOffset": 24,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 128,
+   "byteStride": 32
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 128,
+   "byteLength": 12
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 140,
+   "uri": "data:application/octet-stream;base64,AABAwAAAAMAAAADAAAAAAAAAAAAAAIA/AAAAAAAAAADNzEy9AAAAwAAAAMAAAAAAAAAAAAAAgD8AAAAAAAAAAM3MTL0AAABAAAAAwAAAAAAAAAAAAACAPwAAAAAAAAAAAABAwAAAAEAAAADAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAEAAgAAAAIAAwA="
+  }
+ ]
+}

@@ -1,0 +1,18 @@
+{
+  "__version": 4,
+  "environment": {
+    "__version": 1,
+    "face_size": 128
+  },
+  "guid": "da82d9ab-9588-473b-bd04-0c6897a1d167",
+  "shader": {
+    "__version": 1,
+    "variants": []
+  },
+  "texture": {
+    "__version": 1,
+    "color_space": "Linear",
+    "compress": true,
+    "mips": true
+  }
+}

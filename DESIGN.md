@@ -2557,10 +2557,32 @@ which is what reverse-Z wants everywhere else. A sky at the far plane has to pas
 depth image that still holds its clear of zero, and greater-than alone rejects it
 everywhere.
 
-**The sky draws after the blended geometry**, so a blended surface over open sky blends
-against the clear colour rather than against the sky. That is issue #435. Drawing at the
-opaque and blended seam fixes it and puts the sky draw inside `MeshPass`, and no scene here
-has both halves yet.
+**The sky draws between the opaque draws and the blended ones**, which closed issue #435.
+`MeshPass::draw` is `draw_opaque` and `draw_blended` now, and `SceneRenderer` puts the sky
+between them. The order stays in `SceneRenderer`, where the rest of the frame order lives,
+rather than moving the sky inside `MeshPass`.
+
+**The bug was worse than "blends against the clear colour".** A blended surface writes no
+depth, so the depth image over that surface still holds its clear. The sky tests depth for
+equality and passes there, and the sky is opaque. So a pane over open sky was not tinted
+wrongly. It was painted over and gone.
+
+**The split needed one thing the single call did not.** `draw_opaque` binds the frame set,
+and `draw_blended` used to inherit it. `SkyPass` binds a set of its own against a layout of
+its own, and Vulkan invalidates every set bound against an incompatible layout. So
+`draw_blended` binds the frame set again. The validation layer reported it on the first
+frame of the new scene: "uses set #0 but that set is not bound".
+
+**The frame report takes the sky off the mesh number.** The sky range is inside the mesh
+range now, so reading the mesh pair alone would report both. `read_timestamps` subtracts it,
+and "mesh" still means the cost of the geometry.
+
+**`tests/content_sky/` is the scene that proves it.** Nothing else here has both halves: the
+sandbox is a closed room, Sponza carries no blended geometry, and `tests/content` names no
+environment on purpose. It is one blended pane over the left of a frame of open sky, and the
+environment is a vertical gradient and nothing else, so the two outer thirds of a frame of
+sky alone are the same picture. `test_gpu_frame` compares them. The pane moves two channels
+by about 44 of 255, and the sky painting over it gives under 1.
 
 ### M6 — moth_ui spike, 2 to 3 days, timeboxed
 Write a minimal `IRenderer`, `IImage`, and `IFont` against `gfx::`. Render one static layout

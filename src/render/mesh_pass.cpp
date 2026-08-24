@@ -1307,11 +1307,12 @@ namespace engine::render {
         culled_this_frame_ = true;
     }
 
-    void MeshPass::draw(gfx::CommandList* commands, const scene::World& world,
-                        const assets::AssetSource& content, const Vec3& camera_position) {
+    void MeshPass::draw_opaque(gfx::CommandList* commands, const scene::World& world,
+                               const assets::AssetSource& content, const Vec3& camera_position) {
         draw_count_ = 0;
         pipeline_switches_ = 0;
         culled_meshes_ = 0;
+        gathered_this_frame_ = false;
         if (!frame_sets_[frame_slot_].valid()) {
             return;
         }
@@ -1321,8 +1322,9 @@ namespace engine::render {
         // a picture one frame stale, which is easy to miss and hard to place.
         if (!culled_this_frame_) {
             if (!warned_missing_cull_) {
-                ENGINE_LOG_WARN("MeshPass::draw ran without MeshPass::cull for this frame, so "
-                                "nothing drew. Call cull() first, outside a rendering scope.");
+                ENGINE_LOG_WARN("MeshPass::draw_opaque ran without MeshPass::cull for this "
+                                "frame, so nothing drew. Call cull() first, outside a "
+                                "rendering scope.");
                 warned_missing_cull_ = true;
             }
             return;
@@ -1337,6 +1339,7 @@ namespace engine::render {
                                      frame_sets_[frame_slot_]);
 
         gather_draws(world, content, camera_position);
+        gathered_this_frame_ = true;
 
         // Sort opaque draws by variant so that the pipeline is rebound only
         // when the form changes, and not on every submesh that alternates
@@ -1363,8 +1366,6 @@ namespace engine::render {
             gfx::cmd_draw_indexed(commands, draw.index_count, 1, draw.first_index, 0);
             ++draw_count_;
         }
-
-        draw_blended(commands);
     }
 
     void MeshPass::gather_draws(const scene::World& world, const assets::AssetSource& content,
@@ -1458,6 +1459,20 @@ namespace engine::render {
     }
 
     void MeshPass::draw_blended(gfx::CommandList* commands) {
+        // draw_opaque() gathers the list this draws, so calling this alone
+        // draws nothing at all. Losing every blended surface with no other sign
+        // is worth a message, the way a missing cull() is above.
+        if (!gathered_this_frame_) {
+            if (!warned_missing_gather_) {
+                ENGINE_LOG_WARN("MeshPass::draw_blended ran without MeshPass::draw_opaque for "
+                                "this frame, so no blended surface drew. Call draw_opaque() "
+                                "first, in the same rendering scope.");
+                warned_missing_gather_ = true;
+            }
+            return;
+        }
+        gathered_this_frame_ = false;
+
         if (blended_.empty() || !pipelines_.blend[0].valid()) {
             return;
         }
@@ -1469,9 +1484,19 @@ namespace engine::render {
         std::sort(blended_.begin(), blended_.end(),
                   [](const BlendedDraw& a, const BlendedDraw& b) { return a.depth > b.depth; });
 
-        // The frame set stays bound. Every pipeline declares the same
-        // descriptors, so their layouts are compatible and the binding survives
-        // the pipeline change.
+        // The frame set is bound again rather than left over from
+        // draw_opaque(). SkyPass draws between the two halves now, and it binds
+        // a set of its own against a layout of its own. Vulkan invalidates
+        // every set bound against an incompatible layout, so what draw_opaque()
+        // bound is gone by the time this runs. The validation layer reported it
+        // the first time this scene rendered: "uses set #0 but that set is not
+        // bound". See issue #435.
+        gfx::cmd_bind_descriptor_set(commands, layout_pipeline(), kFrameSet,
+                                     frame_sets_[frame_slot_]);
+
+        // Within this loop the frame set does stay bound. Every mesh pipeline
+        // declares the same descriptors, so their layouts are compatible and
+        // the binding survives the pipeline change.
         //
         // The order is the sort's, and the form is whatever each draw needs, so
         // this can rebind on every draw. Depth order cannot be traded for fewer
