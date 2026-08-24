@@ -658,8 +658,7 @@ namespace {
     void test_file_round_trip() {
         const sc::ComponentRegistry registry = make_registry();
         const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "camina_test.scene";
-        std::filesystem::remove(path);
+            test::scratch("scene_file", "round_trip") / "camina_test.scene";
 
         sc::World original;
         build_world(original);

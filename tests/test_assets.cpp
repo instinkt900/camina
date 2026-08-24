@@ -31,13 +31,7 @@ namespace {
     using engine::Guid;
 
     /// A directory of its own, so two runs of the test cannot collide.
-    std::filesystem::path scratch_directory() {
-        const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "camina_test_assets";
-        test::remove_tree(path);
-        std::filesystem::create_directories(path);
-        return path;
-    }
+    std::filesystem::path scratch_directory() { return test::scratch("assets", "assets"); }
 
     void write_file(const std::filesystem::path& path, std::string_view text) {
         std::ofstream file(path, std::ios::binary | std::ios::trunc);

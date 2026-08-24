@@ -28,12 +28,11 @@ namespace {
     namespace as = engine::assets;
     using engine::ui::LayoutLoad;
 
+    /// Names this binary's scratch tree. See test::scratch.
+    constexpr std::string_view kSuite = "ui_layout";
+
     std::filesystem::path scratch(std::string_view name) {
-        const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "camina_test_ui_layout" / name;
-        test::remove_tree(path);
-        std::filesystem::create_directories(path);
-        return path;
+        return test::scratch(kSuite, name);
     }
 
     void write_file(const std::filesystem::path& path, std::string_view text) {

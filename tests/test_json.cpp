@@ -305,9 +305,8 @@ namespace {
     }
 
     void test_file_round_trip() {
-        const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "camina_test_entity.json";
-        std::filesystem::remove(path);
+        const std::filesystem::path dir = test::scratch("json", "round_trip");
+        const std::filesystem::path path = dir / "entity.json";
 
         const Entity original = changed_entity();
         check(rf::save_json(path, original), "save_json writes the file");
@@ -320,8 +319,7 @@ namespace {
 
         // Writing what we read must give the same bytes. This is the check that
         // catches a field the writer drops and the reader defaults.
-        const std::filesystem::path second_path =
-            std::filesystem::temp_directory_path() / "camina_test_entity_2.json";
+        const std::filesystem::path second_path = dir / "entity_2.json";
         check(rf::save_json(second_path, loaded), "the second write succeeds");
         check(rf::to_json(loaded) == rf::to_json(original), "the two documents are equal");
 

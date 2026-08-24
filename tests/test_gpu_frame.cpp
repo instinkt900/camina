@@ -29,7 +29,6 @@
 
 #include <cstdio>
 #include <filesystem>
-#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -161,13 +160,10 @@ int main(int argc, char** argv) {
         return kSkipExitCode;
     }
 
-    // A name of its own for each run. Seven other tests here take a fixed one
-    // and two concurrent runs of the same binary then delete each other's
-    // fixtures, which is issue #293. This does not add an eighth.
-    const fs::path scratch =
-        fs::temp_directory_path() / ("camina_gpu_frame_" + std::to_string(std::random_device{}()));
-    std::error_code ignored;
-    fs::create_directories(scratch, ignored);
+    // A name of its own for each run, which is what every test here does since
+    // issue #293. This one had its own spelling of it first, and now takes the
+    // shared helper so that a reader meets one convention.
+    const fs::path scratch = test::scratch("gpu_frame", "captures");
 
     section("The editor draws the scene alone");
     // The sharp check of the two. An editor capture carries no game UI and no
@@ -223,6 +219,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    test::remove_tree(scratch);
+    // test::report() removes the scratch root this asked for.
     return test::report();
 }
