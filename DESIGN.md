@@ -1333,7 +1333,7 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   pin. Do not vendor it.
 - **The engine consumes the moth_ui 1.x line, and the pin ceiling is load-bearing.**
   `moth_ui/2.0.0` is a separate fork for a larger toolkit that also carries `moth_core`. It
-  is not the next version of the line this engine uses. So `[>=1.8 <2]` means what it says,
+  is not the next version of the line this engine uses. So `[>=1.9 <2]` means what it says,
   and widening the ceiling takes the engine to a different library rather than a newer one.
 
   **The git tags run ahead of the published line, and an unpublished tag is still a claim on
@@ -1341,10 +1341,20 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   carries tags 1.5.0, 1.6.0 and 1.7.0, made between 2026-03-25 and 2026-04-04 and never
   published. So the published line never went backwards. The tags sit above it.
 
-  That still matters, because `conan create` on the 1.7.0 tag produces a real 1.7.0, and a
+  That mattered, because `conan create` on the 1.7.0 tag produces a real 1.7.0, and a
   version range takes the highest it can find rather than the newest. A release numbered
-  1.2.0 would lose to it. M10.1 releases **1.8.0** to sit above every tag, which removes the
-  question rather than depending on nobody building one. Issue #390 holds the rest.
+  1.2.0 would lose to it.
+
+  **The answer was to move the version line above the tags rather than to delete them.**
+  M10.1 released 1.8.0 and M10.6 released 1.9.0, so the floor this engine pins sits above
+  every tag that was ever made. A stale tag can no longer satisfy the range, whoever builds
+  it. That is structural, where deleting a tag depends on nobody having fetched it. The
+  three tags stay where they are, and they are a record of what the repository did rather
+  than a hazard. Issue #390 closed on this.
+
+  **Raise the floor with the release, not after it.** The pin says which moth_ui the engine
+  needs, so it is part of the change that needs one. It is also what keeps the floor above
+  the tags without anybody thinking about them again.
 - **A Conan editable is for development, not for a build somebody else runs.** Develop against
   the editable when a change spans both repositories. Then release moth_ui and move the engine
   to the pin. A green build that only works because of a local editable is a broken build for
