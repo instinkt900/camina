@@ -30,6 +30,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Warnings)
 include(ClangTidy)
 include(Docs)
+# Empty by default, so a normal build carries no sanitizer. It has to come
+# before the first add_subdirectory below, because add_compile_options reaches
+# only the directories added after it.
+include(Sanitizers)
 
 if(CAMINA_DOCS_ONLY)
     set(CAMINA_BUILD_DOCS ON CACHE BOOL "Configure the Doxygen docs target" FORCE)

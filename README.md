@@ -85,9 +85,28 @@ cmake --build --preset conan-relwithdebinfo
 
 Both profiles ask for the Ninja generator, so the preset names match on each platform.
 
-Use `linux-clang-asan` for a build with the address sanitizer and the undefined behavior
-sanitizer. That profile turns Tracy off, because Tracy and the sanitizers both want the
-signal handlers.
+## The sanitizers
+
+`ENGINE_SANITIZERS` builds with AddressSanitizer and UndefinedBehaviorSanitizer. It is
+empty by default, so a normal build pays nothing:
+
+```bash
+cmake -S . -B build/asan -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/build/RelWithDebInfo/generators/conan_toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DENGINE_SANITIZERS=address,undefined \
+  -DENGINE_ENABLE_CLANG_TIDY=OFF
+cmake --build build/asan
+cd build/asan && ctest -LE gpu
+```
+
+The `sanitize` CI job runs the same build on a push to `main` and on request. It does not
+run on a pull request, so a green pull request says nothing about the sanitizers.
+
+The flags reach this project and nothing else. A Conan profile that carries them reaches
+every dependency Conan builds from source as well, and Conan records such a package under
+its build type alone. The next plain build then reuses a sanitized package and fails to
+link. `profiles/linux-clang-asan` did that, and it is gone.
 
 ## Run
 

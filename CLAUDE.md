@@ -965,14 +965,15 @@ Two traps, both of which have produced a false green:
   unambiguous, and read `conclusion` only after that.
 - **A bare `length > 0` exits far too early.** The review bot registers before the workflow
   jobs do, so the loop sees one finished check and reports success before the build starts.
-  Require the expected count, which is **eight**: `format`, `docs`, `containment`, `lint`,
-  and four `build` jobs.
+  Require the expected count, which is **nine**: `format`, `docs`, `containment`, `lint`,
+  `sanitize`, and four `build` jobs.
 
-- **A skipped job is still an entry, and it reports `COMPLETED` at once.** `lint` does not
-  run on a pull request, and it comes back as `status=COMPLETED, conclusion=SKIPPED` from
-  the first poll. So there are eight entries of which seven do work, and a loop that waits
-  for seven `COMPLETED` can finish while a build is still going: the skipped one plus the
-  three quick jobs plus three builds is already seven.
+- **A skipped job is still an entry, and it reports `COMPLETED` at once.** `lint` and
+  `sanitize` do not run on a pull request, and each comes back as
+  `status=COMPLETED, conclusion=SKIPPED` from the first poll. So there are nine entries of
+  which seven do work, and a loop that waits for seven `COMPLETED` can finish while a build
+  is still going: the two skipped ones plus the three quick jobs plus two builds is already
+  seven.
 
   **Wait for every entry to be `COMPLETED`, not for a count of them**, and treat `SKIPPED`
   as neither a pass nor a failure:
@@ -984,7 +985,7 @@ Two traps, both of which have produced a false green:
   and the job names carry which, for example
   `build (linux-clang, ui=true, editor=true, lua=true)`. **`with_lua` rides the
   Linux leg that already has the other two off**, rather than taking a job of
-  its own, so the count is still eight.
+  its own, so it adds no job of its own.
 
 Make the loop print the per-check result it decided on, so a wrong exit is visible in the
 event rather than hidden behind the word "success". After the monitor reports, **query the
@@ -1377,7 +1378,45 @@ here, consider whether moth_ui wants the same change.
   RelWithDebInfo.** After the cleanup, the RelWithDebInfo build also needs a reinstall
   from source: `conan install . -pr:h profiles/linux-clang -pr:b profiles/linux-clang
   -b missing`. Nothing warns before this happens, and the next build fails on missing
-  libraries. Nothing in `profiles/`, `cmake/`, or `CMakeLists.txt` sets a sanitizer.
+  libraries.
+
+  **`profiles/linux-clang-asan` used to be one way this happened, and it is gone.** A
+  profile `[conf]` entry with no pattern reaches every package in the graph, so
+  `tools.build:cxxflags=["-fsanitize=address,undefined"]` built each missing dependency with
+  the sanitizer. Conan records that package under `build_type=Debug` alone. The sanitizer
+  build lives in `cmake/Sanitizers.cmake` now, which adds the flags to this project and
+  leaves the cache alone.
+- **The sanitizers.** `ENGINE_SANITIZERS` builds with AddressSanitizer and
+  UndefinedBehaviorSanitizer. It is empty by default, so a normal build pays nothing.
+  `cmake/Sanitizers.cmake` holds it, and it adds `-fno-sanitize-recover=all` because
+  UndefinedBehaviorSanitizer otherwise prints and carries on, which passes the test over
+  the bug it found.
+
+  ```bash
+  cmake -S . -B build/asan -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/build/RelWithDebInfo/generators/conan_toolchain.cmake" \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DENGINE_SANITIZERS=address,undefined \
+    -DENGINE_ENABLE_CLANG_TIDY=OFF
+  cmake --build build/asan
+  cd build/asan && ctest -LE gpu
+  ```
+
+  **`cmake --preset conan-relwithdebinfo -B build/asan` does not work.** The preset carries
+  its own binary directory and its own generator, so `-B` disagrees with it. Configure from
+  the toolchain file, as above.
+
+  **The `sanitize` CI job runs the same build on a push to `main` and on request**, the same
+  shape as `lint` and for the same reason. So a green pull request says nothing about the
+  sanitizers, and this is what to run before a push.
+
+  **Leave Tracy on.** Turning it off is what `profiles/linux-clang-asan` did, and it hides
+  every lifetime bug that lives on a profiler marker. Issue #453 was exactly that: the name
+  a task carries is read by nothing else, so a sanitizer run with Tracy off could not see
+  it.
+
+  **This is not the poisoned Conan cache below.** These flags reach this project only. A
+  profile that carries them reaches every dependency Conan builds from source.
 - **A test that must die.** ctest cannot express "this program must abort, and it must
   say why". `PASS_REGULAR_EXPRESSION` does not override a process that a signal
   stopped, and `WILL_FAIL` passes whether the message appeared or not.

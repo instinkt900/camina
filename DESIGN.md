@@ -368,7 +368,7 @@ place, which is what catches a finish callback that returns early.
 ```
 engine/
   cmake/               Conan integration, compiler flags, shader compile rules
-  profiles/            Conan profiles (linux-clang, windows-msvc, linux-clang-asan)
+  profiles/            Conan profiles (linux-clang, windows-msvc, and the two debug ones)
   conanfile.py         Options: with_editor, with_ui, with_lua, with_audio
   third_party/         box3d, bc7enc_rdo (submodules and thin CMakeLists)
   src/
