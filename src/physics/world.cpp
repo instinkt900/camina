@@ -13,6 +13,8 @@
 #include <bit>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace engine::physics {
@@ -122,10 +124,27 @@ namespace engine::physics {
             std::vector<Vec3> points;
         };
 
+        /**
+         * Reads a Box3D debug color as the number it really is.
+         *
+         * **A b3HexColor does not always hold an enumerator.** `b3MakeDebugColor`
+         * packs a `b3DebugMaterial` into the high byte and casts the result back
+         * to the enum, so the debug draw hands over values such as 0x1A9A9A9,
+         * which is `b3_colorDarkGray` with `b3_debugMaterialMatte` above it.
+         * Loading that through an enum-typed lvalue is undefined behaviour, and
+         * UndefinedBehaviorSanitizer says so. The copy reads bytes instead. See
+         * DESIGN.md section 5 and issue #456.
+         */
+        [[nodiscard]] std::uint32_t raw_color(const b3HexColor& color) {
+            std::uint32_t value = 0;
+            std::memcpy(&value, &color, sizeof(value));
+            return value;
+        }
+
         /// Turns a Box3D debug color into the linear working space of section 3.
-        [[nodiscard]] Vec3 from_box3d(b3HexColor color) {
+        /// The material byte is dropped, because a debug line is one flat color.
+        [[nodiscard]] Vec3 from_box3d(std::uint32_t value) {
             constexpr float kByte = 255.0F;
-            const auto value = static_cast<std::uint32_t>(color);
             const Vec3 encoded{ static_cast<float>((value >> 16U) & 0xFFU) / kByte,
                                 static_cast<float>((value >> 8U) & 0xFFU) / kByte,
                                 static_cast<float>(value & 0xFFU) / kByte };
@@ -237,7 +256,7 @@ namespace engine::physics {
 
             const Vec3 origin{ transform.p.x, transform.p.y, transform.p.z };
             const Quat rotation = from_box3d(transform.q);
-            const Vec3 linear = from_box3d(color);
+            const Vec3 linear = from_box3d(raw_color(color));
 
             for (std::size_t i = 0; i + 1 < frame->points.size(); i += 2) {
                 sink->out->push_back(DebugLine{

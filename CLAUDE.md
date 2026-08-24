@@ -507,8 +507,8 @@ Box3D turned out to need nothing patched. What it did cost is four things that h
 out of its source: gravity is -10 rather than -9.8, a sleeping body ignores a velocity of zero
 silently, the debug wireframe of a shape is cached by the application through a callback on the
 world definition, and a hull stores half-edges so every edge is in the array twice. `DESIGN.md`
-section 5 holds all four. M8.4 found three more and a sanitizer run found an eighth, so
-that section now carries eight.
+section 5 holds all four. M8.4 found three more and the sanitizer gate found two, so that
+section now carries nine.
 
 **M8 is complete, and the sandbox game is Lua.** M8.0 put input in `platform/`, because every
 read sat inline in `apps/runtime/main.cpp` and a script API over that would have inherited an
@@ -1397,6 +1397,7 @@ here, consider whether moth_ui wants the same change.
     -DCMAKE_TOOLCHAIN_FILE="$PWD/build/RelWithDebInfo/generators/conan_toolchain.cmake" \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DENGINE_SANITIZERS=address,undefined \
+    -DENGINE_WITH_UI=ON -DENGINE_WITH_EDITOR=ON \
     -DENGINE_ENABLE_CLANG_TIDY=OFF
   cmake --build build/asan
   cd build/asan && ctest -LE gpu
@@ -1405,6 +1406,16 @@ here, consider whether moth_ui wants the same change.
   **`cmake --preset conan-relwithdebinfo -B build/asan` does not work.** The preset carries
   its own binary directory and its own generator, so `-B` disagrees with it. Configure from
   the toolchain file, as above.
+
+  **Name the options, or the run covers less than the gate does.** A build directory of its
+  own does not inherit `with_ui` and `with_editor` from the Conan install, so it drops the
+  `ui_*` tests and the editor. That is 37 tests against the 45 the job runs.
+
+  **Check the flags actually reached the build**, with
+  `grep -o "\-fsanitize=[a-z,]*" build/asan/compile_commands.json | sort -u`. A branch
+  without `cmake/Sanitizers.cmake` reconfigures this directory and silently drops them, and
+  a suite that runs no sanitizer looks exactly like a suite that passes one. That has already
+  produced one wrong "the tree is clean" report.
 
   **The `sanitize` CI job runs the same build on a push to `main` and on request**, the same
   shape as `lint` and for the same reason. So a green pull request says nothing about the
