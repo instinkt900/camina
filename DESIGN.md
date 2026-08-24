@@ -118,9 +118,9 @@ a diff against one directory, not against the whole engine.
 patched once. The whole of it is one flag moved out of the root CMakeLists, and the containment
 script has never had anything to report.
 
-Eight things it did cost, each of which had to be read out of the source rather than out of the
-documentation. M7 found the first four, M8.4 found the next three, and a sanitizer run found the
-last one:
+Nine things it did cost, each of which had to be read out of the source rather than out of the
+documentation. M7 found the first four, M8.4 found the next three, and the sanitizer gate found
+the last two:
 
 - **Gravity is −10, not −9.8.** The documentation says one and the code says the other. §3
   holds the check that pins it.
@@ -153,6 +153,12 @@ last one:
   It used to keep the caller's pointer, which is a read of a dead stack frame on every solve.
   Nothing reported it: a dead frame usually still holds the bytes. AddressSanitizer named it
   in five test binaries at once. See issue #453.
+- **A debug colour is not always an enumerator.** `b3MakeDebugColor` packs a `b3DebugMaterial`
+  into the high byte of a `b3HexColor` and casts the result back to the enum, so the debug draw
+  hands over values such as `0x1A9A9A9`: `b3_colorDarkGray` with `b3_debugMaterialMatte` above
+  it. Loading that through an enum-typed lvalue is undefined behaviour.
+  `engine::physics::raw_color` copies the bytes instead. The picture never moved, because
+  `from_box3d` masks each channel to eight bits and drops the material byte. See issue #456.
 
 **The solver is deterministic across threads.** Three offscreen runs of the sandbox, with a
 crate thrown at a stack on a fixed frame and the solver split over eight job system workers,

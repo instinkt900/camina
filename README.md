@@ -95,6 +95,7 @@ cmake -S . -B build/asan -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$PWD/build/RelWithDebInfo/generators/conan_toolchain.cmake" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DENGINE_SANITIZERS=address,undefined \
+  -DENGINE_WITH_UI=ON -DENGINE_WITH_EDITOR=ON \
   -DENGINE_ENABLE_CLANG_TIDY=OFF
 cmake --build build/asan
 cd build/asan && ctest -LE gpu
