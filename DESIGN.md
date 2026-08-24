@@ -1370,13 +1370,18 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   **A Conan version range takes the highest version it can find, so the first of the two
   it meets wins.** Meet moth_ui first and its range resolves to the newest fmt, which
   then conflicts with the exact version spdlog pins. Meet spdlog first and its pin is
-  already in the graph, so the range resolves onto it. This engine names `spdlog` as a
-  direct requirement and has therefore never hit this. moth_editor listed moth_ui first
-  and always did.
+  already in the graph, so the range resolves onto it.
 
   So there are two rules, and both are needed. Every moth package takes the same spdlog
-  this engine takes, and every consumer of more than one of them names spdlog before it
-  names moth_ui.
+  this engine takes, and **every graph that holds spdlog and moth_ui at all names spdlog
+  first**, whether it names one moth package or three.
+
+  The second rule is the one that is easy to get wrong, because the failure looks like a
+  version problem and is not. moth_graphics already listed spdlog first and went green on
+  the first try. moth_packer took the same spdlog bump, listed moth_ui first, and still
+  conflicted. That pair is the evidence: same versions, different order, different answer.
+  This engine has never hit it because `conanfile.py` names `spdlog` well before it names
+  `moth_ui`, which was luck rather than a decision until now.
 
 - **A Conan editable is for development, not for a build somebody else runs.** Develop against
   the editable when a change spans both repositories. Then release moth_ui and move the engine
