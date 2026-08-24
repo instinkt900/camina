@@ -1,5 +1,7 @@
 #include "import/sound.h"
 
+#include "audio/decode.h"
+
 #include "core/log.h"
 #include "import/rules.h"
 
@@ -256,7 +258,38 @@ namespace engine::import {
         return convert(bytes, format, data, out);
     }
 
+    bool decode_sound(std::span<const std::byte> bytes, PcmAudio& out, std::string_view where) {
+        // The bytes decide, not the extension. A file named .ogg that really
+        // holds a WAV is then read correctly rather than refused, and neither
+        // reader has to trust a name.
+        //
+        // WAV keeps its own reader. It already exists, it is tested, and moving
+        // it to miniaudio would change the bytes every cooked WAV in every
+        // project already has.
+        if (bytes.size() >= kRiffHeaderBytes && is_chunk(bytes, 0, "RIFF") &&
+            is_chunk(bytes, 8, "WAVE")) {
+            return decode_wav(bytes, out, where);
+        }
+
+        engine::audio::DecodedAudio decoded;
+        if (!engine::audio::decode_encoded(bytes, decoded, where)) {
+            return false;
+        }
+        out.channels = decoded.channels;
+        out.sample_rate = decoded.sample_rate;
+        out.samples = std::move(decoded.samples);
+        return true;
+    }
+
     bool guess_stream(const std::filesystem::path& source) {
+        // Still the extension, and still a guess about length rather than about
+        // what can be decoded. Everything this rule takes decodes now (#424),
+        // so the question is whether a file is short enough to hold in memory.
+        // A WAV is uncompressed, so anybody shipping one has already decided it
+        // is short. A compressed file is usually a track.
+        //
+        // A sidecar overrides it either way, and marking an .ogg effect
+        // decoded is the case #424 was about.
         return lowered_extension(source) != ".wav";
     }
 
@@ -281,7 +314,7 @@ namespace engine::import {
         }
 
         PcmAudio audio;
-        if (!decode_wav(bytes, audio, where)) {
+        if (!decode_sound(bytes, audio, where)) {
             return false;
         }
 
@@ -304,13 +337,10 @@ namespace engine::import {
 
     bool cook_sound(const std::filesystem::path& source, Writer& writer,
                     const std::filesystem::path& cooked, const as::SoundImport& settings) {
-        if (!settings.stream && lowered_extension(source) != ".wav") {
-            ENGINE_LOG_ERROR("{}: only a WAV decodes at cook time. Set stream in its sidecar, "
-                             "or give it as a WAV.",
-                             source.string());
-            return false;
-        }
-
+        // No refusal by extension any more. Every format this rule takes
+        // decodes at cook time since #424, and the bytes decide which decoder
+        // reads them. A file that will not decode is refused by name further
+        // down, where something has actually looked at it.
         std::ifstream file(source, std::ios::binary | std::ios::ate);
         if (!file) {
             ENGINE_LOG_ERROR("{}: could not open it to cook.", source.string());

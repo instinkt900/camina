@@ -3105,6 +3105,34 @@ records the package.
 an audio plugin ABI, so `IAudioDevice` exists to hold the containment line rather than to carry
 a second backend.
 
+**The cooker links miniaudio's decoders, and that is a change #424 made on purpose.**
+`src/import/sound.cpp` decodes a short effect once at cook time so that nothing decodes while
+it plays. Only WAV did before, so a project keeping its effects compressed got none of the
+benefit of the PCM path.
+
+The decoders and the device layer are separable, and this uses that.
+`src/audio/miniaudio_config.h` defines `MA_NO_DEVICE_IO` when `with_audio` is off, so a build
+with no audio carries the decoders and no backend. An import still opens no device and still
+runs on a build machine with no sound card, and a cook produces the same tree byte for byte
+whatever the option says. That last part is checked by cooking `sandbox/content` with both
+builds and comparing.
+
+**There is one miniaudio implementation for each binary, in `engine_miniaudio`.** miniaudio
+carries its own implementation and exactly one translation unit may ask for it. Two targets
+need it now, `engine_core` to play and `engine_import` to cook, and `apps/editor` links both.
+Two copies would be duplicate symbols at best, and at worst two struct layouts that disagree
+about a macro, which links cleanly and goes wrong at run time.
+
+**Which decoder reads a file is decided by its bytes and never by its name.** WAV keeps the
+hand-written reader in `import/sound.cpp`, because it already exists, it is tested, and moving
+it would change the bytes every cooked WAV already has. FLAC and MP3 go through miniaudio.
+
+**miniaudio 0.11 has no Vorbis decoder**, which the M11 work never met because no real `.ogg`
+has been through this engine. It carries dr_wav, dr_flac and dr_mp3, and Vorbis needs a
+`ma_decoding_backend_vtable` the caller supplies. So an `.ogg` is accepted, cooks as a streamed
+sound, and cannot be played. Issue #477 holds it, and the fix has to reach the mixer and the
+cook path together or a file cooks and stays silent.
+
 **A machine with no sound card must still run.** A CI runner has none, and an offscreen capture
 runs on machines that have none either. So a device that cannot open hardware opens silent and
 reports it, rather than failing the program. Every test runs on that path, which makes it the

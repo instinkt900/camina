@@ -1127,6 +1127,80 @@ void main() { out_color = push.model[0]; }
      * name the file, because the alternative is a cooked sound holding bytes
      * that are not samples.
      */
+    /// A committed sound fixture, read off disk. See tests/sounds/README.md.
+    [[nodiscard]] std::string real_sound(std::string_view name) {
+        return read_file(std::filesystem::path{ ENGINE_TEST_SOUNDS_DIR } / name);
+    }
+
+    // Issue #424. A short effect that is not a WAV used to have to be streamed,
+    // so it paid a decode while it played rather than once at cook time. Only a
+    // real file can show this: the streamed path copies bytes through without
+    // looking at them, so a made-up file passes whatever the rule does.
+    //
+    // FLAC and MP3, because those are the compressed formats miniaudio decodes.
+    // Ogg Vorbis is not one of them and needs a decoding backend the engine does
+    // not have. That is issue #477, and it is older than this work: a streamed
+    // .ogg cannot play either.
+    void check_a_short_sound_cooks_to_pcm(std::string_view name, std::uint32_t rate) {
+        const std::filesystem::path source = scratch(std::string{ "pcm-" } + std::string{ name });
+        const std::filesystem::path out =
+            scratch(std::string{ "pcm-out-" } + std::string{ name });
+        const std::filesystem::path file = source / name;
+
+        const std::string bytes = real_sound(name);
+        check(!bytes.empty(), "the fixture is on disk");
+        write_file(file, bytes);
+
+        const engine::import::Options options{ .content = source, .out = out };
+        engine::import::Result first;
+        check(engine::import::cook_all(options, first), "it cooks");
+
+        // The guess still streams it, because the guess is about length rather
+        // than about what can be decoded. A sidecar is how somebody says this
+        // one is an effect.
+        as::AssetMeta meta;
+        check(as::load_meta(file, meta) && meta.sound.stream, "and the guess still streams it");
+        meta.sound.stream = false;
+        check(as::save_meta(file, meta), "the sidecar takes the edit");
+
+        engine::import::Result second;
+        check(engine::import::cook_all(options, second), "and it cooks again as an effect");
+        check(second.failed == 0, "with nothing refused");
+
+        const std::string cooked = read_file(out / (std::string{ name } + ".snd"));
+        const std::span<const std::byte> cooked_bytes{
+            reinterpret_cast<const std::byte*>(cooked.data()), cooked.size()
+        };
+        as::SoundView view;
+        check(as::read_sound(cooked_bytes, view, "cooked"), "the cooked sound reads back");
+        check(view.storage == as::SoundStorage::Pcm, "and it is PCM rather than encoded");
+
+        // Mono at the rate the fixture was made at. Nothing resamples and
+        // nothing mixes down, so cooking changes the form and not the sound.
+        check(view.channels == 1, "it kept the channel count");
+        check(view.sample_rate == rate, "and the sample rate");
+        check(view.frame_count > 0, "and it holds frames");
+
+        // A decode that produced silence would pass every check above. This is
+        // what says the samples are the sound rather than a zeroed buffer.
+        const std::size_t sample_count = view.payload.size() / sizeof(float);
+        std::vector<float> samples(sample_count);
+        std::memcpy(samples.data(), view.payload.data(), view.payload.size());
+        bool any_signal = false;
+        for (const float sample : samples) {
+            any_signal = any_signal || sample > 0.01F || sample < -0.01F;
+        }
+        check(any_signal, "and the samples carry a signal rather than silence");
+
+        test::remove_tree(source);
+        test::remove_tree(out);
+    }
+
+    void test_a_short_compressed_sound_cooks_to_pcm() {
+        check_a_short_sound_cooks_to_pcm("blip.flac", 22050);
+        check_a_short_sound_cooks_to_pcm("blip.mp3", 22050);
+    }
+
     void test_a_sound_that_cannot_decode_is_refused() {
         const std::filesystem::path source = scratch("sound-bad/src");
         const std::filesystem::path out = scratch("sound-bad/out");
@@ -3947,6 +4021,7 @@ int main() {
     test_editing_the_sidecar_cooks_again();
     test::section("sounds");
     test_a_sound_cooks_both_ways();
+    test_a_short_compressed_sound_cooks_to_pcm();
     test_a_sound_that_cannot_decode_is_refused();
     test_an_older_manifest_cooks_again();
     test_an_older_cooker_cooks_again();

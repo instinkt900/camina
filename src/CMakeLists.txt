@@ -96,6 +96,54 @@ if(ENGINE_WITH_LUA)
     )
 endif()
 
+# One miniaudio implementation for each binary, and never two.
+#
+# miniaudio carries its own implementation and exactly one translation unit may
+# ask for it. Two consumers need it now: engine_core plays sound, and
+# engine_import decodes a short effect at cook time (issue #424). apps/editor
+# links both, so a copy in each would be duplicate symbols at best and two
+# disagreeing struct layouts at worst.
+#
+# It is built whatever ENGINE_WITH_AUDIO says, because a cook has to produce the
+# same bytes either way. audio/miniaudio_config.h defines MA_NO_DEVICE_IO when
+# the option is off, so a build with no audio compiles the decoders and no
+# backend.
+add_library(engine_miniaudio STATIC
+    audio/miniaudio_impl.cpp
+    audio/decode.cpp
+)
+add_library(engine::miniaudio ALIAS engine_miniaudio)
+
+# It does not link engine::core, on purpose. engine_core links this one, and a
+# cycle between two static libraries is a link order somebody has to think
+# about. audio/decode.cpp needs the include path and the logger, so it takes
+# those two directly.
+target_include_directories(engine_miniaudio PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(engine_miniaudio
+    PRIVATE
+        miniaudio::miniaudio
+        spdlog::spdlog
+        Tracy::TracyClient
+)
+
+if(ENGINE_WITH_AUDIO)
+    target_compile_definitions(engine_miniaudio PRIVATE ENGINE_WITH_AUDIO)
+endif()
+
+# The implementation unit holds nothing of ours, so the warning set and
+# clang-tidy stay off it without covering any of our own code. This is the same
+# treatment gfx/vulkan/vk_vma.cpp gets. audio/decode.cpp is ours and keeps both.
+set_source_files_properties(audio/miniaudio_impl.cpp PROPERTIES
+    SKIP_LINTING ON
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
+)
+
+engine_set_warnings(engine_miniaudio)
+engine_enable_clang_tidy(engine_miniaudio)
+
 # M11. The audio device. These join engine_core the way the script host does,
 # because audio/device.h names no miniaudio type and so nothing leaks out.
 # miniaudio stays a PRIVATE link below for the same reason, and
@@ -106,16 +154,6 @@ if(ENGINE_WITH_AUDIO)
         audio/mixer.cpp
         audio/scene_audio.cpp
         audio/script_audio.cpp
-        audio/miniaudio_impl.cpp
-    )
-
-    # miniaudio carries its own implementation, and exactly one translation unit
-    # asks for it. That unit holds nothing else, so the warning set and
-    # clang-tidy stay off it without covering any of our own code. This is the
-    # same treatment gfx/vulkan/vk_vma.cpp gets.
-    set_source_files_properties(audio/miniaudio_impl.cpp PROPERTIES
-        SKIP_LINTING ON
-        COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
     )
 endif()
 
@@ -203,7 +241,7 @@ endif()
 # ENGINE_WITH_AUDIO is PUBLIC, because an application has to know whether a
 # device can be created before it asks for one.
 if(ENGINE_WITH_AUDIO)
-    target_link_libraries(engine_core PRIVATE miniaudio::miniaudio)
+    target_link_libraries(engine_core PRIVATE miniaudio::miniaudio engine_miniaudio)
     target_compile_definitions(engine_core PUBLIC ENGINE_WITH_AUDIO)
 endif()
 

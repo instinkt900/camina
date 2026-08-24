@@ -22,3 +22,24 @@
 
 /// @brief Nothing synthesizes a waveform. `scripts/` generates the sandbox sounds.
 #define MA_NO_GENERATION
+
+/**
+ * @brief No device layer in a build with no audio.
+ *
+ * The decoders are needed either way, because `import/sound.cpp` decodes a
+ * short effect at cook time and a cook must produce the same bytes whatever
+ * `with_audio` says. The device layer is not: nothing opens one in a build
+ * with the option off.
+ *
+ * So there is one miniaudio implementation for each binary and never two.
+ * `apps/editor` links `engine::core` and `engine::import` together, and two
+ * implementations in one binary are duplicate symbols at best and two
+ * disagreeing struct layouts at worst.
+ *
+ * @warning This macro changes what a struct looks like, so every translation
+ *          unit that includes miniaudio has to agree about it. That is what
+ *          this file is for. See issue #424.
+ */
+#if !defined(ENGINE_WITH_AUDIO)
+#define MA_NO_DEVICE_IO
+#endif
