@@ -3628,6 +3628,74 @@ void main() { color = vec4(1.0); }
 
 // A glTF holds several assets and one rule makes them all, so asking for
 // any of them must import the file once.
+// M13.4a. import_one takes a component registry and hands it to the document
+// rule, so a scene can name an asset in a field the game defines. Deleting
+// that passthrough, so the import falls back to the engine's own components,
+// used to fail no test.
+//
+// The sandbox cannot drive this. Its two components are Spin and Goal, and
+// neither names an asset, so the fallback resolves everything the shipped
+// project holds. test_game::Billboard is the component that does.
+void test_an_import_resolves_a_game_component_reference() {
+    const std::filesystem::path source = scratch("import_gamecomp/src");
+    std::filesystem::create_directories(source / "models");
+
+    write_file(source / "models" / "crate.gltf", kMinimalGltf);
+    write_file(source / "a.prefab",
+               R"({"entities":[{"components":{"Billboard":)"
+               R"({"mesh":"asset:models/crate.gltf#mesh:0"}}}]})");
+
+    engine::scene::ComponentRegistry types = engine::import::engine_components();
+    types.add<test_game::Billboard>();
+
+    engine::import::SourceAssets assets;
+    check(assets.open(source), "the tree opens as a source project");
+    assets.set_components(&types);
+
+    // The prefab, by the identity its own sidecar gave it.
+    std::vector<as::AssetRecord> prefabs;
+    check(assets.assets_for("a.prefab", prefabs), "the index holds the prefab");
+    check(prefabs.size() == 1, "and it names one asset");
+    if (prefabs.size() != 1) {
+        return;
+    }
+
+    // The import is where the registry is read. Without the passthrough the
+    // rule meets a component it does not know, and the whole import fails.
+    std::vector<std::byte> bytes;
+    check(assets.read(prefabs.front().guid, bytes),
+          "the prefab imports with the game's components registered");
+    if (bytes.empty()) {
+        return;
+    }
+
+    const std::string text{ reinterpret_cast<const char*>(bytes.data()), bytes.size() };
+    nlohmann::json imported = nlohmann::json::parse(text, nullptr, false);
+    check(!imported.is_discarded(), "the imported prefab parses");
+    if (imported.is_discarded()) {
+        return;
+    }
+
+    // check() carries on after a failure, so a get() on a shape that is not
+    // there would end the process and every later test would report nothing.
+    const nlohmann::json& field = imported["entities"][0]["components"]["Billboard"]["mesh"];
+    check(field.is_string(), "the imported prefab still holds the game component's field");
+
+    engine::Guid resolved;
+    check(field.is_string() && engine::Guid::parse(field.get<std::string>(), resolved),
+          "and that field holds an identity rather than the reference text");
+
+    // The identity has to be the mesh the reference named, not any GUID that
+    // parses. A wrong one draws nothing and reports one line at run time.
+    as::AssetMeta meta;
+    check(as::load_meta(source / "models" / "crate.gltf", meta), "the glTF has a sidecar");
+    check(resolved == engine::Guid::derive(meta.guid, "mesh", 0),
+          "and it is the identity the glTF rule gave that mesh");
+
+    test::remove_tree(source.parent_path());
+}
+
+
 void test_an_import_is_kept_for_the_session() {
     const std::filesystem::path source = scratch("import_cache/src");
     std::filesystem::create_directories(source / "models");
@@ -3832,6 +3900,7 @@ int main() {
     test::section("importing from source");
     test_the_index_writes_the_same_sidecar_a_cook_would();
     test_an_import_gives_the_cooked_bytes();
+    test_an_import_resolves_a_game_component_reference();
     test_an_import_is_kept_for_the_session();
     test_a_failed_import_does_not_stop_the_project();
     test::section("reimporting");
