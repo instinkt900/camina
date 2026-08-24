@@ -10,6 +10,10 @@
 #include "assets/meta.h"
 #include "assets/texture.h"
 #include "check.h"
+#include "reflect/json.h"
+#include "reflect/reflect.h"
+
+#include <nlohmann/json.hpp>
 
 #include <cstring>
 #include <filesystem>
@@ -259,18 +263,56 @@ namespace {
     }
 
     void test_color_space_text() {
+        namespace rf = engine::reflect;
+
+        // The names are the bytes every committed .meta sidecar already holds.
+        // reflect/ compares an enumerator name exactly, so a change to either
+        // spelling stops those files reading. See issue #235.
+        check(std::string_view{ rf::enumerator_name(as::ColorSpace::Srgb) } == "sRGB",
+              "sRGB is spelled the way a sidecar spells it");
+        check(std::string_view{ rf::enumerator_name(as::ColorSpace::Linear) } == "Linear",
+              "and so is Linear");
+
         as::ColorSpace space = as::ColorSpace::Srgb;
-        check(as::from_text("Linear", space) && space == as::ColorSpace::Linear, "Linear reads");
-        check(as::from_text("srgb", space) && space == as::ColorSpace::Srgb,
-              "and letter case does not matter");
-        check(as::to_text(as::ColorSpace::Linear) == "Linear", "Linear writes");
-        check(as::to_text(as::ColorSpace::Srgb) == "sRGB", "and sRGB writes");
+        check(rf::enumerator_value("Linear", space) && space == as::ColorSpace::Linear,
+              "Linear reads");
+        check(rf::enumerator_value("sRGB", space) && space == as::ColorSpace::Srgb,
+              "and sRGB reads");
 
         // A word nobody recognizes leaves the value alone, so a typo in a
         // sidecar keeps the default rather than silently picking one.
         space = as::ColorSpace::Linear;
-        check(!as::from_text("gamma", space), "an unknown word is refused");
+        check(!rf::enumerator_value("gamma", space), "an unknown word is refused");
         check(space == as::ColorSpace::Linear, "and it changes nothing");
+    }
+
+    /// A sidecar written before #235 must still read, byte for byte as it sits
+    /// on disk. This is the shape every committed .meta carries.
+    void test_color_space_sidecar_round_trip() {
+        namespace rf = engine::reflect;
+
+        const nlohmann::json document = nlohmann::json::parse(R"({
+            "color_space": "sRGB",
+            "compress": true,
+            "mips": true
+        })");
+
+        as::TextureImport settings;
+        settings.color_space = as::ColorSpace::Linear;
+        check(rf::from_json(document, settings), "a sidecar written before the change reads");
+        check(settings.color_space == as::ColorSpace::Srgb, "and its color space arrives");
+
+        settings.color_space = as::ColorSpace::Linear;
+        check(rf::to_json(settings).at("color_space").get<std::string>() == "Linear",
+              "and writing one back gives the same word it used to");
+
+        // A typo is refused and reported, rather than taken as a default. The
+        // whole object fails, so the caller keeps what it started with.
+        const nlohmann::json typo = nlohmann::json::parse(R"({"color_space": "gamma"})");
+        as::TextureImport keeper;
+        keeper.color_space = as::ColorSpace::Linear;
+        check(!rf::from_json(typo, keeper), "a word no enumerator names is refused");
+        check(keeper.color_space == as::ColorSpace::Linear, "and it changes nothing");
     }
 
     /// A material with every field set to something a default would not give.
@@ -497,6 +539,7 @@ int main() {
     test_mip_arithmetic();
     test_read_texture_refuses_a_bad_file();
     test_color_space_text();
+    test_color_space_sidecar_round_trip();
     test::section("the asset source seam");
     test_a_source_path_names_every_form();
     test_a_kind_finds_what_holds_no_path();

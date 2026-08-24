@@ -194,24 +194,4 @@ namespace engine::assets {
     [[nodiscard]] bool read_texture(std::span<const std::byte> bytes, TextureView& out,
                                     std::string_view where);
 
-    /**
-     * @brief The text form of a color space, for reflect/.
-     *
-     * Without this a sidecar would hold `"color_space": 1`, because reflect/
-     * writes a plain enum as its underlying number. A person edits that file by
-     * hand to fix a texture that came out wrong, so it holds `"Linear"` instead.
-     *
-     * @param value The color space to write.
-     * @return "sRGB" or "Linear".
-     */
-    [[nodiscard]] std::string to_text(const ColorSpace& value);
-
-    /**
-     * @brief Reads the text form of a color space, for reflect/.
-     * @param text The word to read. The comparison ignores letter case.
-     * @param out The color space to fill. It stays as it was when this fails.
-     * @return True when @p text names a color space.
-     */
-    [[nodiscard]] bool from_text(std::string_view text, ColorSpace& out);
-
 } // namespace engine::assets

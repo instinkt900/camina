@@ -277,6 +277,29 @@ namespace engine::assets {
 
 } // namespace engine::assets
 
+/**
+ * @brief Describes a color space, so the inspector draws a drop-down.
+ *
+ * The `sRGB` enumerator is named by hand rather than through ENGINE_ENUMERATOR,
+ * because the C++ identifier is `Srgb` and every `.meta` sidecar in the tree
+ * already holds the word `sRGB`. reflect/ compares an enumerator name exactly,
+ * so the spelling here is what keeps those files reading with no change to
+ * their bytes. See issue #235.
+ */
+template <>
+struct engine::reflect::Describe<engine::assets::ColorSpace> {
+    /// @brief The type name a document stores.
+    static constexpr const char* name = "ColorSpace";
+
+    /// @brief The two values.
+    /// @return A tuple of enumerator descriptors.
+    static constexpr auto enumerators() {
+        return std::make_tuple(
+            engine::reflect::enumerator("sRGB", engine::assets::ColorSpace::Srgb),
+            ENGINE_ENUMERATOR(engine::assets::ColorSpace, Linear));
+    }
+};
+
 /// @brief Field descriptors for the texture import settings.
 template <>
 struct engine::reflect::Describe<engine::assets::TextureImport> {

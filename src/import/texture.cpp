@@ -355,7 +355,7 @@ namespace engine::import {
             return false;
         }
         ENGINE_LOG_INFO("{}: reading it as {}, {}. Edit the sidecar to change that.",
-                        source.string(), as::to_text(out.texture.color_space),
+                        source.string(), engine::reflect::enumerator_name(out.texture.color_space),
                         known ? "which is what the model uses it for" : "guessed from the name");
         return true;
     }
