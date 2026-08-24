@@ -5,8 +5,12 @@
  * @brief Profiler markers, wrapping Tracy.
  *
  * When the tracy package has enable=False, every Tracy macro compiles to nothing,
- * so these markers cost nothing. The asan profile turns Tracy off, because Tracy
- * and the sanitizers both want the signal handlers.
+ * so these markers cost nothing.
+ *
+ * @warning **Leave Tracy on under a sanitizer.** A marker is the only reader of a
+ * name or a text a caller passes, so turning Tracy off hides every lifetime bug
+ * on that path. Issue #453 is one: it lives on ENGINE_PROFILE_ZONE_TEXT, and a
+ * sanitizer run with Tracy off cannot see it.
  */
 
 #include <tracy/Tracy.hpp>
