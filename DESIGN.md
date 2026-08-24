@@ -240,11 +240,18 @@ the game module links into both. This is the Unreal and Hazel shape: the editor 
 the project and holds the project types, and it is not a generic tool that opens project
 files.
 
-`WITH_EDITOR` may remove an editor-only method, member, subsystem, or reflection
-attribute. It must never change what the code that remains does. An `#ifdef` around a
-branch inside a function that both builds run is a violation, because it lets a shipping
-build behave unlike the editor build. That class of bug is miserable to trace, and this
-rule is the only thing that prevents it.
+`WITH_EDITOR` may remove an editor-only method, member, or subsystem. It must never change
+what the code that remains does. An `#ifdef` around a branch inside a function that both
+builds run is a violation, because it lets a shipping build behave unlike the editor build.
+That class of bug is miserable to trace, and this rule is the only thing that prevents it.
+
+**A reflection attribute that drops a field is the same violation, and `EditorOnly` was
+deleted for it.** The attribute was declared in M2 and read by nothing. Making it work means
+the serializer skips a tagged field when `WITH_EDITOR` is off, so the editor writes a scene
+the shipping build reads differently. That is a shipping build behaving unlike the editor
+build, which is exactly what this rule forbids. No field ever carried the tag, so deleting it
+cost nothing. Hold editor state in an editor type, not in a tagged field of a shipped one.
+See issue #305.
 
 The macro name matches the Conan option `with_editor` and matches Unreal, so one name
 means one thing across the build, the package, and the code.
@@ -551,7 +558,6 @@ costly. The minimum set is:
 - `ReadOnly` — shown, but not editable
 - `Transient` — serialization skips it
 - `Version` — schema migration
-- `EditorOnly` — removed from shipping builds
 
 **Validation rule.** Never ship a reflection design with one consumer. Build the ImGui
 inspector and the JSON serializer together in M2. A single consumer never proves the

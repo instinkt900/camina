@@ -83,7 +83,7 @@ struct engine::reflect::Describe<Player> {
             ENGINE_FIELD(Player, lives, Range{ 0.0, 9.0, 1.0 }, Category{ "Combat" }),
             ENGINE_FIELD(Player, display_name, Category{ "Identity" }),
             ENGINE_FIELD(Player, cache, Transient{}, Hidden{}),
-            ENGINE_FIELD(Player, debug_counter, EditorOnly{}, ReadOnly{}),
+            ENGINE_FIELD(Player, debug_counter, ReadOnly{}),
             ENGINE_FIELD(Player, legacy_scale, Version{ 2 }));
     }
 };
@@ -185,7 +185,6 @@ namespace {
         check(rf::has_attribute_v<rf::Hidden, decltype(cache)>, "Hidden marks a field the editor does not show");
 
         const auto& debug_counter = std::get<4>(fields);
-        check(rf::has_attribute_v<rf::EditorOnly, decltype(debug_counter)>, "EditorOnly marks editor metadata");
         check(rf::has_attribute_v<rf::ReadOnly, decltype(debug_counter)>, "ReadOnly marks a field the editor locks");
 
         const auto& legacy = std::get<5>(fields);
