@@ -75,6 +75,53 @@ namespace engine::editor {
         GizmoSpace space = GizmoSpace::World;
     };
 
+    /// @brief Which gizmo mode a key press asks for.
+    enum class GizmoShortcut : std::uint8_t {
+        None, ///< The key was not one of the three.
+        Move, ///< Arrows that move the entity. W, the way every editor binds it.
+        Turn, ///< Rings that turn it. E.
+        Size, ///< Boxes that resize it. R.
+    };
+
+    /**
+     * @brief Applies a gizmo mode shortcut, and says whether it took.
+     *
+     * The decision rather than the key reading, so a test can drive it with no
+     * window. `apps/editor/main.cpp` turns an ImGui key press into a
+     * ::GizmoShortcut and calls this.
+     *
+     * @param key Which mode the key asked for, or GizmoShortcut::None.
+     * @param looking Whether the camera look button is held.
+     * @param gizmo What the gizmo is set to. Changed only when this returns true.
+     * @return True when the shortcut changed the mode.
+     *
+     * @warning The look button owns the letter keys while it is held. The
+     * editor fly camera moves on W, A, S, D, Q and E only while that button is
+     * down, which is what leaves the keys free the rest of the time. Binding
+     * them without this check would turn every step forward into a mode change.
+     * See issue #325.
+     */
+    [[nodiscard]] inline bool apply_gizmo_shortcut(GizmoShortcut key, bool looking,
+                                                   GizmoControls& gizmo) {
+        if (looking) {
+            return false;
+        }
+        switch (key) {
+        case GizmoShortcut::Move:
+            gizmo.operation = GizmoOperation::Translate;
+            return true;
+        case GizmoShortcut::Turn:
+            gizmo.operation = GizmoOperation::Rotate;
+            return true;
+        case GizmoShortcut::Size:
+            gizmo.operation = GizmoOperation::Scale;
+            return true;
+        case GizmoShortcut::None:
+            break;
+        }
+        return false;
+    }
+
     /**
      * @brief Something to draw inside the viewport window, over the picture.
      *

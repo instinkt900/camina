@@ -805,8 +805,11 @@ geometry and shading and not on either of those, and a comparison has to account
 **`editor --select <name>` and `--gizmo <move|turn|size>`** exist so a capture can show the
 handles. A gizmo otherwise needs a hand on the mouse, and there is no way to inject one.
 
-**The gizmo has no keyboard shortcuts**, because W, E and R fly the camera. Issue #325 holds
-the decision that would free them.
+**The gizmo modes are on W, E and R**, which closed #325. The editor fly camera moves only
+while the right mouse button is held, so the letters are free the rest of the time. That is
+`FlyCamera::move_needs_look`, and the runtime leaves it off. `editor::apply_gizmo_shortcut`
+is the decision, in `engine_core` so a test drives it with no window, and the rule is the
+button rather than which panel the pointer is over.
 
 **The game's key bindings are in `sandbox::bind_actions` now**, not in the runtime's
 `main.cpp`. Two applications run this game, and two copies of the table would let one key do
