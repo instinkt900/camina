@@ -1201,6 +1201,44 @@ void test_a_stopped_session_is_silent() {
 
 #endif
 
+/**
+ * The gizmo mode shortcuts, which is issue #325.
+ *
+ * Driven with no window, because the decision is a function and the key
+ * reading is the part that needs ImGui.
+ */
+void test_the_gizmo_mode_shortcuts() {
+    namespace ed = engine::editor;
+    test::section("The gizmo mode keys");
+
+    ed::GizmoControls gizmo;
+    check(gizmo.operation == ed::GizmoOperation::Translate, "it starts on the move handles");
+
+    check(ed::apply_gizmo_shortcut(ed::GizmoShortcut::Turn, false, gizmo), "E takes");
+    check(gizmo.operation == ed::GizmoOperation::Rotate, "and turns the entity");
+    check(ed::apply_gizmo_shortcut(ed::GizmoShortcut::Size, false, gizmo), "R takes");
+    check(gizmo.operation == ed::GizmoOperation::Scale, "and resizes it");
+    check(ed::apply_gizmo_shortcut(ed::GizmoShortcut::Move, false, gizmo), "W takes");
+    check(gizmo.operation == ed::GizmoOperation::Translate, "and moves it again");
+
+    // The whole reason the keys are free. While the look button is held, W and
+    // E fly the camera, so a mode change there would turn every step forward
+    // into a mode somebody did not ask for.
+    gizmo.operation = ed::GizmoOperation::Rotate;
+    check(!ed::apply_gizmo_shortcut(ed::GizmoShortcut::Move, true, gizmo),
+          "and none of them takes while the look button is held");
+    check(gizmo.operation == ed::GizmoOperation::Rotate, "so the mode is the one it was");
+
+    // A key that is not one of the three leaves the mode alone whether the
+    // button is down or up.
+    check(!ed::apply_gizmo_shortcut(ed::GizmoShortcut::None, false, gizmo),
+          "another key changes nothing");
+    check(gizmo.operation == ed::GizmoOperation::Rotate, "and the mode stands");
+
+    // The space is the viewport bar's, and no key here touches it.
+    check(gizmo.space == ed::GizmoSpace::World, "the world and local choice is left alone");
+}
+
 int main() {
     register_everything();
 
@@ -1237,6 +1275,7 @@ int main() {
     test_a_delete_before_play_undoes_after_stop();
     test_the_selection_survives_a_play_and_a_stop();
     test_an_entry_naming_a_lost_entity_is_reported();
+    test_the_gizmo_mode_shortcuts();
 
     engine::jobs::shutdown();
     return test::report();

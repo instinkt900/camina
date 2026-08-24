@@ -2847,6 +2847,24 @@ in the entity's own. The handles write through `World::set_local`, so every chil
 a dragged parent, and a child dragged under a moved parent lands where the pointer is
 because the parent is divided out first.
 
+**The gizmo modes are on W, E and R**, which closed issue #325. Every editor binds those
+three keys, and this one could not while the fly camera moved on them whenever they were
+held.
+
+**The camera is what changed, not the keys.** `FlyCamera::move_needs_look` moves the camera
+only while the look button is down, which is what Unity does and what frees the letters the
+rest of the time. The editor turns it on and the runtime leaves it off: the runtime has flown
+with WASD alone since M2, there is nothing else those keys could mean in a game, and a debug
+camera that needs two hands is a worse debug camera.
+
+**The rule is the button, not the panel.** `editor::apply_gizmo_shortcut` ignores the keys
+whenever the right mouse button is down. A rule that also asked which panel the pointer was
+over would be more precise and harder to hold in the head, and the imprecision costs nothing:
+the button is down only while somebody is flying.
+
+The decision lives in `src/editor/panels.h` and the key reading lives in the application, so
+`tests/test_editor.cpp` drives it with no window.
+
 **ImGuizmo needs a projection this engine never builds.** The engine renders with an
 infinite reverse-Z projection whose Y row is negated for Vulkan clip space. ImGuizmo does
 its own clip to screen step and expects the neutral form: Y up, and a finite far plane. So

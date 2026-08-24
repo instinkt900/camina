@@ -829,6 +829,29 @@ namespace {
             return;
         }
 
+        // The gizmo modes, on the keys every other editor binds them to. They
+        // are free because the editor fly camera moves only while the right
+        // mouse button is held, which #326 settled and #325 asked for.
+        //
+        // **Before the editing gate**, because picking a mode edits nothing.
+        // It is a view setting, the way Escape above is one, and somebody
+        // watching a session should be able to set the handles up for the
+        // moment it stops.
+        //
+        // The mouse test is the button rather than what the camera decided.
+        // "While the right button is down the letter keys belong to the
+        // camera" is one rule a person can hold, and a rule that also depended
+        // on which panel the pointer was over would not be.
+        const engine::editor::GizmoShortcut wanted =
+            ImGui::IsKeyPressed(ImGuiKey_W, false)   ? engine::editor::GizmoShortcut::Move
+            : ImGui::IsKeyPressed(ImGuiKey_E, false) ? engine::editor::GizmoShortcut::Turn
+            : ImGui::IsKeyPressed(ImGuiKey_R, false) ? engine::editor::GizmoShortcut::Size
+                                                     : engine::editor::GizmoShortcut::None;
+        if (engine::editor::apply_gizmo_shortcut(
+                wanted, ImGui::IsMouseDown(ImGuiMouseButton_Right), editor.gizmo)) {
+            return;
+        }
+
         // Every key below this edits the scene, and a session is not the
         // scene. The same rule the Edit menu and the save button follow.
         if (editor.play.running()) {
