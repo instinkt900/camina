@@ -7,7 +7,10 @@
 
 #include "platform/watch.h"
 
+#include "core/log.h"
+
 #include <algorithm>
+#include <system_error>
 #include <utility>
 
 namespace engine::platform {
@@ -25,11 +28,18 @@ namespace engine::platform {
     }
 
     DirectoryWatcher::DirectoryWatcher()
-        : DirectoryWatcher(make_polling_watch_backend()) {}
+        : DirectoryWatcher(WatchBackendChoice::Automatic) {}
+
+    DirectoryWatcher::DirectoryWatcher(WatchBackendChoice choice)
+        : DirectoryWatcher(make_watch_backend(choice)) {
+        // Only a watcher that asked for the best available backend may quietly
+        // take a worse one. A caller that named a backend gets that backend.
+        may_fall_back_ = choice == WatchBackendChoice::Automatic;
+    }
 
     DirectoryWatcher::DirectoryWatcher(std::unique_ptr<WatchBackend> backend)
         : backend_(std::move(backend)) {
-        backend_->set_interval(kDefaultInterval);
+        backend_->set_interval(interval_);
     }
 
     DirectoryWatcher::~DirectoryWatcher() = default;
@@ -39,6 +49,9 @@ namespace engine::platform {
     DirectoryWatcher& DirectoryWatcher::operator=(DirectoryWatcher&&) = default;
 
     void DirectoryWatcher::set_interval(std::chrono::milliseconds interval) {
+        // The front end keeps this as well as handing it over, because a
+        // backend swapped in by the fallback below has to be told the same.
+        interval_ = interval;
         backend_->set_interval(interval);
     }
 
@@ -48,6 +61,25 @@ namespace engine::platform {
         pending_.clear();
         started_ = false;
 
+        if (backend_->start(root, known_)) {
+            started_ = true;
+            return true;
+        }
+
+        // A backend that will not start is worth saying out loud. Falling back
+        // without a word hides a broken build, and it brings back the walk on
+        // the machine least able to afford it.
+        std::error_code error;
+        if (!may_fall_back_ || !std::filesystem::is_directory(root, error) || error) {
+            return false;
+        }
+
+        ENGINE_LOG_WARN("{}: the native watcher would not start, so the tree is walked on a "
+                        "timer instead. Hot reload still works and it costs a walk every {} ms.",
+                        root.string(), interval_.count());
+        backend_ = make_polling_watch_backend();
+        backend_->set_interval(interval_);
+        known_.clear();
         if (!backend_->start(root, known_)) {
             return false;
         }
@@ -73,6 +105,15 @@ namespace engine::platform {
         // state it is waiting on is read again below whatever happens here.
         for (std::string& name : candidates) {
             pending_.try_emplace(std::move(name));
+        }
+        if (result == CollectResult::Resync) {
+            // The backend lost track. It can name what is there and not what
+            // is gone, so every file this end knows about goes back on the
+            // list. A file that still holds what was reported drops out again
+            // on the first look, which is what settle() does with it.
+            for (const auto& [name, state] : known_) {
+                pending_.try_emplace(name);
+            }
         }
         if (pending_.empty()) {
             return false;

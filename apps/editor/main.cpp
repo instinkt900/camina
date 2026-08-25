@@ -132,6 +132,10 @@ namespace {
         /// Watch the source tree and import a file that changed. Off makes a
         /// run reproducible, the way it does for the runtime.
         bool watch = true;
+        /// True walks the source tree on a timer rather than asking the
+        /// operating system. A network drive reports no events, so it needs
+        /// this.
+        bool watch_by_polling = false;
         /// Draw with no window at all, and capture what the scene camera sees.
         /// This is the only way to compare the editor's picture against the
         /// runtime's: a windowed capture is whatever size the window manager
@@ -160,6 +164,8 @@ namespace {
         ENGINE_LOG_INFO("  --gizmo-local       Line the handles up with the entity.");
         ENGINE_LOG_INFO("  --screenshot <file> Write the last frame as a PNG and stop.");
         ENGINE_LOG_INFO("  --no-watch          Do not import a source file that changed.");
+        ENGINE_LOG_INFO("  --watch-poll        Walk the source tree on a timer, rather than "
+                        "asking the operating system.");
         ENGINE_LOG_INFO("  --cook              Cook the project on the first frame and report.");
         ENGINE_LOG_INFO("  --offscreen         Draw with no window, through the scene camera.");
         ENGINE_LOG_INFO("  --resolution <WxH>  What an offscreen run renders at.");
@@ -226,6 +232,8 @@ namespace {
             out.own_windows = true;
         } else if (arg == "--no-watch") {
             out.watch = false;
+        } else if (arg == "--watch-poll") {
+            out.watch_by_polling = true;
         } else if (arg == "--cook") {
             out.cook = true;
         } else if (arg == "--offscreen") {
@@ -2210,6 +2218,10 @@ namespace {
         if (options.watch) {
             // start() reports a tree that is not there, so the editor carries
             // on without a watcher rather than refusing to open.
+            editor.watcher = engine::platform::DirectoryWatcher{
+                options.watch_by_polling ? engine::platform::WatchBackendChoice::Polling
+                                         : engine::platform::WatchBackendChoice::Automatic
+            };
             editor.watching = editor.watcher.start(content);
         } else {
             ENGINE_LOG_INFO("The source tree is not watched, because --no-watch was given.");

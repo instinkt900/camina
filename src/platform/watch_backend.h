@@ -52,7 +52,10 @@ namespace engine::platform {
     enum class CollectResult : std::uint8_t {
         Collected, ///< The backend looked. @p out holds everything it found, which may be nothing.
         Idle,      ///< The backend did not look this time, so nothing is known.
-        Failed,    ///< The backend looked and the tree would not read.
+        /// The backend lost track of the tree. @p out holds what it can name,
+        /// and the caller has to check everything it already knows as well.
+        Resync,
+        Failed, ///< The backend looked and the tree would not read.
     };
 
     /**
@@ -89,9 +92,14 @@ namespace engine::platform {
         /**
          * @brief Names the files that may have changed since the last call.
          *
+         * @warning Resync is not a failure. A backend fed by the operating
+         * system loses events when its queue overflows, and a directory moved
+         * out of the tree takes its files with it and reports nothing about
+         * them. Both mean the caller can no longer trust what it knows.
+         *
          * @param out Receives the names, relative to the root, with forward
          * slashes. It is cleared first.
-         * @return What the backend did. Read @p out only after Collected.
+         * @return What the backend did. Read @p out after Collected or Resync.
          */
         [[nodiscard]] virtual CollectResult collect(std::vector<std::string>& out) = 0;
 
@@ -117,6 +125,56 @@ namespace engine::platform {
          */
         virtual void set_interval(std::chrono::milliseconds interval) = 0;
     };
+
+    /**
+     * @brief Reads every file under a directory.
+     *
+     * A backend uses this for its first look, and an event-driven one uses it
+     * again when it loses events and has to start over. A directory is not an
+     * entry: it holds no bytes to cook, and its contents arrive as files of
+     * their own.
+     *
+     * @param root The directory to read.
+     * @param out Receives one entry for each file, keyed by its path relative
+     * to @p root with forward slashes. It is cleared first.
+     * @return True when the tree was read. False leaves @p out incomplete.
+     */
+    [[nodiscard]] bool walk_tree(const std::filesystem::path& root,
+                                 std::unordered_map<std::string, FileState>& out);
+
+    /// @brief Which backend a watcher should use.
+    enum class WatchBackendChoice : std::uint8_t {
+        /// The best backend this build and this machine can give. It asks the
+        /// operating system for changes where it can, and walks where it cannot.
+        Automatic,
+        /// The walk, always. A network drive reports no events, so it needs this.
+        Polling,
+    };
+
+    /**
+     * @brief Makes the backend a choice asks for.
+     *
+     * @warning Automatic can still come back as the polling backend, and it
+     * says so in the log when it does. A caller that must have the native one
+     * cannot ask this.
+     *
+     * @param choice Which backend to make.
+     * @return A backend that has not started yet.
+     */
+    [[nodiscard]] std::unique_ptr<WatchBackend> make_watch_backend(WatchBackendChoice choice);
+
+#if defined(__linux__)
+    /**
+     * @brief Makes the backend the kernel feeds through inotify.
+     *
+     * @warning This can fail to start where the polling backend would work. A
+     * watch descriptor is a per-user resource, so a large tree can exhaust
+     * `max_user_watches` for every program the person is running.
+     *
+     * @return A backend that has not started yet.
+     */
+    [[nodiscard]] std::unique_ptr<WatchBackend> make_inotify_watch_backend();
+#endif
 
     /**
      * @brief Makes the backend that walks the tree on a timer.

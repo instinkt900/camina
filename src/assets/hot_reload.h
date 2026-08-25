@@ -33,6 +33,13 @@ namespace engine::assets {
 
         /// @brief The cooker executable, which normally sits beside this program.
         std::filesystem::path cooker;
+
+        /// @brief How the source tree is watched.
+        ///
+        /// Automatic asks the operating system for changes where it can. A
+        /// tree on a network drive reports no events, so that one needs
+        /// Polling named outright.
+        platform::WatchBackendChoice watching = platform::WatchBackendChoice::Automatic;
     };
 
     /**

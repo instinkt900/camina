@@ -86,8 +86,19 @@ namespace engine::platform {
         /// @brief How long a new state must hold, when nothing else is set.
         static constexpr std::chrono::milliseconds kDefaultSettle{ 250 };
 
-        /// @brief Makes a watcher over the polling backend.
+        /// @brief Makes a watcher over the best backend this machine can give.
         DirectoryWatcher();
+
+        /**
+         * @brief Makes a watcher over the backend a choice asks for.
+         *
+         * Automatic is the only choice that may fall back. A watcher that
+         * asked for Polling gets it, and start() then fails rather than
+         * quietly using something else.
+         *
+         * @param choice Which backend to use.
+         */
+        explicit DirectoryWatcher(WatchBackendChoice choice);
 
         /**
          * @brief Makes a watcher over a backend the caller chose.
@@ -115,6 +126,11 @@ namespace engine::platform {
          * The files already there are the starting point, so the first poll()
          * reports nothing. Calling this again on a live watcher starts over on
          * the new root.
+         *
+         * @warning A watcher built for Automatic falls back to the polling
+         * backend when the native one will not start, and says so in the log.
+         * So a watcher that started may not be running the backend it asked
+         * for.
          *
          * @param root The directory to watch. It must exist.
          * @return True when the directory was there and it was read.
@@ -202,7 +218,10 @@ namespace engine::platform {
         std::unordered_map<std::string, FileState> known_;
         /// The candidates the backend named, which have not settled yet.
         std::unordered_map<std::string, Pending> pending_;
+        std::chrono::milliseconds interval_ = kDefaultInterval;
         std::chrono::milliseconds settle_ = kDefaultSettle;
+        /// Whether start() may take the polling backend when the first one fails.
+        bool may_fall_back_ = false;
         bool started_ = false;
     };
 

@@ -2429,11 +2429,40 @@ catch. `save_manifest` stamps it, so no caller can forget.
 give a cooker you have to run by hand. A person edits a source file, and the running program
 shows the result. Three pieces do it, and each one is useful on its own.
 
-`platform::DirectoryWatcher` walks the source tree on a timer and reports what moved. It
-polls rather than asking the operating system, so one implementation serves both platforms
-and a test drives it with no event plumbing. The cost is the walk, which suits a tree of the
-size `sandbox/` carries. Issue #57 puts a native backend behind the same interface when a
-tree grows past it.
+`platform::DirectoryWatcher` reports what moved under the source tree. It is a front end over
+a `platform::WatchBackend`, and the backend is the half that differs by platform. The front
+end owns the debounce and the meaning of a change. A backend only names the files worth
+another look, so a backend that over-reports costs a little work and cannot produce a wrong
+event.
+
+There are two backends. The polling one walks the tree on a timer, and it needs nothing from
+the operating system, so it serves every platform and every file system. The inotify one is
+the Linux native backend, and issue #482 holds the Windows half.
+
+**Automatic is the default, and it falls back out loud.** `WatchBackendChoice::Automatic`
+takes the native backend where the build has one and it starts. When it will not start, the
+watcher says so in the log, names the reason, and walks the tree instead. Falling back
+without a word would be wrong twice: it hides a broken build, and it brings back the cost
+this work exists to remove on the machine least able to afford it. `--watch-poll` asks for the
+walk outright, which is what a tree on a network drive needs, because a network drive reports
+no events at all.
+
+**A backend can lose track, and only a native one can.** `CollectResult::Resync` is how it
+says so. Two things cause it: the inotify queue overflows, and a directory moved out of the
+tree takes its files with it and reports nothing about any of them. Neither the kernel nor the
+backend can name a file that no event mentions, so the front end re-reads everything it knows
+and finds the removals itself. A walk has neither problem, which is why the polling backend
+never answers Resync.
+
+**A test waits rather than sleeps.** `DirectoryWatcher::wait` blocks until a change settles or
+a deadline passes, and both backends answer it honestly: the polling one waits out its
+interval, the inotify one waits on its file descriptor. Without it every test for a native
+backend would carry a sleep, which is flaky in the direction that hides bugs. One set of cases
+then runs over each backend, so the two are compared rather than tested separately.
+
+The wait also wakes on the front end's own clock when a candidate is due to be reported.
+Nothing reaches a backend for a file that stopped changing, so a wait that leaned on the
+backend alone would sit until the deadline and report the change on the way out.
 
 A change is never reported on the walk that first sees it. An editor that saves by writing a
 temporary file and renaming it over the original shows up as several changes in a few
@@ -3623,8 +3652,8 @@ Verified by deleting the cooked game tree and starting the editor: it imports th
 demand and loads all 43 entities of the sandbox from source.
 
 **M13.5 reimports a source file that changed, and there is no cook in it.**
-`platform::DirectoryWatcher` already polls a tree and holds a change back until the file stops
-moving, so the editor polls it between frames and hands the changed paths to
+`platform::DirectoryWatcher` already watches a tree and holds a change back until the file
+stops moving, so the editor polls it between frames and hands the changed paths to
 `SourceAssets::reload`. A file that changed is a cache entry to drop, and the next read of it
 imports again.
 

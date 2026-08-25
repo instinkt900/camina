@@ -35,7 +35,9 @@ add_library(engine_core STATIC
     platform/paths.cpp
     platform/process.cpp
     platform/watch.cpp
+    platform/watch_backend.cpp
     platform/watch_poll.cpp
+    $<$<PLATFORM_ID:Linux>:platform/watch_inotify.cpp>
     gfx/types.cpp
     reflect/registry.cpp
     reflect/inspector.cpp
