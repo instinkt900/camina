@@ -47,6 +47,12 @@ class CaminaConan(ConanFile):
     def requirements(self):
         # M0
         self.requires("sdl/3.4.8")
+        # Named here, and named before moth_ui below, on purpose. spdlog pins
+        # one fmt exactly and moth_ui asks for a range that spans several, so
+        # whichever Conan resolves first decides fmt for the graph. Meeting
+        # moth_ui first picks the newest fmt and then conflicts with spdlog's
+        # pin, which is what moth_editor hit. See DESIGN.md section 8.5 and
+        # issue #392.
         self.requires("spdlog/1.17.0")
         self.requires("glm/1.0.3")
         self.requires("enkits/1.12")

@@ -1355,6 +1355,34 @@ incremental work. Rule 4.6 applies. Add each one when `sandbox/` needs it.
   **Raise the floor with the release, not after it.** The pin says which moth_ui the engine
   needs, so it is part of the change that needs one. It is also what keeps the floor above
   the tags without anybody thinking about them again.
+
+- **spdlog decides fmt for the whole moth stack, and the declaration order decides
+  whether the graph resolves.** spdlog pins one fmt version exactly: 1.14.1 pins 10.2.1
+  and 1.17.0 pins 12.1.0. moth_ui asks for `fmt/[>=10.2 <13]`, a range that spans both,
+  so moth_ui follows whichever spdlog is in the graph rather than choosing for itself.
+
+  This engine takes spdlog 1.17. moth_graphics and moth_packer took 1.14, so the stack
+  shipped moth_ui in two binary flavours and any graph holding both halves refused to
+  resolve. moth_editor is the first graph that holds both, and it worked around it with
+  an `fmt/10.2.1` override in each consumer. That is a fix every future consumer has to
+  repeat and can only find by hitting the conflict. Issue #392.
+
+  **A Conan version range takes the highest version it can find, so the first of the two
+  it meets wins.** Meet moth_ui first and its range resolves to the newest fmt, which
+  then conflicts with the exact version spdlog pins. Meet spdlog first and its pin is
+  already in the graph, so the range resolves onto it.
+
+  So there are two rules, and both are needed. Every moth package takes the same spdlog
+  this engine takes, and **every graph that holds spdlog and moth_ui at all names spdlog
+  first**, whether it names one moth package or three.
+
+  The second rule is the one that is easy to get wrong, because the failure looks like a
+  version problem and is not. moth_graphics already listed spdlog first and went green on
+  the first try. moth_packer took the same spdlog bump, listed moth_ui first, and still
+  conflicted. That pair is the evidence: same versions, different order, different answer.
+  This engine has never hit it because `conanfile.py` names `spdlog` well before it names
+  `moth_ui`, which was luck rather than a decision until now.
+
 - **A Conan editable is for development, not for a build somebody else runs.** Develop against
   the editable when a change spans both repositories. Then release moth_ui and move the engine
   to the pin. A green build that only works because of a local editable is a broken build for
