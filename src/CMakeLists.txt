@@ -35,6 +35,7 @@ add_library(engine_core STATIC
     platform/paths.cpp
     platform/process.cpp
     platform/watch.cpp
+    platform/watch_poll.cpp
     gfx/types.cpp
     reflect/registry.cpp
     reflect/inspector.cpp
