@@ -7,6 +7,7 @@
 
 #include "platform/watch.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace engine::platform {
@@ -61,9 +62,10 @@ namespace engine::platform {
         }
 
         std::vector<std::string> candidates;
-        if (backend_->collect(candidates) != CollectResult::Collected) {
-            // The backend did not look, or the tree would not read. Either way
-            // nothing new is known, so nothing here moves.
+        const CollectResult result = backend_->collect(candidates);
+        if (result == CollectResult::Failed) {
+            // The tree would not read. Every candidate would look absent, so
+            // reading them now would report a removal for each one.
             return false;
         }
 
@@ -71,6 +73,9 @@ namespace engine::platform {
         // state it is waiting on is read again below whatever happens here.
         for (std::string& name : candidates) {
             pending_.try_emplace(std::move(name));
+        }
+        if (pending_.empty()) {
+            return false;
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -84,6 +89,53 @@ namespace engine::platform {
             pending_.erase(name);
         }
         return !out.empty();
+    }
+
+    bool DirectoryWatcher::wait(std::vector<WatchEvent>& out,
+                                std::chrono::milliseconds timeout) {
+        out.clear();
+        if (!started_) {
+            return false;
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        for (;;) {
+            if (poll(out)) {
+                return true;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                return false;
+            }
+
+            auto slice = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+            // A candidate that is waiting out the settle time has to wake this
+            // loop when it is due. Nothing reaches the backend for it, because
+            // the file that is settling is the file that stopped changing.
+            if (const auto due = next_settle_due(now)) {
+                slice = std::min(slice, *due);
+            }
+            backend_->wait(slice);
+        }
+    }
+
+    std::optional<std::chrono::milliseconds>
+    DirectoryWatcher::next_settle_due(std::chrono::steady_clock::time_point now) const {
+        std::optional<std::chrono::milliseconds> soonest;
+        for (const auto& [name, waiting] : pending_) {
+            std::chrono::milliseconds left{ 0 };
+            if (waiting.seen_once) {
+                const auto due = waiting.first_seen + settle_;
+                if (due > now) {
+                    left = std::chrono::duration_cast<std::chrono::milliseconds>(due - now);
+                }
+            }
+            if (!soonest || left < *soonest) {
+                soonest = left;
+            }
+        }
+        return soonest;
     }
 
     bool DirectoryWatcher::settle(const std::string& name, Pending& waiting,

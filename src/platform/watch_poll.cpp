@@ -9,7 +9,9 @@
 
 #include "core/log.h"
 
+#include <algorithm>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 
 namespace engine::platform {
@@ -70,6 +72,20 @@ namespace engine::platform {
 
                 seen_ = std::move(current);
                 return CollectResult::Collected;
+            }
+
+            void wait(std::chrono::milliseconds timeout) override {
+                if (last_walk_ == std::chrono::steady_clock::time_point{}) {
+                    // The next collect() walks, so there is nothing to wait for.
+                    return;
+                }
+                const auto due = last_walk_ + interval_;
+                const auto now = std::chrono::steady_clock::now();
+                if (due <= now) {
+                    return;
+                }
+                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(due - now);
+                std::this_thread::sleep_for(std::min(timeout, left));
             }
 
             void set_interval(std::chrono::milliseconds interval) override {

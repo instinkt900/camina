@@ -1,10 +1,13 @@
 // M4.5 tests for the two platform pieces hot reload stands on.
 //
-// The watcher is polled rather than event driven, so a test drives it by
-// calling poll() and never by sleeping. Every test here sets the interval and
-// the settle time to zero, which makes a change arrive on the walk after the
-// one that first saw it. That is the rule the debounce is built on, and it is
-// what these tests check.
+// The watcher cases run over a backend the caller names, so one set of cases
+// covers every backend and the two are compared rather than tested separately.
+//
+// A test asks the watcher to wait rather than sleeping itself. It asks twice
+// for each change: once with a window shorter than the settle time, which must
+// report nothing, and once with a window long enough for any backend, which
+// must report it. That states the debounce in time rather than in polls, which
+// is the only form a backend fed by the operating system can answer.
 //
 // The process runner is checked by running this same program again. That gives
 // a child that exists on both platforms, and it lets one test read back the
@@ -15,11 +18,13 @@
 #include "platform/paths.h"
 #include "platform/process.h"
 #include "platform/watch.h"
+#include "platform/watch_backend.h"
 
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -48,57 +53,96 @@ namespace {
         file << text;
     }
 
-    /// A watcher on @p root with the timers off, so a test drives it by polling.
+    /// Makes the backend a run of the watcher cases drives.
+    using MakeBackend = std::unique_ptr<pf::WatchBackend> (*)();
+
+    /// One run of the watcher cases, over one backend.
+    struct WatcherCase {
+        MakeBackend make = nullptr;
+        /// Names the backend. It joins each scratch path, so two runs cannot
+        /// share a directory and delete each other's fixtures.
+        std::string_view label;
+    };
+
+    /// How long a change must hold still before the watcher reports it.
+    ///
+    /// A test asks for a change and then asks that nothing arrived yet, so the
+    /// two windows below sit either side of this. It is long enough that the
+    /// gap is not a race and short enough that the suite does not crawl.
+    constexpr std::chrono::milliseconds kSettle{ 200 };
+
+    /// How long a test waits for a change it expects. Only a failure waits it out.
+    constexpr std::chrono::milliseconds kArrives{ 5000 };
+
+    /// How long a test waits to satisfy itself that nothing is coming.
+    ///
+    /// A change cannot be reported before it has held still for kSettle, so
+    /// this window is safe by a factor of four whatever the machine is doing.
+    constexpr std::chrono::milliseconds kQuiet{ 50 };
+
+    /// How often the polling backend walks. A native backend ignores it.
+    constexpr std::chrono::milliseconds kInterval{ 5 };
+
+    std::filesystem::path case_scratch(const WatcherCase& over, std::string_view name) {
+        return scratch(std::string{ over.label } + "_" + std::string{ name });
+    }
+
+    /// A watcher on @p root, set up so a test waits rather than sleeps.
     void start_watcher(pf::DirectoryWatcher& watcher, const std::filesystem::path& root) {
-        watcher.set_interval(std::chrono::milliseconds{ 0 });
-        watcher.set_settle(std::chrono::milliseconds{ 0 });
+        watcher.set_interval(kInterval);
+        watcher.set_settle(kSettle);
         check(watcher.start(root), "the watcher starts on a directory that is there");
     }
 
-    /// Polls once and reports whether that poll produced nothing.
-    [[nodiscard]] bool quiet(pf::DirectoryWatcher& watcher) {
-        std::vector<pf::WatchEvent> changes;
-        return !watcher.poll(changes) && changes.empty();
+    /// Waits for the changes a test expects, and reports whether it got them.
+    [[nodiscard]] bool arrived(pf::DirectoryWatcher& watcher, std::vector<pf::WatchEvent>& out,
+                               std::size_t count) {
+        return watcher.wait(out, kArrives) && out.size() == count;
     }
 
-    void test_a_missing_directory_will_not_start() {
-        pf::DirectoryWatcher watcher;
-        check(!watcher.start(scratch("missing") / "not_here"),
+    /// Waits a short while and reports whether nothing came.
+    [[nodiscard]] bool quiet(pf::DirectoryWatcher& watcher) {
+        std::vector<pf::WatchEvent> changes;
+        return !watcher.wait(changes, kQuiet) && changes.empty();
+    }
+
+    void test_a_missing_directory_will_not_start(const WatcherCase& over) {
+        pf::DirectoryWatcher watcher(over.make());
+        check(!watcher.start(case_scratch(over, "missing") / "not_here"),
               "starting on a directory that is not there fails");
 
         std::vector<pf::WatchEvent> changes;
-        check(!watcher.poll(changes),
-              "polling a watcher that never started reports nothing");
+        check(!watcher.poll(changes), "polling a watcher that never started reports nothing");
+        check(!watcher.wait(changes, kQuiet), "and waiting on one reports nothing either");
     }
 
-    void test_the_files_already_there_are_not_a_change() {
-        const std::filesystem::path root = scratch("existing");
+    void test_the_files_already_there_are_not_a_change(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "existing");
         write_file(root / "a.txt", "one");
         write_file(root / "deep" / "b.txt", "two");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
-        check(watcher.size() == 2, "the first walk finds both files");
+        check(watcher.size() == 2, "the first look finds both files");
 
         // The point of the test. A watcher that reported its starting tree as
         // a pile of changes would cook the whole tree on the first frame.
         check(quiet(watcher), "the files that were already there report nothing");
-        check(quiet(watcher), "and they still report nothing on the next poll");
+        check(quiet(watcher), "and they still report nothing after that");
     }
 
-    void test_a_new_file_arrives_after_it_settles() {
-        const std::filesystem::path root = scratch("added");
+    void test_a_new_file_arrives_after_it_settles(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "added");
         write_file(root / "a.txt", "one");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
 
         write_file(root / "deep" / "new.txt", "hello");
-        check(quiet(watcher), "the walk that first sees a new file reports nothing");
+        check(quiet(watcher), "a new file is not reported before it settles");
 
         std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 1,
-              "the next walk reports the new file");
+        check(arrived(watcher, changes, 1), "and then the new file reports");
         if (changes.size() != 1) {
             return;
         }
@@ -110,18 +154,18 @@ namespace {
         check(quiet(watcher), "the same file does not report a second time");
     }
 
-    void test_a_changed_file_reports_as_modified() {
-        const std::filesystem::path root = scratch("modified");
+    void test_a_changed_file_reports_as_modified(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "modified");
         write_file(root / "a.txt", "one");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
 
         write_file(root / "a.txt", "one and more");
-        check(quiet(watcher), "the walk that first sees the change reports nothing");
+        check(quiet(watcher), "the change is not reported before it settles");
 
         std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 1, "the next walk reports it");
+        check(arrived(watcher, changes, 1), "and then it reports");
         if (changes.size() != 1) {
             return;
         }
@@ -130,11 +174,11 @@ namespace {
         check(changes.front().relative == "a.txt", "and it names the file");
     }
 
-    void test_a_change_that_keeps_the_length_still_reports() {
-        const std::filesystem::path root = scratch("same_length");
+    void test_a_change_that_keeps_the_length_still_reports(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "same_length");
         write_file(root / "a.txt", "one");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
 
         // Editing one character of a scene file does this, and a watcher that
@@ -150,10 +194,9 @@ namespace {
         write_file(file, "two");
         std::filesystem::last_write_time(file, std::filesystem::last_write_time(file) +
                                                    std::chrono::seconds{ 2 });
-        check(quiet(watcher), "the walk that first sees it reports nothing");
 
         std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 1,
+        check(arrived(watcher, changes, 1),
               "a file that changed without changing length still reports");
         if (changes.size() != 1) {
             return;
@@ -161,19 +204,19 @@ namespace {
         check(changes.front().change == pf::FileChange::Modified, "and it reports as modified");
     }
 
-    void test_a_deleted_file_reports_as_removed() {
-        const std::filesystem::path root = scratch("removed");
+    void test_a_deleted_file_reports_as_removed(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "removed");
         write_file(root / "a.txt", "one");
         write_file(root / "b.txt", "two");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
 
         std::filesystem::remove(root / "b.txt");
-        check(quiet(watcher), "the walk that first sees the removal reports nothing");
+        check(quiet(watcher), "the removal is not reported before it settles");
 
         std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 1, "the next walk reports it");
+        check(arrived(watcher, changes, 1), "and then it reports");
         if (changes.size() != 1) {
             return;
         }
@@ -183,16 +226,19 @@ namespace {
         check(watcher.size() == 1, "the watcher forgets the file that went away");
     }
 
-    void test_a_file_still_being_written_is_held_back() {
-        const std::filesystem::path root = scratch("settling");
+    void test_a_file_still_being_written_is_held_back(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "settling");
         write_file(root / "a.txt", "one");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
 
         // This is the failure the debounce exists to stop. A cooker handed a
         // file part way through a save reads a truncated glTF and reports a
         // parse error that names nothing the person did.
+        //
+        // Each write restarts the settle clock, so the quiet windows here add
+        // up to less than one settle time and the file still reports nothing.
         write_file(root / "a.txt", "one two");
         check(quiet(watcher), "a file that just changed is not reported yet");
 
@@ -203,20 +249,19 @@ namespace {
         check(quiet(watcher), "however long the writing goes on");
 
         std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 1,
-              "the file reports once it stops moving");
+        check(arrived(watcher, changes, 1), "the file reports once it stops moving");
         if (changes.size() != 1) {
             return;
         }
         check(changes.front().change == pf::FileChange::Modified, "and it reports as modified");
     }
 
-    void test_a_change_that_undoes_itself_reports_nothing() {
-        const std::filesystem::path root = scratch("undone");
+    void test_a_change_that_undoes_itself_reports_nothing(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "undone");
         const std::filesystem::path file = root / "a.txt";
         write_file(file, "one");
 
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
         const auto written = std::filesystem::last_write_time(file);
 
@@ -231,50 +276,105 @@ namespace {
         // The file is byte for byte and stamp for stamp what the watcher
         // already knows, so there is nothing to tell anybody about.
         check(quiet(watcher), "a file that went back to what it was reports nothing");
-        check(quiet(watcher), "and it stays quiet on the next poll");
+        check(quiet(watcher), "and it stays quiet after that");
     }
 
-    void test_the_interval_keeps_a_poll_from_walking() {
-        const std::filesystem::path root = scratch("interval");
+    void test_several_files_report_together(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "several");
         write_file(root / "a.txt", "one");
 
-        pf::DirectoryWatcher watcher;
-        start_watcher(watcher, root);
-        // The first poll after start() always walks, so this uses it up.
-        check(quiet(watcher), "the first poll walks and finds nothing");
-
-        watcher.set_interval(std::chrono::hours{ 1 });
-        write_file(root / "a.txt", "one two");
-        check(quiet(watcher), "a poll inside the interval does not walk");
-        check(quiet(watcher), "and neither does the next one");
-
-        // With the interval back off, the same change comes through. Without
-        // this the test above would pass on a watcher that never works.
-        watcher.set_interval(std::chrono::milliseconds{ 0 });
-        check(quiet(watcher), "the first walk after the wait sees the change");
-
-        std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 1, "and the next one reports it");
-    }
-
-    void test_several_files_report_together() {
-        const std::filesystem::path root = scratch("several");
-        write_file(root / "a.txt", "one");
-
-        pf::DirectoryWatcher watcher;
+        pf::DirectoryWatcher watcher(over.make());
         start_watcher(watcher, root);
 
         write_file(root / "a.txt", "one two");
         write_file(root / "b.txt", "two");
         std::filesystem::create_directories(root / "empty");
-        check(quiet(watcher), "the first walk sees them");
 
         std::vector<pf::WatchEvent> changes;
-        check(watcher.poll(changes) && changes.size() == 2,
-              "one poll reports every file that settled");
+        check(arrived(watcher, changes, 2), "one wait reports every file that settled");
         // A directory holds no bytes to cook, and the cooker walks the tree
         // itself, so an empty one is not a change anybody can act on.
         check(watcher.size() == 2, "a directory is not counted as a file");
+    }
+
+    /// Runs every case that any backend has to pass.
+    void run_watcher_cases(const WatcherCase& over) {
+        test_a_missing_directory_will_not_start(over);
+        test_the_files_already_there_are_not_a_change(over);
+        test_a_new_file_arrives_after_it_settles(over);
+        test_a_changed_file_reports_as_modified(over);
+        test_a_change_that_keeps_the_length_still_reports(over);
+        test_a_deleted_file_reports_as_removed(over);
+        test_a_file_still_being_written_is_held_back(over);
+        test_a_change_that_undoes_itself_reports_nothing(over);
+        test_several_files_report_together(over);
+    }
+
+    // A candidate that is waiting out the settle time has to wake wait() by
+    // itself. The file stopped changing, so nothing reaches the backend for
+    // it, and a wait that leans on the backend alone sits until the deadline.
+    //
+    // This drives the polling backend with its interval turned up, because
+    // that is the only way here to make a backend that will not wake. A
+    // native backend is in the same position by nature: no more events
+    // arrive for a file nobody is writing.
+    void test_a_settling_change_reports_without_the_backend() {
+        const std::filesystem::path root = scratch("settle_wakes");
+        write_file(root / "a.txt", "one");
+
+        pf::DirectoryWatcher watcher(pf::make_polling_watch_backend());
+        watcher.set_interval(kInterval);
+        watcher.set_settle(kSettle);
+        check(watcher.start(root), "the watcher starts on a directory that is there");
+
+        write_file(root / "a.txt", "one two");
+        check(quiet(watcher), "the change is waiting to settle");
+
+        // From here the backend has nothing more to say for an hour.
+        watcher.set_interval(std::chrono::hours{ 1 });
+
+        const auto began = std::chrono::steady_clock::now();
+        std::vector<pf::WatchEvent> changes;
+        const bool reported = arrived(watcher, changes, 1);
+        const auto took =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - began);
+
+        check(reported, "the change still reports, on the watcher's own clock");
+        // When it reports is the whole point. A wait that leans on the backend
+        // sits out the deadline and finds the change only on the way out, so
+        // it reports the right thing far too late. The settle time is kSettle,
+        // and the deadline is more than twenty times that.
+        check(took < kArrives / 2, "and it reports when it settles rather than at the deadline");
+    }
+
+    // The interval belongs to the polling backend alone, so this case names
+    // that backend rather than running over whichever one a build has. It is
+    // also the one case that drives poll() directly, because "a poll inside
+    // the interval does not walk" is a statement about poll().
+    void test_the_interval_keeps_a_poll_from_walking() {
+        const std::filesystem::path root = scratch("interval");
+        write_file(root / "a.txt", "one");
+
+        pf::DirectoryWatcher watcher(pf::make_polling_watch_backend());
+        watcher.set_interval(std::chrono::milliseconds{ 0 });
+        watcher.set_settle(std::chrono::milliseconds{ 0 });
+        check(watcher.start(root), "the watcher starts on a directory that is there");
+
+        std::vector<pf::WatchEvent> changes;
+        // The first poll after start() always walks, so this uses it up.
+        check(!watcher.poll(changes), "the first poll walks and finds nothing");
+
+        watcher.set_interval(std::chrono::hours{ 1 });
+        write_file(root / "a.txt", "one two");
+        check(!watcher.poll(changes), "a poll inside the interval does not walk");
+        check(!watcher.poll(changes), "and neither does the next one");
+
+        // With the interval back off, the same change comes through. Without
+        // this the test above would pass on a watcher that never works.
+        watcher.set_interval(std::chrono::milliseconds{ 0 });
+        check(!watcher.poll(changes), "the first walk after the wait sees the change");
+        check(watcher.poll(changes) && changes.size() == 1, "and the next one reports it");
     }
 
     void test_a_program_that_is_not_there_does_not_run() {
@@ -399,17 +499,14 @@ int main(int argc, char** argv) {
 
     const std::filesystem::path self = std::filesystem::absolute(argv[0]);
 
-    test::section("watcher");
-    test_a_missing_directory_will_not_start();
-    test_the_files_already_there_are_not_a_change();
-    test_a_new_file_arrives_after_it_settles();
-    test_a_changed_file_reports_as_modified();
-    test_a_change_that_keeps_the_length_still_reports();
-    test_a_deleted_file_reports_as_removed();
-    test_a_file_still_being_written_is_held_back();
-    test_a_change_that_undoes_itself_reports_nothing();
+    // Every backend runs the same cases, so the two are compared rather than
+    // tested separately. Issue #481 adds the second entry here.
+    test::section("watcher (polling)");
+    run_watcher_cases(WatcherCase{ .make = pf::make_polling_watch_backend, .label = "poll" });
+
+    test::section("watcher (polling only)");
+    test_a_settling_change_reports_without_the_backend();
     test_the_interval_keeps_a_poll_from_walking();
-    test_several_files_report_together();
 
     test::section("paths");
     test_the_preferences_directory_is_there_and_writable();
