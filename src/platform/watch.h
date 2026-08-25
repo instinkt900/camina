@@ -7,16 +7,20 @@
  * M4.5 needs this so a person edits an asset and sees the result without a
  * restart. The watcher says what moved. The caller decides what to do about it.
  *
- * This walks the tree on a timer rather than asking the operating system for
- * events. One implementation then serves both platforms, and a test drives it
- * with no event plumbing. The cost is the walk, which suits a content tree of
- * the size `sandbox/` carries today. Issue #57 holds the reasons to put a
- * native backend behind this interface, and the traps that come with one.
+ * The watcher finds its changes through a `WatchBackend`. The one backend
+ * today walks the tree on a timer, so one implementation serves both platforms
+ * and a test drives it with no event plumbing. The cost is the walk, which
+ * suits a content tree of the size `sandbox/` carries today. Issue #57 holds
+ * the native backends that go behind the same seam, and the traps that come
+ * with them.
  */
+
+#include "platform/watch_backend.h"
 
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -59,8 +63,9 @@ namespace engine::platform {
      * The next real change reports both, so this delays a reload and never
      * loses one. Windows updates the write time coarsely enough for this to
      * be reachable, and a tool that rewrites many files at once, such as a
-     * branch checkout, is what reaches it. Issue #57 removes the limitation
-     * by asking the operating system for the change instead.
+     * branch checkout, is what reaches it. That is a limit of the polling
+     * backend rather than of this class. Issue #57 removes it by asking the
+     * operating system for the change instead.
      *
      * @code
      * engine::platform::DirectoryWatcher watcher;
@@ -80,6 +85,29 @@ namespace engine::platform {
         /// @brief How long a new state must hold, when nothing else is set.
         static constexpr std::chrono::milliseconds kDefaultSettle{ 250 };
 
+        /// @brief Makes a watcher over the polling backend.
+        DirectoryWatcher();
+
+        /**
+         * @brief Makes a watcher over a backend the caller chose.
+         * @param backend Where the candidate names come from. It must not be null.
+         */
+        explicit DirectoryWatcher(std::unique_ptr<WatchBackend> backend);
+
+        /// @brief Drops the backend.
+        ~DirectoryWatcher();
+
+        DirectoryWatcher(const DirectoryWatcher&) = delete;
+        DirectoryWatcher& operator=(const DirectoryWatcher&) = delete;
+        /// @brief Takes the backend and the state of another watcher.
+        /// @param other The watcher to take from.
+        DirectoryWatcher(DirectoryWatcher&& other);
+
+        /// @brief Takes the backend and the state of another watcher.
+        /// @param other The watcher to take from.
+        /// @return This watcher.
+        DirectoryWatcher& operator=(DirectoryWatcher&& other);
+
         /**
          * @brief Takes the first snapshot of a directory tree.
          *
@@ -95,9 +123,9 @@ namespace engine::platform {
         /**
          * @brief Reports every file that changed and then settled.
          *
-         * Call this as often as you like. The walk happens only when the poll
-         * interval has passed, so calling it once a frame costs almost nothing
-         * on the frames between walks.
+         * Call this as often as you like. The backend decides how often it
+         * looks, so calling this once a frame costs almost nothing on the
+         * frames between two looks.
          *
          * @param out Receives the changes. It is cleared first.
          * @return True when @p out holds at least one change.
@@ -105,10 +133,13 @@ namespace engine::platform {
         [[nodiscard]] bool poll(std::vector<WatchEvent>& out);
 
         /**
-         * @brief Sets how often the tree is walked.
-         * @param interval The wait between two walks. Zero walks on every poll().
+         * @brief Sets how often the backend looks for changes.
+         *
+         * A backend the operating system feeds is free to ignore this.
+         *
+         * @param interval The wait between two looks. Zero looks on every poll().
          */
-        void set_interval(std::chrono::milliseconds interval) { interval_ = interval; }
+        void set_interval(std::chrono::milliseconds interval);
 
         /**
          * @brief Sets how long a new state must hold before it is reported.
@@ -130,35 +161,25 @@ namespace engine::platform {
         [[nodiscard]] std::size_t size() const { return known_.size(); }
 
     private:
-        /// What one walk saw of one file. An absent file carries exists false.
-        struct State {
-            std::int64_t write_time = 0;
-            std::uintmax_t size = 0;
-            bool exists = false;
-
-            [[nodiscard]] bool operator==(const State& other) const = default;
-        };
-
-        /// A state seen once, waiting to be seen again and to settle.
+        /// A candidate the backend named, waiting to hold still.
         struct Pending {
-            State state;
-            std::chrono::steady_clock::time_point first_seen;
+            FileState state;                                  ///< The state the last look saw.
+            std::chrono::steady_clock::time_point first_seen; ///< When that state arrived.
+            bool seen_once = false;                           ///< False until the first look.
         };
 
-        /// Reads every file under the root into a map of relative path to state.
-        [[nodiscard]] bool walk(std::unordered_map<std::string, State>& out) const;
+        /// Moves one candidate toward a reported change, and reports it once it holds.
+        /// Returns true when the candidate is finished with, either way.
+        [[nodiscard]] bool settle(const std::string& name, Pending& waiting,
+                                  std::chrono::steady_clock::time_point now,
+                                  std::vector<WatchEvent>& out);
 
-        /// Moves one file toward a reported change, and reports it once it holds.
-        void settle(const std::string& name, const State& seen,
-                    std::chrono::steady_clock::time_point now, std::vector<WatchEvent>& out);
-
+        std::unique_ptr<WatchBackend> backend_;
         std::filesystem::path root_;
         /// The last state reported for each file. A file with no entry is absent.
-        std::unordered_map<std::string, State> known_;
-        /// The states seen since, which have not settled yet.
+        std::unordered_map<std::string, FileState> known_;
+        /// The candidates the backend named, which have not settled yet.
         std::unordered_map<std::string, Pending> pending_;
-        std::chrono::steady_clock::time_point last_walk_;
-        std::chrono::milliseconds interval_ = kDefaultInterval;
         std::chrono::milliseconds settle_ = kDefaultSettle;
         bool started_ = false;
     };

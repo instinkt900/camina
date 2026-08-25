@@ -1,6 +1,13 @@
+// The front end of the watcher. It owns the debounce and the meaning of a
+// change, and it asks a backend only which files are worth another look.
+//
+// Every backend needs the debounce, because a native event arrives while the
+// file is still being written, which is the same problem polling has. So it
+// lives here and a backend never repeats it.
+
 #include "platform/watch.h"
 
-#include "core/log.h"
+#include <utility>
 
 namespace engine::platform {
 
@@ -16,20 +23,33 @@ namespace engine::platform {
         return "unknown";
     }
 
+    DirectoryWatcher::DirectoryWatcher()
+        : DirectoryWatcher(make_polling_watch_backend()) {}
+
+    DirectoryWatcher::DirectoryWatcher(std::unique_ptr<WatchBackend> backend)
+        : backend_(std::move(backend)) {
+        backend_->set_interval(kDefaultInterval);
+    }
+
+    DirectoryWatcher::~DirectoryWatcher() = default;
+
+    DirectoryWatcher::DirectoryWatcher(DirectoryWatcher&&) = default;
+
+    DirectoryWatcher& DirectoryWatcher::operator=(DirectoryWatcher&&) = default;
+
+    void DirectoryWatcher::set_interval(std::chrono::milliseconds interval) {
+        backend_->set_interval(interval);
+    }
+
     bool DirectoryWatcher::start(const std::filesystem::path& root) {
         root_ = root;
         known_.clear();
         pending_.clear();
         started_ = false;
 
-        if (!walk(known_)) {
+        if (!backend_->start(root, known_)) {
             return false;
         }
-
-        // The next poll() must walk rather than wait out an interval that
-        // started here. A person who edits a file the moment the program opens
-        // would otherwise wait twice as long for it.
-        last_walk_ = std::chrono::steady_clock::time_point{};
         started_ = true;
         return true;
     }
@@ -40,64 +60,57 @@ namespace engine::platform {
             return false;
         }
 
+        std::vector<std::string> candidates;
+        if (backend_->collect(candidates) != CollectResult::Collected) {
+            // The backend did not look, or the tree would not read. Either way
+            // nothing new is known, so nothing here moves.
+            return false;
+        }
+
+        // A name the backend already gave keeps the clock it started on. The
+        // state it is waiting on is read again below whatever happens here.
+        for (std::string& name : candidates) {
+            pending_.try_emplace(std::move(name));
+        }
+
         const auto now = std::chrono::steady_clock::now();
-        if (last_walk_ != std::chrono::steady_clock::time_point{} &&
-            now - last_walk_ < interval_) {
-            return false;
-        }
-        last_walk_ = now;
-
-        std::unordered_map<std::string, State> current;
-        if (!walk(current)) {
-            // The root went away, or it will not read. Report nothing and keep
-            // what is known, because a directory that comes back should not
-            // arrive as one removal for every file in it.
-            return false;
-        }
-
-        // A name in either map may have changed, so both are walked.
-        for (const auto& [name, state] : current) {
-            settle(name, state, now, out);
-        }
-
-        // The names to check for removal are collected before they are
-        // checked, because settle() writes to known_ and this reads it.
-        std::vector<std::string> gone;
-        for (const auto& [name, state] : known_) {
-            if (!current.contains(name)) {
-                gone.push_back(name);
+        std::vector<std::string> finished;
+        for (auto& [name, waiting] : pending_) {
+            if (settle(name, waiting, now, out)) {
+                finished.push_back(name);
             }
         }
-        for (const std::string& name : gone) {
-            settle(name, State{}, now, out);
+        for (const std::string& name : finished) {
+            pending_.erase(name);
         }
         return !out.empty();
     }
 
-    void DirectoryWatcher::settle(const std::string& name, const State& seen,
+    bool DirectoryWatcher::settle(const std::string& name, Pending& waiting,
                                   std::chrono::steady_clock::time_point now,
                                   std::vector<WatchEvent>& out) {
+        const FileState seen = read_file_state(root_ / name);
+
         const auto was = known_.find(name);
-        const State before = was != known_.end() ? was->second : State{};
+        const FileState before = was != known_.end() ? was->second : FileState{};
         if (seen == before) {
-            // Almost every file on almost every walk lands here. It is also
-            // where a file whose write time and size came back to what was
-            // already reported lands, and dropping the pending entry is what
-            // stops a change that undid itself from being announced.
-            pending_.erase(name);
-            return;
+            // This is where a file whose write time and size came back to what
+            // was already reported lands. Dropping it is what stops a change
+            // that undid itself from being announced.
+            return true;
         }
 
-        const auto waiting = pending_.find(name);
-        if (waiting == pending_.end() || waiting->second.state != seen) {
-            // The first walk to see this state only starts the clock. A file
-            // still being written changes again before the next walk, and this
-            // is where that gets caught.
-            pending_[name] = Pending{ .state = seen, .first_seen = now };
-            return;
+        if (!waiting.seen_once || waiting.state != seen) {
+            // The first look at this state only starts the clock. A file still
+            // being written changes again before the next look, and this is
+            // where that gets caught.
+            waiting.state = seen;
+            waiting.first_seen = now;
+            waiting.seen_once = true;
+            return false;
         }
-        if (now - waiting->second.first_seen < settle_) {
-            return;
+        if (now - waiting.first_seen < settle_) {
+            return false;
         }
 
         FileChange change = FileChange::Modified;
@@ -112,54 +125,6 @@ namespace engine::platform {
             known_[name] = seen;
         } else {
             known_.erase(name);
-        }
-        pending_.erase(name);
-    }
-
-    bool DirectoryWatcher::walk(std::unordered_map<std::string, State>& out) const {
-        std::error_code error;
-        std::filesystem::recursive_directory_iterator entry{
-            root_, std::filesystem::directory_options::skip_permission_denied, error
-        };
-        if (error) {
-            ENGINE_LOG_WARN("{}: it will not read, so nothing under it is watched: {}",
-                            root_.string(), error.message());
-            return false;
-        }
-
-        const std::filesystem::recursive_directory_iterator end;
-        for (; entry != end; entry.increment(error)) {
-            if (error) {
-                ENGINE_LOG_WARN("{}: the walk stopped part way through: {}", root_.string(),
-                                error.message());
-                return false;
-            }
-
-            // A directory holds no bytes to cook. Its contents arrive as files
-            // of their own, so a new directory reports as the files inside it.
-            if (!entry->is_regular_file(error) || error) {
-                error.clear();
-                continue;
-            }
-
-            const auto write_time = entry->last_write_time(error);
-            if (error) {
-                // The file went away between the directory read and this call.
-                // Leaving it out makes it absent, and the next walk either
-                // finds it again or reports the removal.
-                error.clear();
-                continue;
-            }
-            const auto size = entry->file_size(error);
-            if (error) {
-                error.clear();
-                continue;
-            }
-
-            out.emplace(entry->path().lexically_relative(root_).generic_string(),
-                        State{ .write_time = write_time.time_since_epoch().count(),
-                               .size = size,
-                               .exists = true });
         }
         return true;
     }
