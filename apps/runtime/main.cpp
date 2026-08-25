@@ -152,6 +152,10 @@ namespace {
         /// The source content tree to watch. Empty means the compiled-in default.
         std::string watch;
         bool hot_reload = true; ///< False turns the watcher and the cooker off.
+        /// True walks the source tree on a timer rather than asking the
+        /// operating system. A network drive reports no events, so it needs
+        /// this.
+        bool watch_by_polling = false;
         /// Whether to wait for the refresh. On by default, because a person
         /// flying around the sandbox wants it. Turn it off to measure a change.
         bool vsync = true;
@@ -448,6 +452,8 @@ namespace {
             options.physics_debug = true;
         } else if (arg == "--no-watch") {
             options.hot_reload = false;
+        } else if (arg == "--watch-poll") {
+            options.watch_by_polling = true;
         } else if (arg == "--no-validation") {
             options.validation = false;
         } else if (arg == "--sync-validation") {
@@ -1156,10 +1162,15 @@ namespace {
             return;
         }
 
+        const engine::platform::WatchBackendChoice watching =
+            options.watch_by_polling ? engine::platform::WatchBackendChoice::Polling
+                                     : engine::platform::WatchBackendChoice::Automatic;
+
         const engine::assets::HotReloadDesc desc{
             .source = options.watch.empty() ? std::filesystem::path{ ENGINE_GAME_CONTENT_SOURCE }
                                             : std::filesystem::path{ options.watch },
             .cooker = cooker_path(),
+            .watching = watching,
         };
         // HotReload::start reports a source tree that is not there, so this
         // does not check for one first.
@@ -1172,6 +1183,7 @@ namespace {
         const engine::assets::HotReloadDesc engine_desc{
             .source = std::filesystem::path{ ENGINE_ENGINE_CONTENT_SOURCE },
             .cooker = cooker_path(),
+            .watching = watching,
         };
         (void)runtime.engine_reload.start(engine_desc);
     }

@@ -39,6 +39,7 @@ namespace engine::assets {
                             cooker_.string());
             return false;
         }
+        watcher_ = platform::DirectoryWatcher{ desc.watching };
         if (!watcher_.start(source_)) {
             return false;
         }

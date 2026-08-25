@@ -297,6 +297,118 @@ namespace {
         check(watcher.size() == 2, "a directory is not counted as a file");
     }
 
+    void test_a_directory_added_during_a_session_is_watched(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "new_dir");
+        write_file(root / "a.txt", "one");
+
+        pf::DirectoryWatcher watcher(over.make());
+        start_watcher(watcher, root);
+
+        // The directory goes in on its own first, and the watcher is given
+        // time to take it up. Writing the file straight afterwards would let a
+        // backend pass by reading the whole directory once and never watching
+        // it, which is the mistake this case exists to catch.
+        std::filesystem::create_directories(root / "deep");
+        check(quiet(watcher), "an empty directory is not a change anybody can act on");
+        check(quiet(watcher), "and it stays that way");
+
+        write_file(root / "deep" / "new.txt", "hello");
+
+        std::vector<pf::WatchEvent> changes;
+        check(arrived(watcher, changes, 1), "a file in the new directory reports");
+        if (changes.size() != 1) {
+            return;
+        }
+        check(changes.front().relative == "deep/new.txt", "and it names the file");
+        check(changes.front().change == pf::FileChange::Added, "as added");
+    }
+
+    void test_a_file_below_the_root_reports(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "nested");
+        write_file(root / "deep" / "deeper" / "c.txt", "three");
+
+        pf::DirectoryWatcher watcher(over.make());
+        start_watcher(watcher, root);
+
+        // inotify does not recurse, so every directory under the root needs a
+        // watch of its own from the start. A backend that watched the root
+        // alone would report nothing here, and the tree the sandbox ships is
+        // nested throughout. Two levels, because one level passes a backend
+        // that recurses exactly once.
+        write_file(root / "deep" / "deeper" / "c.txt", "three and more");
+
+        std::vector<pf::WatchEvent> changes;
+        check(arrived(watcher, changes, 1), "a file two directories down reports");
+        if (changes.size() != 1) {
+            return;
+        }
+        check(changes.front().relative == "deep/deeper/c.txt", "and it names the file");
+        check(changes.front().change == pf::FileChange::Modified, "as modified");
+    }
+
+    void test_a_save_by_rename_is_reported(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "renamed");
+        write_file(root / "a.txt", "one");
+
+        pf::DirectoryWatcher watcher(over.make());
+        start_watcher(watcher, root);
+
+        // Several editors save by writing a temporary file and renaming it
+        // over the original. inotify calls that IN_MOVED_TO and not IN_MODIFY,
+        // so a backend that watches only IN_MODIFY misses every save from
+        // those. That reads as hot reload being broken for some people and
+        // fine for others.
+        //
+        // The temporary file is written outside the root. Inside it, the
+        // watcher would race the rename for a file that exists for a
+        // millisecond, and the count this case checks would come and go.
+        const std::filesystem::path incoming =
+            root.parent_path() / (std::string{ over.label } + "_incoming.txt");
+        write_file(incoming, "one and more");
+
+        std::error_code error;
+        std::filesystem::rename(incoming, root / "a.txt", error);
+        check(!error, "the save by rename went through");
+
+        std::vector<pf::WatchEvent> changes;
+        check(arrived(watcher, changes, 1), "a save by rename reports");
+        if (changes.size() != 1) {
+            return;
+        }
+        check(changes.front().relative == "a.txt", "and it names the file");
+        check(changes.front().change == pf::FileChange::Modified, "as modified");
+    }
+
+    void test_a_directory_moved_away_takes_its_files_with_it(const WatcherCase& over) {
+        const std::filesystem::path root = case_scratch(over, "moved_dir");
+        write_file(root / "deep" / "b.txt", "two");
+
+        pf::DirectoryWatcher watcher(over.make());
+        start_watcher(watcher, root);
+        check(watcher.size() == 1, "the first look finds the file");
+
+        // A directory moved out of the tree reports nothing at all about the
+        // files inside it. A walk notices because the files stop being there.
+        // A backend the kernel feeds has to say that it lost track, because
+        // neither half can name a file that no event mentions.
+        // The destination carries the backend name. Every backend runs this
+        // case, and a directory left behind by the run before would otherwise
+        // make the rename fail with "directory not empty".
+        std::error_code error;
+        std::filesystem::rename(root / "deep",
+                                root.parent_path() / (std::string{ over.label } + "_gone"), error);
+        check(!error, "the directory moved out of the tree");
+
+        std::vector<pf::WatchEvent> changes;
+        check(arrived(watcher, changes, 1), "the file inside it reports");
+        if (changes.size() != 1) {
+            return;
+        }
+        check(changes.front().relative == "deep/b.txt", "and it names the file");
+        check(changes.front().change == pf::FileChange::Removed, "as removed");
+        check(watcher.size() == 0, "the watcher forgets it");
+    }
+
     /// Runs every case that any backend has to pass.
     void run_watcher_cases(const WatcherCase& over) {
         test_a_missing_directory_will_not_start(over);
@@ -308,6 +420,10 @@ namespace {
         test_a_file_still_being_written_is_held_back(over);
         test_a_change_that_undoes_itself_reports_nothing(over);
         test_several_files_report_together(over);
+        test_a_directory_added_during_a_session_is_watched(over);
+        test_a_file_below_the_root_reports(over);
+        test_a_save_by_rename_is_reported(over);
+        test_a_directory_moved_away_takes_its_files_with_it(over);
     }
 
     // A candidate that is waiting out the settle time has to wake wait() by
@@ -500,9 +616,14 @@ int main(int argc, char** argv) {
     const std::filesystem::path self = std::filesystem::absolute(argv[0]);
 
     // Every backend runs the same cases, so the two are compared rather than
-    // tested separately. Issue #481 adds the second entry here.
+    // tested separately.
     test::section("watcher (polling)");
     run_watcher_cases(WatcherCase{ .make = pf::make_polling_watch_backend, .label = "poll" });
+
+#if defined(__linux__)
+    test::section("watcher (inotify)");
+    run_watcher_cases(WatcherCase{ .make = pf::make_inotify_watch_backend, .label = "inotify" });
+#endif
 
     test::section("watcher (polling only)");
     test_a_settling_change_reports_without_the_backend();
