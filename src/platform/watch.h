@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -133,6 +134,22 @@ namespace engine::platform {
         [[nodiscard]] bool poll(std::vector<WatchEvent>& out);
 
         /**
+         * @brief Waits for at least one change, or for the deadline to pass.
+         *
+         * This is poll() with the waiting done for you. It asks the backend to
+         * wait on whatever the backend waits on, and it wakes by itself when a
+         * change that is holding still is due to be reported.
+         *
+         * @warning This blocks the calling thread for up to @p timeout. A
+         * program that draws frames calls poll() instead.
+         *
+         * @param out Receives the changes. It is cleared first.
+         * @param timeout The longest to wait. Zero makes this one poll().
+         * @return True when @p out holds at least one change.
+         */
+        [[nodiscard]] bool wait(std::vector<WatchEvent>& out, std::chrono::milliseconds timeout);
+
+        /**
          * @brief Sets how often the backend looks for changes.
          *
          * A backend the operating system feeds is free to ignore this.
@@ -167,6 +184,11 @@ namespace engine::platform {
             std::chrono::steady_clock::time_point first_seen; ///< When that state arrived.
             bool seen_once = false;                           ///< False until the first look.
         };
+
+        /// How long until the candidate that is closest to settling is due.
+        /// Nothing pending gives no answer, and the caller then waits on the backend alone.
+        [[nodiscard]] std::optional<std::chrono::milliseconds>
+        next_settle_due(std::chrono::steady_clock::time_point now) const;
 
         /// Moves one candidate toward a reported change, and reports it once it holds.
         /// Returns true when the candidate is finished with, either way.

@@ -96,6 +96,19 @@ namespace engine::platform {
         [[nodiscard]] virtual CollectResult collect(std::vector<std::string>& out) = 0;
 
         /**
+         * @brief Waits until the backend may have something new.
+         *
+         * A backend that looks on a timer waits out the rest of its interval.
+         * A backend the operating system feeds waits on its handle. Either one
+         * may come back with nothing, so the caller collects and checks.
+         *
+         * @warning This blocks the calling thread. Nothing on a frame calls it.
+         *
+         * @param timeout The longest to wait. Zero returns at once.
+         */
+        virtual void wait(std::chrono::milliseconds timeout) = 0;
+
+        /**
          * @brief Sets how often the backend looks for changes.
          *
          * A backend the operating system feeds is free to ignore this.
